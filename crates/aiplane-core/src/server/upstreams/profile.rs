@@ -107,14 +107,23 @@ impl BackendProfile {
         }
     }
 
-    /// Whether this server honours `tool_choice`.
+    /// Whether this server can be trusted to keep a model from calling tools
+    /// with `tool_choice: "none"` alone.
     ///
-    /// The final tool round keeps the tool definitions in the request and
-    /// relies on `tool_choice: "none"` to force a final answer (see
-    /// `openai_driver::configure_final_tool_round`). Ollama's OpenAI layer has
-    /// no `tool_choice` field at all, so the value is discarded and the model
-    /// still sees its tools on the round that was supposed to end the turn —
-    /// the "turn ends on a promise" failure, with nothing to detect it by.
+    /// When it can, the final tool round keeps the tool definitions in the
+    /// request and relies on `tool_choice: "none"` to force a final answer
+    /// (see `runner::configure_final_tool_round` in aiplane-runtime).
+    ///
+    /// - **Ollama**'s OpenAI layer has no `tool_choice` field at all, so the
+    ///   value is discarded and the model still sees its tools on the round
+    ///   that was supposed to end the turn: the "turn ends on a promise"
+    ///   failure, with nothing to detect it by.
+    /// - **vLLM and SGLang** accept the field but keep the definitions in the
+    ///   prompt and switch their tool parser *off*. A model that calls a tool
+    ///   anyway (Qwen does: six of seven budget-exhausted turns in production
+    ///   on SGLang; vLLM has public reports for Qwen3.5 and gpt-oss) writes the
+    ///   call out as raw `<tool_call>` text, which the turn then ends on.
+    ///   Without the definitions in the prompt, the model has nothing to call.
     ///
     /// `false` here means the caller must withhold the tools themselves.
     /// Matched exhaustively so a server added later has to state its answer
@@ -123,8 +132,8 @@ impl BackendProfile {
     /// optimistic one silently reproduces the Ollama bug for the next server.
     pub fn honors_tool_choice(self) -> bool {
         match self {
-            Self::Ollama => false,
-            Self::Generic | Self::VLlm | Self::LlamaCpp | Self::SgLang => true,
+            Self::Ollama | Self::VLlm | Self::SgLang => false,
+            Self::Generic | Self::LlamaCpp => true,
         }
     }
 
@@ -642,14 +651,15 @@ mod tests {
     }
 
     #[test]
-    fn only_ollama_ignores_tool_choice() {
-        assert!(!BackendProfile::Ollama.honors_tool_choice());
+    fn ollama_vllm_and_sglang_are_not_trusted_with_tool_choice() {
         for profile in [
-            BackendProfile::Generic,
+            BackendProfile::Ollama,
             BackendProfile::VLlm,
-            BackendProfile::LlamaCpp,
             BackendProfile::SgLang,
         ] {
+            assert!(!profile.honors_tool_choice(), "{profile:?}");
+        }
+        for profile in [BackendProfile::Generic, BackendProfile::LlamaCpp] {
             assert!(profile.honors_tool_choice(), "{profile:?}");
         }
     }

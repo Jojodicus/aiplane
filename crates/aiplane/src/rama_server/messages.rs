@@ -480,7 +480,10 @@ async fn buffered(
         }
     };
     let message = anthropic::response::from_openai(&completion, requested_model);
-    let mut resp = json_response(StatusCode::OK, &message);
+    let mut resp = proxy::with_budget_header(
+        json_response(StatusCode::OK, &message),
+        outcome.budget_exhausted,
+    );
     if let Ok(rounds) = rama::http::HeaderValue::from_str(&outcome.rounds.to_string()) {
         resp.headers_mut().insert("x-gateway-tool-rounds", rounds);
     }

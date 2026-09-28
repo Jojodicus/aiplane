@@ -3045,7 +3045,6 @@ mod tests {
             let registry = registry_with_profiles("m", &[profile]);
             let serving = registry.serving_profile("m", PoolKind::Chat, &PoolAccess::all());
             assert_eq!(serving.dialect, None, "{profile:?}");
-            assert!(serving.honors_tool_choice, "{profile:?}");
         }
     }
 

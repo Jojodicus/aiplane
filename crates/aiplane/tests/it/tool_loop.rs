@@ -777,3 +777,348 @@ impl wiremock::Respond for ToolLoopResponder {
         }
     }
 }
+
+/// A model researching without end: it calls `company_echo` on every round,
+/// except where `answers(request)` says it would answer instead. `streaming`
+/// picks the wire shape.
+struct BudgetResponder {
+    streaming: bool,
+    answers: fn(&serde_json::Value) -> bool,
+}
+
+impl wiremock::Respond for BudgetResponder {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        let answer = (self.answers)(&body);
+        if !self.streaming {
+            return ResponseTemplate::new(200).set_body_json(if answer {
+                json!({"choices": [{"message": {"role": "assistant", "content": "Here is what I found."},
+                    "finish_reason": "stop"}]})
+            } else {
+                json!({"choices": [{"message": {"role": "assistant", "content": null,
+                    "tool_calls": [{"id": "call-r", "type": "function",
+                        "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]},
+                    "finish_reason": "tool_calls"}]})
+            });
+        }
+        let frames = if answer {
+            vec![
+                json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Here is what I found."}, "finish_reason": null}]}),
+                json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+            ]
+        } else {
+            vec![
+                json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [{"index": 0, "id": "call-r", "type": "function",
+                        "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]}, "finish_reason": null}]}),
+                json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+            ]
+        };
+        ResponseTemplate::new(200).set_body_raw(sse_body(&frames), "text/event-stream")
+    }
+}
+
+fn honours_tool_choice(body: &serde_json::Value) -> bool {
+    body["tool_choice"] == "none"
+}
+
+fn answers_only_without_tools(body: &serde_json::Value) -> bool {
+    body.get("tools").is_none()
+}
+
+fn never_answers(_: &serde_json::Value) -> bool {
+    false
+}
+
+/// Serve one research request against a `BudgetResponder` upstream.
+async fn research_request(
+    streaming: bool,
+    answers: fn(&serde_json::Value) -> bool,
+) -> (rama::http::Response, MockServer) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(BudgetResponder { streaming, answers })
+        .mount(&upstream)
+        .await;
+    let state = state_with_tools(&upstream.uri()).await;
+    let bearer = seed_engineer_with_bearer(&state).await;
+    let app = router(Arc::new(state));
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "model-a", "stream": streaming,
+                "messages": [{"role": "user", "content": "research this sender"}]})
+            .to_string(),
+        ))
+        .unwrap();
+    (app.serve(req).await.unwrap(), upstream)
+}
+
+/// Upstream chat requests so far. Read it only after the body: a stream is
+/// produced by a background task, which is still running until then.
+async fn chat_calls(upstream: &MockServer) -> usize {
+    upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/chat/completions")
+        .count()
+}
+
+fn data_frames(body: &str) -> Vec<serde_json::Value> {
+    body.split("\n\n")
+        .filter_map(|event| event.strip_prefix("data: "))
+        .filter(|payload| *payload != "[DONE]")
+        .map(|payload| serde_json::from_str(payload).unwrap())
+        .collect()
+}
+
+const MAX_ROUNDS: u32 = aiplane_runtime::server::tools::runner::MAX_TOOL_ROUNDS;
+
+/// The production failure: a request that runs out of tool rounds ends in a
+/// 200 completion built from what was gathered, flagged in the header and in
+/// the body — not in a 500 that throws the work away.
+#[tokio::test]
+async fn a_request_that_exhausts_the_tool_budget_still_gets_an_answer() {
+    let (resp, upstream) = research_request(false, honours_tool_choice).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("x-gateway-tool-budget-exhausted")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-gateway-tool-rounds")
+            .and_then(|v| v.to_str().ok()),
+        Some((MAX_ROUNDS - 1).to_string().as_str())
+    );
+    let body: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "Here is what I found."
+    );
+    assert_eq!(body["aiplane"]["tool_budget_exhausted"], true);
+    assert_eq!(body["aiplane"]["tool_rounds"], MAX_ROUNDS - 1);
+    assert_eq!(
+        chat_calls(&upstream).await,
+        MAX_ROUNDS as usize,
+        "the hard bound holds"
+    );
+}
+
+#[tokio::test]
+async fn a_streamed_request_that_exhausts_the_tool_budget_still_gets_an_answer() {
+    let (resp, upstream) = research_request(true, honours_tool_choice).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.ends_with("data: [DONE]\n\n"), "{body}");
+    assert!(!body.contains("\"tool_calls\""), "{body}");
+
+    let frames = data_frames(&body);
+    let content: String = frames
+        .iter()
+        .filter_map(|f| f["choices"][0]["delta"]["content"].as_str())
+        .collect();
+    assert_eq!(content, "Here is what I found.");
+    let last = frames.last().unwrap();
+    assert_eq!(last["choices"][0]["finish_reason"], "stop");
+    assert_eq!(
+        last["aiplane"],
+        json!({"tool_rounds": MAX_ROUNDS - 1, "tool_budget_exhausted": true}),
+        "the signal rides the finish chunk: {body}"
+    );
+    assert_eq!(
+        frames.iter().filter(|f| f.get("aiplane").is_some()).count(),
+        1
+    );
+    assert_eq!(chat_calls(&upstream).await, MAX_ROUNDS as usize);
+}
+
+/// A model that calls tools despite `tool_choice: "none"` (seen on vLLM) gets
+/// one closing round with the tools withheld, streamed like any other.
+#[tokio::test]
+async fn a_streamed_model_that_ignores_the_final_round_is_closed_without_tools() {
+    let (resp, upstream) = research_request(true, answers_only_without_tools).await;
+    let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
+    let frames = data_frames(&body);
+    assert_eq!(
+        frames.last().unwrap()["aiplane"]["tool_budget_exhausted"],
+        true,
+        "{body}"
+    );
+    assert!(body.contains("Here is what I found."), "{body}");
+    assert_eq!(
+        chat_calls(&upstream).await,
+        MAX_ROUNDS as usize + 1,
+        "one request past the budget"
+    );
+
+    let requests = upstream.received_requests().await.unwrap();
+    let closing: serde_json::Value =
+        serde_json::from_slice(&requests.last().unwrap().body).unwrap();
+    assert!(closing.get("tools").is_none());
+    assert!(closing.get("tool_choice").is_none());
+}
+
+/// No answer even after the closing round: an error a client can tell from a
+/// failure before any work — its own code, the rounds that ran in the text.
+#[tokio::test]
+async fn a_request_that_never_stops_calling_tools_fails_with_a_budget_error() {
+    let (resp, upstream) = research_request(false, never_answers).await;
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    let body: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(body["error"]["code"], "tool_budget_exhausted");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains(&format!("after {} tool rounds", MAX_ROUNDS - 1))),
+        "{body}"
+    );
+    assert_eq!(chat_calls(&upstream).await, MAX_ROUNDS as usize + 1);
+}
+
+#[tokio::test]
+async fn a_streamed_request_that_never_stops_calling_tools_ends_on_a_budget_error() {
+    let (resp, upstream) = research_request(true, never_answers).await;
+    let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
+    let frames = data_frames(&body);
+    let error = &frames.last().unwrap()["error"];
+    assert_eq!(error["code"], "tool_budget_exhausted", "{body}");
+    assert!(body.ends_with("data: [DONE]\n\n"));
+    assert_eq!(chat_calls(&upstream).await, MAX_ROUNDS as usize + 1);
+}
+
+/// Qwen on SGLang/vLLM on its final round: the tool parser is off under
+/// `tool_choice: "none"`, so the call it makes anyway arrives as content,
+/// split across chunks. Answers only once the tools are gone.
+struct WrittenOutCallResponder {
+    preamble: &'static str,
+}
+
+impl wiremock::Respond for WrittenOutCallResponder {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        let chunk = |delta: serde_json::Value, finish: serde_json::Value| {
+            json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+        };
+        let frames = if body.get("tools").is_none() {
+            vec![
+                chunk(json!({"content": "Here is what I found."}), json!(null)),
+                chunk(json!({}), json!("stop")),
+            ]
+        } else if body["tool_choice"] == "none" {
+            vec![
+                chunk(
+                    json!({"role": "assistant", "content": format!("{}<tool", self.preamble)}),
+                    json!(null),
+                ),
+                chunk(
+                    json!({"content": "_call>\n<function=company_echo>\n<parameter=message>\nmore\n</parameter>\n</function>\n</tool_call>"}),
+                    json!(null),
+                ),
+                chunk(json!({}), json!("stop")),
+            ]
+        } else {
+            vec![
+                chunk(
+                    json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-r", "type": "function",
+                    "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]}),
+                    json!(null),
+                ),
+                chunk(json!({}), json!("tool_calls")),
+            ]
+        };
+        ResponseTemplate::new(200).set_body_raw(sse_body(&frames), "text/event-stream")
+    }
+}
+
+async fn streamed_written_out_call(preamble: &'static str) -> (String, usize) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(WrittenOutCallResponder { preamble })
+        .mount(&upstream)
+        .await;
+    let state = state_with_tools(&upstream.uri()).await;
+    let bearer = seed_engineer_with_bearer(&state).await;
+    let app = router(Arc::new(state));
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "model-a", "stream": true,
+                "messages": [{"role": "user", "content": "research this sender"}]})
+            .to_string(),
+        ))
+        .unwrap();
+    let body = String::from_utf8(
+        common::read_body(app.serve(req).await.unwrap())
+            .await
+            .to_vec(),
+    )
+    .unwrap();
+    (body, chat_calls(&upstream).await)
+}
+
+fn streamed_content(body: &str) -> String {
+    data_frames(body)
+        .iter()
+        .filter_map(|f| {
+            f["choices"][0]["delta"]["content"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_tool_call_written_out_on_the_final_round_never_reaches_the_client() {
+    let (body, calls) = streamed_written_out_call("Found three leads.\n\n").await;
+    assert!(!body.contains("tool_call>"), "{body}");
+    assert!(!body.contains("function="), "{body}");
+    assert_eq!(streamed_content(&body), "Found three leads.\n\n");
+    let frames = data_frames(&body);
+    assert_eq!(
+        frames.last().unwrap()["aiplane"]["tool_budget_exhausted"],
+        true,
+        "{body}"
+    );
+    assert_eq!(
+        calls, MAX_ROUNDS as usize,
+        "the preamble is the answer; no closing round"
+    );
+}
+
+#[tokio::test]
+async fn a_final_round_that_only_writes_out_a_call_gets_a_closing_round() {
+    let (body, calls) = streamed_written_out_call("").await;
+    assert!(!body.contains("tool_call>"), "{body}");
+    assert_eq!(streamed_content(&body), "Here is what I found.");
+    let frames = data_frames(&body);
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| f["choices"][0]["finish_reason"].is_string())
+            .count(),
+        1,
+        "the ignored round's finish must not end the message early: {body}"
+    );
+    assert_eq!(
+        frames.last().unwrap()["aiplane"]["tool_budget_exhausted"],
+        true
+    );
+    assert_eq!(calls, MAX_ROUNDS as usize + 1);
+}

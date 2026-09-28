@@ -384,11 +384,24 @@ client tool in one turn.
 
 ### Bounds
 
-- **Rounds per turn** — `MAX_TOOL_ROUNDS` = **16**. A compile-time constant,
-  not configurable, shared by all three loops (buffered `/v1`, streaming `/v1`,
-  chat-UI driver) so they can't silently diverge again. Exceeding it surfaces
-  as `500` with `code = "internal_error"` and the message `tool-call loop
-  exhausted after N rounds`.
+- **Rounds per turn** — `MAX_TOOL_ROUNDS` = **16** for both `/v1` loops
+  (buffered and streaming, as a `runner::RoundBudget`). This is a compile-time
+  constant and not configurable. The chat-UI driver takes its cap from the
+  conversation's effort level instead (`Effort::max_rounds`; Standard = 16).
+  All three close the budget the same way, through
+  `runner::prepare_final_round`. The last round tells the model in the system
+  message to answer from what it has. It then either sends `tool_choice:
+  "none"` or withholds the tools, according to
+  `ServingProfile::honors_tool_choice`; Ollama, vLLM and SGLang get the tools
+  withheld. A call the model makes anyway, structured or written out as
+  `<tool_call>` text, never runs, and the text is cut from the reply. If
+  nothing else was written, the model gets one closing round with no tools
+  (`prepare_closing_round`). On `/v1` the answer comes back as a normal
+  completion carrying the `aiplane.tool_budget_exhausted` signal, and an empty
+  closing round fails as `502 tool_budget_exhausted`. In the chat UI an empty
+  closing round ends the turn with the "ran its tools but wrote no answer"
+  notice. See
+  [`gateway-api.md`](gateway-api.md#tool-round-budget).
 - **Per-tool timeout** — 30s, overridable per tool via `max_duration`.
 - **Concurrency** — tool calls within one round run concurrently, bounded by a
   per-request semaphore of 4.

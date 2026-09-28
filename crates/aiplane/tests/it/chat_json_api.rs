@@ -2585,3 +2585,99 @@ async fn removing_an_attachment_drops_only_its_marker() {
         "the typed text must survive: {after}"
     );
 }
+
+/// A chat model researching without end, then doing what Qwen on SGLang does
+/// on six of seven budget-exhausted turns: under `tool_choice: "none"` it
+/// writes its next call out as text. It answers only in the closing round
+/// (final-round notice, no tools, no `tool_choice`). Keyed on the request, not
+/// a counter, so a side request (a title) cannot shift the script.
+struct ResearchingChatResponder;
+
+impl ResearchingChatResponder {
+    fn is_closing(body: &serde_json::Value) -> bool {
+        body.get("tools").is_none()
+            && body.get("tool_choice").is_none()
+            && body["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("FINAL round"))
+    }
+}
+
+impl wiremock::Respond for ResearchingChatResponder {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        let delta = if Self::is_closing(&body) {
+            serde_json::json!({"content": "Here is what I found."})
+        } else if body["tool_choice"] == "none" {
+            serde_json::json!({"content": "<tool_call>\n<function=get_user_location>\n</function>\n</tool_call>"})
+        } else {
+            serde_json::json!({"tool_calls": [{"index": 0, "id": "call-r", "type": "function",
+                "function": {"name": "get_user_location", "arguments": "{}"}}]})
+        };
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices": [{"index": 0, "delta": delta}]})
+        );
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    }
+}
+
+/// The unfinished `<tool_call><function=…>` replies users kept seeing: a chat
+/// turn that runs out of rounds must end on an answer, with the written-out
+/// call gone from the turn, not on the call itself.
+#[tokio::test]
+async fn a_chat_turn_whose_model_writes_out_a_call_on_its_final_round_ends_on_an_answer() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResearchingChatResponder)
+        .mount(&upstream)
+        .await;
+    let (state, cookie) = setup_with_location_tool(&upstream.uri()).await;
+    let app = router(state.clone());
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+
+    let resp = app
+        .serve(json_req(
+            Method::POST,
+            format!("/api/v0/chat/sessions/{}/messages", session.id),
+            &cookie,
+            Some(r#"{"model":"model-a","message":"research this"}"#.into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let accepted: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let turn_id = accepted["assistant_turn_id"].as_str().unwrap().to_string();
+    wait_for_idle(&state, "alice").await;
+
+    let content = chat::get_content(&state.db, &turn_id)
+        .await
+        .unwrap()
+        .unwrap_or_default();
+    assert_eq!(content, "Here is what I found.");
+
+    let requests: Vec<serde_json::Value> = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|b| b["tool_choice"] == "none")
+            .count(),
+        1,
+        "one final round"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|b| ResearchingChatResponder::is_closing(b))
+            .count(),
+        1,
+        "exactly one request past the budget"
+    );
+}

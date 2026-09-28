@@ -849,6 +849,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         .header(rama::http::header::CONTENT_TYPE, "application/json")
         .header("x-gateway-tool-rounds", outcome.rounds.to_string())
         .body(outcome.body.into())
+        .map(|resp| with_budget_header(resp, outcome.budget_exhausted))
         .unwrap_or_else(|err| {
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1062,6 +1063,20 @@ pub(crate) fn with_automatic_route_headers(
     response
 }
 
+/// `X-Gateway-Tool-Budget-Exhausted: true` when the gateway closed the turn
+/// because its round budget ran out. Buffered responses only: a stream's
+/// headers leave before the budget is known, so there the body signal is the
+/// only one.
+pub(crate) fn with_budget_header(mut response: Response, budget_exhausted: bool) -> Response {
+    if budget_exhausted {
+        response.headers_mut().insert(
+            "x-gateway-tool-budget-exhausted",
+            rama::http::HeaderValue::from_static("true"),
+        );
+    }
+    response
+}
+
 fn loop_error_response(err: LoopError) -> Response {
     match err {
         LoopError::MalformedRequest(m) => {
@@ -1075,10 +1090,10 @@ fn loop_error_response(err: LoopError) -> Response {
             "internal_error",
             &format!("upstream returned unparseable JSON: {m}"),
         ),
-        LoopError::LoopExhausted(n) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            &format!("tool-call loop exhausted after {n} rounds"),
+        err @ LoopError::ToolBudgetExhausted(_) => error_response(
+            StatusCode::BAD_GATEWAY,
+            runner::TOOL_BUDGET_EXHAUSTED_CODE,
+            &err.to_string(),
         ),
     }
 }
@@ -2573,6 +2588,10 @@ pub(crate) struct StreamFailure {
     /// than a transport error or a decision of ours.
     pub(crate) status: Option<u16>,
     pub(crate) message: String,
+    /// Machine-readable `code` for a failure of ours that a client must be
+    /// able to tell apart from the rest, such as
+    /// [`runner::TOOL_BUDGET_EXHAUSTED_CODE`].
+    pub(crate) code: Option<&'static str>,
 }
 
 impl StreamFailure {
@@ -2580,6 +2599,17 @@ impl StreamFailure {
         Self {
             status: Some(status),
             message: message.into(),
+            code: None,
+        }
+    }
+
+    fn from_loop_error(err: &LoopError) -> Self {
+        let (status, message) = err.status_and_message();
+        Self {
+            status: Some(status),
+            message,
+            code: matches!(err, LoopError::ToolBudgetExhausted(_))
+                .then_some(runner::TOOL_BUDGET_EXHAUSTED_CODE),
         }
     }
 }
@@ -2591,6 +2621,7 @@ impl From<String> for StreamFailure {
         Self {
             status: None,
             message,
+            code: None,
         }
     }
 }
@@ -2672,7 +2703,11 @@ impl StreamSink for OpenAiSink {
     fn error(&mut self, failure: &StreamFailure) -> Vec<Bytes> {
         let chunk = format!(
             "data: {}\n\n",
-            json!({"error": {"message": failure.message, "type": "internal_error"}})
+            json!({"error": {
+                "message": failure.message,
+                "type": failure.code.unwrap_or("internal_error"),
+                "code": failure.code,
+            }})
         );
         vec![Bytes::from(chunk), Bytes::from_static(b"data: [DONE]\n\n")]
     }
@@ -2740,6 +2775,12 @@ pub(crate) async fn buffered_with_tools(
         auto_tools,
     );
     let offered = tool_source.offered_ids();
+    let budget = runner::RoundBudget::new(
+        state
+            .upstreams
+            .serving_profile(real_model, PoolKind::Chat, &access)
+            .honors_tool_choice,
+    );
 
     let round_state = state.clone();
     let round_model = real_model.to_string();
@@ -2755,6 +2796,7 @@ pub(crate) async fn buffered_with_tools(
         &offered,
         &tool_ctx,
         request_body,
+        budget,
         move |body_value| {
             let state = round_state.clone();
             let model = round_model.clone();
@@ -2950,10 +2992,6 @@ pub(crate) async fn stream_with_tools(
         })
 }
 
-// Shared cap (one source of truth) so the streaming proxy, the buffered
-// runner, and the chat driver can't drift apart on round limits.
-use runner::MAX_TOOL_ROUNDS as STREAM_TOOL_LOOP_MAX_ROUNDS;
-
 /// Top-level envelope fields lifted off the upstream's own SSE chunks so
 /// any chunk we synthesize (see [`synth_client_tool_call_chunks`]) carries
 /// the same `id` / `created` / `model` / `system_fingerprint` the client
@@ -3131,9 +3169,36 @@ async fn drive_streaming_tool_loop_inner(
     }
     let suppress_usage_frame = !client_wants_usage;
 
-    for _round in 0..STREAM_TOOL_LOOP_MAX_ROUNDS {
+    // The same round budget, and the same way of closing it, as the buffered
+    // runner and the chat driver.
+    let budget = runner::RoundBudget::new(
+        state
+            .upstreams
+            .serving_profile(&model, PoolKind::Chat, &access)
+            .honors_tool_choice,
+    );
+    let mut rounds = 0u32;
+    // Set once the model ignored its final round: the next request is the one
+    // closing round past the budget.
+    let mut closing = false;
+
+    loop {
+        let final_round = closing || budget.is_final(rounds);
+        let mut round_body = request_body.clone();
+        if closing {
+            runner::prepare_closing_round(&mut round_body);
+        } else if final_round {
+            runner::prepare_final_round(&mut round_body, budget.honors_tool_choice);
+            tracing::info!(
+                max_rounds = budget.max_rounds,
+                tools_withheld = !budget.honors_tool_choice,
+                "tool-round budget reached; requesting final answer with tool choice none"
+            );
+        }
         // See the note in `buffered_round`: keyed off the unchanging head of the
         // conversation, so every round of this loop lands on the same replica.
+        // Taken from the unrestricted body: the final-round notice rewrites the
+        // system message, which would otherwise move the last round elsewhere.
         let affinity = aiplane_core::server::upstreams::affinity::hint_for_request(
             &client_headers,
             &request_body,
@@ -3171,7 +3236,7 @@ async fn drive_streaming_tool_loop_inner(
                 let backend_name = acquired.backend().name.clone();
                 let started = Instant::now();
                 let url = format!("{}/chat/completions", acquired.backend().base_url);
-                let serialized = serde_json::to_vec(&request_body).map_err(|e| e.to_string())?;
+                let serialized = serde_json::to_vec(&round_body).map_err(|e| e.to_string())?;
 
                 let mut http = state
                     .http
@@ -3257,6 +3322,7 @@ async fn drive_streaming_tool_loop_inner(
         // Token counts ride the trailing `usage` frame when the client opted
         // into `stream_options.include_usage` (we never inject it on /v1).
         let mut round_tokens: (Option<i64>, Option<i64>, Option<i64>) = (None, None, None);
+        let mut held = HeldRound::default();
         let mut sse = upstream.bytes_stream();
 
         while let Some(chunk) = sse.next().await {
@@ -3336,10 +3402,11 @@ async fn drive_streaming_tool_loop_inner(
                 if is_done || hide_event {
                     continue;
                 }
-                for frame in sink.visible_chunk(parsed.as_ref(), event_bytes) {
-                    tx.unbounded_send(Ok(frame))
-                        .map_err(|e| format!("client disconnected: {e}"))?;
+                if final_round {
+                    held.push(parsed, event_bytes);
+                    continue;
                 }
+                relay(tx, sink.visible_chunk(parsed.as_ref(), event_bytes))?;
             }
         }
         rec.emit(
@@ -3354,29 +3421,9 @@ async fn drive_streaming_tool_loop_inner(
         sink.round_usage(round_tokens);
         drop(acquired);
 
-        if tool_acc.is_empty() {
-            // Model finished without tool calls — final round.
-            return Ok(());
-        }
-
-        // A turn that calls any tool we don't own (the client's own tool,
-        // or a hallucinated name) goes back to the client — same rule as
-        // the buffered path: the client owns the message history here, so
-        // it must run its tools and re-submit. Re-emit the tool_calls we
-        // hid during streaming as one synthesized assistant delta + a
-        // `finish_reason:"tool_calls"` chunk so the client sees the whole
-        // turn, then end the stream (the caller appends `[DONE]`).
         let has_client_owned = tool_acc
             .values()
             .any(|acc| !acc.name.is_empty() && !tool_source.contains(&acc.name));
-        if has_client_owned {
-            for frame in sink.client_tool_calls(&chunk_meta, &tool_acc) {
-                tx.unbounded_send(Ok(frame))
-                    .map_err(|e| format!("client disconnected: {e}"))?;
-            }
-            return Ok(());
-        }
-
         let gateway_owned: Vec<runner::ToolCallRef> = tool_acc
             .values()
             .filter(|acc| tool_source.contains(&acc.name))
@@ -3387,58 +3434,228 @@ async fn drive_streaming_tool_loop_inner(
             })
             .collect();
 
+        // A turn that calls any tool we don't own (the client's own tool,
+        // or a hallucinated name) goes back to the client — same rule as
+        // the buffered path: the client owns the message history here, so
+        // it must run its tools and re-submit. Re-emit the tool_calls we
+        // hid during streaming as one synthesized assistant delta + a
+        // `finish_reason:"tool_calls"` chunk so the client sees the whole
+        // turn, then end the stream (the caller appends `[DONE]`).
+        let wrote_out_call = held.cut_written_out_call();
+        if has_client_owned {
+            relay(tx, held.frames(sink))?;
+            relay(tx, sink.client_tool_calls(&chunk_meta, &tool_acc))?;
+            return Ok(());
+        }
+
+        if final_round {
+            // A call the model made on its final (or closing) round, structured
+            // or written out as text, never runs.
+            let ignored = !gateway_owned.is_empty() || wrote_out_call;
+            let answered = held.has_text();
+            if closing && !answered {
+                return Err(StreamFailure::from_loop_error(
+                    &LoopError::ToolBudgetExhausted(rounds),
+                ));
+            }
+            if !ignored || answered {
+                relay(tx, held.close_frames(sink, &chunk_meta, rounds))?;
+                return Ok(());
+            }
+            tracing::warn!(
+                tool_rounds = rounds,
+                ignored_calls = gateway_owned.len(),
+                wrote_out_call,
+                "model called tools on its final round; asking once more with the tools withheld"
+            );
+            relay(tx, held.frames_without_finish(sink))?;
+            if !gateway_owned.is_empty() {
+                let messages = request_body
+                    .get_mut("messages")
+                    .and_then(|m| m.as_array_mut())
+                    .ok_or_else(|| "request body missing messages array".to_string())?;
+                runner::push_unrun_round(messages, &gateway_owned);
+            }
+            closing = true;
+            continue;
+        }
+
         if gateway_owned.is_empty() {
-            // Only unnamed/garbage tool-call fragments survived — nothing
-            // to run and nothing the client needs. End cleanly rather than
-            // loop with empty tool results.
+            // Model finished without tool calls, or only unnamed/garbage
+            // tool-call fragments survived — nothing to run and nothing the
+            // client needs. End cleanly rather than loop with empty results.
             return Ok(());
         }
 
         let results = runner::execute_tool_calls(&tool_source, &tool_ctx, &gateway_owned).await;
-
-        // No client-owned calls here (handled above), so every accumulated
-        // call is gateway-owned — build the assistant turn straight off
-        // `gateway_owned` to keep each tool_call paired with its result.
-        let assistant_tool_calls: Vec<Value> = gateway_owned
-            .iter()
-            .map(|call| {
-                json!({
-                    "id": call.id.clone(),
-                    "type": "function",
-                    "function": {
-                        "name": call.name.clone(),
-                        // Normalise before replaying upstream: an empty/garbage
-                        // args string (common for no-arg tools) 400s a strict
-                        // re-parse (Mistral/`mistral_common`'s `json.loads`).
-                        "arguments": runner::normalize_tool_arguments(&call.arguments_raw),
-                    }
-                })
-            })
-            .collect();
-
-        let messages = request_body
-            .get_mut("messages")
-            .and_then(|m| m.as_array_mut())
-            .ok_or_else(|| "request body missing messages array".to_string())?;
-        messages.push(json!({
-            "role": "assistant",
-            "content": Value::Null,
-            "tool_calls": assistant_tool_calls,
-        }));
-        for (call, result) in gateway_owned.iter().zip(results.iter()) {
-            let output_str =
-                serde_json::to_string(&result.body).unwrap_or_else(|_| "{}".to_string());
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": &call.id,
-                "content": output_str,
-            }));
-        }
+        append_tool_round(&mut request_body, &gateway_owned, &results)?;
         runner::inject_tools(&mut request_body, &tool_source, &tool_source.offered_ids())
             .map_err(|err| err.to_string())?;
+        rounds += 1;
+    }
+}
+
+fn relay(
+    tx: &mut mpsc::UnboundedSender<Result<Bytes, std::io::Error>>,
+    frames: Vec<Bytes>,
+) -> Result<(), StreamFailure> {
+    for frame in frames {
+        tx.unbounded_send(Ok(frame))
+            .map_err(|e| format!("client disconnected: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The round that may close a streamed turn, held back until it is over.
+///
+/// Only then is it known whether the budget closed the turn (the signal rides
+/// on the `finish_reason` chunk) and whether the model wrote a tool call out
+/// as text instead of answering, which must never reach the client. The cost
+/// is that this one round arrives in one piece instead of live.
+#[derive(Default)]
+struct HeldRound {
+    frames: Vec<(Option<Value>, Vec<u8>)>,
+}
+
+impl HeldRound {
+    fn push(&mut self, chunk: Option<Value>, raw: Vec<u8>) {
+        self.frames.push((chunk, raw));
     }
 
-    Err(format!("tool-call loop exhausted after {STREAM_TOOL_LOOP_MAX_ROUNDS} rounds").into())
+    fn content(chunk: &Value) -> Option<&str> {
+        chunk
+            .pointer("/choices/0/delta/content")
+            .and_then(Value::as_str)
+    }
+
+    fn text(&self) -> String {
+        self.frames
+            .iter()
+            .filter_map(|(chunk, _)| chunk.as_ref().and_then(Self::content))
+            .collect()
+    }
+
+    fn has_text(&self) -> bool {
+        !self.text().trim().is_empty()
+    }
+
+    /// Cut a tool call the model wrote out as text, and everything after it,
+    /// out of the held content. Returns whether there was one.
+    fn cut_written_out_call(&mut self) -> bool {
+        let Some(start) = runner::tool_call_markup_start(&self.text()) else {
+            return false;
+        };
+        let mut pos = 0;
+        for (chunk, raw) in &mut self.frames {
+            let Some(chunk) = chunk else { continue };
+            let Some(content) = Self::content(chunk) else {
+                continue;
+            };
+            let len = content.len();
+            if pos + len > start {
+                // `start` and every chunk boundary are char boundaries of the
+                // joined text, so this offset is one of `content`'s.
+                let kept = content[..start.saturating_sub(pos)].to_string();
+                chunk["choices"][0]["delta"]["content"] = json!(kept);
+                *raw = format!("data: {chunk}\n\n").into_bytes();
+            }
+            pos += len;
+        }
+        true
+    }
+
+    fn frames(self, sink: &mut dyn StreamSink) -> Vec<Bytes> {
+        self.frames
+            .into_iter()
+            .flat_map(|(chunk, raw)| sink.visible_chunk(chunk.as_ref(), raw))
+            .collect()
+    }
+
+    /// For a round that does not end the message: a `finish_reason` here would
+    /// tell the client the answer is over before the closing round writes it.
+    fn frames_without_finish(mut self, sink: &mut dyn StreamSink) -> Vec<Bytes> {
+        self.frames
+            .retain(|(chunk, _)| !chunk.as_ref().is_some_and(has_finish_reason));
+        self.frames(sink)
+    }
+
+    /// The frames that end a turn the round budget closed: the round's own
+    /// `finish_reason` chunk stamped with the budget signal — or, when that
+    /// chunk was a hidden `tool_calls` one, a synthesized `stop` in its place.
+    fn close_frames(
+        mut self,
+        sink: &mut dyn StreamSink,
+        meta: &ChunkMeta,
+        rounds: u32,
+    ) -> Vec<Bytes> {
+        let finish = self
+            .frames
+            .iter()
+            .position(|(chunk, _)| chunk.as_ref().is_some_and(has_finish_reason));
+        let index = finish.unwrap_or_else(|| {
+            let stop = meta.envelope(json!([{"index": 0, "delta": {}, "finish_reason": "stop"}]));
+            self.frames.push((Some(stop), Vec::new()));
+            self.frames.len() - 1
+        });
+        let (chunk, raw) = &mut self.frames[index];
+        if let Some(chunk) = chunk {
+            runner::mark_budget_exhausted(chunk, rounds);
+            *raw = format!("data: {chunk}\n\n").into_bytes();
+        }
+        self.frames(sink)
+    }
+}
+
+fn has_finish_reason(chunk: &Value) -> bool {
+    chunk
+        .pointer("/choices/0/finish_reason")
+        .is_some_and(Value::is_string)
+}
+
+/// Append one round's assistant tool-call message and its results to the
+/// conversation. No client-owned calls reach here, so every call is
+/// gateway-owned and the assistant turn is built straight off them, keeping
+/// each tool_call paired with its result.
+fn append_tool_round(
+    request_body: &mut Value,
+    calls: &[runner::ToolCallRef],
+    results: &[runner::ToolResultRecord],
+) -> Result<(), StreamFailure> {
+    let assistant_tool_calls: Vec<Value> = calls
+        .iter()
+        .map(|call| {
+            json!({
+                "id": call.id.clone(),
+                "type": "function",
+                "function": {
+                    "name": call.name.clone(),
+                    // Normalise before replaying upstream: an empty/garbage
+                    // args string (common for no-arg tools) 400s a strict
+                    // re-parse (Mistral/`mistral_common`'s `json.loads`).
+                    "arguments": runner::normalize_tool_arguments(&call.arguments_raw),
+                }
+            })
+        })
+        .collect();
+
+    let messages = request_body
+        .get_mut("messages")
+        .and_then(|m| m.as_array_mut())
+        .ok_or_else(|| "request body missing messages array".to_string())?;
+    messages.push(json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "tool_calls": assistant_tool_calls,
+    }));
+    for (call, result) in calls.iter().zip(results.iter()) {
+        let output_str = serde_json::to_string(&result.body).unwrap_or_else(|_| "{}".to_string());
+        messages.push(json!({
+            "role": "tool",
+            "tool_call_id": &call.id,
+            "content": output_str,
+        }));
+    }
+    Ok(())
 }
 
 /// vLLM hard-rejects `stream_options` when `stream` isn't `true`
