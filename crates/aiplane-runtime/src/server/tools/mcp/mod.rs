@@ -481,7 +481,8 @@ mod tests {
                 "model": "fixture-model",
                 "messages": [{"role": "user", "content": "find the fixture"}],
             }),
-            move |request| {
+            runner::RoundBudget::default(),
+            move |request: serde_json::Value| {
                 let tool_id = tool_id_for_upstream.clone();
                 let rounds = upstream_rounds.clone();
                 async move {

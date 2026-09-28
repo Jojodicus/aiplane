@@ -102,6 +102,29 @@ Beyond the relayed upstream headers, AIplane may add:
 |---|---|---|
 | `X-Gateway-Resolved-Model` | Alias/fallback fired | The real model id that actually served the request. |
 | `X-Gateway-Tool-Rounds` | Non-streaming chat completion that ran the gateway tool loop | Number of upstream rounds the tool loop took. Absent on the byte-dumb fast path and on streaming responses. |
+| `X-Gateway-Tool-Budget-Exhausted` | Non-streaming response whose turn the tool-round budget closed | Always `true` when present. Same fact as the [`aiplane` body field](#tool-round-budget); absent otherwise. |
+
+## Tool-round budget
+
+A request that runs gateway tools (including `web_search_options`) is one whole agentic turn, bounded by a hard round budget (`MAX_TOOL_ROUNDS`, 16 upstream requests). Running out of rounds does **not** discard the work:
+
+1. The last round the budget allows is a *final round*: the model is told its tools are spent and asked to answer from the results it already has. On Ollama, vLLM and SGLang the tool definitions are left out of that request; elsewhere it sends `tool_choice: "none"`. Ollama ignores `tool_choice`. vLLM and SGLang switch their tool parser off under it while the model still sees its tools, so Qwen writes the call out as text instead (see `BackendProfile::honors_tool_choice`).
+2. The answer is returned as an ordinary `200` completion, with `finish_reason: "stop"`, plus a top-level signal:
+
+   ```json
+   {
+     "choices": [{"message": {"role": "assistant", "content": "…"}, "finish_reason": "stop"}],
+     "aiplane": {"tool_rounds": 15, "tool_budget_exhausted": true}
+   }
+   ```
+
+   `tool_rounds` is the number of tool rounds that actually ran. When streaming, the same object rides the chunk that carries the `finish_reason`, the last one before `[DONE]`. The field appears **only** when the budget closed the turn, so a client that ignores it sees a normal completion.
+3. A model that calls a tool on the final round anyway never has that call run or handed to the client. That includes a call written out as text (`<tool_call>…` or `<function=…>`): it is cut from the content together with everything after it. When streaming, the final round is therefore held back and arrives in one piece at its end rather than live. If the model also wrote text, that text is the answer. If it wrote nothing, it gets exactly one *closing round* with no tools, where each ignored call is answered as "not run". So a turn takes at most `MAX_TOOL_ROUNDS + 1` upstream requests.
+4. Only if the closing round also comes back without text does the request fail: `502` with `code: "tool_budget_exhausted"` (a streamed request ends on an error chunk with the same `code`, then `[DONE]`). The code is never used for a failure that happened before any tool work.
+
+A turn that calls a client-owned tool is handed back to the client as always, and carries no budget signal.
+
+`/v1/messages` follows the same rounds. Its buffered response sets `X-Gateway-Tool-Budget-Exhausted`; the Anthropic wire format has no slot for the body field, so a streamed Anthropic response carries no signal.
 
 ## Streaming
 
@@ -117,7 +140,7 @@ Hop-by-hop and identity headers are filtered in both directions. Requests drop `
 
 ## Schema
 
-We mirror the OpenAI schema for compatibility. We do **not** invent new request/response body fields; gateway-specific signals go in headers (`X-Gateway-Resolved-Model`, `X-Gateway-Tool-Rounds`), never in the body. Handlers only read the fields they care about (`model`, `stream`, `messages`, `tools`) and pass the rest through to the upstream unmodified.
+We mirror the OpenAI schema for compatibility. We do **not** invent new request/response body fields; gateway-specific signals go in headers (`X-Gateway-Resolved-Model`, `X-Gateway-Tool-Rounds`). The one exception is the [`aiplane` budget signal](#tool-round-budget): a stream's headers leave before the budget is known, so it cannot be a header only. It is additive and appears only when the budget closed the turn. Handlers only read the fields they care about (`model`, `stream`, `messages`, `tools`) and pass the rest through to the upstream unmodified.
 
 ## Usage and cost accounting
 
@@ -176,8 +199,9 @@ Status codes AIplane itself produces:
 | `400` | `invalid_request` | Malformed body, missing `model`, unparseable multipart. |
 | `401` | `unauthorized` | Missing / malformed / unknown bearer token. |
 | `404` | `model_not_found` | No backend in any pool serves the requested model. |
-| `500` | `internal_error` | Internal failure, unparseable upstream JSON, or a tool loop that exhausted its round budget. |
+| `500` | `internal_error` | Internal failure or unparseable upstream JSON. |
 | `502` | `upstream_unreachable` | A chosen backend was contacted but the transport/read failed. |
+| `502` | `tool_budget_exhausted` | Tool rounds ran, but the model never produced text, even in the closing round after the budget ran out. See [Tool-round budget](#tool-round-budget). |
 | `503` | `upstream_unreachable` | No healthy backend for the model's pool, or the pool is saturated. |
 
 There is no built-in per-user rate limiting today.

@@ -353,92 +353,6 @@ fn take_safe_content(buf: &mut String) -> String {
 
 use crate::server::tools::runner::ToolCallAcc;
 
-/// Tell the upstream that the round it is about to take must not call a tool.
-///
-/// `honors_tool_choice` is what the serving backend said about itself (see
-/// `upstreams::ServingProfile`), and it changes *which* mechanism does the
-/// work:
-///
-///   * **`true`** — send `tool_choice: "none"` and keep the definitions in the
-///     request. Providers whose templates need the definitions to render an
-///     explicit no-tools turn depend on them being there; vLLM Gemma
-///     deployments pair this with `--exclude-tools-when-tool-choice-none` to
-///     drop them from the prompt while keeping the signal.
-///   * **`false`** — withhold the definitions entirely. Ollama's OpenAI layer
-///     has no `tool_choice` field, so the value is discarded without a word
-///     and the model still sees its tools on the round that was supposed to
-///     end the turn. It then calls one, the loop is over, and the turn ends on
-///     a preamble for work that never happened — with nothing in any log to
-///     say why. Taking the tools away is cruder, and it is the only thing that
-///     actually holds on a server that ignores the polite version.
-///
-/// `tool_choice` is still sent in the second case: it costs nothing on a
-/// server that ignores it, and any server that later learns the field gets the
-/// clearer signal without a code change.
-fn configure_final_tool_round(body: &mut serde_json::Value, honors_tool_choice: bool) {
-    let Some(obj) = body.as_object_mut() else {
-        return;
-    };
-    obj.insert("tool_choice".into(), serde_json::json!("none"));
-    if !honors_tool_choice {
-        obj.remove("tools");
-    }
-}
-
-/// Tell the model, in words, that the round it is about to take is its last.
-///
-/// `configure_final_tool_round` withholds the tools, which guarantees *some*
-/// text comes back — but a model that doesn't know why its tools vanished
-/// writes the text it was going to write anyway: the preamble for the tool call
-/// it intended to make next ("All files written. Let me bundle them into a zip
-/// for one download."). The turn then ends on a promise, the user cannot tell a
-/// finished turn from a hung one, and asking "did that complete?" gets an answer
-/// built from what the model *meant* to do rather than what it did.
-///
-/// So the mechanical signal gets a stated one alongside it. Written into the
-/// request only — never into the persisted `messages` — so it applies to this
-/// round and leaves no trace in the conversation.
-///
-/// It is *merged into the leading system message* rather than appended as a
-/// second one. Appending was a hard bug: the Qwen3 vLLM chat template rejects
-/// any `system` turn that is not first ("System message must be at the
-/// beginning"), so on that backend every turn that exhausted its round budget
-/// died on a 400 — throwing away a full turn of completed tool work at the
-/// exact moment the model was about to report it. The same one-system-turn
-/// invariant [`leading_system_message`] exists to keep.
-///
-/// This is the *budget-spent* case only. The same failure with rounds still on
-/// the clock — the model simply stops calling tools after announcing its plan —
-/// is addressed by [`TURN_DISCIPLINE`], which rides in every round.
-fn announce_final_round(body: &mut serde_json::Value) {
-    const NOTICE: &str = "This is your FINAL round for this turn: your tool budget is spent and \
-                          no further tool call can run, so nothing you say you are about to do \
-                          will happen. Answer now, from what you already have. State plainly \
-                          what you did and did not manage to finish; do not write a preamble \
-                          for work you cannot do, and do not claim any file was produced, \
-                          attached or made downloadable unless a tool result in this turn \
-                          actually says so.";
-
-    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
-        return;
-    };
-    // The driver always puts a system message at index 0 (see
-    // `leading_system_message`), so this is the merge path in practice; the
-    // insert is for callers that don't, and it still lands at the front.
-    match messages.first_mut() {
-        Some(first) if first.get("role").and_then(|r| r.as_str()) == Some("system") => {
-            // String content is the shape this driver builds. A block-array
-            // system message (a `/v1` caller's shape) is left alone rather
-            // than stringified, which would flatten a structure the upstream
-            // may need — the mechanical `tool_choice: none` still applies.
-            if let Some(text) = first.get("content").and_then(|c| c.as_str()) {
-                first["content"] = serde_json::json!(format!("{text}\n\n---\n\n{NOTICE}"));
-            }
-        }
-        _ => messages.insert(0, serde_json::json!({"role": "system", "content": NOTICE})),
-    }
-}
-
 /// Ensure every tool call in one round has a non-empty id that is unique
 /// *within the turn*. Some OpenAI-compatible backends (qwen / vLLM are the
 /// usual offenders) emit `tool_call_id`s that are empty or recycled per
@@ -490,7 +404,45 @@ fn unavailable_tool_message(name: &str, allowed_tools: &[String]) -> String {
 }
 
 fn unparsed_tool_markup(content: &str) -> bool {
-    content.contains("<tool_call>") || content.contains("<function=")
+    runner::tool_call_markup_start(content).is_some()
+}
+
+/// Cut a tool call the model wrote out as text in this round, and everything
+/// after it, out of the persisted turn. Returns whether there was one.
+///
+/// Located in the stored content rather than by length arithmetic: the round's
+/// text is the tail of it, but the store strips search-index sentinels on the
+/// way in, so the two need not be byte-for-byte the same length.
+async fn cut_written_out_call(
+    d: &OpenAiDriver,
+    ctx: &SessionContext,
+    round_content: &mut String,
+    wrote_any_content: &mut bool,
+) -> Result<bool, TurnError> {
+    let Some(start) = runner::tool_call_markup_start(round_content) else {
+        return Ok(false);
+    };
+    let round_len = round_content.len();
+    round_content.truncate(start);
+    let stored = chat::get_content(&d.state.db, &ctx.assistant_turn_id)
+        .await
+        .map_err(persist_err("get_content", &ctx.assistant_turn_id))?
+        .unwrap_or_default();
+    // Search only this round's tail, so text from an earlier round is never
+    // what gets cut.
+    let mut from = stored.len().saturating_sub(round_len);
+    while !stored.is_char_boundary(from) {
+        from -= 1;
+    }
+    if let Some(offset) = runner::tool_call_markup_start(&stored[from..]) {
+        let kept = stored[..from + offset].trim_end();
+        chat::set_content(&d.state.db, &ctx.assistant_turn_id, kept)
+            .await
+            .map_err(persist_err("set_content", &ctx.assistant_turn_id))?;
+        *wrote_any_content = !kept.trim().is_empty();
+        let _ = ctx.broadcast.send(TurnUpdate::Tick);
+    }
+    Ok(true)
 }
 
 /// Per-turn driver. Built once by the chat-message handler with the
@@ -1073,7 +1025,14 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         "tool-result byte budget for this turn"
     );
 
-    for round in 0..max_rounds {
+    // Set once the model ignored its final round: the one request past the
+    // budget is the closing round (`runner::prepare_closing_round`).
+    let mut closing = false;
+
+    for round in 0..=max_rounds {
+        if round == max_rounds && !closing {
+            break;
+        }
         if ctx.cancel.load(Ordering::SeqCst) {
             return Ok(TurnOutcome::default());
         }
@@ -1157,22 +1116,19 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &enabled_keys,
             &d.state.mcp_grant_for(&d.tool_ctx.roles),
         );
-        if final_round {
-            // Inject, then let `configure_final_tool_round` decide whether the
-            // definitions may stay — which depends on whether this backend
-            // honours `tool_choice` at all.
-            runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
-                .map_err(upstream_err)?;
-            configure_final_tool_round(&mut request_body, serving.honors_tool_choice);
-            announce_final_round(&mut request_body);
+        runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
+            .map_err(upstream_err)?;
+        if closing {
+            runner::prepare_closing_round(&mut request_body);
+        } else if final_round {
+            // Whether the definitions may stay depends on whether this backend
+            // can be trusted with `tool_choice` at all.
+            runner::prepare_final_round(&mut request_body, serving.honors_tool_choice);
             tracing::info!(
                 max_rounds,
                 tools_withheld = !serving.honors_tool_choice,
                 "tool-round budget reached; requesting final answer with tool choice none"
             );
-        } else {
-            runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
-                .map_err(upstream_err)?;
         }
         // Fill in admin-configured sampling defaults (temperature,
         // top_p, etc.) for keys the chat-page composer didn't set.
@@ -1539,6 +1495,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             );
         }
 
+        // A call written out as text on the round that must end the turn is
+        // as ignored as a structured one, and must not be left standing as the
+        // reply. It has already streamed into the turn, so it is cut back out.
+        let ends_turn = final_round || closing;
+        let wrote_out_call = ends_turn
+            && cut_written_out_call(d, &ctx, &mut round_content, &mut wrote_any_content).await?;
+
         if ctx.cancel.load(Ordering::SeqCst) {
             return Ok(TurnOutcome::default());
         }
@@ -1568,6 +1531,46 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             return Ok(TurnOutcome {
                 notice: Some(TRUNCATED_MESSAGE.to_string()),
             });
+        }
+
+        // The model called a tool on the round that had to end the turn. The
+        // call never runs; what it wrote alongside is the answer, and with
+        // nothing written it gets the closing round, as on `/v1`.
+        if ends_turn && (wrote_out_call || !tool_acc.is_empty()) {
+            let answered = !round_content.trim().is_empty();
+            if answered || closing {
+                if !wrote_any_content {
+                    return Ok(TurnOutcome {
+                        notice: Some(EMPTY_AFTER_TOOLS_MESSAGE.to_string()),
+                    });
+                }
+                return Ok(TurnOutcome::default());
+            }
+            tracing::warn!(
+                model = %ctx.model,
+                ignored_calls = tool_acc.len(),
+                wrote_out_call,
+                "model called tools on its final round; asking once more with the tools withheld"
+            );
+            if !tool_acc.is_empty() {
+                let mut collected: Vec<ToolCallAcc> = tool_acc.into_values().collect();
+                ensure_unique_tool_call_ids(
+                    &mut collected,
+                    round as usize,
+                    &mut seen_tool_call_ids,
+                );
+                let calls: Vec<runner::ToolCallRef> = collected
+                    .into_iter()
+                    .map(|acc| runner::ToolCallRef {
+                        id: acc.id,
+                        name: acc.name,
+                        arguments_raw: acc.arguments,
+                    })
+                    .collect();
+                runner::push_unrun_round(&mut messages, &calls);
+            }
+            closing = true;
+            continue;
         }
 
         // End of round. If no tool calls, we're done.
@@ -2637,7 +2640,7 @@ fn messages_for_history(turn: &session_core::db::TurnWithTools) -> Vec<serde_jso
 /// still thinking?", and *that* turn does the work while the model explains it
 /// was "processing in the background". It was not; there is no such thing here.
 ///
-/// [`announce_final_round`] says this already, but only when the tool budget is
+/// [`runner::announce_final_round`] says this already, but only when the tool budget is
 /// spent — the reported failures happen with most of the budget still unused
 /// (a handful of calls into a 32-round Deep turn). So it is stated standing, in
 /// the single leading system message, for every round of every turn (chat and
@@ -2985,10 +2988,9 @@ where
 mod tests {
     use super::{
         STEER_PREFIX, SessionContext, THINK_TAGS, ToolCallAcc, ToolCallStatus,
-        announce_final_round, configure_final_tool_round, ensure_unique_tool_call_ids,
-        fold_in_steers, inject_ocr_blocks, message_for_history, ocr_activity_result,
-        ocr_context_block, render_active_skills, render_skill_listing, take_safe_content,
-        truncated_output, unavailable_tool_message, unparsed_tool_markup,
+        ensure_unique_tool_call_ids, fold_in_steers, inject_ocr_blocks, message_for_history,
+        ocr_activity_result, ocr_context_block, render_active_skills, render_skill_listing,
+        take_safe_content, truncated_output, unavailable_tool_message, unparsed_tool_markup,
     };
     use aiplane_features::server::ocr::{OcrError, OcrOutcome};
     use aiplane_features::server::skills::{Skill, SkillRegistry};
@@ -3166,116 +3168,6 @@ mod tests {
         assert_eq!(stream(&["Hello, ", "world!"]), "Hello, world!");
     }
 
-    #[test]
-    fn final_tool_round_explicitly_disables_tool_choice() {
-        let mut body = serde_json::json!({"messages": [], "tools": [{"name": "a"}]});
-        configure_final_tool_round(&mut body, true);
-        assert_eq!(body["tool_choice"], serde_json::json!("none"));
-        // A backend that honours it keeps the definitions: some templates need
-        // them present to render an explicit no-tools turn.
-        assert!(body.get("tools").is_some());
-    }
-
-    /// Ollama has no `tool_choice` field, so the value is discarded in silence
-    /// and the model still sees its tools on the round meant to end the turn.
-    /// The only thing that holds there is taking them away.
-    #[test]
-    fn final_tool_round_withholds_tools_when_tool_choice_is_ignored() {
-        let mut body = serde_json::json!({"messages": [], "tools": [{"name": "a"}]});
-        configure_final_tool_round(&mut body, false);
-        assert!(
-            body.get("tools").is_none(),
-            "a backend that ignores tool_choice must not be left holding the tools"
-        );
-        // Still sent: free on a server that ignores it, and correct the moment
-        // one starts honouring it.
-        assert_eq!(body["tool_choice"], serde_json::json!("none"));
-    }
-
-    /// Withholding the tools guarantees text comes back, but not that the text
-    /// is an *answer*: a model that doesn't know why its tools vanished writes
-    /// the preamble for the call it meant to make next ("Let me bundle those
-    /// into a zip"), and the turn ends on a promise nothing will keep. So the
-    /// mechanical signal gets a stated one next to it.
-    #[test]
-    fn the_final_round_tells_the_model_it_is_the_final_round() {
-        let mut body = serde_json::json!({
-            "messages": [
-                {"role": "system", "content": "the standing rules"},
-                {"role": "user", "content": "make me the docs"},
-            ]
-        });
-        announce_final_round(&mut body);
-        let messages = body["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 2, "merged, not appended");
-        assert_eq!(messages[1]["content"], "make me the docs");
-        let note = messages[0]["content"].as_str().unwrap();
-        assert_eq!(messages[0]["role"], "system");
-        assert!(note.starts_with("the standing rules"), "{note}");
-        assert!(note.contains("FINAL round"), "{note}");
-        // The two failure modes it exists to head off.
-        assert!(note.contains("do not write a preamble"), "{note}");
-        assert!(note.contains("do not claim any file"), "{note}");
-    }
-
-    /// The regression this function was rewritten for. Appending the notice as
-    /// a *second* `system` message is rejected outright by the Qwen3 vLLM chat
-    /// template ("System message must be at the beginning"), so a turn that
-    /// exhausted its round budget died on a 400 and threw away every tool
-    /// result it had already paid for. Whatever the incoming shape, the request
-    /// must leave here with at most one `system` message, at index 0.
-    #[test]
-    fn the_final_round_notice_never_makes_a_second_system_message() {
-        let shapes = [
-            serde_json::json!({"messages": [
-                {"role": "system", "content": "rules"},
-                {"role": "user", "content": "go"},
-                {"role": "assistant", "content": null, "tool_calls": []},
-                {"role": "tool", "tool_call_id": "c1", "content": "{}"},
-            ]}),
-            // No leading system message: the notice becomes one, at the front.
-            serde_json::json!({"messages": [{"role": "user", "content": "go"}]}),
-            // Empty conversation — still no trailing system turn.
-            serde_json::json!({"messages": []}),
-        ];
-        for mut body in shapes {
-            announce_final_round(&mut body);
-            let messages = body["messages"].as_array().unwrap().clone();
-            let system_idxs: Vec<usize> = messages
-                .iter()
-                .enumerate()
-                .filter(|(_, m)| m["role"] == "system")
-                .map(|(i, _)| i)
-                .collect();
-            assert!(
-                system_idxs.as_slice() == [0] || system_idxs.is_empty(),
-                "a system message somewhere other than the front: {system_idxs:?} in {messages:?}"
-            );
-            assert!(
-                messages.iter().any(|m| m["content"]
-                    .as_str()
-                    .is_some_and(|c| c.contains("FINAL round"))),
-                "the notice went missing: {messages:?}"
-            );
-        }
-    }
-
-    /// A `/v1` caller's system message can be a block array. Flattening it to a
-    /// string to append the notice would destroy a structure the upstream may
-    /// need (cache breakpoints, for one), so that shape is left untouched —
-    /// `tool_choice: none` still forces the final answer.
-    #[test]
-    fn a_block_array_system_message_is_left_intact() {
-        let mut body = serde_json::json!({"messages": [
-            {"role": "system", "content": [{"type": "text", "text": "rules"}]},
-            {"role": "user", "content": "go"},
-        ]});
-        announce_final_round(&mut body);
-        let messages = body["messages"].as_array().unwrap();
-        assert_eq!(messages.len(), 2, "no message added");
-        assert_eq!(messages[0]["content"][0]["text"], "rules", "left as blocks");
-    }
-
     /// The truncation guard keys on the two spellings backends actually use,
     /// and on nothing else — a false positive turns a healthy turn into an
     /// error alert, and plenty of backends send no `finish_reason` at all.
@@ -3292,14 +3184,6 @@ mod tests {
             !truncated_output(None),
             "absent must read as a normal finish"
         );
-    }
-
-    #[test]
-    fn announcing_a_final_round_on_a_bodyless_request_is_a_no_op() {
-        // Defensive: a request shape without `messages` must not panic.
-        let mut body = serde_json::json!({"model": "m"});
-        announce_final_round(&mut body);
-        assert!(body.get("messages").is_none());
     }
 
     /// A turn in which the model *typed* an attachment stub instead of calling

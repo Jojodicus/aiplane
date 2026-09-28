@@ -22,7 +22,14 @@
 //!      owns the message history on this path, so we can't run ours and
 //!      yield mid-turn without dropping or orphaning the client's calls.
 //!    - If no tool_calls at all, return the final assistant message.
-//! 4. Hard bound: [`MAX_TOOL_ROUNDS`].
+//! 4. Hard bound: [`RoundBudget`]. The last round the budget allows is a
+//!    *final round* ([`prepare_final_round`]): the model is told its tools are
+//!    spent and asked to answer from what it gathered, and the request ends in
+//!    a normal completion carrying the [`BUDGET_SIGNAL_FIELD`] signal instead
+//!    of an error. A model that calls a tool anyway gets one *closing round*
+//!    with the tools withheld ([`prepare_closing_round`]); only when that also
+//!    yields no text does the request fail, with
+//!    [`LoopError::ToolBudgetExhausted`].
 //!
 //! Streaming caveat: this path always returns non-streaming. If the client
 //! requested `stream: true` and the user has any allowed tools, we still
@@ -95,9 +102,19 @@ pub enum LoopError {
     MalformedUpstream(String),
     #[error("upstream HTTP error: {0}")]
     Upstream(String),
-    #[error("tool-call loop exhausted after {0} rounds")]
-    LoopExhausted(u32),
+    #[error(
+        "the model was still calling tools after {0} tool rounds and gave no answer when asked to \
+         stop, so the results gathered in those rounds could not be turned into a reply; narrow the \
+         request, or retry it"
+    )]
+    ToolBudgetExhausted(u32),
 }
+
+/// The `code` a [`LoopError::ToolBudgetExhausted`] carries on the wire, in both
+/// the buffered error body and the streamed error chunk. Distinct from
+/// `internal_error` on purpose: this failure comes *after* tool work was done,
+/// and a client must be able to tell it from one that happened before any.
+pub const TOOL_BUDGET_EXHAUSTED_CODE: &str = "tool_budget_exhausted";
 
 impl LoopError {
     /// The HTTP status this failure means, and the sentence to show for it.
@@ -113,7 +130,8 @@ impl LoopError {
             Self::MalformedRequest(m) => (400, m.clone()),
             Self::Upstream(m) => (503, m.clone()),
             Self::MalformedUpstream(m) => (500, format!("upstream returned unparseable JSON: {m}")),
-            Self::LoopExhausted(n) => (500, format!("tool-call loop exhausted after {n} rounds")),
+            // The backend answered every round; what it answered was unusable.
+            Self::ToolBudgetExhausted(_) => (502, self.to_string()),
         }
     }
 }
@@ -137,6 +155,263 @@ pub struct LoopOutput {
     /// decisions were otherwise unobservable from outside the process, which
     /// makes "is my session staying on one replica?" unanswerable.
     pub backend: Option<String>,
+    /// The gateway closed the turn because its round budget ran out, not
+    /// because the model was done. The body already carries the
+    /// [`BUDGET_SIGNAL_FIELD`] object; this is the same fact for callers that
+    /// set a header from it.
+    pub budget_exhausted: bool,
+}
+
+/// How many upstream rounds one `/v1` tool turn may take, and how the last one
+/// is closed. The same rule the chat driver applies with its effort-derived
+/// `max_rounds`.
+#[derive(Debug, Clone, Copy)]
+pub struct RoundBudget {
+    /// Upstream requests the turn may make before the closing round.
+    pub max_rounds: u32,
+    /// What the serving backend said about `tool_choice` (see
+    /// `upstreams::ServingProfile`) — decides how [`prepare_final_round`]
+    /// takes the tools away.
+    pub honors_tool_choice: bool,
+}
+
+impl RoundBudget {
+    pub fn new(honors_tool_choice: bool) -> Self {
+        Self {
+            max_rounds: MAX_TOOL_ROUNDS,
+            honors_tool_choice,
+        }
+    }
+
+    /// Whether the round after `tool_rounds_done` completed tool rounds is the
+    /// last one the budget allows.
+    pub fn is_final(&self, tool_rounds_done: u32) -> bool {
+        tool_rounds_done + 1 >= self.max_rounds
+    }
+}
+
+impl Default for RoundBudget {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+/// Top-level field of a `/v1` chat completion (and of the streamed chunk that
+/// carries its `finish_reason`) saying the gateway cut the turn short. Present
+/// only then, so a client that never reads it sees an ordinary completion.
+pub const BUDGET_SIGNAL_FIELD: &str = "aiplane";
+
+/// The value under [`BUDGET_SIGNAL_FIELD`].
+pub fn budget_signal(tool_rounds: u32) -> Value {
+    json!({"tool_rounds": tool_rounds, "tool_budget_exhausted": true})
+}
+
+/// Stamp the budget signal onto a completion or chunk object.
+pub fn mark_budget_exhausted(response: &mut Value, tool_rounds: u32) {
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert(BUDGET_SIGNAL_FIELD.into(), budget_signal(tool_rounds));
+    }
+}
+
+/// Tell the upstream that the round it is about to take must not call a tool.
+///
+/// `honors_tool_choice` is what the serving backend said about itself (see
+/// `upstreams::ServingProfile`), and it changes *which* mechanism does the
+/// work:
+///
+///   * **`true`** — send `tool_choice: "none"` and keep the definitions in the
+///     request. Providers whose templates need the definitions to render an
+///     explicit no-tools turn depend on them being there (Anthropic and Bedrock
+///     reject a history with tool calls but no tools).
+///   * **`false`** — withhold the definitions entirely. On Ollama the field
+///     is discarded without a word; on vLLM and SGLang it switches the tool
+///     parser off while the model still sees its tools, so a model that calls
+///     one anyway writes the call out as text (see
+///     `BackendProfile::honors_tool_choice`). Either way the turn ends on a
+///     call that never runs. Taking the tools away is cruder, and it is the
+///     only thing that actually holds on those servers.
+///
+/// `tool_choice` goes with the tools in the second case: it means nothing
+/// without them, and a strict server rejects the field on its own.
+pub fn configure_final_tool_round(body: &mut Value, honors_tool_choice: bool) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    if honors_tool_choice {
+        obj.insert("tool_choice".into(), json!("none"));
+    } else {
+        obj.remove("tools");
+        obj.remove("tool_choice");
+    }
+}
+
+/// Tell the model, in words, that the round it is about to take is its last.
+///
+/// `configure_final_tool_round` withholds the tools, which guarantees *some*
+/// text comes back — but a model that doesn't know why its tools vanished
+/// writes the text it was going to write anyway: the preamble for the tool call
+/// it intended to make next ("All files written. Let me bundle them into a zip
+/// for one download."). The turn then ends on a promise, the user cannot tell a
+/// finished turn from a hung one, and asking "did that complete?" gets an answer
+/// built from what the model *meant* to do rather than what it did.
+///
+/// So the mechanical signal gets a stated one alongside it. Written into the
+/// request only — never into the persisted `messages` — so it applies to this
+/// round and leaves no trace in the conversation.
+///
+/// It is *merged into the leading system message* rather than appended as a
+/// second one. Appending was a hard bug: the Qwen3 vLLM chat template rejects
+/// any `system` turn that is not first ("System message must be at the
+/// beginning"), so on that backend every turn that exhausted its round budget
+/// died on a 400 — throwing away a full turn of completed tool work at the
+/// exact moment the model was about to report it.
+pub fn announce_final_round(body: &mut Value) {
+    const NOTICE: &str = "This is your FINAL round for this turn: your tool budget is spent and \
+                          no further tool call can run, so nothing you say you are about to do \
+                          will happen. Answer now, from what you already have. State plainly \
+                          what you did and did not manage to finish; do not write a preamble \
+                          for work you cannot do, and do not claim any file was produced, \
+                          attached or made downloadable unless a tool result in this turn \
+                          actually says so.";
+
+    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    match messages.first_mut() {
+        Some(first) if first.get("role").and_then(|r| r.as_str()) == Some("system") => {
+            match first.get_mut("content") {
+                Some(Value::String(text)) => *text = format!("{text}\n\n---\n\n{NOTICE}"),
+                // A `/v1` caller's block-array system message gains a block
+                // rather than being flattened to a string, which would destroy
+                // structure the upstream may need (cache breakpoints, for one).
+                Some(Value::Array(blocks)) => blocks.push(json!({"type": "text", "text": NOTICE})),
+                _ => first["content"] = json!(NOTICE),
+            }
+        }
+        _ => messages.insert(0, json!({"role": "system", "content": NOTICE})),
+    }
+}
+
+/// Shape the request for the last round the budget allows: tools away (by
+/// whichever mechanism the backend honours) and the model told why. One rule
+/// for the chat driver and both `/v1` loops.
+pub fn prepare_final_round(body: &mut Value, honors_tool_choice: bool) {
+    configure_final_tool_round(body, honors_tool_choice);
+    announce_final_round(body);
+}
+
+/// Shape the request for the closing round: the one extra request a turn gets
+/// when the model ignored the final round and called a tool with nothing else
+/// to say. The definitions go whatever the backend claims about `tool_choice`,
+/// since it has just shown it does not follow it here. The calls
+/// already made stay in the conversation: OpenAI-compatible servers accept tool
+/// history without definitions (the chat driver's Ollama path relies on it),
+/// unlike the Anthropic API.
+pub fn prepare_closing_round(body: &mut Value) {
+    prepare_final_round(body, false);
+}
+
+/// The result a tool call gets when the budget ran out before it could run.
+/// Told to the model in the tool's own slot, the way OpenAI's `max_tool_calls`
+/// and Anthropic's `max_uses_exceeded` refuse over-budget calls, so the
+/// closing round's history stays well-formed and the model reads why nothing
+/// came back.
+fn unrun_tool_results(calls: &[ToolCallRef]) -> Vec<ToolResultRecord> {
+    calls
+        .iter()
+        .map(|call| ToolResultRecord {
+            call_id: call.id.clone(),
+            body: error_to_tool_message(
+                "not run: the tool budget for this request is spent. Answer now from the results \
+                 you already have.",
+            ),
+        })
+        .collect()
+}
+
+/// Append calls the budget stopped from running to a conversation, each
+/// answered as "not run", for the closing round. For the loops that build the
+/// assistant turn from their own accumulated calls (the chat driver, the
+/// streaming `/v1` loop) rather than replaying the upstream's message.
+pub fn push_unrun_round(messages: &mut Vec<Value>, calls: &[ToolCallRef]) {
+    let tool_calls: Vec<Value> = calls
+        .iter()
+        .map(|call| {
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": normalize_tool_arguments(&call.arguments_raw),
+                }
+            })
+        })
+        .collect();
+    messages.push(json!({"role": "assistant", "content": Value::Null, "tool_calls": tool_calls}));
+    for result in unrun_tool_results(calls) {
+        messages.push(json!({
+            "role": "tool",
+            "tool_call_id": result.call_id,
+            "content": result.body.to_string(),
+        }));
+    }
+}
+
+/// Where a tool call the model *wrote out as text* begins, if it wrote one:
+/// the Hermes/Qwen `<tool_call>` wrapper or Qwen3-Coder's `<function=…>`.
+///
+/// vLLM only runs its tool parser while tools may be called, so a model that
+/// ignores `tool_choice: "none"` on the final round emits its call as plain
+/// content (in production: six of seven budget-exhausted turns on Qwen). The
+/// call sits after any real text, so everything from here on is the call.
+pub fn tool_call_markup_start(text: &str) -> Option<usize> {
+    ["<tool_call>", "<function="]
+        .iter()
+        .filter_map(|marker| text.find(marker))
+        .min()
+}
+
+/// Cut a written-out tool call off an assistant message's string content.
+/// Returns whether there was one.
+fn strip_tool_call_markup(message: &mut Value) -> bool {
+    let Some(Value::String(content)) = message.get_mut("content") else {
+        return false;
+    };
+    let Some(start) = tool_call_markup_start(content) else {
+        return false;
+    };
+    content.truncate(start);
+    let kept = content.trim_end().len();
+    content.truncate(kept);
+    true
+}
+
+/// Whether an assistant message says anything a client could show. Reasoning
+/// alone does not count: the client asked for an answer.
+fn message_has_text(message: &Value) -> bool {
+    match message.get("content") {
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Array(parts)) => parts.iter().any(|p| {
+            p.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|t| !t.trim().is_empty())
+        }),
+        _ => false,
+    }
+}
+
+/// Turn a completion whose model ignored the final round into the answer it
+/// also wrote: drop the calls nobody will run, and finish as a normal stop.
+fn drop_unrun_tool_calls(response: &mut Value) {
+    let Some(choice) = response.pointer_mut("/choices/0") else {
+        return;
+    };
+    if let Some(message) = choice.get_mut("message").and_then(Value::as_object_mut) {
+        message.remove("tool_calls");
+    }
+    if choice.get("finish_reason").and_then(Value::as_str) == Some("tool_calls") {
+        choice["finish_reason"] = json!("stop");
+    }
 }
 
 /// Runs the chat-completion request with tool injection + the gateway-tool
@@ -157,13 +432,14 @@ pub async fn run_with_tools<F, Fut>(
     allowed_tools: &[String],
     ctx: &ToolContext,
     request_body: Value,
+    budget: RoundBudget,
     upstream: F,
 ) -> Result<LoopOutput, LoopError>
 where
     F: Fn(Value) -> Fut,
     Fut: std::future::Future<Output = Result<(u16, Bytes), LoopError>>,
 {
-    let out = run_with_tools_inner(tools, allowed_tools, ctx, request_body, upstream).await;
+    let out = run_with_tools_inner(tools, allowed_tools, ctx, request_body, budget, upstream).await;
     if let Some(lease) = &ctx.sandbox_lease {
         lease.release().await;
     }
@@ -179,6 +455,7 @@ async fn run_with_tools_inner<F, Fut>(
     allowed_tools: &[String],
     ctx: &ToolContext,
     mut request_body: Value,
+    budget: RoundBudget,
     upstream: F,
 ) -> Result<LoopOutput, LoopError>
 where
@@ -199,11 +476,18 @@ where
 
     let mut rounds = 0u32;
     loop {
-        if rounds > MAX_TOOL_ROUNDS {
-            return Err(LoopError::LoopExhausted(MAX_TOOL_ROUNDS));
+        let final_round = budget.is_final(rounds);
+        let mut round_body = request_body.clone();
+        if final_round {
+            prepare_final_round(&mut round_body, budget.honors_tool_choice);
+            tracing::info!(
+                max_rounds = budget.max_rounds,
+                tools_withheld = !budget.honors_tool_choice,
+                "tool-round budget reached; requesting final answer with tool choice none"
+            );
         }
 
-        let (status, body_bytes) = upstream(request_body.clone()).await?;
+        let (status, body_bytes) = upstream(round_body).await?;
         if status >= 400 {
             // Upstream error: just relay.
             return Ok(LoopOutput {
@@ -211,11 +495,18 @@ where
                 status,
                 rounds,
                 backend: None,
+                budget_exhausted: false,
             });
         }
 
-        let response: Value = serde_json::from_slice(&body_bytes)
+        let mut response: Value = serde_json::from_slice(&body_bytes)
             .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?;
+        // A call written out as text on the final round is as ignored as a
+        // structured one, and must not reach the client as its answer.
+        let wrote_markup = final_round
+            && response
+                .pointer_mut("/choices/0/message")
+                .is_some_and(strip_tool_call_markup);
 
         // Split the response's tool_calls into "owned by us" vs "owned by the
         // client". Only the first choice is considered — multi-choice with
@@ -235,18 +526,25 @@ where
         // upstream round (which the upstream rejects). Mixed turns are
         // rare; this keeps the wire valid at the cost of not executing our
         // tool in that one turn (the model re-emits it on the next).
-        if split.gateway_owned.is_empty() || split.has_client_tool_calls {
-            // Either the model returned a normal assistant message, the
-            // tool_calls belong to client-supplied tools, or the turn
-            // mixes both. Hand it back to the client.
-            return Ok(LoopOutput {
-                body: serde_json::to_vec(&response)
-                    .map(Bytes::from)
-                    .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?,
+        if split.has_client_tool_calls {
+            return finished(response, status, rounds, false);
+        }
+        if split.gateway_owned.is_empty() && !wrote_markup {
+            if final_round {
+                mark_budget_exhausted(&mut response, rounds);
+            }
+            return finished(response, status, rounds, final_round);
+        }
+        if final_round {
+            return close_ignored_final_round(
+                request_body,
+                response,
+                split,
                 status,
                 rounds,
-                backend: None,
-            });
+                &upstream,
+            )
+            .await;
         }
 
         // Execute gateway-owned tool calls concurrently.
@@ -275,6 +573,91 @@ where
 
         rounds += 1;
     }
+}
+
+fn finished(
+    response: Value,
+    status: u16,
+    rounds: u32,
+    budget_exhausted: bool,
+) -> Result<LoopOutput, LoopError> {
+    Ok(LoopOutput {
+        body: serde_json::to_vec(&response)
+            .map(Bytes::from)
+            .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?,
+        status,
+        rounds,
+        backend: None,
+        budget_exhausted,
+    })
+}
+
+/// The model called gateway tools on the round it was told was its last, as
+/// structured calls or written out as text.
+/// Those calls never run. Text it wrote alongside them is the answer; with
+/// none, it gets exactly one closing round without tools, and only if that
+/// too comes back empty does the request fail.
+async fn close_ignored_final_round<F, Fut>(
+    mut request_body: Value,
+    mut response: Value,
+    split: ToolCallSplit,
+    status: u16,
+    rounds: u32,
+    upstream: &F,
+) -> Result<LoopOutput, LoopError>
+where
+    F: Fn(Value) -> Fut,
+    Fut: std::future::Future<Output = Result<(u16, Bytes), LoopError>>,
+{
+    let wrote_text = response
+        .pointer("/choices/0/message")
+        .is_some_and(message_has_text);
+    if wrote_text {
+        drop_unrun_tool_calls(&mut response);
+        mark_budget_exhausted(&mut response, rounds);
+        return finished(response, status, rounds, true);
+    }
+    tracing::warn!(
+        tool_rounds = rounds,
+        ignored_calls = split.gateway_owned.len(),
+        "model called tools on its final round; asking once more with the tools withheld"
+    );
+    // A call that was only written out has no id to answer; the closing
+    // round's missing tools are the whole message then.
+    if !split.gateway_owned.is_empty() {
+        append_round_to_messages(
+            &mut request_body,
+            &split.assistant_message,
+            &split.gateway_owned,
+            &unrun_tool_results(&split.gateway_owned),
+        )?;
+    }
+    prepare_closing_round(&mut request_body);
+
+    let (status, body_bytes) = upstream(request_body).await?;
+    if status >= 400 {
+        return Ok(LoopOutput {
+            body: body_bytes,
+            status,
+            rounds,
+            backend: None,
+            budget_exhausted: false,
+        });
+    }
+    let mut response: Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?;
+    if let Some(message) = response.pointer_mut("/choices/0/message") {
+        strip_tool_call_markup(message);
+    }
+    let answered = response
+        .pointer("/choices/0/message")
+        .is_some_and(message_has_text);
+    if !answered {
+        return Err(LoopError::ToolBudgetExhausted(rounds));
+    }
+    drop_unrun_tool_calls(&mut response);
+    mark_budget_exhausted(&mut response, rounds);
+    finished(response, status, rounds, true)
 }
 
 pub fn inject_tools(
@@ -848,6 +1231,7 @@ mod tests {
             &[],
             &ctx,
             json!({"model": "x", "messages": []}),
+            RoundBudget::default(),
             move |_| {
                 let b = bytes.clone();
                 async move { Ok::<_, LoopError>((200u16, b)) }
@@ -873,6 +1257,7 @@ mod tests {
             &[],
             &ctx,
             json!({"model": "x", "messages": []}),
+            RoundBudget::default(),
             move |_| async move { Ok::<_, LoopError>((200u16, Bytes::from_static(b"not json"))) },
         )
         .await;
@@ -1086,6 +1471,7 @@ mod tests {
             &["get_current_timestamp".into()],
             &ctx,
             request,
+            RoundBudget::default(),
             upstream,
         )
         .await
@@ -1130,9 +1516,16 @@ mod tests {
                 Ok::<_, LoopError>((200, Bytes::from(serde_json::to_vec(&response).unwrap())))
             }
         };
-        let out = run_with_tools(&reg, &["company_echo".into()], &ctx, request, upstream)
-            .await
-            .unwrap();
+        let out = run_with_tools(
+            &reg,
+            &["company_echo".into()],
+            &ctx,
+            request,
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
         // No tool round ran, and the upstream was hit exactly once.
         assert_eq!(out.rounds, 0);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1158,9 +1551,16 @@ mod tests {
             });
             Ok::<_, LoopError>((200, Bytes::from(serde_json::to_vec(&response).unwrap())))
         };
-        let out = run_with_tools(&reg, &["company_echo".into()], &ctx, request, upstream)
-            .await
-            .unwrap();
+        let out = run_with_tools(
+            &reg,
+            &["company_echo".into()],
+            &ctx,
+            request,
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.rounds, 0);
     }
 
@@ -1172,39 +1572,511 @@ mod tests {
         let upstream = |_body: Value| async {
             Ok::<_, LoopError>((429, Bytes::from(r#"{"error":{"message":"rate limit"}}"#)))
         };
-        let out = run_with_tools(&reg, &["company_echo".into()], &ctx, request, upstream)
-            .await
-            .unwrap();
+        let out = run_with_tools(
+            &reg,
+            &["company_echo".into()],
+            &ctx,
+            request,
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.status, 429);
         assert_eq!(out.rounds, 0);
     }
 
+    /// One gateway tool call, optionally with text alongside it — what a model
+    /// that keeps researching sends back every round.
+    fn tool_call_reply(text: Option<&str>) -> Value {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                    "tool_calls": [{
+                        "id": "x",
+                        "type": "function",
+                        "function": {"name": "company_echo", "arguments": "{\"message\":\"loop\"}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })
+    }
+
+    fn answer_reply(text: &str) -> Value {
+        json!({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
+    }
+
+    /// An upstream that answers each request with `reply(request)` and keeps
+    /// every request it saw, so a test can assert on what went over the wire.
+    #[allow(clippy::type_complexity)]
+    fn scripted_upstream(
+        reply: fn(&Value) -> Value,
+    ) -> (
+        impl Fn(Value) -> std::future::Ready<Result<(u16, Bytes), LoopError>>,
+        Arc<std::sync::Mutex<Vec<Value>>>,
+    ) {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let upstream = move |body: Value| {
+            let response = reply(&body);
+            log.lock().unwrap().push(body);
+            std::future::ready(Ok((
+                200u16,
+                Bytes::from(serde_json::to_vec(&response).unwrap()),
+            )))
+        };
+        (upstream, seen)
+    }
+
+    fn small_budget(honors_tool_choice: bool) -> RoundBudget {
+        RoundBudget {
+            max_rounds: 3,
+            honors_tool_choice,
+        }
+    }
+
+    /// The production failure: a research request whose model keeps calling
+    /// tools right up to the budget. It must end in an answer built from what
+    /// was gathered, flagged as cut short — not in a 500 that throws the work
+    /// away — and it must still stop at the budget.
     #[tokio::test]
     async fn run_with_tools_loop_exhausted_after_max_rounds() {
-        let reg = registry();
-        let ctx = ctx().await;
-        let request = json!({"model": "x", "messages": []});
-        // Always return a tool_call → guaranteed infinite loop, MAX_ROUNDS
-        // breaks it.
-        let upstream = |_body: Value| async {
-            let response = json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": "x",
-                            "type": "function",
-                            "function": {"name": "company_echo", "arguments": "{\"message\":\"loop\"}"}
-                        }]
-                    }
-                }]
-            });
-            Ok::<_, LoopError>((200, Bytes::from(serde_json::to_vec(&response).unwrap())))
-        };
-        let err = run_with_tools(&reg, &["company_echo".into()], &ctx, request, upstream)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, LoopError::LoopExhausted(_)), "{err:?}");
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body["tool_choice"] == "none" {
+                answer_reply("Here is what I found.")
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": [{"role": "user", "content": "research this"}]}),
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.status, 200);
+        assert!(out.budget_exhausted);
+        assert_eq!(out.rounds, MAX_TOOL_ROUNDS - 1);
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(
+            body["choices"][0]["message"]["content"],
+            "Here is what I found."
+        );
+        assert_eq!(
+            body[BUDGET_SIGNAL_FIELD],
+            json!({"tool_rounds": MAX_TOOL_ROUNDS - 1, "tool_budget_exhausted": true})
+        );
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), MAX_TOOL_ROUNDS as usize, "the hard bound holds");
+        let last = seen.last().unwrap();
+        assert!(
+            last.get("tools").is_some(),
+            "kept for a backend that honours tool_choice"
+        );
+        assert!(
+            last["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("FINAL round")),
+            "the model is told why its tools are gone: {last}"
+        );
+        assert!(
+            seen[..seen.len() - 1]
+                .iter()
+                .all(|b| b.get("tool_choice").is_none()),
+            "only the last round is restricted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_normal_answer_carries_no_budget_signal() {
+        let (upstream, _) = scripted_upstream(|_| answer_reply("done"));
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap();
+        assert!(!out.budget_exhausted);
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert!(body.get(BUDGET_SIGNAL_FIELD).is_none(), "{body}");
+    }
+
+    /// Ollama drops `tool_choice` without a word, and vLLM/SGLang turn their
+    /// tool parser off under it, so there the tools themselves have to go.
+    #[tokio::test]
+    async fn a_backend_that_ignores_tool_choice_gets_no_tools_on_the_final_round() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body.get("tools").is_none() {
+                answer_reply("summary")
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(false),
+            upstream,
+        )
+        .await
+        .unwrap();
+        assert!(out.budget_exhausted);
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    /// vLLM-served Qwen and gpt-oss have been seen calling tools despite
+    /// `tool_choice: "none"`. The ignored calls must not run; the model gets
+    /// one closing round with the tools withheld and each call answered as
+    /// "not run", and that answer is the reply.
+    #[tokio::test]
+    async fn a_model_that_ignores_the_final_round_gets_one_closing_round_without_tools() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body.get("tools").is_none() {
+                answer_reply("summary")
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.status, 200);
+        assert!(out.budget_exhausted);
+        assert_eq!(out.rounds, 2, "the ignored calls are not a completed round");
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(body["choices"][0]["message"]["content"], "summary");
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 4, "exactly one request past the budget");
+        let closing = seen.last().unwrap();
+        assert!(
+            closing.get("tool_choice").is_none(),
+            "no tool_choice without tools"
+        );
+        let messages = closing["messages"].as_array().unwrap();
+        let last = messages.last().unwrap();
+        assert_eq!(last["role"], "tool");
+        assert!(
+            last["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("not run")),
+            "the ignored call is answered, not executed: {last}"
+        );
+    }
+
+    /// What Qwen on vLLM does on six of seven budget-exhausted turns: the tool
+    /// parser is off under `tool_choice: "none"`, so the call arrives as text.
+    const WRITTEN_OUT_CALL: &str = "<tool_call>\n<function=company_echo>\n<parameter=message>\nmore\n</parameter>\n</function>\n</tool_call>";
+
+    #[tokio::test]
+    async fn a_tool_call_written_out_as_text_on_the_final_round_gets_a_closing_round() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body.get("tools").is_none() {
+                answer_reply("summary")
+            } else if body["tool_choice"] == "none" {
+                answer_reply(WRITTEN_OUT_CALL)
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap();
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(body["choices"][0]["message"]["content"], "summary");
+        assert!(out.budget_exhausted);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 4);
+        let closing = seen.last().unwrap();
+        assert_ne!(
+            closing["messages"].as_array().unwrap().last().unwrap()["role"],
+            "assistant",
+            "a written-out call has no id to answer, so nothing is replayed for it"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_before_a_written_out_call_is_kept_as_the_answer() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body["tool_choice"] == "none" {
+                answer_reply(&format!("Found three leads.\n\n{WRITTEN_OUT_CALL}"))
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap();
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(
+            body["choices"][0]["message"]["content"],
+            "Found three leads."
+        );
+        assert!(out.budget_exhausted);
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn unrun_calls_are_answered_so_the_history_stays_well_formed() {
+        let mut messages = vec![json!({"role": "user", "content": "go"})];
+        let calls = [ToolCallRef {
+            id: "c1".into(),
+            name: "company_echo".into(),
+            arguments_raw: String::new(),
+        }];
+        push_unrun_round(&mut messages, &calls);
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "c1");
+        assert_eq!(messages[1]["tool_calls"][0]["function"]["arguments"], "{}");
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "c1");
+        assert!(messages[2]["content"].as_str().unwrap().contains("not run"));
+    }
+
+    #[test]
+    fn written_out_tool_calls_are_found_in_both_spellings() {
+        assert_eq!(tool_call_markup_start("ok <tool_call>{}"), Some(3));
+        assert_eq!(tool_call_markup_start("ok <function=search>"), Some(3));
+        assert_eq!(
+            tool_call_markup_start("a <function=x> then <tool_call>"),
+            Some(2),
+            "the earliest marker wins"
+        );
+        assert_eq!(tool_call_markup_start("a function call, in prose"), None);
+    }
+
+    #[tokio::test]
+    async fn text_written_alongside_an_ignored_final_call_is_the_answer() {
+        let (upstream, seen) = scripted_upstream(|_| tool_call_reply(Some("Partial findings.")));
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap();
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        let choice = &body["choices"][0];
+        assert_eq!(choice["message"]["content"], "Partial findings.");
+        assert!(
+            choice["message"].get("tool_calls").is_none(),
+            "a client must never be handed a gateway tool call: {choice}"
+        );
+        assert_eq!(choice["finish_reason"], "stop");
+        assert!(out.budget_exhausted);
+        assert_eq!(seen.lock().unwrap().len(), 3, "no closing round needed");
+    }
+
+    /// Nothing to answer with even after the closing round: an error, but one a
+    /// client can tell from a failure before any work was done.
+    #[tokio::test]
+    async fn a_model_that_never_stops_calling_tools_fails_with_a_budget_error() {
+        let (upstream, seen) = scripted_upstream(|_| tool_call_reply(None));
+        let err = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, LoopError::ToolBudgetExhausted(2)), "{err:?}");
+        let (status, message) = err.status_and_message();
+        assert_eq!(status, 502);
+        assert!(message.contains("after 2 tool rounds"), "{message}");
+        assert_eq!(seen.lock().unwrap().len(), 4, "still bounded");
+    }
+
+    #[tokio::test]
+    async fn run_with_tools_releases_the_lease_when_the_budget_runs_out() {
+        let server = wiremock::MockServer::start().await;
+        let (ctx, _lease) = ctx_with_established_lease(&server).await;
+        let (upstream, _) = scripted_upstream(|_| tool_call_reply(None));
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx,
+            json!({"model": "x", "messages": []}),
+            small_budget(true),
+            upstream,
+        )
+        .await;
+        assert!(out.is_err());
+        assert!(
+            deleted_container(&server.received_requests().await.unwrap()),
+            "the lease must be released when the budget ends the turn"
+        );
+    }
+
+    #[test]
+    fn final_tool_round_explicitly_disables_tool_choice() {
+        let mut body = json!({"messages": [], "tools": [{"name": "a"}]});
+        configure_final_tool_round(&mut body, true);
+        assert_eq!(body["tool_choice"], json!("none"));
+        // A backend that honours it keeps the definitions: some templates need
+        // them present to render an explicit no-tools turn.
+        assert!(body.get("tools").is_some());
+    }
+
+    /// Ollama has no `tool_choice` field, so the value is discarded in silence
+    /// and the model still sees its tools on the round meant to end the turn.
+    /// The only thing that holds there is taking them away.
+    #[test]
+    fn final_tool_round_withholds_tools_when_tool_choice_is_ignored() {
+        let mut body = json!({"messages": [], "tools": [{"name": "a"}]});
+        configure_final_tool_round(&mut body, false);
+        assert!(
+            body.get("tools").is_none(),
+            "a backend that ignores tool_choice must not be left holding the tools"
+        );
+        // A strict server rejects `tool_choice` without `tools`.
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    /// Withholding the tools guarantees text comes back, but not that the text
+    /// is an *answer*: a model that doesn't know why its tools vanished writes
+    /// the preamble for the call it meant to make next ("Let me bundle those
+    /// into a zip"), and the turn ends on a promise nothing will keep. So the
+    /// mechanical signal gets a stated one next to it.
+    #[test]
+    fn the_final_round_tells_the_model_it_is_the_final_round() {
+        let mut body = json!({
+            "messages": [
+                {"role": "system", "content": "the standing rules"},
+                {"role": "user", "content": "make me the docs"},
+            ]
+        });
+        announce_final_round(&mut body);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "merged, not appended");
+        assert_eq!(messages[1]["content"], "make me the docs");
+        let note = messages[0]["content"].as_str().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert!(note.starts_with("the standing rules"), "{note}");
+        assert!(note.contains("FINAL round"), "{note}");
+        // The two failure modes it exists to head off.
+        assert!(note.contains("do not write a preamble"), "{note}");
+        assert!(note.contains("do not claim any file"), "{note}");
+    }
+
+    /// The regression this function was rewritten for. Appending the notice as
+    /// a *second* `system` message is rejected outright by the Qwen3 vLLM chat
+    /// template ("System message must be at the beginning"), so a turn that
+    /// exhausted its round budget died on a 400 and threw away every tool
+    /// result it had already paid for. Whatever the incoming shape, the request
+    /// must leave here with at most one `system` message, at index 0.
+    #[test]
+    fn the_final_round_notice_never_makes_a_second_system_message() {
+        let shapes = [
+            json!({"messages": [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "go"},
+                {"role": "assistant", "content": null, "tool_calls": []},
+                {"role": "tool", "tool_call_id": "c1", "content": "{}"},
+            ]}),
+            // No leading system message: the notice becomes one, at the front.
+            json!({"messages": [{"role": "user", "content": "go"}]}),
+            // Empty conversation — still no trailing system turn.
+            json!({"messages": []}),
+        ];
+        for mut body in shapes {
+            announce_final_round(&mut body);
+            let messages = body["messages"].as_array().unwrap().clone();
+            let system_idxs: Vec<usize> = messages
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m["role"] == "system")
+                .map(|(i, _)| i)
+                .collect();
+            assert!(
+                system_idxs.as_slice() == [0] || system_idxs.is_empty(),
+                "a system message somewhere other than the front: {system_idxs:?} in {messages:?}"
+            );
+            assert!(
+                messages.iter().any(|m| m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("FINAL round"))),
+                "the notice went missing: {messages:?}"
+            );
+        }
+    }
+
+    /// A `/v1` caller's system message can be a block array. Flattening it to a
+    /// string would destroy structure the upstream may need (cache breakpoints,
+    /// for one), so the notice rides as one more block.
+    #[test]
+    fn a_block_array_system_message_gains_the_notice_as_a_block() {
+        let mut body = json!({"messages": [
+            {"role": "system", "content": [{"type": "text", "text": "rules"}]},
+            {"role": "user", "content": "go"},
+        ]});
+        announce_final_round(&mut body);
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "no message added");
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["text"], "rules", "left as blocks");
+        assert!(
+            blocks[1]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("FINAL round"))
+        );
+    }
+
+    #[test]
+    fn announcing_a_final_round_on_a_bodyless_request_is_a_no_op() {
+        // Defensive: a request shape without `messages` must not panic.
+        let mut body = json!({"model": "m"});
+        announce_final_round(&mut body);
+        assert!(body.get("messages").is_none());
+    }
+
+    #[test]
+    fn the_closing_round_sends_neither_tools_nor_tool_choice() {
+        let mut body = json!({"messages": [], "tools": [{"name": "a"}], "tool_choice": "none"});
+        prepare_closing_round(&mut body);
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
     }
 
     fn body_with_tool_results(contents: &[(&str, String)]) -> Value {
@@ -1441,6 +2313,7 @@ mod tests {
             &["get_current_timestamp".into()],
             &ctx,
             request,
+            RoundBudget::default(),
             upstream,
         )
         .await
