@@ -65,12 +65,12 @@ pub struct Backend {
     pub weight: u32,
     pub max_inflight: u32,
     pub health_path: String,
-    /// Whether the probe may overwrite [`models`](Self::models) from a
-    /// `/models` response. `false` pins the model set to `config_models`
-    /// (see [`BackendConfig::probe_models`]). System One pools always pin
-    /// their configured models because their endpoint has a separate catalog
-    /// from OpenAI-compatible `/models`.
-    probe_models: bool,
+    /// Whether the probe discovers [`models`](Self::models) from `/models`:
+    /// exactly when no model is configured. A configured list is the catalog,
+    /// full stop — it is how a backend whose `/models` lists something else
+    /// (OpenRouter's chat catalog behind a System One pool, z.AI's behind an
+    /// image pool) or nothing usable (`~` aliases) is served correctly.
+    discovers_models: bool,
     /// Whether this backend can edit images (image-to-image), not just
     /// generate. Only meaningful on image pools; see
     /// [`BackendConfig::supports_edit`].
@@ -109,14 +109,13 @@ pub struct Backend {
     /// The set of model IDs this backend currently advertises, as reported
     /// by its most recent successful `/models` probe. Empty until the first
     /// probe completes (`health::spawn` does an initial blocking round so
-    /// the first request finds something). Updated by the probe loop
-    /// whenever the upstream's loadout changes.
+    /// the first request finds something), and always empty on a backend
+    /// with configured models. Updated by the probe loop whenever the
+    /// upstream's loadout changes.
     models: RwLock<HashSet<String>>,
-    /// Static fallback model IDs from config (backend `models`, else the
-    /// pool's `models`). Used only while `models` (the live probe set) is
-    /// empty — see [`Backend::with_effective_models`] for the precedence.
-    /// Lets a backend without a working `/models` endpoint (e.g. Voxtral
-    /// realtime) still be routable and advertised.
+    /// Configured model IDs (backend `models`, else the pool's `models`).
+    /// When non-empty this *is* the served set and nothing is discovered —
+    /// see [`Backend::with_effective_models`].
     config_models: HashSet<String>,
     /// Client-facing aliases this backend answers to, from config: alias name →
     /// optional explicit target real id. `Some(id)` (map form) pins a specific
@@ -161,7 +160,7 @@ pub struct Backend {
 impl Backend {
     /// `pool_models` is the pool-level fallback, applied when this backend
     /// declares no `models` of its own (backend config wins over pool).
-    fn new(cfg: &BackendConfig, pool_models: &[String], kind: PoolKind) -> Self {
+    fn new(cfg: &BackendConfig, pool_models: &[String]) -> Self {
         let fallback = if cfg.models.is_empty() {
             pool_models
         } else {
@@ -177,7 +176,7 @@ impl Backend {
             weight: cfg.weight.max(1),
             max_inflight: cfg.max_inflight.max(1),
             health_path: cfg.health_path.clone(),
-            probe_models: cfg.probe_models && kind != PoolKind::SystemOne,
+            discovers_models: config_models.is_empty(),
             supports_edit: cfg.supports_edit,
             inflight: AtomicU32::new(0),
             dispatched: AtomicU64::new(0),
@@ -257,63 +256,22 @@ impl Backend {
     }
 
     /// Runs `f` against this backend's *effective* model set — the set the
-    /// backend actually serves and advertises. The single place the
-    /// probe/config precedence lives; the read lock is held for the duration
-    /// of `f`. Precedence:
-    ///   - **live probe + a configured `models` list** → the *intersection*:
-    ///     the list is an allowlist, so a probed model it doesn't name is
-    ///     discovered-but-withheld (not served, not advertised);
-    ///   - **live probe + empty list** → the whole probe set (offer everything
-    ///     the backend reports);
-    ///   - **no live probe** → the configured `models` verbatim (the static
-    ///     fallback for backends that don't self-report via `/models`).
+    /// backend actually serves and advertises: the configured `models` when
+    /// there are any, otherwise what the probe discovered.
     fn with_effective_models<R>(&self, f: impl FnOnce(&HashSet<String>) -> R) -> R {
-        if let Ok(probe) = self.models.read()
-            && !probe.is_empty()
-        {
-            if self.config_models.is_empty() {
-                return f(&probe);
-            }
-            let allowed: HashSet<String> =
-                probe.intersection(&self.config_models).cloned().collect();
-            return f(&allowed);
+        if !self.discovers_models {
+            return f(&self.config_models);
         }
-        f(&self.config_models)
-    }
-
-    /// The models the backend reports via `/models` but its allowlist withholds
-    /// — i.e. `live probe \ effective`. Empty unless a configured `models` list
-    /// is actively filtering a live probe. Drives the struck-through
-    /// "discovered but not served" chips in the admin health view; never
-    /// consulted on the routing hot path.
-    pub fn withheld_models(&self) -> HashSet<String> {
-        let Ok(probe) = self.models.read() else {
-            return HashSet::new();
-        };
-        if probe.is_empty() || self.config_models.is_empty() {
-            return HashSet::new();
+        match self.models.read() {
+            Ok(probe) => f(&probe),
+            Err(_) => f(&HashSet::new()),
         }
-        probe.difference(&self.config_models).cloned().collect()
     }
 
     /// Real-model membership only (no aliases): the backend's effective set
-    /// (live probe, else config fallback) contains `model`.
-    ///
-    /// Spelled out rather than going through
-    /// [`with_effective_models`](Self::with_effective_models), because that
-    /// *materialises* the intersection — a fresh `HashSet` with a cloned
-    /// `String` per model — whenever a configured allowlist is filtering a live
-    /// probe. This is a membership test on the routing path, and it is also
-    /// reached once per model from the admin pages; the same answer comes out
-    /// of two `contains` calls with no allocation at all.
+    /// contains `model`. The routing hot path, so a lookup, not a clone.
     fn serves_real(&self, model: &str) -> bool {
-        if let Ok(probe) = self.models.read()
-            && !probe.is_empty()
-        {
-            return probe.contains(model)
-                && (self.config_models.is_empty() || self.config_models.contains(model));
-        }
-        self.config_models.contains(model)
+        self.with_effective_models(|set| set.contains(model))
     }
 
     /// The backend's sole effective model, if it serves exactly one. Backs
@@ -376,11 +334,10 @@ impl Backend {
         }
     }
 
-    /// Whether the probe is allowed to discover this backend's model set from
-    /// `/models`. `false` pins the set to `config_models` — see
-    /// [`BackendConfig::probe_models`].
-    pub fn probe_models_enabled(&self) -> bool {
-        self.probe_models
+    /// Whether the probe discovers this backend's model set from `/models` —
+    /// true exactly when no model is configured for it.
+    pub fn discovers_models(&self) -> bool {
+        self.discovers_models
     }
 
     /// Whether this backend advertises image-editing support. Only meaningful
@@ -392,11 +349,11 @@ impl Backend {
     /// Replace the advertised-model set wholesale. Probe-only path —
     /// called from `health.rs` after a successful `/models` parse so the
     /// next routing lookup reflects the upstream's current loadout. Ignored
-    /// when model discovery is disabled, keeping configured models authoritative
-    /// even if a stale probe, startup seed, or reload carryover reaches here.
+    /// on a backend with configured models, keeping them authoritative even
+    /// if a stale probe, startup seed, or reload carryover reaches here.
     /// Also re-evaluates bare-alias ambiguity against the new set.
     pub fn set_models(&self, models: HashSet<String>) {
-        if !self.probe_models {
+        if !self.discovers_models {
             return;
         }
         if let Ok(mut guard) = self.models.write() {
@@ -598,13 +555,6 @@ impl Backend {
         *guard = now_disabled;
     }
 
-    /// Raw probe-reported set only (no config fallback). For `health.rs`'s
-    /// change-detection so the "advertised models updated" diff reflects
-    /// what the upstream actually reported, not the static fallback.
-    pub fn probe_models(&self) -> HashSet<String> {
-        self.models.read().map(|g| g.clone()).unwrap_or_default()
-    }
-
     /// Configured aliases and their current state, sorted by name. For the
     /// read-only `/admin/backends` view.
     pub fn alias_status(&self) -> Vec<AliasStatus> {
@@ -802,7 +752,7 @@ impl Pool {
         let backends = cfg
             .backend
             .iter()
-            .map(|b| Arc::new(Backend::new(b, &cfg.models, cfg.kind)))
+            .map(|b| Arc::new(Backend::new(b, &cfg.models)))
             .collect();
         Self {
             name,
@@ -1408,7 +1358,7 @@ impl UpstreamRegistry {
                 let entry = prior
                     .entry((b.name.as_str(), b.base_url.as_str()))
                     .or_insert_with(|| (HashSet::new(), Detected::default()));
-                if b.probe_models_enabled() && !live.is_empty() {
+                if b.discovers_models() && !live.is_empty() {
                     entry.0 = live;
                 }
                 if detected != Detected::default() {
@@ -1419,7 +1369,7 @@ impl UpstreamRegistry {
         for pool in data.pools.values() {
             for b in &pool.backends {
                 if let Some((live, detected)) = prior.get(&(b.name.as_str(), b.base_url.as_str())) {
-                    if b.probe_models_enabled() && !live.is_empty() {
+                    if b.discovers_models() && !live.is_empty() {
                         b.set_models(live.clone());
                     }
                     b.set_detected(detected);
@@ -2727,7 +2677,7 @@ mod tests {
     fn a_bare_alias_on_a_backend_with_no_models_reports_itself_broken() {
         let mut b = backend("qwen-gpu0", 16);
         b.alias = Some(AliasSpec::Names(vec!["default".into()]));
-        let be = Backend::new(&b, &[], PoolKind::Chat);
+        let be = Backend::new(&b, &[]);
 
         assert!(
             be.models_snapshot().is_empty(),
@@ -2756,7 +2706,6 @@ mod tests {
     fn system_one_keeps_configured_models_independent_of_openai_catalog() {
         let mut config = backend("openrouter", 16);
         config.models = vec!["~typesafe/jev-latest".into(), "typesafe/jev-1.13".into()];
-        config.probe_models = true;
         let pools = HashMap::from([(
             "selector".to_string(),
             pool_config(
@@ -2769,7 +2718,7 @@ mod tests {
         let registry = UpstreamRegistry::new(&pools).unwrap();
         let backend = registry.pools()[0].backends[0].clone();
 
-        assert!(!backend.probe_models_enabled());
+        assert!(!backend.discovers_models());
         assert_eq!(
             backend.models_snapshot(),
             HashSet::from([
@@ -2777,6 +2726,25 @@ mod tests {
                 "typesafe/jev-1.13".to_string(),
             ])
         );
+    }
+
+    /// A dedicated System One server (jeff) lists exactly its System One
+    /// models, so a pool that names none discovers them like any other kind.
+    #[test]
+    fn system_one_pool_without_models_discovers_its_catalog() {
+        let reg = build(vec![(
+            "croit_system_one",
+            pool_config(
+                PoolKind::SystemOne,
+                PickerStrategy::LeastInflight,
+                vec![backend("jeff", 16)],
+            ),
+        )]);
+        let d = reg.data();
+        assert!(d.pools["croit_system_one"].backends[0].discovers_models());
+        drop(d);
+        seed_models(&reg, "croit_system_one", 0, &["jeff"]);
+        assert!(reg.route("jeff", PoolKind::SystemOne).is_ok());
     }
 
     /// Sequential traffic — one request at a time, which is what a single agent
@@ -2936,7 +2904,7 @@ mod tests {
         // Bare alias + exactly one served model: resolves and is advertised.
         let mut b = backend("qwen-gpu0", 4);
         b.alias = Some(AliasSpec::Names(vec!["default".into(), "qwen".into()]));
-        let bare = Backend::new(&b, &[], PoolKind::Chat);
+        let bare = Backend::new(&b, &[]);
         bare.set_models(HashSet::from([served.to_string()]));
         assert_eq!(bare.resolve("default").as_deref(), Some(served));
         assert!(bare.listed_models().contains("default"));
@@ -2956,7 +2924,7 @@ mod tests {
             "default".to_string(),
             "qwen-32b".to_string(),
         )])));
-        let mapped = Backend::new(&m, &[], PoolKind::Chat);
+        let mapped = Backend::new(&m, &[]);
         mapped.set_models(HashSet::from([served.to_string()]));
         assert!(
             mapped.resolve("default").is_none(),
@@ -2970,7 +2938,7 @@ mod tests {
             "default".to_string(),
             served.to_string(),
         )])));
-        let ok = Backend::new(&m2, &[], PoolKind::Chat);
+        let ok = Backend::new(&m2, &[]);
         ok.set_models(HashSet::from([served.to_string()]));
         assert_eq!(ok.resolve("default").as_deref(), Some(served));
     }
@@ -2990,7 +2958,6 @@ mod tests {
             health_path: "/models".into(),
             models: Vec::new(),
             alias: None,
-            probe_models: true,
             supports_edit: false,
             enabled: true,
         }
@@ -4035,10 +4002,11 @@ mod tests {
     }
 
     #[test]
-    fn config_models_allowlist_restricts_live_probe() {
-        // A configured `models` list is an allowlist over the live probe: only
-        // the ids it names are served/advertised; a probed id it omits is
-        // discovered-but-withheld (404 on request, absent from `/v1/models`).
+    fn configured_models_are_served_verbatim_whatever_the_probe_reports() {
+        // A configured `models` list pins the catalog: the backend is not asked
+        // what it serves, so a model it would not have listed (`keep-b`, e.g.
+        // OpenRouter's `~` aliases) still routes, and one it would (`drop-c`)
+        // does not.
         let reg = build(vec![(
             "voice",
             pool_config_with_models(
@@ -4047,29 +4015,25 @@ mod tests {
                 vec![backend("a", 16)],
             ),
         )]);
-        seed_models(&reg, "voice", 0, &["keep-a", "keep-b", "drop-c"]);
-        assert!(
-            reg.acquire_for("keep-a", PoolKind::Transcription).is_ok(),
-            "allowlisted id must route"
-        );
+        seed_models(&reg, "voice", 0, &["keep-a", "drop-c"]);
+        assert!(reg.acquire_for("keep-a", PoolKind::Transcription).is_ok());
         assert!(reg.acquire_for("keep-b", PoolKind::Transcription).is_ok());
         let err = reg
             .acquire_for("drop-c", PoolKind::Transcription)
             .unwrap_err();
-        assert!(
-            matches!(err, RouteError::UnknownModel(_)),
-            "withheld id must 404 even though the backend reports it: {err:?}"
-        );
-        // Advertised set is the allowlist ∩ probe, not the whole probe.
+        assert!(matches!(err, RouteError::UnknownModel(_)), "{err:?}");
         assert_eq!(reg.all_models(), vec!["keep-a", "keep-b"]);
-        // The withheld id surfaces for the struck-through UI chip.
         let d = reg.data();
         let b = &d.pools.get("voice").unwrap().backends[0];
-        assert_eq!(b.withheld_models(), HashSet::from(["drop-c".to_string()]));
+        assert!(!b.discovers_models());
+        assert!(
+            b.live_models().is_empty(),
+            "a pinned backend records no discovery"
+        );
     }
 
     #[test]
-    fn empty_model_list_serves_whole_probe_and_withholds_nothing() {
+    fn empty_model_list_serves_whole_probe() {
         // With no configured list, the probe set is served verbatim — the
         // allowlist is opt-in, so unconfigured pools are unaffected.
         let reg = build(vec![(
@@ -4084,12 +4048,6 @@ mod tests {
         assert!(reg.acquire_for("m1", PoolKind::Chat).is_ok());
         assert!(reg.acquire_for("m2", PoolKind::Chat).is_ok());
         assert_eq!(reg.all_models(), vec!["m1", "m2"]);
-        let d = reg.data();
-        let b = &d.pools.get("chat").unwrap().backends[0];
-        assert!(
-            b.withheld_models().is_empty(),
-            "no allowlist → nothing withheld"
-        );
     }
 
     #[test]
@@ -4578,7 +4536,6 @@ mod tests {
                     weight: 1,
                     max_inflight: 16,
                     health_path: "/models".into(),
-                    probe_models: true,
                     supports_edit: false,
                     enabled: true,
                     models: vec![],

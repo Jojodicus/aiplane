@@ -3,15 +3,17 @@
 
 //! Per-backend health checker + model discovery.
 //!
-//! Each backend gets one background task that pings `<base_url><health_path>`
-//! (default `/models`) every 5 s with a 2 s timeout. The probe does two
+//! Each upstream gets one background task that pings `<base_url><health_path>`
+//! (default `/models`) every 5 s with a 2 s timeout — a backend in several
+//! pools is one upstream, probed once for all of them. The probe does two
 //! jobs from one round-trip:
 //!
 //!   1. **Liveness** — three consecutive failures flip the backend to
 //!      unhealthy; one success flips it back. The picker in `registry.rs`
 //!      skips unhealthy backends.
 //!   2. **Model discovery** — on every success the response body is parsed
-//!      as the OpenAI `/models` envelope (`{"data": [{"id": "..."}, ...]}`)
+//!      as the OpenAI `/models` envelope (`{"data": [{"id": "..."}, ...]}`),
+//!      or TypeSafe System One's (`{"models": [{"name": "..."}]}`),
 //!      and the backend's advertised-model set is replaced wholesale. The
 //!      router in `acquire_for` reads that set to decide which pool handles
 //!      a given model. No static route table.
@@ -61,9 +63,9 @@ fn probe_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-/// Spawns one background task per backend. Awaits an initial parallel
-/// probe round before returning, so the registry has at least one
-/// model-set update per reachable backend before traffic starts.
+/// Spawns one background task per upstream (see [`ProbeTarget`]). Awaits an
+/// initial parallel probe round before returning, so the registry has at
+/// least one model-set update per reachable backend before traffic starts.
 pub async fn spawn(registry: Arc<UpstreamRegistry>, db: Option<Pool>) {
     let http = probe_client();
     // The generation this call is *for*, read before anything is awaited.
@@ -76,7 +78,7 @@ pub async fn spawn(registry: Arc<UpstreamRegistry>, db: Option<Pool>) {
     // two concurrent writers — permanently, and a double-click on Apply is
     // enough to cause it.
     let generation = registry.generation();
-    let pools = registry.pools();
+    let targets = probe_targets(&registry.pools());
     if let Some(db) = db.as_ref() {
         seed_remembered_models(&registry, db).await;
         seed_remembered_detection(&registry, db).await;
@@ -89,30 +91,29 @@ pub async fn spawn(registry: Arc<UpstreamRegistry>, db: Option<Pool>) {
     // occasions an operator is already waiting and already unhappy.
     let detection = tokio::spawn({
         let http = http.clone();
-        let registry = Arc::clone(&registry);
+        let targets = targets.clone();
         let db = db.clone();
-        async move { detect_all(&http, &registry, db.as_ref()).await }
+        async move { detect_all(&http, &targets, db.as_ref()).await }
     });
     let mut initial = Vec::new();
-    for pool in &pools {
-        for backend in &pool.backends {
-            let http = http.clone();
-            let pool_name = pool.name.clone();
-            let backend = Arc::clone(backend);
-            let db = db.clone();
-            initial.push(tokio::spawn(async move {
-                let outcome = probe_once(&http, &pool_name, &backend, db.as_ref()).await;
-                // A backend that is already unreachable at startup must not
-                // start out `healthy` (the field's initial value): the router
-                // would send it real traffic for the first three probe rounds
-                // and every one of those requests would fail at the socket.
-                // We just proved it is down, so say so — the loop below flips
-                // it back on the first success, ~1 s later.
-                if matches!(outcome, ProbeOutcome::Failed(_)) {
+    for target in &targets {
+        let http = http.clone();
+        let target = target.clone();
+        let db = db.clone();
+        initial.push(tokio::spawn(async move {
+            let outcome = probe_once(&http, &target, db.as_ref()).await;
+            // A backend that is already unreachable at startup must not
+            // start out `healthy` (the field's initial value): the router
+            // would send it real traffic for the first three probe rounds
+            // and every one of those requests would fail at the socket.
+            // We just proved it is down, so say so — the loop below flips
+            // it back on the first success, ~1 s later.
+            if matches!(outcome, ProbeOutcome::Failed(_)) {
+                for (_, backend) in &target {
                     backend.set_healthy(false);
                 }
-            }));
-        }
+            }
+        }));
     }
     // Block startup until every backend has been probed at least once
     // (or its probe has timed out at 2 s). Failures here aren't fatal —
@@ -126,7 +127,7 @@ pub async fn spawn(registry: Arc<UpstreamRegistry>, db: Option<Pool>) {
     // through a freshly-applied topology already knows how to phrase itself.
     let _ = detection.await;
 
-    // Now arm the looping probe per backend. Each loop owns its own
+    // Now arm the looping probe per upstream. Each loop owns its own
     // failure counter — the bootstrap probe above doesn't pre-seed it
     // because mid-startup flaps shouldn't permanently mark a backend
     // unhealthy. Each loop is tagged with the topology generation it was
@@ -147,17 +148,13 @@ pub async fn spawn(registry: Arc<UpstreamRegistry>, db: Option<Pool>) {
         );
         return;
     }
-    for pool in &pools {
-        for backend in &pool.backends {
-            let backend = Arc::clone(backend);
-            let pool_name = pool.name.clone();
-            let http = http.clone();
-            let registry = Arc::clone(&registry);
-            let db = db.clone();
-            tokio::spawn(async move {
-                run_probe(http, pool_name, backend, registry, generation, db).await;
-            });
-        }
+    for target in targets {
+        let http = http.clone();
+        let registry = Arc::clone(&registry);
+        let db = db.clone();
+        tokio::spawn(async move {
+            run_probe(http, target, registry, generation, db).await;
+        });
     }
 }
 
@@ -226,7 +223,7 @@ async fn seed_remembered_models(registry: &UpstreamRegistry, db: &Pool) {
     };
     for pool in registry.pools() {
         for backend in &pool.backends {
-            if !backend.probe_models_enabled() {
+            if !backend.discovers_models() {
                 continue;
             }
             if !backend.live_models().is_empty() {
@@ -258,77 +255,80 @@ async fn seed_remembered_models(registry: &UpstreamRegistry, db: &Pool) {
 /// changed on the upstream is picked up within five seconds without anyone
 /// applying anything; it is the *profile* that waits for the next apply.
 ///
-async fn detect_all(http: &reqwest::Client, registry: &UpstreamRegistry, db: Option<&Pool>) {
-    // Bounded fan-out. Each round is five concurrent GETs and each backend
+async fn detect_all(http: &reqwest::Client, targets: &[ProbeTarget], db: Option<&Pool>) {
+    // Bounded fan-out. Each round is five concurrent GETs and each upstream
     // gets its own round, so an unbounded loop turns a fifty-backend apply
     // into a ~250-socket burst against a client that pools nothing.
     let permits = Arc::new(tokio::sync::Semaphore::new(DETECT_CONCURRENCY));
     let mut rounds = Vec::new();
-    for pool in registry.pools() {
-        for backend in &pool.backends {
-            // A drained backend takes no traffic, so nothing depends on
-            // knowing what it is — and identification is five requests, not
-            // the probe's one. It keeps whatever was seeded from the database
-            // and is identified on the apply that brings it back.
-            if !backend.is_enabled() {
-                continue;
-            }
-            let http = http.clone();
-            let backend = Arc::clone(backend);
-            let pool_name = pool.name.clone();
-            let permits = Arc::clone(&permits);
-            rounds.push(tokio::spawn(async move {
-                let _permit = permits.acquire().await.ok()?;
-                let detected =
-                    profile::detect(&http, &backend.base_url, backend.api_key.as_deref())
-                        .await
-                        // Stamped here rather than by the database write, so the
-                        // live registry carries the same time the row does — the
-                        // admin page reads the registry, and was showing `null`
-                        // for every backend it had actually identified.
-                        .map(|d| profile::Detected {
-                            detected_at: Some(jiff::Timestamp::now().to_string()),
-                            ..d
-                        });
+    for target in targets {
+        let Some((pool_name, backend)) = target.first() else {
+            continue;
+        };
+        // A drained backend takes no traffic, so nothing depends on
+        // knowing what it is — and identification is five requests, not
+        // the probe's one. It keeps whatever was seeded from the database
+        // and is identified on the apply that brings it back.
+        if !backend.is_enabled() {
+            continue;
+        }
+        let http = http.clone();
+        let backend = Arc::clone(backend);
+        let pool_name = pool_name.clone();
+        let target = target.clone();
+        let permits = Arc::clone(&permits);
+        rounds.push(tokio::spawn(async move {
+            let _permit = permits.acquire().await.ok()?;
+            let detected = profile::detect(&http, &backend.base_url, backend.api_key.as_deref())
+                .await
+                // Stamped here rather than by the database write, so the
+                // live registry carries the same time the row does — the
+                // admin page reads the registry, and was showing `null`
+                // for every backend it had actually identified.
+                .map(|d| profile::Detected {
+                    detected_at: Some(jiff::Timestamp::now().to_string()),
+                    ..d
+                });
 
-                // Nothing answered. Keep what we already knew — an unreachable
-                // server is not a plain OpenAI server, and writing that
-                // conclusion would undo `seed_remembered_detection` and the
-                // reload carry-forward milliseconds after they ran, then
-                // persist the loss. A gateway restarted while the Ollama box
-                // was rebooting would forget it was Ollama, permanently.
-                let Some(detected) = detected else {
-                    tracing::info!(
-                        pool = %pool_name, backend = %backend.name,
-                        "backend did not answer identification; keeping the profile it had"
-                    );
-                    return None;
-                };
-
+            // Nothing answered. Keep what we already knew — an unreachable
+            // server is not a plain OpenAI server, and writing that
+            // conclusion would undo `seed_remembered_detection` and the
+            // reload carry-forward milliseconds after they ran, then
+            // persist the loss. A gateway restarted while the Ollama box
+            // was rebooting would forget it was Ollama, permanently.
+            let Some(detected) = detected else {
                 tracing::info!(
                     pool = %pool_name, backend = %backend.name,
-                    profile = detected.profile.as_str(),
-                    version = detected.version.as_deref().unwrap_or("-"),
-                    context_windows = detected.context_windows.len(),
-                    max_parallel = ?detected.max_parallel,
-                    "identified backend"
+                    "backend did not answer identification; keeping the profile it had"
                 );
-                if detected.profile == profile::BackendProfile::Generic {
-                    // Not an error, and — unlike an unanswered round — a real
-                    // answer, so it is allowed to replace a stale profile.
-                    // That is what lets a backend repointed from an Ollama box
-                    // to a hosted API stop being treated as Ollama.
-                    tracing::info!(
-                        pool = %pool_name, backend = %backend.name,
-                        "backend answered but is none of the server kinds we know; treating it \
-                         as plain OpenAI-compatible (no separate context endpoint, reasoning \
-                         spelling guessed from the model name)"
-                    );
-                }
-                backend.set_detected(&detected);
-                Some((backend.name.clone(), backend.base_url.clone(), detected))
-            }));
-        }
+                return None;
+            };
+
+            tracing::info!(
+                pool = %pool_name, backend = %backend.name,
+                profile = detected.profile.as_str(),
+                version = detected.version.as_deref().unwrap_or("-"),
+                context_windows = detected.context_windows.len(),
+                max_parallel = ?detected.max_parallel,
+                "identified backend"
+            );
+            if detected.profile == profile::BackendProfile::Generic {
+                // Not an error, and — unlike an unanswered round — a real
+                // answer, so it is allowed to replace a stale profile.
+                // That is what lets a backend repointed from an Ollama box
+                // to a hosted API stop being treated as Ollama.
+                tracing::info!(
+                    pool = %pool_name, backend = %backend.name,
+                    "backend answered but is none of the server kinds we know; treating it \
+                     as plain OpenAI-compatible (no separate context endpoint, reasoning \
+                     spelling guessed from the model name)"
+                );
+            }
+            for (_, view) in &target {
+                view.set_detected(&detected);
+            }
+            Some((backend.name.clone(), backend.base_url.clone(), detected))
+        }));
     }
     for round in rounds {
         match round.await {
@@ -389,16 +389,49 @@ async fn seed_remembered_detection(registry: &UpstreamRegistry, db: &Pool) {
     }
 }
 
+/// Every pool's view of one upstream, keyed by the pool it belongs to.
+///
+/// A backend linked into several pools (OpenRouter behind both a chat and a
+/// System One pool) gets a runtime view per pool, so each can apply its own
+/// model rule — but it is one server, and asking it the same question once per
+/// pool every five seconds is requests for nothing.
+type ProbeTarget = Vec<(String, Arc<Backend>)>;
+
+/// Group the pools' backends into one [`ProbeTarget`] per upstream, by the
+/// same identity [`UpstreamRegistry::reload`] carries state across: name and
+/// base URL.
+fn probe_targets(pools: &[Arc<super::registry::Pool>]) -> Vec<ProbeTarget> {
+    let mut targets: Vec<ProbeTarget> = Vec::new();
+    for pool in pools {
+        for backend in &pool.backends {
+            let member = (pool.name.clone(), Arc::clone(backend));
+            match targets.iter_mut().find(|target| {
+                let lead = &target[0].1;
+                lead.name == backend.name && lead.base_url == backend.base_url
+            }) {
+                Some(target) => target.push(member),
+                None => targets.push(vec![member]),
+            }
+        }
+    }
+    targets
+}
+
 /// Single round of probing — used by both the bootstrap path and the
-/// looping path. Updates liveness + advertised-model set on success; on
-/// failure, only returns the outcome (the caller decides whether one
-/// failure flips health or only the third).
+/// looping path. One request to the upstream, applied to every pool's view of
+/// it: liveness, auth, context windows, and — on a view that discovers — the
+/// advertised-model set. On failure, only returns the outcome (the caller
+/// decides whether one failure flips health or only the third).
 async fn probe_once(
     http: &reqwest::Client,
-    pool_name: &str,
-    backend: &Backend,
+    target: &[(String, Arc<Backend>)],
     db: Option<&Pool>,
 ) -> ProbeOutcome {
+    // Every view is built from the same backend row, so any of them can speak
+    // for the upstream: same URL, same key, same identified profile.
+    let Some((pool_name, backend)) = target.first() else {
+        return ProbeOutcome::AliveNoData;
+    };
     let url = format!("{}{}", backend.base_url, backend.health_path);
     // The profile's context endpoint, read on the same tick and concurrently
     // with `/models` — they are independent, and serialising them would double
@@ -409,13 +442,9 @@ async fn probe_once(
     // reports nothing and a freshly applied topology would know no window for
     // any model. Now one arrives within five seconds of the model being used.
     //
-    // Skipped when discovery is off: that path returns before the writes
-    // below, so asking would have been one request every five seconds whose
-    // answer is thrown away.
+    // Asked on a backend with configured models too: the catalog is pinned,
+    // but how much context each pinned model has is still the server's to say.
     let context = async {
-        if !backend.probe_models_enabled() {
-            return None;
-        }
         profile::read_context(
             http,
             &backend.base_url,
@@ -473,7 +502,9 @@ async fn probe_once(
                  (and, if it uses `api_key_env`, that the variable is actually set)."
             );
         }
-        backend.set_auth_failed(true);
+        for (_, view) in target {
+            view.set_auth_failed(true);
+        }
         return ProbeOutcome::AliveNoData;
     }
     if !status.is_success() {
@@ -484,16 +515,7 @@ async fn probe_once(
         ));
     }
 
-    // Model discovery disabled for this backend: the probe is a pure liveness
-    // check, and the configured model set is authoritative. We reached a 2xx,
-    // so the backend is up — but we deliberately do NOT read/parse `/models`,
-    // because on an image backend (e.g. z.AI's general endpoint) that response
-    // is the *chat* catalog and would clobber the configured image model ids.
-    if !backend.probe_models_enabled() {
-        return ProbeOutcome::AliveNoData;
-    }
-
-    // Parse the OpenAI `/models` envelope. A backend that returns 200
+    // Parse the `/models` envelope. A backend that returns 200
     // with a different shape (or non-JSON entirely — e.g. plain
     // whisper.cpp) is alive but unparseable: we mark it healthy and
     // leave the model set unchanged, so the operator can either keep
@@ -525,43 +547,18 @@ async fn probe_once(
     // they did, the probe understood only vLLM's spelling of the window and
     // every llama.cpp model fell through to the global 32768 guess with the
     // real figure sitting in the body it had just read.
-    // `None` = not an OpenAI model envelope at all. Alive, but nothing to
+    // `None` = not a model envelope at all. Alive, but nothing to
     // learn, so the previous model set survives — a backend whose `/models`
     // answers in some other shape stays routable on what it advertised before
     // rather than being emptied into unroutability.
     let Some((new_set, windows)) = profile::read_models(&value) else {
         tracing::debug!(
             pool = %pool_name, backend = %backend.name,
-            "/models body was not an OpenAI model envelope; leaving model set unchanged"
+            "/models body was not a model envelope we understand; leaving model set unchanged"
         );
         return ProbeOutcome::AliveNoData;
     };
 
-    let previous = backend.probe_models();
-    if previous != new_set {
-        let added: Vec<&String> = new_set.difference(&previous).collect();
-        let removed: Vec<&String> = previous.difference(&new_set).collect();
-        tracing::info!(
-            pool = %pool_name, backend = %backend.name,
-            added = ?added, removed = ?removed,
-            total = new_set.len(),
-            "advertised models updated"
-        );
-        // Remember it, so the *next* boot knows this backend's models even if
-        // it is unreachable then (see `seed_remembered_models`). Only on a
-        // change — the steady state writes nothing. Best-effort: a write failure
-        // costs the seed, not the probe.
-        if let Some(db) = db
-            && let Err(err) =
-                upstreams_config::save_probed_models(db, &backend.name, &new_set).await
-        {
-            tracing::debug!(
-                pool = %pool_name, backend = %backend.name, error = %err,
-                "could not remember the advertised model set"
-            );
-        }
-    }
-    backend.set_models(new_set);
     // `/models` first, then whatever the profile's own endpoint said — the
     // latter is the figure actually allocated, so it wins where both speak.
     //
@@ -571,26 +568,68 @@ async fn probe_once(
     // assumed window, which is the silent truncation the reading exists to
     // prevent. `None` here leaves the last good answer standing, exactly as an
     // unparseable `/models` body leaves the model set standing.
-    if let Some((endpoint_windows, context_cap)) = context {
-        let mut windows = windows;
-        windows.extend(endpoint_windows);
-        backend.set_context_windows(windows);
-        backend.set_context_cap(context_cap);
-    } else if backend.profile().context_endpoint().is_some() {
-        tracing::debug!(
-            pool = %pool_name, backend = %backend.name,
-            "the context endpoint did not answer; keeping the windows already known"
-        );
-        backend.set_context_windows(windows);
-    } else {
-        backend.set_context_windows(windows);
-    }
-    if backend.auth_failed() {
-        tracing::info!(
-            pool = %pool_name, backend = %backend.name,
-            "upstream auth accepted again — model discovery restored"
-        );
-        backend.set_auth_failed(false);
+    let (windows, context_cap) = match context {
+        Some((endpoint_windows, context_cap)) => {
+            let mut windows = windows;
+            windows.extend(endpoint_windows);
+            (windows, Some(context_cap))
+        }
+        None => {
+            if backend.profile().context_endpoint().is_some() {
+                tracing::debug!(
+                    pool = %pool_name, backend = %backend.name,
+                    "the context endpoint did not answer; keeping the windows already known"
+                );
+            }
+            (windows, None)
+        }
+    };
+
+    let mut remembered = false;
+    for (pool_name, view) in target {
+        // Configured models are the catalog, so a pinned view ignores the ids
+        // in this body: on an image backend (z.AI's general endpoint) or behind
+        // a System One pool (OpenRouter) they are a *different* capability's
+        // catalog. It still takes the windows.
+        let previous = view.live_models();
+        if view.discovers_models() && previous != new_set {
+            let added: Vec<&String> = new_set.difference(&previous).collect();
+            let removed: Vec<&String> = previous.difference(&new_set).collect();
+            tracing::info!(
+                pool = %pool_name, backend = %view.name,
+                added = ?added, removed = ?removed,
+                total = new_set.len(),
+                "advertised models updated"
+            );
+            // Remember it, so the *next* boot knows this backend's models even
+            // if it is unreachable then (see `seed_remembered_models`). Only on
+            // a change, and once per upstream — the row is keyed by backend
+            // name, not pool. Best-effort: a write failure costs the seed, not
+            // the probe.
+            if !remembered
+                && let Some(db) = db
+                && let Err(err) =
+                    upstreams_config::save_probed_models(db, &view.name, &new_set).await
+            {
+                tracing::debug!(
+                    pool = %pool_name, backend = %view.name, error = %err,
+                    "could not remember the advertised model set"
+                );
+            }
+            remembered = true;
+        }
+        view.set_models(new_set.clone());
+        view.set_context_windows(windows.clone());
+        if let Some(context_cap) = context_cap {
+            view.set_context_cap(context_cap);
+        }
+        if view.auth_failed() {
+            tracing::info!(
+                pool = %pool_name, backend = %view.name,
+                "upstream auth accepted again — model discovery restored"
+            );
+            view.set_auth_failed(false);
+        }
     }
 
     ProbeOutcome::AliveWithModels
@@ -655,12 +694,26 @@ fn describe_transport_error(err: &reqwest::Error) -> String {
 
 async fn run_probe(
     http: reqwest::Client,
-    pool_name: String,
-    backend: Arc<Backend>,
+    target: ProbeTarget,
     registry: Arc<UpstreamRegistry>,
     generation: u64,
     db: Option<Pool>,
 ) {
+    let Some(backend) = target.first().map(|(_, backend)| Arc::clone(backend)) else {
+        return;
+    };
+    // Every pool this upstream serves, for the log lines: an outage is one
+    // event however many pools it takes down.
+    let pool_name = target
+        .iter()
+        .map(|(pool, _)| pool.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let set_healthy = |healthy: bool| {
+        for (_, view) in &target {
+            view.set_healthy(healthy);
+        }
+    };
     tracing::debug!(
         pool = %pool_name,
         backend = %backend.name,
@@ -679,12 +732,12 @@ async fn run_probe(
             );
             return;
         }
-        match probe_once(&http, &pool_name, &backend, db.as_ref()).await {
+        match probe_once(&http, &target, db.as_ref()).await {
             ProbeOutcome::AliveWithModels | ProbeOutcome::AliveNoData => {
                 if !backend.is_healthy() {
                     tracing::info!(pool = %pool_name, backend = %backend.name, "backend recovered — healthy again");
                 }
-                backend.set_healthy(true);
+                set_healthy(true);
                 consecutive_failures = 0;
             }
             ProbeOutcome::Failed(reason) => {
@@ -702,7 +755,7 @@ async fn run_probe(
                             failures = consecutive_failures,
                             "backend DOWN: {reason}"
                         );
-                        backend.set_healthy(false);
+                        set_healthy(false);
                     }
                     // Still serving traffic — a single blip, not an outage.
                     // Quiet (DEBUG) and explicitly labelled so it can't be
@@ -756,7 +809,7 @@ mod tests {
         assert!(desc.contains("chain:"), "missing source chain: {desc}");
     }
 
-    // --- probe_models gate ---------------------------------------------------
+    // --- configured models pin the catalog ------------------------------------
 
     use std::collections::{HashMap, HashSet};
 
@@ -768,7 +821,7 @@ mod tests {
         BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig,
     };
 
-    fn image_backend(base_url: &str, probe_models: bool) -> BackendConfig {
+    fn image_backend(base_url: &str) -> BackendConfig {
         BackendConfig {
             name: "img".into(),
             base_url: base_url.into(),
@@ -779,7 +832,6 @@ mod tests {
             health_path: "/models".into(),
             models: vec!["glm-image".into()],
             alias: None,
-            probe_models,
             supports_edit: false,
             enabled: true,
         }
@@ -801,7 +853,7 @@ mod tests {
         server
     }
 
-    fn backend_arc(base_url: &str, probe_models: bool) -> std::sync::Arc<Backend> {
+    fn backend_arc(base_url: &str) -> std::sync::Arc<Backend> {
         let mut pools = HashMap::new();
         pools.insert(
             "images".to_string(),
@@ -815,7 +867,7 @@ mod tests {
                 strategy: PickerStrategy::RoundRobin,
                 models: Vec::new(),
                 fallback_offline: None,
-                backend: vec![image_backend(base_url, probe_models)],
+                backend: vec![image_backend(base_url)],
             },
         );
         let reg = UpstreamRegistry::new(&pools).unwrap();
@@ -849,33 +901,112 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let backend = backend_arc(&server.uri(), true);
+        let backend = backend_arc(&server.uri());
 
-        let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
+        let outcome = probe_once(
+            &reqwest::Client::new(),
+            &[("images".into(), backend.clone())],
+            None,
+        )
+        .await;
         assert!(
             matches!(outcome, ProbeOutcome::AliveWithModels),
             "expected AliveWithModels, got {outcome:?}"
         );
+        // Read on a backend with configured models too: pinning the catalog
+        // does not make the server's figure for a pinned model less true.
         assert_eq!(backend.context_window("glm-image"), Some(262_144));
         assert_eq!(backend.context_window("hosted-model"), None);
         assert_eq!(backend.context_window("broken"), None, "0 is not a window");
         assert_eq!(backend.context_window("never-heard-of-it"), None);
     }
 
-    #[tokio::test]
-    async fn probe_models_false_keeps_config_models_over_chat_catalog() {
-        let server = chat_catalog_server().await;
-        let backend = backend_arc(&server.uri(), false);
+    /// OpenRouter in both a chat pool and a System One pool: one backend row,
+    /// one pool view each.
+    fn shared_backend_registry(base_url: &str) -> std::sync::Arc<UpstreamRegistry> {
+        let backend = |models: Vec<String>| BackendConfig {
+            name: "openrouter".into(),
+            models,
+            ..image_backend(base_url)
+        };
+        let pool = |kind, models: Vec<String>| UpstreamPoolConfig {
+            voices: Default::default(),
+            offer_voices: Vec::new(),
+            allowed_groups: Vec::new(),
+            compliance: Default::default(),
+            enforce_limits: true,
+            kind,
+            strategy: PickerStrategy::RoundRobin,
+            models,
+            fallback_offline: None,
+            backend: vec![backend(Vec::new())],
+        };
+        UpstreamRegistry::new(&HashMap::from([
+            ("chat".to_string(), pool(PoolKind::Chat, Vec::new())),
+            (
+                "system-one".to_string(),
+                pool(PoolKind::SystemOne, vec!["typesafe/jev-1.13".into()]),
+            ),
+        ]))
+        .unwrap()
+    }
 
-        let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
-        // Reachable, but no discovery: config model set is untouched.
+    #[test]
+    fn a_backend_in_two_pools_is_one_probe_target() {
+        let registry = shared_backend_registry("http://openrouter.invalid/api/v1");
+        let targets = probe_targets(&registry.pools());
+        assert_eq!(targets.len(), 1, "one upstream, one probe");
+        let mut pools: Vec<&str> = targets[0].iter().map(|(pool, _)| pool.as_str()).collect();
+        pools.sort();
+        assert_eq!(pools, ["chat", "system-one"]);
+    }
+
+    /// One request answers every pool the backend is in, and each pool's view
+    /// takes from it what its own rule allows.
+    #[tokio::test]
+    async fn one_probe_serves_every_pool_view_of_a_backend() {
+        let server = chat_catalog_server().await;
+        let registry = shared_backend_registry(&server.uri());
+        let targets = probe_targets(&registry.pools());
+
+        let outcome = probe_once(&reqwest::Client::new(), &targets[0], None).await;
+        assert!(!matches!(outcome, ProbeOutcome::Failed(_)), "{outcome:?}");
+
+        let models_requests = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/models")
+            .count();
+        assert_eq!(models_requests, 1);
+        assert!(registry.route("glm-4.6", PoolKind::Chat).is_ok());
         assert!(
-            matches!(outcome, ProbeOutcome::AliveNoData),
-            "expected AliveNoData, got {outcome:?}"
+            registry
+                .route("typesafe/jev-1.13", PoolKind::SystemOne)
+                .is_ok()
+        );
+        assert!(registry.route("glm-4.6", PoolKind::SystemOne).is_err());
+    }
+
+    #[tokio::test]
+    async fn configured_models_keep_a_chat_catalog_out() {
+        let server = chat_catalog_server().await;
+        let backend = backend_arc(&server.uri());
+
+        let outcome = probe_once(
+            &reqwest::Client::new(),
+            &[("images".into(), backend.clone())],
+            None,
+        )
+        .await;
+        assert!(
+            !matches!(outcome, ProbeOutcome::Failed(_)),
+            "a 200 is alive, got {outcome:?}"
         );
         assert!(
-            backend.probe_models().is_empty(),
-            "probe must not populate the live set when probe_models = false"
+            backend.live_models().is_empty(),
+            "a backend with configured models must not discover"
         );
         assert_eq!(
             backend.models_snapshot(),
@@ -913,7 +1044,6 @@ mod tests {
                 weight: 1,
                 max_inflight: 16,
                 health_path: "/models".into(),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 models: Vec::new(),
@@ -988,13 +1118,11 @@ mod tests {
             chat.models_snapshot(),
             HashSet::from(["cached-chat".into()])
         );
-        assert!(chat.withheld_models().is_empty());
         assert!(system_one.live_models().is_empty());
         assert_eq!(
             system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()])
         );
-        assert!(system_one.withheld_models().is_empty());
 
         system_one.set_models(HashSet::from(["cached-chat".into()]));
         assert!(
@@ -1011,27 +1139,29 @@ mod tests {
         assert!(registry.route("cached-chat", PoolKind::SystemOne).is_err());
 
         assert!(matches!(
-            probe_once(&reqwest::Client::new(), "chat", &chat, Some(&db)).await,
+            probe_once(
+                &reqwest::Client::new(),
+                &[("chat".into(), chat.clone())],
+                Some(&db)
+            )
+            .await,
             ProbeOutcome::AliveWithModels
         ));
         assert!(matches!(
             probe_once(
                 &reqwest::Client::new(),
-                "system-one",
-                &system_one,
+                &[("system-one".into(), system_one.clone())],
                 Some(&db),
             )
             .await,
-            ProbeOutcome::AliveNoData
+            ProbeOutcome::AliveWithModels
         ));
         assert_eq!(chat.models_snapshot(), HashSet::from(["fresh-chat".into()]));
-        assert!(chat.withheld_models().is_empty());
         assert!(system_one.live_models().is_empty());
         assert_eq!(
             system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()])
         );
-        assert!(system_one.withheld_models().is_empty());
         assert!(registry.route("fresh-chat", PoolKind::Chat).is_ok());
         assert!(registry.route("fresh-chat", PoolKind::SystemOne).is_err());
 
@@ -1055,14 +1185,12 @@ mod tests {
             HashSet::from(["fresh-chat".into()]),
             "reload must carry the live chat catalog across"
         );
-        assert!(reloaded_chat.withheld_models().is_empty());
         assert!(reloaded_system_one.live_models().is_empty());
         assert_eq!(
             reloaded_system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()]),
             "reload must leave the System One catalog pinned to config"
         );
-        assert!(reloaded_system_one.withheld_models().is_empty());
         assert!(registry.route("fresh-chat", PoolKind::Chat).is_ok());
         assert!(
             registry
@@ -1070,35 +1198,6 @@ mod tests {
                 .is_ok()
         );
         assert!(registry.route("fresh-chat", PoolKind::SystemOne).is_err());
-    }
-
-    #[tokio::test]
-    async fn probe_models_true_allowlist_withholds_chat_catalog() {
-        // The contrast case: with discovery on, the server's chat catalog
-        // (`glm-4.6`) is discovered — but the backend's configured `models`
-        // list (`glm-image`) is now an allowlist, so the unlisted chat model
-        // is *withheld* rather than clobbering the intended set. The
-        // intersection is empty here (the backend doesn't actually serve
-        // `glm-image`), so nothing is served and the discovered id shows up in
-        // the withheld set for the struck-through UI chip.
-        let server = chat_catalog_server().await;
-        let backend = backend_arc(&server.uri(), true);
-
-        let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
-        assert!(
-            matches!(outcome, ProbeOutcome::AliveWithModels),
-            "expected AliveWithModels, got {outcome:?}"
-        );
-        assert!(
-            backend.models_snapshot().is_empty(),
-            "allowlist ∩ probe is empty → nothing served, got {:?}",
-            backend.models_snapshot()
-        );
-        assert_eq!(
-            backend.withheld_models(),
-            std::collections::HashSet::from(["glm-4.6".to_string()]),
-            "the discovered-but-unlisted chat model must be withheld"
-        );
     }
 }
 
@@ -1159,7 +1258,6 @@ mod detection_wiring {
                     health_path: "/models".into(),
                     models: Vec::new(),
                     alias: None,
-                    probe_models: true,
                     enabled: true,
                     supports_edit: false,
                 }],
@@ -1321,7 +1419,12 @@ mod detection_wiring {
         spawn(Arc::clone(&loaded), None).await;
         let pools = loaded.pools();
         let backend = &pools[0].backends[0];
-        probe_once(&reqwest::Client::new(), "chat", backend, None).await;
+        probe_once(
+            &reqwest::Client::new(),
+            &[("chat".into(), backend.clone())],
+            None,
+        )
+        .await;
         assert_eq!(backend.context_window("qwen3:0.6b"), Some(4_096));
     }
 }

@@ -38,7 +38,6 @@ pub struct BackendRow {
     pub weight: u32,
     pub max_inflight: u32,
     pub health_path: String,
-    pub probe_models: bool,
     pub supports_edit: bool,
     /// `false` = taken out of rotation for maintenance (migration 0063).
     pub enabled: bool,
@@ -143,7 +142,7 @@ pub async fn is_empty(db: &Pool) -> Result<bool, DbError> {
 async fn load_all_backends(db: &Pool) -> Result<HashMap<String, BackendRow>, DbError> {
     let rows = sqlx::query(
         r#"SELECT name, base_url, api_key_env, api_key_ct, api_key_nonce, weight, max_inflight,
-                  health_path, probe_models, supports_edit, enabled, created_at, updated_at
+                  health_path, supports_edit, enabled, created_at, updated_at
              FROM backends ORDER BY name"#,
     )
     .fetch_all(db)
@@ -165,7 +164,6 @@ async fn load_all_backends(db: &Pool) -> Result<HashMap<String, BackendRow>, DbE
                 weight: row.try_get::<u32, _>("weight")?,
                 max_inflight: row.try_get::<u32, _>("max_inflight")?,
                 health_path: row.try_get("health_path")?,
-                probe_models: row.try_get::<i64, _>("probe_models")? != 0,
                 supports_edit: row.try_get::<i64, _>("supports_edit")? != 0,
                 enabled: row.try_get::<i64, _>("enabled")? != 0,
                 models: Vec::new(),
@@ -592,8 +590,8 @@ pub async fn upsert_backend(db: &Pool, row: &BackendRow) -> Result<(), DbError> 
     sqlx::query(
         r#"INSERT INTO backends
                (name, base_url, api_key_env, api_key_ct, api_key_nonce, weight, max_inflight,
-                health_path, probe_models, supports_edit, enabled, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                health_path, supports_edit, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(name) DO UPDATE SET
                base_url      = excluded.base_url,
                api_key_env   = excluded.api_key_env,
@@ -602,7 +600,6 @@ pub async fn upsert_backend(db: &Pool, row: &BackendRow) -> Result<(), DbError> 
                weight        = excluded.weight,
                max_inflight  = excluded.max_inflight,
                health_path   = excluded.health_path,
-               probe_models  = excluded.probe_models,
                supports_edit = excluded.supports_edit,
                enabled       = excluded.enabled,
                updated_at    = excluded.updated_at"#,
@@ -615,7 +612,6 @@ pub async fn upsert_backend(db: &Pool, row: &BackendRow) -> Result<(), DbError> 
     .bind(row.weight)
     .bind(row.max_inflight)
     .bind(&row.health_path)
-    .bind(row.probe_models as i64)
     .bind(row.supports_edit as i64)
     .bind(row.enabled as i64)
     .bind(&now)
@@ -1083,7 +1079,6 @@ mod tests {
             weight: 1,
             max_inflight: 16,
             health_path: "/models".into(),
-            probe_models: true,
             supports_edit: false,
             enabled: true,
             models: Vec::new(),
@@ -1232,7 +1227,6 @@ mod tests {
             weight: 2,
             max_inflight: 32,
             health_path: "/v1/models".into(),
-            probe_models: true,
             supports_edit: false,
             enabled: true,
             models: vec!["qwen-32b".into(), "qwen-7b".into()],
@@ -1321,7 +1315,6 @@ mod tests {
             weight: 1,
             max_inflight: 16,
             health_path: "/models".into(),
-            probe_models: true,
             supports_edit: false,
             enabled: true,
             models: vec!["voxtral-small".into()],
@@ -1412,7 +1405,6 @@ mod tests {
                     weight: 1,
                     max_inflight: 16,
                     health_path: "/models".into(),
-                    probe_models: true,
                     supports_edit: false,
                     enabled: true,
                     models: vec![],
@@ -1483,7 +1475,6 @@ mod tests {
                     weight: 1,
                     max_inflight: 16,
                     health_path: "/models".into(),
-                    probe_models: true,
                     supports_edit: false,
                     enabled: true,
                     models: vec![],
@@ -1524,7 +1515,6 @@ mod tests {
             weight: 1,
             max_inflight: 16,
             health_path: "/models".into(),
-            probe_models: true,
             supports_edit: false,
             enabled: true,
             models: vec!["m1".into()],
@@ -1562,7 +1552,6 @@ mod tests {
             weight: 1,
             max_inflight: 16,
             health_path: "/models".into(),
-            probe_models: true,
             supports_edit: false,
             enabled: true,
             models: vec![],
@@ -1631,7 +1620,6 @@ mod tests {
                 weight: 1,
                 max_inflight: 16,
                 health_path: "/models".into(),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 models: vec![],
@@ -1757,7 +1745,6 @@ mod tests {
                 weight: 1,
                 max_inflight: 16,
                 health_path: "/models".into(),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 models: vec![],

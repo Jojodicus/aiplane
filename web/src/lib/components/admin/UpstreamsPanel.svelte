@@ -43,7 +43,7 @@
 		const live = status.pool === null ? null : {
 			healthy: status.healthy, enabled: status.enabled, auth_failed: status.auth_failed,
 			inflight: status.inflight, max_inflight: status.max_inflight, models: status.models,
-			withheld: status.withheld, pool: status.pool, profile: previous?.profile ?? 'generic',
+			pool: status.pool, profile: previous?.profile ?? 'generic',
 			detected_version: previous?.detected_version ?? null,
 			detected_max_parallel: previous?.detected_max_parallel ?? null,
 			detected_at: previous?.detected_at ?? null

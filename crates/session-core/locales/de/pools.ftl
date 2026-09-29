@@ -3,7 +3,7 @@
 
 pools-field-name = Name
 pools-field-kind = Art
-pools-field-models = Bereitgestellte Modelle (Positivliste, kommagetrennt)
+pools-field-models = Bereitgestellte Modelle (kommagetrennt)
 pools-field-backends = Backends
 pools-save-pool = Pool speichern
 pools-delete-pool = Löschen
@@ -23,7 +23,7 @@ pools-field-strategy = Strategie
 pools-field-strategy-hint = prefix_affinity hält eine Konversation auf der Replika, die ihren KV-Cache schon hat (beste Wahl für Chat-/Agent-Traffic über mehrere GPUs — die anderen schicken aufeinanderfolgende Turns abwechselnd hin und her und zahlen jedes Mal den vollen Prefill) und verteilt trotzdem, wenn ein Backend echt stärker belastet ist. least_inflight verteilt nach aktueller Last; round_robin rotiert gewichtet.
 pools-field-fallback-offline = Offline-Fallback-Modell
 pools-field-fallback-offline-placeholder = wird ausgeliefert, wenn jedes Backend ausgefallen ist
-pools-field-models-hint = Wenn gesetzt, werden von einem Backend mit /models-Probe nur diese IDs bereitgestellt — der Rest wird durchgestrichen angezeigt. Leer = alles bereitstellen, was das Backend meldet.
+pools-field-models-hint = Wenn gesetzt, werden genau diese IDs bereitgestellt und die Backends nicht gefragt, was sie haben — nötig, wo /models etwas anderes listet oder ein Modell auslässt. Leer = die Modelle über /models jedes Backends erkennen.
 pools-field-allowed-groups = Erlaubte Gruppen
 pools-field-allowed-groups-hint = AIplane-Gruppen, die die Modelle dieses Pools sehen + nutzen dürfen. Nichts ausgewählt = alle. Admins haben immer Zugriff. Gruppen unter Admin → Gruppen verwalten.
 pools-field-voices = Stimmen (lang=voice pro Zeile)

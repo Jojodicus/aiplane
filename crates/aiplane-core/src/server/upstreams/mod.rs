@@ -31,9 +31,11 @@
 //!   not — where this server keeps its context window, and how it spells
 //!   "think harder" — so those stay one vocabulary in the UI while meaning
 //!   different bytes per upstream.
-//! - **Health** (`health.rs`): one background task per backend, hitting
+//! - **Health** (`health.rs`): one background task per upstream — a backend
+//!   in several pools is probed once for all of them — hitting
 //!   `<base_url>/models`. On every successful probe the response is
-//!   parsed as the OpenAI envelope (`{"data": [{"id": ...}]}`) and the
+//!   parsed as the OpenAI envelope (`{"data": [{"id": ...}]}`) or
+//!   TypeSafe's (`{"models": [{"name": ...}]}`) and the
 //!   backend's advertised-model set is replaced. Three consecutive
 //!   failures mark unhealthy; one success flips back. `spawn` blocks on
 //!   an initial parallel probe round so the first request finds populated

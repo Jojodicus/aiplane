@@ -1,6 +1,6 @@
 # Upstreams (multi-provider routing + load balancing)
 
-AIplane routes each request to one of several upstream LLM backends based on the requested model name. **Routes are not declared statically** — the health probe parses each backend's `/models` response and the registry routes by what each upstream reports it serves. Load a model on a backend in the right kind of pool and it becomes routable automatically.
+AIplane routes each request to one of several upstream LLM backends based on the requested model name. **Routes are not declared statically** — the health probe parses each backend's `/models` response and the registry routes by what each upstream reports it serves. Load a model on a backend in the right kind of pool and it becomes routable automatically. The exception is a backend with models configured for it: those are its catalog, and it is not asked (see [Configured models](#configured-models)).
 
 ## Core abstraction
 
@@ -23,9 +23,8 @@ Pools, backends, and per-model settings are configured **in the admin UI at `/ad
 
 A **pool** has a name, a `kind` (`chat` | `transcription` | `embedding` | `image` | `speech` | `system_one` | `ocr` | `rerank`), a picker `strategy` (`prefix_affinity` — recommended for multi-replica chat pools — `least_inflight`, or `round_robin`), optional GDPR/NDA compliance flags, a rate-limit-exemption toggle, and an optional offline-fallback model. `ocr` and `rerank` are internal capability pools rather than public model endpoints.
 
-A **backend** can belong to one or more pools and carries a name, base URL, an API key (entered once, stored encrypted; an env-var name can be given as a fallback), weight, max in-flight, health path, client-facing aliases, and two capability flags. Each pool gets its own runtime view of that backend, so pool-specific model policy stays isolated even when the name, URL, and credentials are shared:
+A **backend** can belong to one or more pools and carries a name, base URL, an API key (entered once, stored encrypted; an env-var name can be given as a fallback), weight, max in-flight, health path, client-facing aliases, an optional model list, and a capability flag. Each pool gets its own runtime view of that backend, so pool-specific model policy stays isolated even when the name, URL, and credentials are shared:
 
-- **Discover models from probe** (`probe_models`, default on). When off, the health probe is a pure liveness check and never overwrites the backend's configured model list. Turn it off for image/speech backends whose `/models` returns a *chat* catalog (z.AI's general endpoint, OpenAI) — otherwise the probe replaces the real model ids, makes them unroutable, and pollutes `/v1/models`. Such backends instead get an explicit model list (on the backend, or on the pool).
 - **Supports image editing** (`supports_edit`, default off). Marks an image backend as capable of editing. The `edit_image` tool is only registered when some image backend sets this, and editing is additionally refused against a backend whose pool is non-GDPR (it would ship existing user images off-site).
 
 A **speech** pool also takes an optional voice map — one voice id per spoken language (lowercase ISO-639-1), plus a default used when no language matches; voice mode resolves the voice from the language the STT detected. Unlike other kinds, a speech pool has **no unknown-model fallback** — a mistyped model or voice just surfaces the backend's own error. The chat UI's voice mode appears only when both a speech pool and a transcription model exist (see [`ui.md`](ui.md)).
@@ -38,13 +37,13 @@ sidecar, not the raw vLLM OpenAI endpoint. The sidecar may use the official
 `infer.py --pdf` wrapper; it owns PDF rasterization and sends the model's
 required image requests and `vllm_xargs` values itself.
 
-A **system_one** pool serves the TypeSafe-compatible `POST /v1/systemone` endpoint. The gateway does not translate its question or answer schema. Because this endpoint has its own model catalog, System One backends always use their explicitly configured model list and only use the health probe for liveness; startup model-cache seeding, reload carryover, and the OpenAI-compatible `/models` response cannot replace or withhold those models. A multi-capability backend such as OpenRouter can be linked to both a normal chat pool and a System One pool: leave discovery enabled for the shared backend, let the chat pool use its discovered catalog, and put the System One models on the `system_one` pool. For example, configure `~typesafe/jev-latest`, or pin a versioned id such as `typesafe/jev-1.13`.
+A **system_one** pool serves the TypeSafe-compatible `POST /v1/systemone` endpoint. The gateway does not translate its question or answer schema. Its models follow the same rule as every other kind: a dedicated System One server (jeff) lists exactly its System One models on `/models`, so leave the pool's models blank and they are discovered. A multi-capability backend such as OpenRouter can be linked to both a normal chat pool and a System One pool; its `/models` is the *chat* catalog and does not list the System One ids, so put them on the `system_one` pool — `~typesafe/jev-latest`, or a versioned id such as `typesafe/jev-1.13` — and that pool's view of the backend is pinned to them while the chat pool keeps discovering.
 
 ## Content guard
 
 Content guard is an optional Settings feature. The administrator selects any configured System One model, with its GDPR and NDA flags shown in the selector; a non-compliant choice remains possible but is explicitly warned about. AIplane does not call the guard for a selected chat pool whose GDPR and NDA flags are both true; it asks only the missing GDPR and/or NDA questions, batching both questions into one request when both flags are false. Monitor mode logs a structured, content-free outcome and never blocks dispatch. Enforce mode treats a malformed or unavailable guard response as unavailable, asks an interactive chat user to confirm when configured to do so, returns machine-readable `content_confirmation_required` to API clients, and prevents dispatch for `deny`.
 
-There is no static model table for ordinary pools: each backend's `/models` response is the source of truth for what it serves. `system_one` is the deliberate exception because its contract has a separate model catalog. API keys are stored encrypted at rest; the optional env-var fallback is the only place key material comes from the environment.
+There is no static model table: each backend's `/models` response is the source of truth for what it serves, unless models are configured for it. API keys are stored encrypted at rest; the optional env-var fallback is the only place key material comes from the environment.
 
 For aliases and the two fallback mechanisms, see [Model aliases](#model-aliases) and [Fallback models](#fallback-models) below.
 
@@ -54,9 +53,21 @@ through the caller's pool access, and uses a `system_one` model to pick one
 before this registry performs ordinary static-alias, pool, replica, and fallback
 routing. See [`automatic-routing.md`](automatic-routing.md).
 
+## Configured models
+
+A model list on the backend, or failing that on the pool, **is** that backend's catalog in that pool: exactly those ids are served and advertised, and nothing is discovered — the probe still checks liveness and still reads context windows off the `/models` body, but never the ids. Blank means discover. There is no third mode, so there is no per-backend discovery switch.
+
+Configure models where `/models` cannot tell the truth:
+
+- it lists a *different* capability than the pool serves — z.AI's general endpoint and OpenAI answer `/models` with their chat catalog behind an image or speech pool, OpenRouter's behind a System One pool;
+- it omits a model that is nonetheless served — OpenRouter's `~` "latest" aliases, or a server with no `/models` at all (Voxtral realtime, the OCR sidecar on `/healthz`);
+- you want a multi-model provider to offer only some of its models — list the ones to serve.
+
+A model the upstream stops serving stays advertised until it is removed from the list; requests for it surface the upstream's own error.
+
 ## Model discovery
 
-Every 5 s, each backend gets a `GET <base_url>/models` probe (with the backend's bearer token, if configured). On 200 + parseable OpenAI envelope (`{"data": [{"id": ...}, ...]}`), the backend's advertised-model set is **replaced wholesale** with the names in `data[].id`. On 401 or non-parseable 200, the backend is marked alive but its model set is left as-is (so a previously-populated set survives a transient parser failure). On network error, timeout, or 5xx, the probe counts toward the unhealthy threshold.
+Every 5 s, each backend gets a `GET <base_url>/models` probe (with the backend's bearer token, if configured). A backend linked into several pools is probed **once** per tick, and identified once per apply; every pool's view of it takes the answer by its own model rule. On 200 + a parseable model envelope, the backend's advertised-model set is **replaced wholesale** with the names it lists: OpenAI's `{"data": [{"id": ...}, ...]}` (`data[].id`), or TypeSafe System One's `{"models": [{"name": ...}, ...]}` (`models[].name`), so a TypeSafe-native server such as jeff is discovered without speaking OpenAI's shape. On 401 or non-parseable 200, the backend is marked alive but its model set is left as-is (so a previously-populated set survives a transient parser failure). On network error, timeout, or 5xx, the probe counts toward the unhealthy threshold.
 
 At startup, `health::spawn` runs an initial parallel probe round and awaits it before returning, so the first request lands on a registry that already knows what each backend serves. Worst case (every backend unreachable): AIplane waits the 2 s probe timeout and starts serving with empty model sets, returning `400 invalid_request` until the looping probe populates them. [Backend identification](#backend-profiles-what-kind-of-server-is-this) runs concurrently with that round, on the same 2 s budget, so it costs no extra startup time.
 
@@ -183,7 +194,7 @@ flowchart TD
 
 The same probe drives liveness *and* discovery. Three consecutive failures mark a backend `unhealthy`; one success returns to `healthy`. Unhealthy backends are skipped both for routing and for discovery (their previous model set lingers but doesn't contribute matches because the registry filters by `is_healthy()`).
 
-For backends that don't speak OpenAI-compatible `/models`, override `health_path` per backend. The probe will still mark liveness from the HTTP status, but won't be able to register any model IDs — those backends won't appear in routing decisions unless the upstream serves OpenAI-style on the override path.
+For backends that don't serve `/models`, override `health_path` per backend and [configure their models](#configured-models). The probe then marks liveness from the HTTP status alone.
 
 ## Picking strategies
 

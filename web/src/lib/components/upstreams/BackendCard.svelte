@@ -19,8 +19,6 @@
 	// The server sorts these by byte so the status payload is stable; display
 	// order is a separate, human question.
 	let models = $derived(naturalSort(backend.live?.models ?? []));
-	let withheld = $derived(naturalSort(backend.live?.withheld ?? []));
-	let showInactive = $state(false);
 	let editing = $state(false);
 	let toggling = $state(false);
 	let toggleError = $state<string | null>(null);
@@ -104,15 +102,9 @@
 			</div>
 		</div>
 		{#if toggleError}<div class="alert alert-error py-2 text-sm" role="alert"><span>{toggleError}</span></div>{/if}
-		{#if backend.live?.models.length || backend.live?.withheld.length || backend.aliases.length}
+		{#if backend.live?.models.length || backend.aliases.length}
 			<div class="flex flex-wrap items-center gap-1">
 				{#each models as model (model)}<span class="badge badge-ghost badge-sm font-mono">{model}</span>{/each}
-				{#if showInactive}
-					{#each withheld as model (model)}<span class="badge badge-ghost badge-sm font-mono line-through opacity-50" title={t('upstreams-model-withheld-title')}>{model}</span>{/each}
-					<button class="btn btn-ghost btn-xs" type="button" onclick={() => (showInactive = false)}>{t('upstreams-models-inactive-hide')}</button>
-			{:else if backend.live?.withheld.length}
-					<button class="badge badge-ghost badge-sm" type="button" title={t('upstreams-model-withheld-title')} onclick={() => (showInactive = true)}>{t('upstreams-models-inactive-pill', { count: n(backend.live.withheld.length) })}</button>
-				{/if}
 				{#if backend.aliases.length}<span class="text-xs text-base-content/60">{t('backends-aliases-label')}</span>{/if}
 				{#each backend.aliases as alias (alias.alias)}
 					{@const target = aliasTarget(alias)}

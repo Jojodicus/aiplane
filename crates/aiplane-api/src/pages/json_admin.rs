@@ -1415,7 +1415,6 @@ pub async fn topology_list(State(state): State<Arc<RamaState>>, req: Request) ->
                 // Sorted for the same reason the live stream sorts them: a
                 // `HashSet` would render the first paint in a random order.
                 "models": sorted(models),
-                "withheld": sorted(backend.withheld_models()),
                 "pool": pool.name,
                 // What identification made of this backend: shown as a badge,
                 // never as a setting — nothing here is an operator's choice.
@@ -1499,7 +1498,6 @@ pub async fn topology_list(State(state): State<Arc<RamaState>>, req: Request) ->
                 "weight": b.weight,
                 "max_inflight": b.max_inflight,
                 "health_path": b.health_path,
-                "probe_models": b.probe_models,
                 "supports_edit": b.supports_edit,
                 "enabled": b.enabled,
                 "models": b.models,
@@ -1665,8 +1663,6 @@ pub struct BackendSaveBody {
     pub max_inflight: u32,
     #[serde(default)]
     pub health_path: String,
-    #[serde(default)]
-    pub probe_models: bool,
     #[serde(default)]
     pub supports_edit: bool,
     #[serde(default)]
@@ -1971,7 +1967,6 @@ pub async fn backends_save(State(state): State<Arc<RamaState>>, req: Request) ->
         } else {
             parsed.health_path.trim().to_string()
         },
-        probe_models: parsed.probe_models,
         supports_edit: parsed.supports_edit,
         enabled,
         models: parsed.models,
@@ -2475,8 +2470,6 @@ pub async fn topology_events(State(state): State<Arc<RamaState>>, req: Request) 
                     // pushes an event per backend per tick forever. Sorting is
                     // what makes the change detection actually detect change.
                     "models": live.as_ref().map(|(_, backend)| sorted(backend.models_snapshot()))
-                        .unwrap_or_default(),
-                    "withheld": live.as_ref().map(|(_, backend)| sorted(backend.withheld_models()))
                         .unwrap_or_default(),
                     "usage": usage.get(name).cloned().unwrap_or_else(|| vec![0; 12]),
                     "requests_last_hour": usage.get(name).map(|v| v.iter().sum::<i64>()).unwrap_or(0),

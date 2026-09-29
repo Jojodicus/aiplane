@@ -34,9 +34,8 @@ backends-field-health-path = Путь проверки состояния
 backends-field-pool-hint = Назначает этот бэкенд одному пулу. Бэкенд в нескольких пулах сводится к выбранному здесь.
 backends-field-weight = Вес
 backends-field-max-inflight = Макс. одновременных
-backends-field-models = Модели (через запятую)
+backends-field-models = Модели (через запятую; пусто = определять через /models)
 backends-field-aliases = Алиасы (name=target по одному в строке)
-backends-field-probe-models = Определять модели через проверочный запрос /models
 backends-field-supports-edit = Поддерживает редактирование изображений
 backends-status-saturated = перегружен
 backends-auth-failed-title = Upstream отклонил учётные данные health-пробы (401/403), поэтому обнаружение моделей отключено — через этот бэкенд не станет доступно ничего нового. Проверьте ключ API; если он берётся из переменной окружения, проверьте, что она задана.
@@ -60,7 +59,7 @@ backends-test-button = Проверить соединение
 backends-test-hint = Обращается к этому URL с указанными выше учётными данными. Ничего не сохраняется.
 backends-test-insert-hint = Объявленные id моделей — нажмите, чтобы дополнить строку псевдонима под курсором:
 backends-test-ok = Доступен, аутентификация пройдена ({ $source }), найдено моделей: { $count }.
-backends-test-ok-no-models = Доступен, аутентификация пройдена ({ $source }), но ответ не является конвертом OpenAI /models — обнаружение не может его прочитать. Этот бэкенд сможет обслуживать только id, перечисленные в поле «Модели».
+backends-test-ok-no-models = Доступен, аутентификация пройдена ({ $source }), но ответ не является списком /models ни в формате OpenAI, ни в формате TypeSafe — обнаружение не может его прочитать. Этот бэкенд сможет обслуживать только id, перечисленные в поле «Модели».
 backends-test-auth-failed = Отклонено с HTTP { $status }: учётные данные не приняты ({ $source }). Пока это не исправлено, обнаружение моделей отключено и бэкенд ничего не объявляет.
 backends-test-http-error = { $url } ответил HTTP { $status }.
 backends-test-unreachable = Не удалось связаться с { $url }: { $err }

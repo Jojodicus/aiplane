@@ -213,7 +213,6 @@ async fn main() -> anyhow::Result<()> {
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "wiremock-chat".into(),
@@ -241,7 +240,6 @@ async fn main() -> anyhow::Result<()> {
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "wiremock-voice".into(),
@@ -269,7 +267,6 @@ async fn main() -> anyhow::Result<()> {
             models: vec!["demo-selector".into()],
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: false,
                 supports_edit: false,
                 enabled: true,
                 name: "wiremock-selector".into(),
@@ -286,7 +283,7 @@ async fn main() -> anyhow::Result<()> {
     // Speech (TTS) pool — its mere presence flips `voice_available` on so the
     // chat composer renders the live-voice button (and modal). Points at the
     // chat mock's URL (never actually called just to render the button);
-    // `probe_models: false` + an explicit pool model keeps it out of the
+    // an explicit pool model keeps it out of the
     // /models discovery path.
     pools.insert(
         "speech".to_string(),
@@ -302,7 +299,6 @@ async fn main() -> anyhow::Result<()> {
             models: vec!["demo-tts".into()],
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: false,
                 supports_edit: false,
                 enabled: true,
                 name: "wiremock-speech".into(),
@@ -332,7 +328,6 @@ async fn main() -> anyhow::Result<()> {
             models: vec!["demo-image".into()],
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: false,
                 supports_edit: true,
                 enabled: true,
                 name: "wiremock-image".into(),
@@ -365,7 +360,6 @@ async fn main() -> anyhow::Result<()> {
                     weight: backend.weight,
                     max_inflight: backend.max_inflight,
                     health_path: backend.health_path.clone(),
-                    probe_models: backend.probe_models,
                     supports_edit: backend.supports_edit,
                     enabled: backend.enabled,
                     models: backend.models.clone(),

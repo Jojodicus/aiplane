@@ -24,11 +24,9 @@ pub struct UpstreamPoolConfig {
     /// wholly *unknown* model name.
     #[serde(default)]
     pub fallback_offline: Option<String>,
-    /// Pool-level fallback model IDs. Used to advertise/route a model when a
-    /// backend in this pool doesn't report it via its `/models` probe (e.g.
-    /// a Voxtral realtime server that has no `/models` endpoint). This is the
-    /// lowest-priority source — see [`BackendConfig::models`] for the full
-    /// precedence (probe → backend `models` → pool `models`).
+    /// Pool-level model IDs, served by every backend in this pool that
+    /// declares none of its own. Setting them turns discovery off for those
+    /// backends — see [`BackendConfig::models`] for the precedence.
     #[serde(default)]
     pub models: Vec<String>,
     /// Data-handling/compliance attributes for every model this pool serves.
@@ -131,8 +129,8 @@ pub enum PoolKind {
     Transcription,
     Embedding,
     /// Image generation (OpenAI `/images/generations`-shaped). Routed like any
-    /// other pool; backends that don't expose `/models` declare their model ids
-    /// statically and set `probe_models = false` (see [`BackendConfig`]).
+    /// other pool; a backend whose `/models` lists something else declares its
+    /// model ids in `models` (see [`BackendConfig::models`]).
     Image,
     /// Text-to-speech. Backs `POST /v1/audio/speech` (OpenAI-shaped) and the
     /// session `POST /api/v0/speech` the voice-conversation UI calls. Dormant
@@ -245,17 +243,13 @@ pub struct BackendConfig {
     /// override here.
     #[serde(default = "default_health_path")]
     pub health_path: String,
-    /// Backend-level fallback model IDs, used when this backend's `/models`
-    /// probe reports nothing (unparseable body, `401`, or no such endpoint).
+    /// The models this backend serves. Configured models are the catalog:
+    /// the probe then only checks liveness and never discovers anything.
     ///
-    /// Model resolution precedence, highest first:
-    ///   1. what the backend's `/models` probe reports (authoritative while
-    ///      it returns *any* model);
-    ///   2. this backend's `models` (more specific than the pool's);
-    ///   3. the pool's [`UpstreamPoolConfig::models`].
-    ///
-    /// The first non-empty source wins — config is a fallback for backends
-    /// that don't self-report, not a supplement to a live probe.
+    /// Model resolution, highest first:
+    ///   1. this backend's `models` (more specific than the pool's);
+    ///   2. the pool's [`UpstreamPoolConfig::models`];
+    ///   3. neither set → whatever the backend's `/models` probe reports.
     #[serde(default)]
     pub models: Vec<String>,
     /// Client-facing aliases this backend also answers to. An alias decouples
@@ -275,17 +269,6 @@ pub struct BackendConfig {
     /// See [`AliasSpec`] and `docs/upstreams.md`.
     #[serde(default)]
     pub alias: Option<AliasSpec>,
-    /// Whether the health probe may *discover* this backend's model set from a
-    /// `/models` response. Default `true` (the OpenAI-compat norm). Set `false`
-    /// for a backend whose `/models` endpoint lists a *different* capability
-    /// than this pool serves — notably an image backend (z.AI's general
-    /// endpoint answers `/models` with its **chat** catalog): with `true` the
-    /// probe would overwrite the configured image model ids and make them
-    /// unroutable. When `false` the probe still tracks liveness but never
-    /// touches the model set, so the configured [`models`](Self::models) /
-    /// [`pool models`](UpstreamPoolConfig::models) stay authoritative.
-    #[serde(default = "default_true")]
-    pub probe_models: bool,
     /// Whether this backend may receive traffic. `false` is the maintenance
     /// switch: the backend keeps every setting and keeps being health-probed,
     /// but the picker skips it. Its models stay *known* to the gateway, so a

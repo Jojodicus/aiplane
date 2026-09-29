@@ -132,7 +132,6 @@ mod tests {
             health_path: "/models".into(),
             models: vec!["m1".into()],
             alias: None,
-            probe_models: false,
             supports_edit: false,
             enabled: true,
         };

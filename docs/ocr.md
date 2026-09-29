@@ -122,9 +122,9 @@ max_pages    page ceiling for this document
 dpi          rasterisation DPI
 ```
 
-The sidecar exposes `GET /healthz` for the backend health path. Configure its backend entry in AIplane with `health_path = "/healthz"`, `probe_models = false`, and
-`baidu/Unlimited-OCR` as its static model — the sidecar is not a
-model-discovery endpoint.
+The sidecar exposes `GET /healthz` for the backend health path. Configure its backend entry in AIplane with `health_path = "/healthz"` and
+`baidu/Unlimited-OCR` as its model — a configured model is never
+discovered, and the sidecar is not a model-discovery endpoint.
 
 Responses come in two shapes. Per-page (what the shipped sidecar returns, and
 the reason page numbers survive):

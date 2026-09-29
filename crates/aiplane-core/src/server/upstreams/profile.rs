@@ -504,10 +504,13 @@ struct ModelMeta {
 /// Everything a `/models` body says: the model ids it advertises, and the
 /// context window for those that report one.
 ///
-/// `None` means this was not an OpenAI model envelope at all — no `data`
-/// array. That is a different thing from an envelope listing nothing, and the
-/// caller must treat it differently: one leaves a backend's model set alone,
-/// the other empties it.
+/// Two envelopes are understood: OpenAI's `{"data": [{"id": …}]}` and
+/// TypeSafe System One's `{"models": [{"name": …}]}`, which carries no window.
+///
+/// `None` means this was neither envelope — no `data` or `models` array. That
+/// is a different thing from an envelope listing nothing, and the caller must
+/// treat it differently: one leaves a backend's model set alone, the other
+/// empties it.
 ///
 /// One function rather than two because the health probe and detection read
 /// the same response for different halves of it, and the halves drifted once
@@ -519,7 +522,9 @@ struct ModelMeta {
 /// "not reported" has to stay distinguishable from "reported as small",
 /// because only one of those should make the admin page ask for a value.
 pub fn read_models(body: &serde_json::Value) -> Option<(HashSet<String>, HashMap<String, i64>)> {
-    let data = body.get("data")?.as_array()?;
+    let Some(data) = body.get("data").and_then(serde_json::Value::as_array) else {
+        return read_typesafe_models(body).map(|ids| (ids, HashMap::new()));
+    };
     let mut ids = HashSet::new();
     let mut windows = HashMap::new();
     for raw in data {
@@ -557,6 +562,18 @@ pub fn read_models(body: &serde_json::Value) -> Option<(HashSet<String>, HashMap
         ids.insert(id.to_string());
     }
     Some((ids, windows))
+}
+
+fn read_typesafe_models(body: &serde_json::Value) -> Option<HashSet<String>> {
+    let models = body.get("models")?.as_array()?;
+    Some(
+        models
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 /// Context windows from Ollama's `/api/ps`, by model id.
@@ -730,6 +747,44 @@ mod tests {
         assert_eq!(read_models(&json!({"data": "not-an-array"})), None);
         let (ids, windows) = read_models(&json!({"data": []})).unwrap();
         assert!(ids.is_empty() && windows.is_empty());
+    }
+
+    /// A TypeSafe System One server (jeff, for one) lists its models in its
+    /// own envelope. Understanding only OpenAI's left such a backend healthy
+    /// and serving nothing.
+    #[test]
+    fn typesafe_envelope_yields_ids_from_name() {
+        let body = json!({"models": [
+            {"name": "jeff", "description": "GLiFormer", "release_date": "2026-09-16"},
+            {"name": "jev-latest"},
+            {"name": ""},
+            {"description": "no name"},
+        ]});
+        let (ids, windows) = read_models(&body).unwrap();
+        assert_eq!(
+            ids,
+            HashSet::from(["jeff".to_string(), "jev-latest".to_string()])
+        );
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn a_malformed_typesafe_envelope_is_not_an_envelope() {
+        assert_eq!(read_models(&json!({"models": "jeff"})), None);
+        let (ids, _) = read_models(&json!({"models": []})).unwrap();
+        assert!(ids.is_empty());
+    }
+
+    /// A body carrying both is read as OpenAI's, the shape every other field
+    /// in this function understands.
+    #[test]
+    fn the_openai_envelope_wins_when_both_are_present() {
+        let body = json!({
+            "data": [{"id": "openai-id"}],
+            "models": [{"name": "typesafe-name"}],
+        });
+        let (ids, _) = read_models(&body).unwrap();
+        assert_eq!(ids, HashSet::from(["openai-id".to_string()]));
     }
 
     /// "Not reported" and "reported as zero" must not collapse into the same

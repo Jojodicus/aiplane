@@ -3,7 +3,7 @@
 
 pools-field-name = 名称
 pools-field-kind = 类型
-pools-field-models = 提供的模型（白名单，逗号分隔）
+pools-field-models = 提供的模型（逗号分隔）
 pools-field-backends = 后端
 pools-save-pool = 保存池
 pools-delete-pool = 删除
@@ -23,7 +23,7 @@ pools-field-strategy = 策略
 pools-field-strategy-hint = prefix_affinity 让同一会话继续落在已持有其 KV 缓存的副本上（多 GPU 的聊天/智能体流量首选——其他策略会把相邻回合分散到不同副本，每次都要重付一次完整 prefill），同时在某个后端确实更繁忙时仍会分流。least_inflight 按当前负载均衡；round_robin 按权重轮转。
 pools-field-fallback-offline = 离线回退模型
 pools-field-fallback-offline-placeholder = 当所有后端都离线时提供服务
-pools-field-models-hint = 设置后，对于启用 /models 探测的后端仅提供这些 id，其余以划线显示。留空 = 提供后端报告的所有模型。
+pools-field-models-hint = 设置后，只提供这些 id，且不再询问后端有哪些模型 — 适用于 /models 列出的是别的内容或遗漏了某个模型的情况。留空 = 通过每个后端的 /models 发现模型。
 pools-field-allowed-groups = 允许的组
 pools-field-allowed-groups-hint = 允许查看和使用此池模型的 AIplane 组。未选择 = 所有人。管理员始终有权限。在 管理 → 组 中管理组。
 pools-field-voices = 语音（每行 lang=voice）

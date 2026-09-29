@@ -34,9 +34,8 @@ backends-field-health-path = 健康检查路径
 backends-field-pool-hint = 将此后端分配到一个池。位于多个池中的后端会被收敛到此处所选的池。
 backends-field-weight = 权重
 backends-field-max-inflight = 最大处理中数
-backends-field-models = 模型（逗号分隔）
+backends-field-models = 模型（逗号分隔；留空 = 通过 /models 发现）
 backends-field-aliases = 别名（每行 name=target）
-backends-field-probe-models = 通过 /models 探测发现模型
 backends-field-supports-edit = 支持图像编辑
 backends-status-saturated = 已饱和
 backends-auth-failed-title = 上游拒绝了健康探测的凭据（401/403），因此模型发现已关闭——不会有新模型通过该后端变为可路由。请检查 API 密钥；若使用环境变量，请确认该变量确实已设置。
@@ -60,7 +59,7 @@ backends-test-button = 测试连接
 backends-test-hint = 使用上面填写的凭据调用该 URL。不会保存任何内容。
 backends-test-insert-hint = 上游公布的模型 id —— 点击即可补全光标所在的别名行：
 backends-test-ok = 可达，认证通过（{ $source }），发现 { $count } 个模型。
-backends-test-ok-no-models = 可达且认证通过（{ $source }），但响应不是 OpenAI /models 信封，模型发现无法解析。该后端只能提供你在“模型”中列出的 id。
+backends-test-ok-no-models = 可达且认证通过（{ $source }），但响应既不是 OpenAI 也不是 TypeSafe 的 /models 列表，模型发现无法解析。该后端只能提供你在“模型”中列出的 id。
 backends-test-auth-failed = 被拒绝，HTTP { $status }：凭据未被接受（{ $source }）。在修好之前模型发现保持关闭，后端不会公布任何模型。
 backends-test-http-error = { $url } 返回 HTTP { $status }。
 backends-test-unreachable = 无法连接 { $url }：{ $err }

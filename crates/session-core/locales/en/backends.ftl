@@ -37,9 +37,8 @@ backends-field-health-path = Health path
 backends-field-pool-hint = Assigns this backend to one pool. A backend in several pools collapses to the one chosen here.
 backends-field-weight = Weight
 backends-field-max-inflight = Max in-flight
-backends-field-models = Models (comma-separated)
+backends-field-models = Models (comma-separated; blank = discover from /models)
 backends-field-aliases = Aliases (name=target per line)
-backends-field-probe-models = Discover models from /models probe
 backends-field-supports-edit = Supports image editing
 backends-status-saturated = saturated
 backends-auth-failed-title = The upstream rejected the health probe's credentials (401/403), so model discovery is off — nothing new can become routable through this backend. Check the API key; if it uses an env var, check that the variable is actually set.
@@ -63,7 +62,7 @@ backends-test-button = Test connection
 backends-test-hint = Calls this URL with the credentials above. Nothing is saved.
 backends-test-insert-hint = Reported model ids — click one to complete the alias line your cursor is on:
 backends-test-ok = Reachable, authenticated ({ $source }), { $count } models discovered.
-backends-test-ok-no-models = Reachable and authenticated ({ $source }), but the response is not an OpenAI /models envelope, so discovery cannot read it. This backend can only serve the ids you list under "Models".
+backends-test-ok-no-models = Reachable and authenticated ({ $source }), but the response is neither an OpenAI nor a TypeSafe /models list, so discovery cannot read it. This backend can only serve the ids you list under "Models".
 backends-test-auth-failed = Rejected with HTTP { $status }: the credential was refused ({ $source }). Model discovery stays off until this is fixed, which leaves the backend advertising nothing.
 backends-test-http-error = { $url } answered HTTP { $status }.
 backends-test-unreachable = Could not reach { $url }: { $err }

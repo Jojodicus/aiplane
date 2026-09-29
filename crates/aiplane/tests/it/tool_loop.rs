@@ -58,7 +58,6 @@ async fn state_with_tool_grants(upstream_uri: &str, granted_tools: Vec<String>) 
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),

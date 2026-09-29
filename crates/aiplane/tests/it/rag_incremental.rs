@@ -156,7 +156,6 @@ fn registry(embed: &str) -> Arc<UpstreamRegistry> {
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "e".into(),
