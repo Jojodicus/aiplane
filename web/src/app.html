@@ -1,23 +1,22 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="preload" href="%sveltekit.assets%/fonts/urbanist-latin.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
 		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/favicon.svg?v=gateway-v1" />
 		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-		<meta name="theme-color" content="#1d1d1b" media="(prefers-color-scheme: dark)" />
-		<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#1d1d1b" />
 		<script>
 			// Theme before first paint: the gateway's chrome reads a
 			// `theme` cookie ("light"/"dark", see session_core::chrome).
-			// No cookie → follow the OS preference (what the legacy page's
-			// `media="(prefers-color-scheme: …)"` meta did). Applying it
-			// here — before CSS resolves — avoids a flash-of-wrong-theme.
+			// No cookie → use the Croit dark theme. Apply before CSS resolves
+			// so the first paint matches the persisted choice.
 			(() => {
 				const m = document.cookie.match(/(?:^|;\s*)theme=(dark|light)(?:;|$)/);
-				document.documentElement.dataset.theme =
-					m ? m[1] : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+				document.documentElement.dataset.theme = m ? m[1] : 'dark';
+				document.querySelector('meta[name="theme-color"]').content = m && m[1] === 'light' ? '#ffffff' : '#1d1d1b';
 
 				// Language, same story: `$lib/i18n` resolves the `lang` cookie
 				// then the browser's own preference list, and the app fixes up

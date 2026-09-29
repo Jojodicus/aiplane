@@ -15,6 +15,7 @@
 	import { feedback, loadConfig } from '$lib/feedback.svelte';
 	import { t, locale } from '$lib/i18n.svelte';
 	import NavIcon, { type NavIconName } from '$lib/components/NavIcon.svelte';
+	import BrandLockup from '$lib/components/BrandLockup.svelte';
 	import LanguagePicker from '$lib/components/LanguagePicker.svelte';
 	import SourceLink from '$lib/components/SourceLink.svelte';
 	import ConversationSidebarRow from '$lib/components/chat/ConversationSidebarRow.svelte';
@@ -38,7 +39,7 @@
 	// Mirrors `document.documentElement.dataset.theme`, which the inline script
 	// in app.html sets before first paint. Kept as state only so the toggle's
 	// aria-label can name the theme it switches *to*.
-	let dark = $state(false);
+	let dark = $state(true);
 	onMount(() => {
 		dark = document.documentElement.dataset.theme === 'dark';
 	});
@@ -46,6 +47,7 @@
 	function setTheme(theme: 'light' | 'dark') {
 		dark = theme === 'dark';
 		document.documentElement.dataset.theme = theme;
+		document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1d1b' : '#ffffff');
 		// Persisted as a cookie, not localStorage, so the inline script in
 		// app.html can read it before first paint — that is what stops a
 		// flash of the wrong theme on a hard load.
@@ -212,13 +214,19 @@
 </svelte:head>
 
 {#if publicRoute}
-	<div class="relative min-h-dvh bg-base-100 text-base-content"><div class="fixed right-4 top-4 z-20"><LanguagePicker placement="down" /></div><main class="flex min-h-dvh items-center justify-center p-6"><div class="w-full">{@render children()}</div></main></div>
+	<div class="relative isolate min-h-dvh overflow-hidden bg-base-100 text-base-content">
+		<div class="pointer-events-none absolute -left-20 -top-24 h-72 w-72 rounded-full bg-secondary/15 blur-3xl"></div>
+		<div class="pointer-events-none absolute -right-20 top-16 h-80 w-80 rounded-full bg-primary/20 blur-3xl"></div>
+		<div class="absolute left-5 top-5 z-20 sm:left-8 sm:top-8"><a href="{base}/chat" aria-label={t('nav-brand')}><BrandLockup /></a></div>
+		<div class="absolute right-4 top-4 z-20"><LanguagePicker placement="down" /></div>
+		<main class="relative flex min-h-dvh items-center justify-center px-6 pb-8 pt-24"><div class="w-full">{@render children()}</div></main>
+	</div>
 {:else}
 <div class="flex h-dvh overflow-hidden bg-base-100 text-base-content">
 	<!-- Mobile backdrop -->
 	{#if sidebar.open}
 		<button
-			class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+			class="fixed inset-0 z-30 bg-neutral/50 lg:hidden"
 			aria-label={t('nav-close-menu')}
 			onclick={() => (sidebar.open = false)}
 		></button>
@@ -226,13 +234,14 @@
 
 	<!-- Sidebar -->
 	<aside
-		class="fixed lg:sticky top-0 z-40 h-dvh w-72 shrink-0 flex flex-col bg-base-200 border-r border-base-300/60
+		class="fixed lg:sticky top-0 z-40 h-dvh w-72 shrink-0 flex flex-col bg-base-200/85 backdrop-blur-xl border-r border-base-300/60
 			transition-transform -translate-x-full lg:translate-x-0 {sidebar.open ? 'translate-x-0' : ''}"
 		aria-label={t('nav-main-aria')}
 	>
+		<div class="h-1 shrink-0 bg-linear-to-r from-secondary to-primary"></div>
 		<!-- Brand -->
-		<div class="px-4 pt-4 pb-2 flex items-center">
-			<a href="{base}/chat" class="font-semibold">{t('nav-brand')}</a>
+		<div class="px-4 pt-5 pb-5 flex items-center">
+			<a href="{base}/chat" aria-label={t('nav-brand')}><BrandLockup /></a>
 		</div>
 
 		<!-- Primary nav -->
@@ -240,8 +249,8 @@
 			<a
 				href="{base}/chat"
 				class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm {isChatActive()
-					? 'bg-base-300 font-medium'
-					: 'hover:bg-base-300/50'}"
+					? 'bg-primary/15 text-primary dark:text-base-content font-semibold'
+					: 'hover:bg-primary/10'}"
 				onclick={() => (sidebar.open = false)}
 			>
 				<NavIcon name="message" />
@@ -269,8 +278,8 @@
 							<a
 								href="{base}{path}"
 								class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm {isActive(path)
-									? 'bg-base-300 font-medium'
-									: 'hover:bg-base-300/50'}"
+									? 'bg-primary/15 text-primary dark:text-base-content font-semibold'
+									: 'hover:bg-primary/10'}"
 								onclick={() => (sidebar.open = false)}
 							>
 								<NavIcon name={icon} />
@@ -358,16 +367,17 @@
 	</aside>
 
 	<!-- Main column -->
-	<div class="flex h-dvh min-w-0 flex-1 flex-col">
+	<div class="relative isolate flex h-dvh min-w-0 flex-1 flex-col">
+		<div class="pointer-events-none absolute -right-24 -top-28 h-96 w-96 rounded-full bg-primary/10 blur-3xl"></div>
 		<!-- Mobile top bar with the menu toggle -->
-		<div class="lg:hidden sticky top-0 z-20 h-14 flex items-center gap-2 px-3 bg-base-200 border-b border-base-300">
+		<div class="lg:hidden sticky top-0 z-20 h-14 flex items-center gap-2 px-3 bg-base-200/85 backdrop-blur-xl border-b border-base-300">
 			<button class="btn btn-ghost btn-sm" onclick={() => (sidebar.open = true)} aria-label={t('nav-open-menu')}>
 				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
 			</button>
-			<span class="font-semibold">{t('nav-brand')}</span>
+			<BrandLockup />
 		</div>
 
-		<main class="min-h-0 min-w-0 flex-1 {isChatActive() ? 'overflow-hidden' : 'overflow-y-auto'}">
+		<main class="relative z-10 min-h-0 min-w-0 flex-1 {isChatActive() ? 'overflow-hidden' : 'overflow-y-auto'}">
 			<div class="w-full {isChatActive() ? 'h-full px-4 py-3 sm:px-6' : 'px-4 pb-8 pt-6 sm:px-6'}">
 				{#if featureOff && routeFeature}
 					<!-- The URL still resolves — the feature behind it does not.

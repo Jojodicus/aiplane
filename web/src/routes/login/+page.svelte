@@ -9,7 +9,7 @@
 
 <svelte:head><title>{t('login-page-title')}</title></svelte:head>
 
-<div class="card w-full max-w-md border border-base-300 mx-auto">
+<div class="card mx-auto w-full max-w-md border border-base-300/70 bg-base-200/60 shadow-xl backdrop-blur-xl">
 	<div class="card-body">
 		<h2 class="card-title text-2xl">{t('login-heading')}</h2>
 		<p class="text-base-content/70">{t('login-description')}</p>

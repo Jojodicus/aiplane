@@ -380,9 +380,9 @@ Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as 
 
 ## Theming
 
-`web/src/app.css` registers two daisyUI themes named `light` and `dark` (a shadcn-flavoured neutral palette: the primary action is near-black in light, near-white in dark; only info/success/warning/error carry hue) with daisyUI's built-in palettes switched off. Unlike a Rust-templated UI it needs no `@source` globs — the Tailwind v4 Vite plugin scans the Svelte sources itself.
+`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. Dark is the default: deep anthracite surfaces, white text, purple primary actions, peach secondary accents, and 18 px card corners. Light uses white and light gray surfaces with dark purple actions for readable contrast. The shared layout adds subtle peach and purple ambient accents; daisyUI cards and the sidebar use translucent surfaces. Urbanist Latin and Latin Extended fonts are bundled under `web/static/fonts/`, with the OFL license beside them. Other scripts use the fallback font stack. The official white and black SVG wordmarks are served from `web/static/` and selected by theme. Tailwind v4 Vite scans the Svelte sources automatically, so no `@source` globs are needed.
 
-The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before first paint** by a small inline script in `app.html`: it reads the cookie and sets `document.documentElement.dataset.theme`, falling back to `prefers-color-scheme` when there is no cookie. Doing it there — before CSS resolves — is what avoids a flash of the wrong theme. The toggle in `+layout.svelte` writes the same cookie and flips the attribute.
+The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before first paint** by a small inline script in `app.html`: it reads the cookie and sets `document.documentElement.dataset.theme`, using `dark` when there is no cookie. Doing it there — before CSS resolves — avoids a flash of the wrong theme. The toggle in `+layout.svelte` writes the same cookie, flips the attribute, and updates the browser theme color.
 
 **Hard rules (unchanged from the previous UI):**
 

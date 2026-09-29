@@ -221,7 +221,7 @@ Every tool is **RBAC-gated per role**, and each user can flip their own grants o
 
 **Tools turn themselves on.** Tools start *off* to keep the model's tool list short — short lists are cheaper and the model picks tools more accurately. When a request needs a capability the model doesn't currently have, it calls a built-in `enable_tools` tool to switch the relevant ones on; their real schemas appear on the next turn and stay on for the rest of the conversation. So the model reaches for exactly what it needs, when it needs it, without the operator wiring per-conversation tool lists — all still bounded by what the user's role permits.
 
-![The chat rendering a generated image inline — the model called `generate_image` from a text prompt and the result appears directly in the reply.](docs/img/image-generation.png)
+![The chat showing a generated mountain landscape inline, with the image also listed in the conversation assets panel.](docs/img/image-generation.png)
 
 ## The built-in web UI
 
@@ -234,12 +234,12 @@ UI text is currently English. The gateway's server-side strings still ship in si
 
 | | |
 |---|---|
-| ![The /admin/upstreams page: one card per pool showing its kind and picker-strategy badges, GDPR/NDA/limits compliance flags, and a live health row per backend — status, base URL, in-flight load against capacity, advertised models, and a request sparkline — with inline Edit pool / Delete controls and Add pool / Add backend buttons.](docs/img/upstreams.png) | ![The RAG page: a form to index a new collection from a git repo (embedding model, branch, include/exclude globs, chunk size) and a list of existing collections with their indexing status.](docs/img/rag.png) |
+| ![The /admin/upstreams page: one card per pool showing its kind and picker-strategy badges, GDPR/NDA/limits compliance flags, and a live health row per backend — status, base URL, in-flight load against capacity, advertised models, and a request sparkline — with inline Edit pool / Delete controls and Add pool / Add backend buttons.](docs/img/upstreams.png) | ![The RAG page showing demo collections and their indexed sources, status, and management controls.](docs/img/rag.png) |
 | **Upstreams** (`/admin/upstreams`) — one page for pools and backends: live health, in-flight load, and discovered models per pool, with inline add/edit/delete of pools and backends (API key stored encrypted, so a new backend goes live on "Apply changes" without a restart). A sticky bar counts unapplied topology edits until you reload the runtime registry. | **RAG** (`/rag`) — index a codebase or file source, manage its refs and indexing log, and edit document extraction profiles at `/rag/profiles`. |
 
 There's also `/tokens` (mint, rotate, and revoke your `gwk_…` API tokens — scope each token to a subset of your tools **and of your models**, give it its own spending quota, and see what it has cost this month), `/usage` (your own request/token usage, plus spend when per-model prices are set), `/memory` (view and edit what the assistant has remembered about you), `/scheduled` (prompts that run on a cron schedule — see [Scheduled actions](#scheduled-actions)), `/admin/models` (server-wide sampling defaults, per-model reasoning budgets, per-model context windows that drive [conversation compaction](#conversation-compaction), per-model **prices** (input/output per 1M tokens) that turn token usage into spend on `/usage`, and the per-feature **default model** pre-selected for chat, voice, image generation, and the RAG embedding picker), `/admin/settings?tab=web-search` (the `search_web` backend — SearXNG URL, Brave API key, or Tavily API key; keys encrypted at rest), `/admin/limits` (rate limits & quotas — see below), and `/admin/users` (registered users with their resolved roles). The users page can also let an admin **impersonate** another user for debugging — every impersonation is audited and shows a persistent banner, and an impersonation session expires 8 hours after it started (it never gets the sliding renewal an ordinary login does). Impersonation is **opt-in**: it's off unless you enable `gateway.allow_impersonation` at `/admin/settings` (default off), in which case the Impersonate buttons appear and `POST /api/v0/admin/users/{id}/impersonate` is accepted; otherwise the buttons are hidden and that endpoint returns 403.
 
-![The /admin/models page: a "Default models" card with per-feature model pickers (chat, voice, image generation) above a filterable list of every advertised model — each row showing its kind, input/output price, context window, reasoning settings, and whether it has been configured, expandable for the full per-model editor.](docs/img/models.png)
+![The /admin/models page on its Model catalog tab, showing a filterable list of demo models, their kinds, prices, context windows, and configuration status.](docs/img/models.png)
 
 | | |
 |---|---|
@@ -271,7 +271,7 @@ The `/chat` page itself does more than stream replies: **fork** a conversation, 
 
 Every signed-in user can have prompts run **automatically on a schedule** at `/scheduled` — a daily standup digest, a weekly repo summary, an hourly health check. Each scheduled action is just a saved prompt plus a model, a schedule, and a timezone; when it fires, AIplane opens a chat session driven by the same engine as the interactive `/chat` page, so the result lands as an ordinary conversation you can open and read afterward. By default each run starts a **fresh** conversation; turn on **reuse** and each run instead continues the previous run's chat — replaying the last few rounds as history — so the model builds on what it said last time. Schedules are per-user and private (scoped by user, behind the normal session login — no admin role needed).
 
-![The /scheduled page: a builder form (name, model, prompt) with a Hourly/Daily/Weekly/Monthly/Advanced schedule selector, time and timezone fields, a live human-readable summary with the next three run times, and a tools toggle — above the list of your existing scheduled actions.](docs/img/scheduled.png)
+![The /scheduled page showing demo monthly, weekly, and daily actions with their schedules, status, and recent runs.](docs/img/scheduled.png)
 
 **The schedule builder.** Pick **Hourly**, **Daily**, **Weekly**, **Monthly**, or **Advanced**. The friendly modes expose just the fields they need (a minute; a time; weekday checkboxes; a day-of-month) and AIplane assembles a standard 5-field cron expression from them — non-technical users never have to see cron. **Advanced** takes a raw `minute hour day-of-month month day-of-week` expression for anything the presets can't express. Either way the expression is evaluated in the **IANA timezone** you choose (e.g. `Europe/Berlin`), and a live preview — computed server-side via `POST /scheduled/preview` so it can't drift from what the scheduler actually does — shows a plain-English summary plus the **next three run times**. Each action also has a tools toggle (web search, RAG, attachments — same set as in chat).
 
@@ -309,7 +309,7 @@ It appears in the chat composer **only when a `speech` upstream pool is configur
 
 **How it works:** push-to-talk (hold the mic) → release → the transcript is submitted with the voice directive → as the reply streams, complete sentences are spoken one at a time. Non-speakable bits (code, tables) become a short spoken marker like "the code is shown on screen." It's **half-duplex** — while the assistant speaks, the mic is inert (no echo loop). The reply's language follows what you *spoke*; only the opening greeting uses the UI language. Always-listening (voice-activity) mode and barge-in are a planned next phase.
 
-![The voice conversation modal: a large push-to-talk button with a "Tap to talk" prompt, a running YOU / AI transcript, and a "recording to chat" indicator — everything said is also saved as an ordinary chat turn.](docs/img/voice.png)
+![The voice conversation modal over chat, with its push-to-talk button and "Tap to talk" prompt.](docs/img/voice.png)
 
 ## Built with
 
