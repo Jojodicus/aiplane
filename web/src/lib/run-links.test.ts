@@ -48,6 +48,16 @@ test('runs that produced no chat are still reachable', () => {
 	});
 });
 
+test('a deleted chat is never linked; the history, which says it is gone, is', () => {
+	// One chat, one run: normally the chat link alone. Once the user deleted
+	// that chat the link would land on a 404, so the row points at the run
+	// history, which marks the chat as deleted.
+	assert.deepEqual(
+		runLinks(source({ run_count: 1, chat_count: 1, last_session_id: 'sess-1', last_chat_deleted: true }), '/scheduled'),
+		{ chat: null, runs: '/scheduled/row-1/runs' }
+	);
+});
+
 test('the same rule serves webhooks, under their own section', () => {
 	// The two pages must not teach the user two different rules.
 	assert.deepEqual(runLinks(source({ run_count: 4, chat_count: 4, last_session_id: 'sess-4' }), '/webhooks'), {

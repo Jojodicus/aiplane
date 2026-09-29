@@ -1196,6 +1196,21 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn existing_session_ids_leaves_out_deleted_and_unknown_ids() {
+        let pool = pool().await;
+        let kept = create_session(&pool, "u1").await.unwrap();
+        let deleted = create_session(&pool, "u1").await.unwrap();
+        assert!(delete_session(&pool, "u1", &deleted.id).await.unwrap());
+
+        let found = existing_session_ids(&pool, &[&kept.id, &deleted.id, "never-existed"])
+            .await
+            .unwrap();
+
+        assert_eq!(found, std::collections::HashSet::from([kept.id.clone()]));
+        assert!(existing_session_ids(&pool, &[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn error_interrupted_turn_finishes_only_its_running_calls() {
         let pool = pool().await;
         let session = create_session(&pool, "u1").await.unwrap();

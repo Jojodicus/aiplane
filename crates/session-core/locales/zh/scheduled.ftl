@@ -90,6 +90,7 @@ scheduled-runs-heading = 运行记录 · { $name }
 scheduled-runs-intro = 全部已记录的触发，最新在前，并附上它打开的对话。
 scheduled-runs-empty = 还没有运行记录。该任务自创建以来尚未触发。
 scheduled-run-open = 打开对话
+scheduled-run-chat-deleted = 对话已删除
 scheduled-run-status-ok = 成功
 scheduled-run-status-error = 错误
 scheduled-run-status-pending = 运行中

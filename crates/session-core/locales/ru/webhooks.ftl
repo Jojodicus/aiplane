@@ -62,6 +62,7 @@ webhooks-runs-page-name = Запуски вебхука
 webhooks-runs-intro = Последние срабатывания и перезапуски. Откройте запуск, чтобы прочитать его беседу, или перезапустите его полезную нагрузку с другим промптом.
 webhooks-runs-empty = Пока нет запусков. Запустите вебхук, чтобы увидеть историю здесь.
 webhooks-run-open = открыть чат
+webhooks-run-chat-deleted = чат удалён
 webhooks-run-rerun = перезапустить
 webhooks-run-source-fire = срабатывание
 webhooks-run-source-rerun = перезапуск

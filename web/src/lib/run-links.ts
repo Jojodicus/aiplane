@@ -12,6 +12,8 @@ export interface RunLinkSource {
 	id: string;
 	/** The chat the most recent fire opened. */
 	last_session_id: string | null;
+	/** That chat has since been deleted. */
+	last_chat_deleted?: boolean;
 	/** Recorded fires. */
 	run_count: number;
 	/** Distinct chats those fires opened — one, when the conversation is reused. */
@@ -49,13 +51,17 @@ export interface RunLinkOptions {
  * list, and that list is the history page. Fires that produced no chat at all
  * (over quota, the model never answered) are still worth seeing, so the
  * history stays reachable whenever it holds anything the chat link does not.
+ * A chat the user deleted is never linked: the history says it is gone.
  */
 export function runLinks(
 	source: RunLinkSource,
 	section: string,
 	{ runsCarryMore = false }: RunLinkOptions = {}
 ): RunLinks {
-	const chat = source.chat_count <= 1 && source.last_session_id ? `/chat/${source.last_session_id}` : null;
+	const chat =
+		source.chat_count <= 1 && source.last_session_id && !source.last_chat_deleted
+			? `/chat/${source.last_session_id}`
+			: null;
 	const everythingIsInTheChatLink = chat !== null && source.run_count <= 1 && !runsCarryMore;
 	return {
 		chat,

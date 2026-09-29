@@ -96,6 +96,7 @@ scheduled-runs-heading = Ejecuciones · { $name }
 scheduled-runs-intro = Cada ejecución registrada, la más reciente primero, con el chat que abrió.
 scheduled-runs-empty = Aún no hay ejecuciones. Esta acción no se ha activado desde que se creó.
 scheduled-run-open = abrir chat
+scheduled-run-chat-deleted = chat eliminado
 scheduled-run-status-ok = ok
 scheduled-run-status-error = error
 scheduled-run-status-pending = en curso

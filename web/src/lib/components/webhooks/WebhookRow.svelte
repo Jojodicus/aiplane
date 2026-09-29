@@ -93,6 +93,7 @@
 				<a class="link link-hover font-medium" href="{base}{links.chat}">{t('webhooks-open-chat')}</a>
 				{#if links.runs}<a class="link link-hover text-base-content/70" href="{base}{links.runs}">{t('webhooks-open-runs', { count: webhook.run_count })}</a>{/if}
 			{:else if links.runs}
+				{#if webhook.last_chat_deleted && webhook.chat_count <= 1}<span class="badge badge-sm badge-outline text-base-content/60">{t('webhooks-run-chat-deleted')}</span>{/if}
 				<a class="link link-hover font-medium" href="{base}{links.runs}">
 					{webhook.chat_count > 0 ? t('webhooks-open-chats', { count: webhook.chat_count }) : t('webhooks-open-runs', { count: webhook.run_count })}
 				</a>

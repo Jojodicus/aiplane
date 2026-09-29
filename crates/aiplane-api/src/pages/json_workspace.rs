@@ -136,6 +136,26 @@ pub async fn memories_delete(
 // ---------------------------------------------------------------------------
 // Scheduled actions
 
+/// Stamp `last_chat_deleted` on each row, so a list row can say its chat is
+/// gone instead of linking into a 404. One query for the whole list.
+async fn flag_deleted_last_chats(
+    db: &db::Pool,
+    rows: &mut [serde_json::Value],
+) -> Result<(), db::DbError> {
+    let ids: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row["last_session_id"].as_str())
+        .collect();
+    let existing = session_core::db::existing_session_ids(db, &ids).await?;
+    for row in rows.iter_mut() {
+        let deleted = row["last_session_id"]
+            .as_str()
+            .is_some_and(|id| !existing.contains(id));
+        row["last_chat_deleted"] = serde_json::Value::Bool(deleted);
+    }
+    Ok(())
+}
+
 fn action_json(a: &scheduled::ScheduledAction) -> serde_json::Value {
     action_json_with_counts(a, (0, 0))
 }
@@ -201,13 +221,17 @@ pub async fn scheduled_list(State(state): State<Arc<RamaState>>, req: Request) -
         Ok(counts) => counts,
         Err(err) => return internal(err),
     };
+    let mut actions: Vec<_> = rows
+        .iter()
+        .map(|a| action_json_with_counts(a, counts.get(&a.id).copied().unwrap_or((0, 0))))
+        .collect();
+    if let Err(err) = flag_deleted_last_chats(&state.db, &mut actions).await {
+        return internal(err);
+    }
     json_ok(
         StatusCode::OK,
         serde_json::json!({
-            "actions": rows
-                .iter()
-                .map(|a| action_json_with_counts(a, counts.get(&a.id).copied().unwrap_or((0, 0))))
-                .collect::<Vec<_>>(),
+            "actions": actions,
             "models": chat_model_options(&state),
             "default_timezone": user.timezone.as_deref().unwrap_or("UTC"),
         }),
@@ -249,6 +273,7 @@ fn scheduled_run_json(r: &scheduled::ScheduledRun) -> serde_json::Value {
         "fired_at": r.fired_at.to_string(),
         "status": r.status,
         "session_id": r.session_id,
+        "chat_deleted": r.chat_deleted,
         "error": r.error,
     })
 }
@@ -395,7 +420,12 @@ pub async fn scheduled_update(
                         .ok()
                         .and_then(|counts| counts.get(&a.id).copied())
                         .unwrap_or((0, 0));
-                    json_ok(StatusCode::OK, action_json_with_counts(&a, counts))
+                    let mut row = [action_json_with_counts(&a, counts)];
+                    if let Err(err) = flag_deleted_last_chats(&state.db, &mut row).await {
+                        return internal(err);
+                    }
+                    let [row] = row;
+                    json_ok(StatusCode::OK, row)
                 }
                 None => json_ok(StatusCode::OK, serde_json::json!({ "ok": true })),
             }
@@ -561,13 +591,17 @@ pub async fn webhooks_list(State(state): State<Arc<RamaState>>, req: Request) ->
         Ok(counts) => counts,
         Err(err) => return internal(err),
     };
+    let mut hooks: Vec<_> = rows
+        .iter()
+        .map(|w| webhook_json_with_counts(w, counts.get(&w.id).copied().unwrap_or((0, 0))))
+        .collect();
+    if let Err(err) = flag_deleted_last_chats(&state.db, &mut hooks).await {
+        return internal(err);
+    }
     json_ok(
         StatusCode::OK,
         serde_json::json!({
-            "webhooks": rows
-                .iter()
-                .map(|w| webhook_json_with_counts(w, counts.get(&w.id).copied().unwrap_or((0, 0))))
-                .collect::<Vec<_>>(),
+            "webhooks": hooks,
             "models": chat_model_options(&state),
         }),
     )
@@ -778,6 +812,7 @@ fn run_json(r: &webhooks::WebhookRun) -> serde_json::Value {
         "fired_at": r.fired_at.to_string(),
         "source": r.source,
         "session_id": r.session_id,
+        "chat_deleted": r.chat_deleted,
         "prompt": r.prompt,
         "payload": r.payload,
     })

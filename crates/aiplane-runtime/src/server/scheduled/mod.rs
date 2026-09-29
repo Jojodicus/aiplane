@@ -300,7 +300,9 @@ pub async fn set_next_run(
 
 /// Record the outcome of a run and advance `next_run_at`. `status` is
 /// `"ok"` or `"error"`; `session_id` is the chat the run opened (kept
-/// even on error so the user can inspect the partial conversation).
+/// even on error so the user can inspect the partial conversation). `None`
+/// keeps the chat already on record: a fire that opened none (skipped over
+/// quota) must not cut a reusing schedule off from its conversation.
 pub async fn mark_ran(
     pool: &Pool,
     id: &str,
@@ -311,7 +313,7 @@ pub async fn mark_ran(
 ) -> Result<(), DbError> {
     sqlx::query(
         r#"UPDATE scheduled_actions
-           SET last_run_at = ?, last_status = ?, last_session_id = ?,
+           SET last_run_at = ?, last_status = ?, last_session_id = COALESCE(?, last_session_id),
                last_error = ?, next_run_at = ?, updated_at = ?
            WHERE id = ?"#,
     )
@@ -344,11 +346,19 @@ pub struct ScheduledRun {
     /// `None` only while the run is in flight; `"ok"` or `"error"` once done.
     pub status: Option<String>,
     pub session_id: Option<String>,
+    /// The run opened a chat that the user has since deleted. Kept apart from
+    /// `session_id = None` (the run never opened one) so the history can say
+    /// which of the two happened.
+    pub chat_deleted: bool,
     pub error: Option<String>,
     pub created_at: Timestamp,
 }
 
-const RUN_COLS: &str = "id, action_id, fired_at, status, session_id, error, created_at";
+const RUN_COLS: &str = "r.id, r.action_id, r.fired_at, r.status, r.session_id, r.error, r.created_at, \
+     (r.session_id IS NOT NULL AND s.id IS NULL) AS chat_deleted";
+
+/// What a run left pending by a dead process is closed with at startup.
+pub const RUN_INTERRUPTED: &str = "interrupted — the server stopped before this run finished";
 
 fn map_run(row: &SqliteRow) -> Result<ScheduledRun, DbError> {
     Ok(ScheduledRun {
@@ -357,6 +367,7 @@ fn map_run(row: &SqliteRow) -> Result<ScheduledRun, DbError> {
         fired_at: parse_ts(row.try_get("fired_at")?, "fired_at")?,
         status: row.try_get("status")?,
         session_id: row.try_get("session_id")?,
+        chat_deleted: row.try_get("chat_deleted")?,
         error: row.try_get("error")?,
         created_at: parse_ts(row.try_get("created_at")?, "created_at")?,
     })
@@ -380,8 +391,69 @@ pub async fn record_run_start(pool: &Pool, action_id: &str) -> Result<String, Db
     Ok(id)
 }
 
+/// Link a pending run to the chat it just opened, ahead of its outcome, so a
+/// run that dies mid-turn still points at the conversation it was writing.
+/// The action's `last_session_id` moves with it: a reusing schedule continues
+/// in that chat next time even if this run never finishes.
+pub async fn attach_run_session(
+    pool: &Pool,
+    run_id: &str,
+    session_id: &str,
+) -> Result<(), DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE scheduled_runs SET session_id = ? WHERE id = ?")
+        .bind(session_id)
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE scheduled_actions SET last_session_id = ? \
+         WHERE id = (SELECT action_id FROM scheduled_runs WHERE id = ?)",
+    )
+    .bind(session_id)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Close every run still pending at startup: no worker survives a restart, so
+/// nothing will ever finish them, and left alone they read as running forever.
+/// An action whose newest run is one of them gets the same outcome on its list
+/// row, which would otherwise still describe the run before. Returns how many
+/// runs were closed.
+///
+/// Only sound before the scheduler starts firing: a run pending *then* is
+/// necessarily a previous process's.
+pub async fn sweep_interrupted_runs(pool: &Pool) -> Result<u64, DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"UPDATE scheduled_actions
+           SET last_status = 'error', last_error = ?1, last_run_at = newest.fired_at
+           FROM (SELECT r.action_id, r.fired_at
+                 FROM scheduled_runs r
+                 WHERE r.status IS NULL
+                   AND r.rowid = (SELECT rowid FROM scheduled_runs
+                                  WHERE action_id = r.action_id
+                                  ORDER BY fired_at DESC, rowid DESC LIMIT 1)) AS newest
+           WHERE scheduled_actions.id = newest.action_id"#,
+    )
+    .bind(RUN_INTERRUPTED)
+    .execute(&mut *tx)
+    .await?;
+    let done =
+        sqlx::query("UPDATE scheduled_runs SET status = 'error', error = ? WHERE status IS NULL")
+            .bind(RUN_INTERRUPTED)
+            .execute(&mut *tx)
+            .await?;
+    tx.commit().await?;
+    Ok(done.rows_affected())
+}
+
 /// Record the outcome of a run started by [`record_run_start`]. `session_id`
-/// is kept even on error so the user can inspect the partial conversation.
+/// is kept even on error so the user can inspect the partial conversation;
+/// `None` keeps the one [`attach_run_session`] already linked.
 pub async fn finish_run(
     pool: &Pool,
     run_id: &str,
@@ -389,13 +461,16 @@ pub async fn finish_run(
     session_id: Option<&str>,
     error: Option<&str>,
 ) -> Result<(), DbError> {
-    sqlx::query("UPDATE scheduled_runs SET status = ?, session_id = ?, error = ? WHERE id = ?")
-        .bind(status)
-        .bind(session_id)
-        .bind(error)
-        .bind(run_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE scheduled_runs SET status = ?, session_id = COALESCE(?, session_id), error = ? \
+         WHERE id = ?",
+    )
+    .bind(status)
+    .bind(session_id)
+    .bind(error)
+    .bind(run_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -410,8 +485,10 @@ pub async fn list_runs(
     limit: i64,
 ) -> Result<Vec<ScheduledRun>, DbError> {
     let sql = format!(
-        "SELECT {RUN_COLS} FROM scheduled_runs WHERE action_id = ? \
-         ORDER BY fired_at DESC, rowid DESC LIMIT ?"
+        "SELECT {RUN_COLS} FROM scheduled_runs r \
+         LEFT JOIN chat_sessions s ON s.id = r.session_id \
+         WHERE r.action_id = ? \
+         ORDER BY r.fired_at DESC, r.rowid DESC LIMIT ?"
     );
     let rows = sqlx::query(&sql)
         .bind(action_id)
@@ -633,6 +710,131 @@ mod tests {
         assert_eq!(counts.get(&reuses.id), Some(&(3, 1)));
         // Another user's action never appears in this user's counts.
         assert_eq!(counts.get(&other_owner.id), None);
+    }
+
+    /// The run links its chat the moment the session is opened, not when it
+    /// finishes: a run that never reaches `finish_run` (a panic, a restart)
+    /// must still point at the conversation it was writing.
+    #[tokio::test]
+    async fn a_pending_run_links_its_chat_as_soon_as_the_session_opens() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let a = create(&pool, sample("u1", None)).await.unwrap();
+        let run = record_run_start(&pool, &a.id).await.unwrap();
+
+        attach_run_session(&pool, &run, "sess-1").await.unwrap();
+
+        let runs = list_runs(&pool, &a.id, 50).await.unwrap();
+        assert_eq!(runs[0].status, None);
+        assert_eq!(runs[0].session_id.as_deref(), Some("sess-1"));
+        // A reusing schedule continues in this chat even if the run dies here.
+        let a = get(&pool, "u1", &a.id).await.unwrap().unwrap();
+        assert_eq!(a.last_session_id.as_deref(), Some("sess-1"));
+
+        // Closing the run without a session (it crashed before it knew one)
+        // keeps the link rather than erasing it.
+        finish_run(&pool, &run, "error", None, Some("crashed"))
+            .await
+            .unwrap();
+        mark_ran(&pool, &a.id, "error", None, None, Some("crashed"))
+            .await
+            .unwrap();
+        let runs = list_runs(&pool, &a.id, 50).await.unwrap();
+        assert_eq!(runs[0].session_id.as_deref(), Some("sess-1"));
+        let a = get(&pool, "u1", &a.id).await.unwrap().unwrap();
+        assert_eq!(a.last_session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[tokio::test]
+    async fn list_runs_reports_a_deleted_chat() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let a = create(&pool, sample("u1", None)).await.unwrap();
+        let kept = session_core::db::create_session(&pool, "u1").await.unwrap();
+        let deleted = session_core::db::create_session(&pool, "u1").await.unwrap();
+        for session in [&kept.id, &deleted.id] {
+            let run = record_run_start(&pool, &a.id).await.unwrap();
+            finish_run(&pool, &run, "ok", Some(session), None)
+                .await
+                .unwrap();
+        }
+        let no_chat = record_run_start(&pool, &a.id).await.unwrap();
+        finish_run(&pool, &no_chat, "error", None, Some("usage limit"))
+            .await
+            .unwrap();
+        assert!(
+            session_core::db::delete_session(&pool, "u1", &deleted.id)
+                .await
+                .unwrap()
+        );
+
+        let runs = list_runs(&pool, &a.id, 50).await.unwrap();
+        let by_session = |id: Option<&str>| {
+            runs.iter()
+                .find(|r| r.session_id.as_deref() == id)
+                .unwrap()
+                .chat_deleted
+        };
+        assert!(!by_session(Some(&kept.id)));
+        assert!(by_session(Some(&deleted.id)));
+        // A run that never opened a chat has nothing that could be deleted.
+        assert!(!by_session(None));
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_closes_runs_a_dead_process_left_pending() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let a = create(&pool, sample("u1", None)).await.unwrap();
+        let finished = record_run_start(&pool, &a.id).await.unwrap();
+        finish_run(&pool, &finished, "ok", Some("sess-1"), None)
+            .await
+            .unwrap();
+        mark_ran(&pool, &a.id, "ok", Some("sess-1"), None, None)
+            .await
+            .unwrap();
+        let orphan = record_run_start(&pool, &a.id).await.unwrap();
+        attach_run_session(&pool, &orphan, "sess-2").await.unwrap();
+        // An older orphan on an action whose later run finished: that list row
+        // describes the later run and must stay as it is.
+        let b = create(&pool, sample("u1", None)).await.unwrap();
+        let old_orphan = record_run_start(&pool, &b.id).await.unwrap();
+        let later = record_run_start(&pool, &b.id).await.unwrap();
+        finish_run(&pool, &later, "ok", Some("sess-b"), None)
+            .await
+            .unwrap();
+        mark_ran(&pool, &b.id, "ok", Some("sess-b"), None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(sweep_interrupted_runs(&pool).await.unwrap(), 2);
+
+        let runs = list_runs(&pool, &a.id, 50).await.unwrap();
+        let orphan_run = runs.iter().find(|r| r.id == orphan).unwrap();
+        assert_eq!(orphan_run.status.as_deref(), Some("error"));
+        assert_eq!(orphan_run.error.as_deref(), Some(RUN_INTERRUPTED));
+        assert_eq!(orphan_run.session_id.as_deref(), Some("sess-2"));
+        let finished = runs.iter().find(|r| r.id == finished).unwrap();
+        assert_eq!(finished.status.as_deref(), Some("ok"));
+        assert_eq!(finished.error, None);
+        let a_row = get(&pool, "u1", &a.id).await.unwrap().unwrap();
+        assert_eq!(a_row.last_status.as_deref(), Some("error"));
+        assert_eq!(a_row.last_error.as_deref(), Some(RUN_INTERRUPTED));
+        assert_eq!(a_row.last_session_id.as_deref(), Some("sess-2"));
+        assert_eq!(a_row.last_run_at, Some(orphan_run.fired_at));
+
+        let b_row = get(&pool, "u1", &b.id).await.unwrap().unwrap();
+        assert_eq!(b_row.last_status.as_deref(), Some("ok"));
+        assert_eq!(b_row.last_error, None);
+        let b_runs = list_runs(&pool, &b.id, 50).await.unwrap();
+        let old_orphan = b_runs.iter().find(|r| r.id == old_orphan).unwrap();
+        assert_eq!(old_orphan.status.as_deref(), Some("error"));
+
+        assert_eq!(
+            sweep_interrupted_runs(&pool).await.unwrap(),
+            0,
+            "a second pass finds nothing left to close"
+        );
     }
 
     #[tokio::test]

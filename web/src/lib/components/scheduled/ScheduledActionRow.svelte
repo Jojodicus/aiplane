@@ -84,6 +84,7 @@
 				<a class="link link-hover font-medium" href="{base}{links.chat}">{t('scheduled-open-chat')}</a>
 				{#if links.runs}<a class="link link-hover text-base-content/70" href="{base}{links.runs}">{t('scheduled-open-runs', { count: action.run_count })}</a>{/if}
 			{:else if links.runs}
+				{#if action.last_chat_deleted && action.chat_count <= 1}<span class="badge badge-sm badge-outline text-base-content/60">{t('scheduled-run-chat-deleted')}</span>{/if}
 				<a class="link link-hover font-medium" href="{base}{links.runs}">
 					{action.chat_count > 0 ? t('scheduled-open-chats', { count: action.chat_count }) : t('scheduled-open-runs', { count: action.run_count })}
 				</a>

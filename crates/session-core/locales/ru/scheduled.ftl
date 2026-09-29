@@ -100,6 +100,7 @@ scheduled-runs-heading = Запуски · { $name }
 scheduled-runs-intro = Каждый записанный запуск, новые сверху, вместе с чатом, который он открыл.
 scheduled-runs-empty = Пока нет запусков. Это действие ни разу не срабатывало с момента создания.
 scheduled-run-open = открыть чат
+scheduled-run-chat-deleted = чат удалён
 scheduled-run-status-ok = ок
 scheduled-run-status-error = ошибка
 scheduled-run-status-pending = выполняется

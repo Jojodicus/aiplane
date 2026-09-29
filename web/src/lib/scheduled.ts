@@ -24,6 +24,8 @@ export interface ScheduledAction {
 	next_run_at: string | null;
 	last_run_at: string | null;
 	last_session_id: string | null;
+	/** That chat has since been deleted; list responses only. */
+	last_chat_deleted?: boolean;
 	last_status: string | null;
 	last_error: string | null;
 	/** Recorded fires. */
@@ -39,6 +41,8 @@ export interface ScheduledRun {
 	/** `null` only while a run is still in flight. */
 	status: string | null;
 	session_id: string | null;
+	/** The run opened a chat the user has since deleted. */
+	chat_deleted: boolean;
 	error: string | null;
 }
 
