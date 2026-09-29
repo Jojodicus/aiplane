@@ -253,6 +253,30 @@ pub async fn set_enabled(
     Ok(affected > 0)
 }
 
+/// Point a reusing schedule at the chat its next run continues in — any
+/// existing conversation of the owner's, not only one a previous run opened —
+/// or, with `None`, let the next run open a fresh one. The caller checks the
+/// chat is the owner's. Owner-scoped; `false` if the action is not theirs.
+pub async fn set_linked_session(
+    pool: &Pool,
+    user_id: &str,
+    id: &str,
+    session_id: Option<&str>,
+) -> Result<bool, DbError> {
+    let affected = sqlx::query(
+        "UPDATE scheduled_actions SET last_session_id = ?, updated_at = ? \
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(session_id)
+    .bind(Timestamp::now().to_string())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
 /// Delete an action, scoped to the owner. Returns `true` if a row matched.
 pub async fn delete(pool: &Pool, user_id: &str, id: &str) -> Result<bool, DbError> {
     let affected = sqlx::query("DELETE FROM scheduled_actions WHERE id = ? AND user_id = ?")
@@ -834,6 +858,54 @@ mod tests {
             sweep_interrupted_runs(&pool).await.unwrap(),
             0,
             "a second pass finds nothing left to close"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_linked_chat_is_where_the_next_run_continues() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        seed_user(&pool, "u2").await;
+        let a = create(&pool, sample("u1", None)).await.unwrap();
+
+        assert!(
+            set_linked_session(&pool, "u1", &a.id, Some("chat-1"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get(&pool, "u1", &a.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_session_id
+                .as_deref(),
+            Some("chat-1")
+        );
+
+        assert!(set_linked_session(&pool, "u1", &a.id, None).await.unwrap());
+        assert_eq!(
+            get(&pool, "u1", &a.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_session_id,
+            None
+        );
+
+        assert!(
+            !set_linked_session(&pool, "u2", &a.id, Some("chat-2"))
+                .await
+                .unwrap(),
+            "another user cannot repoint the action"
+        );
+        assert_eq!(
+            get(&pool, "u1", &a.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_session_id,
+            None
         );
     }
 

@@ -36,3 +36,7 @@ chat-steer-pending = Während dieser Antwort ergänzt — noch nicht gelesen
 chat-steer-delivered = Während dieser Antwort ergänzt — berücksichtigt
 chat-steer-resent = Während dieser Antwort ergänzt — kam zu spät, als nächste Nachricht gesendet
 chat-steer-discarded = Während dieser Antwort ergänzt — kam zu spät und wurde verworfen
+
+linked-chat-label = Fortsetzen in
+linked-chat-fresh = Einem neuen Chat, den der nächste Lauf öffnet
+linked-chat-help = Jeder Lauf hängt seinen Prompt und die Antwort an diesen Chat an. Wähle eine deiner Unterhaltungen, um alles in einem Verlauf zu halten.

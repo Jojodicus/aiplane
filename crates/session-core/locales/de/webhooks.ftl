@@ -71,7 +71,7 @@ webhooks-run-status-error = Fehler
 webhooks-run-status-pending = läuft
 
 # --- Konversation wiederverwenden ---
-webhooks-reuse-toggle-label = Konversation wiederverwenden (jede Auslösung setzt den vorherigen Chat fort)
+webhooks-reuse-toggle-label = Eine Unterhaltung fortsetzen — jede Auslösung schreibt in denselben Chat, statt einen neuen zu öffnen
 webhooks-reuse-rounds-prefix = die letzten
 webhooks-reuse-rounds-suffix = Runden wiederholen
 webhooks-reuse-rounds-aria = Anzahl der wiederzugebenden Verlaufsrunden

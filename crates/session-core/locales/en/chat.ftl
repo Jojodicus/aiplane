@@ -35,3 +35,7 @@ chat-steer-pending = Added during this answer — not read yet
 chat-steer-delivered = Added during this answer — taken into account
 chat-steer-resent = Added during this answer — arrived too late, sent as the next message
 chat-steer-discarded = Added during this answer — arrived too late and was discarded
+
+linked-chat-label = Continue in
+linked-chat-fresh = A new chat, opened by the next run
+linked-chat-help = Every run adds its prompt and reply to this chat. Pick one of your conversations to keep a single thread.
