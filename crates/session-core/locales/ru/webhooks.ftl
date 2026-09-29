@@ -71,7 +71,7 @@ webhooks-run-status-error = ошибка
 webhooks-run-status-pending = выполняется
 
 # --- Повторное использование беседы ---
-webhooks-reuse-toggle-label = Повторно использовать беседу (каждое срабатывание продолжает предыдущий чат)
+webhooks-reuse-toggle-label = Продолжать одну беседу — каждое срабатывание пишет в тот же чат, а не открывает новый
 webhooks-reuse-rounds-prefix = воспроизводя последние
 webhooks-reuse-rounds-suffix = раундов
 webhooks-reuse-rounds-aria = Сколько раундов истории воспроизводить

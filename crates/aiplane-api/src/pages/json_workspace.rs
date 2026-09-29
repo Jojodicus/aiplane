@@ -292,6 +292,10 @@ pub struct ScheduledBody {
     pub reuse_conversation: bool,
     #[serde(default)]
     pub reuse_rounds: i64,
+    /// The chat a reusing row continues in: an id links that chat, `""` lets
+    /// the next run open a fresh one, absent leaves the link as it is.
+    #[serde(default)]
+    pub linked_session_id: Option<String>,
 }
 
 async fn compute_next(cron: &str, tz_name: &str) -> Result<Option<jiff::Timestamp>, String> {
@@ -316,6 +320,17 @@ pub async fn scheduled_create(State(state): State<Arc<RamaState>>, req: Request)
     if let Err(msg) = validate_scheduled(&parsed) {
         return bad_request(msg);
     }
+    let link = match resolve_linked_session(
+        &state.db,
+        &user.id,
+        parsed.reuse_conversation,
+        parsed.linked_session_id.as_deref(),
+    )
+    .await
+    {
+        Ok(link) => link,
+        Err(resp) => return resp,
+    };
     let tz = if parsed.timezone.trim().is_empty() {
         user.timezone.clone().unwrap_or_else(|| "UTC".into())
     } else {
@@ -337,9 +352,52 @@ pub async fn scheduled_create(State(state): State<Arc<RamaState>>, req: Request)
         reuse_rounds: parsed.reuse_rounds,
         next_run_at: next,
     };
-    match scheduled::create(&state.db, new).await {
-        Ok(a) => json_ok(StatusCode::CREATED, action_json(&a)),
-        Err(err) => internal(err),
+    let mut a = match scheduled::create(&state.db, new).await {
+        Ok(a) => a,
+        Err(err) => return internal(err),
+    };
+    if let Some(Some(session_id)) = link {
+        if let Err(err) =
+            scheduled::set_linked_session(&state.db, &user.id, &a.id, Some(&session_id)).await
+        {
+            return internal(err);
+        }
+        a.last_session_id = Some(session_id);
+    }
+    json_ok(StatusCode::CREATED, action_json(&a))
+}
+
+/// What a body's `linked_session_id` asks for: `None` leaves the link alone,
+/// `Some(None)` lets the next run open a fresh chat, `Some(Some(id))` continues
+/// in chat `id`. Shared by schedules and webhooks, create and update.
+///
+/// The chat must be the caller's own: the link is where a run writes, so
+/// naming someone else's chat would put a run's output into it.
+async fn resolve_linked_session(
+    db: &db::Pool,
+    user_id: &str,
+    reuse_conversation: bool,
+    requested: Option<&str>,
+) -> Result<Option<Option<String>>, Response> {
+    let Some(requested) = requested.map(str::trim) else {
+        return Ok(None);
+    };
+    if requested.is_empty() {
+        return Ok(Some(None));
+    }
+    if !reuse_conversation {
+        return Err(bad_request(
+            "`linked_session_id` needs `reuse_conversation`: without it every run opens a \
+             fresh chat, so there is none to continue in. Turn reuse on, or leave the field out.",
+        ));
+    }
+    match session_core::db::get_session(db, user_id, requested).await {
+        Ok(Some(_)) => Ok(Some(Some(requested.to_string()))),
+        Ok(None) => Err(bad_request(
+            "`linked_session_id` names no chat of yours — it may have been deleted. Pick \
+             another chat, or send an empty string to let the next run start a new one.",
+        )),
+        Err(err) => Err(internal(err)),
     }
 }
 
@@ -383,6 +441,17 @@ pub async fn scheduled_update(
     if let Err(msg) = validate_scheduled(&parsed) {
         return bad_request(msg);
     }
+    let link = match resolve_linked_session(
+        &state.db,
+        &user.id,
+        parsed.reuse_conversation,
+        parsed.linked_session_id.as_deref(),
+    )
+    .await
+    {
+        Ok(link) => link,
+        Err(resp) => return resp,
+    };
     // Same fallback the create and preview paths apply. Without it a body that
     // omits `timezone` 400s here while succeeding there.
     let tz = if parsed.timezone.trim().is_empty() {
@@ -407,6 +476,12 @@ pub async fn scheduled_update(
     };
     match scheduled::update(&state.db, &user.id, &id, edit).await {
         Ok(true) => {
+            if let Some(link) = link
+                && let Err(err) =
+                    scheduled::set_linked_session(&state.db, &user.id, &id, link.as_deref()).await
+            {
+                return internal(err);
+            }
             let a = scheduled::get(&state.db, &user.id, &id)
                 .await
                 .ok()
@@ -620,6 +695,10 @@ pub struct WebhookBody {
     pub reuse_conversation: bool,
     #[serde(default)]
     pub reuse_rounds: i64,
+    /// The chat a reusing row continues in: an id links that chat, `""` lets
+    /// the next run open a fresh one, absent leaves the link as it is.
+    #[serde(default)]
+    pub linked_session_id: Option<String>,
 }
 
 /// The field rules both webhook paths must apply — same story as
@@ -656,6 +735,17 @@ pub async fn webhooks_create(State(state): State<Arc<RamaState>>, req: Request) 
     if let Err(msg) = validate_webhook(&parsed) {
         return bad_request(msg);
     }
+    let link = match resolve_linked_session(
+        &state.db,
+        &user.id,
+        parsed.reuse_conversation,
+        parsed.linked_session_id.as_deref(),
+    )
+    .await
+    {
+        Ok(link) => link,
+        Err(resp) => return resp,
+    };
     let (secret, hash) = auth_token::mint_webhook();
     let new = webhooks::NewWebhook {
         user_id: user.id.clone(),
@@ -668,13 +758,22 @@ pub async fn webhooks_create(State(state): State<Arc<RamaState>>, req: Request) 
         reuse_rounds: parsed.reuse_rounds,
         secret_hash: hash,
     };
-    match webhooks::create(&state.db, new).await {
-        Ok(w) => json_ok(
-            StatusCode::CREATED,
-            serde_json::json!({ "webhook": webhook_json(&w), "secret": secret }),
-        ),
-        Err(err) => internal(err),
+    let mut w = match webhooks::create(&state.db, new).await {
+        Ok(w) => w,
+        Err(err) => return internal(err),
+    };
+    if let Some(Some(session_id)) = link {
+        if let Err(err) =
+            webhooks::set_linked_session(&state.db, &user.id, &w.id, Some(&session_id)).await
+        {
+            return internal(err);
+        }
+        w.last_session_id = Some(session_id);
     }
+    json_ok(
+        StatusCode::CREATED,
+        serde_json::json!({ "webhook": webhook_json(&w), "secret": secret }),
+    )
 }
 
 /// PUT /api/v0/webhooks/{id}
@@ -696,6 +795,17 @@ pub async fn webhooks_update(
     if let Err(msg) = validate_webhook(&parsed) {
         return bad_request(msg);
     }
+    let link = match resolve_linked_session(
+        &state.db,
+        &user.id,
+        parsed.reuse_conversation,
+        parsed.linked_session_id.as_deref(),
+    )
+    .await
+    {
+        Ok(link) => link,
+        Err(resp) => return resp,
+    };
     let edit = webhooks::EditWebhook {
         name: parsed.name.trim().to_string(),
         prompt: parsed.prompt,
@@ -707,6 +817,12 @@ pub async fn webhooks_update(
     };
     match webhooks::update(&state.db, &user.id, &id, edit).await {
         Ok(true) => {
+            if let Some(link) = link
+                && let Err(err) =
+                    webhooks::set_linked_session(&state.db, &user.id, &id, link.as_deref()).await
+            {
+                return internal(err);
+            }
             let w = webhooks::get(&state.db, &user.id, &id).await.ok().flatten();
             match w {
                 Some(w) => json_ok(StatusCode::OK, webhook_json(&w)),

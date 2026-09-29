@@ -34,3 +34,7 @@ chat-steer-pending = Ajouté pendant cette réponse — pas encore lu
 chat-steer-delivered = Ajouté pendant cette réponse — pris en compte
 chat-steer-resent = Ajouté pendant cette réponse — arrivé trop tard, envoyé comme message suivant
 chat-steer-discarded = Ajouté pendant cette réponse — arrivé trop tard et abandonné
+
+linked-chat-label = Continuer dans
+linked-chat-fresh = Un nouveau chat, ouvert par la prochaine exécution
+linked-chat-help = Chaque exécution ajoute son prompt et sa réponse à ce chat. Choisissez une de vos conversations pour tout garder dans un seul fil.

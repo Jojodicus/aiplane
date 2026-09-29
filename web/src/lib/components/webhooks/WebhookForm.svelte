@@ -3,6 +3,8 @@
 	import { adminPost, adminPut } from '$lib/admin-client';
 	import { t } from '$lib/i18n.svelte';
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import LinkedChatPicker from '$lib/components/LinkedChatPicker.svelte';
+	import { initialLinkedSession, linkedSessionField } from '$lib/linked-chat';
 	import { modelSelectOptions, type ChatModelOption } from '$lib/model-option';
 	import type { Webhook } from '$lib/webhooks';
 
@@ -21,6 +23,8 @@
 	let toolsEnabled = $state(initial?.tools_enabled ?? false);
 	let reuseConversation = $state(initial?.reuse_conversation ?? false);
 	let reuseRounds = $state(initial?.reuse_rounds ?? 5);
+	const initialLinked = initialLinkedSession(initial);
+	let linkedSession = $state(initialLinked);
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 	let selectedModel = $derived(models.find((candidate: ChatModelOption) => candidate.id === model));
@@ -35,7 +39,8 @@
 		error = null;
 		const body = {
 			name, prompt, model, tools_enabled: toolsEnabled, synchronous,
-			reuse_conversation: reuseConversation, reuse_rounds: reuseRounds
+			reuse_conversation: reuseConversation, reuse_rounds: reuseRounds,
+			...linkedSessionField(reuseConversation, initialLinked, linkedSession)
 		};
 		try {
 			if (webhook) await adminPut(`/api/v0/webhooks/${webhook.id}`, body);
@@ -77,6 +82,7 @@
 			<label class="label cursor-pointer justify-start gap-3 whitespace-normal"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={reuseConversation} /><span>{t('webhooks-reuse-toggle-label')}</span></label>
 			{#if reuseConversation}<label class="flex items-center gap-2 text-sm"><span class="opacity-70">{t('webhooks-reuse-rounds-prefix')}</span><input class="input input-sm w-20" type="number" min="1" max="50" bind:value={reuseRounds} aria-label={t('webhooks-reuse-rounds-aria')} /><span class="opacity-70">{t('webhooks-reuse-rounds-suffix')}</span></label>{/if}
 		</div>
+		{#if reuseConversation}<LinkedChatPicker bind:value={linkedSession} />{/if}
 		<div class="card-actions justify-end">{#if oncancel}<button class="btn" type="button" onclick={oncancel}>{t('admin-cancel')}</button>{/if}<button class="btn btn-primary" type="submit" disabled={busy || !name.trim() || !prompt.trim() || !model.trim()}>{webhook ? t('webhooks-save-submit') : t('webhooks-create-submit')}</button></div>
 	</div>
 </form>

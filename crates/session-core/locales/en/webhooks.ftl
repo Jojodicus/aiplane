@@ -73,7 +73,7 @@ webhooks-run-status-error = error
 webhooks-run-status-pending = running
 
 # --- Conversation reuse ---
-webhooks-reuse-toggle-label = Reuse the conversation (each fire continues the previous fire's chat)
+webhooks-reuse-toggle-label = Continue one conversation — every fire adds to the same chat instead of opening a new one
 webhooks-reuse-rounds-prefix = replaying the last
 webhooks-reuse-rounds-suffix = rounds
 webhooks-reuse-rounds-aria = Rounds of history to replay

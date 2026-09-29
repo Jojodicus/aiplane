@@ -242,6 +242,28 @@ pub async fn set_enabled(
     Ok(affected > 0)
 }
 
+/// Point a reusing webhook at the chat its next fire continues in, or, with
+/// `None`, let the next fire open a fresh one. The caller checks the chat is
+/// the owner's. Owner-scoped; `false` if the webhook is not theirs.
+pub async fn set_linked_session(
+    pool: &Pool,
+    user_id: &str,
+    id: &str,
+    session_id: Option<&str>,
+) -> Result<bool, DbError> {
+    let affected = sqlx::query(
+        "UPDATE webhooks SET last_session_id = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(session_id)
+    .bind(Timestamp::now().to_string())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected > 0)
+}
+
 /// Swap in a fresh secret hash, scoped to the owner. The old trigger URL stops
 /// working immediately. Returns `true` if a row matched.
 pub async fn rotate_secret(
@@ -690,6 +712,47 @@ mod tests {
                 .chat_deleted
         );
         assert!(list_runs(&pool, &hook.id, 50).await.unwrap()[0].chat_deleted);
+    }
+
+    #[tokio::test]
+    async fn a_linked_chat_is_where_the_next_fire_continues() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        seed_user(&pool, "u2").await;
+        let hook = create(&pool, sample("u1", "hash-link")).await.unwrap();
+
+        assert!(
+            set_linked_session(&pool, "u1", &hook.id, Some("chat-1"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get(&pool, "u1", &hook.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_session_id
+                .as_deref(),
+            Some("chat-1")
+        );
+        assert!(
+            set_linked_session(&pool, "u1", &hook.id, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get(&pool, "u1", &hook.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .last_session_id,
+            None
+        );
+        assert!(
+            !set_linked_session(&pool, "u2", &hook.id, Some("chat-2"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

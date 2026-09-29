@@ -3,6 +3,8 @@
 	import { adminPost, adminPut } from '$lib/admin-client';
 	import { locale, t } from '$lib/i18n.svelte';
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import LinkedChatPicker from '$lib/components/LinkedChatPicker.svelte';
+	import { initialLinkedSession, linkedSessionField } from '$lib/linked-chat';
 	import { modelSelectOptions, type ChatModelOption } from '$lib/model-option';
 	import { cronFromSchedule, defaultSchedule, formatScheduledRun, scheduleFromCron, type ScheduledAction } from '$lib/scheduled';
 	import { timezoneOptions } from '$lib/timezones';
@@ -22,6 +24,8 @@
 	let toolsEnabled = $state(initial?.tools_enabled ?? true);
 	let reuseConversation = $state(initial?.reuse_conversation ?? false);
 	let reuseRounds = $state(initial?.reuse_rounds ?? 5);
+	const initialLinked = initialLinkedSession(initial);
+	let linkedSession = $state(initialLinked);
 	let schedule = $state(initial ? scheduleFromCron(initial.cron) : defaultSchedule());
 	let preview = $state<{ summary: string; upcoming: string[] } | null>(null);
 	let error = $state<string | null>(null);
@@ -81,7 +85,8 @@
 		error = null;
 		const body = {
 			name, prompt, model, cron, timezone, tools_enabled: toolsEnabled,
-			reuse_conversation: reuseConversation, reuse_rounds: reuseRounds
+			reuse_conversation: reuseConversation, reuse_rounds: reuseRounds,
+			...linkedSessionField(reuseConversation, initialLinked, linkedSession)
 		};
 		try {
 			if (action) await adminPut(`/api/v0/scheduled/${action.id}`, body);
@@ -181,6 +186,7 @@
 			<label class="label cursor-pointer justify-start gap-3 whitespace-normal"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={reuseConversation} /><span>{t('scheduled-reuse-toggle-label')}</span></label>
 			{#if reuseConversation}<label class="flex items-center gap-2 text-sm"><span class="opacity-70">{t('scheduled-reuse-rounds-prefix')}</span><input class="input input-sm w-20" type="number" min="1" max="50" bind:value={reuseRounds} aria-label={t('scheduled-reuse-rounds-aria')} /><span class="opacity-70">{t('scheduled-reuse-rounds-suffix')}</span></label>{/if}
 		</div>
+		{#if reuseConversation}<LinkedChatPicker bind:value={linkedSession} />{/if}
 
 		<div class="card-actions justify-end">
 			{#if oncancel}<button class="btn" type="button" onclick={oncancel}>{t('admin-cancel')}</button>{/if}

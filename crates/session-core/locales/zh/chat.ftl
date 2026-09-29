@@ -34,3 +34,7 @@ chat-steer-pending = 在本条回答期间补充 — 尚未读取
 chat-steer-delivered = 在本条回答期间补充 — 已采纳
 chat-steer-resent = 在本条回答期间补充 — 送达太晚，已作为下一条消息发送
 chat-steer-discarded = 在本条回答期间补充 — 送达太晚，已丢弃
+
+linked-chat-label = 继续于
+linked-chat-fresh = 下次运行时打开的新对话
+linked-chat-help = 每次运行都会把提示和回复追加到此对话。选择你的一个对话，即可让所有内容保持在同一线程中。

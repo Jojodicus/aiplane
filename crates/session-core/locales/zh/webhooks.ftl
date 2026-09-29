@@ -71,7 +71,7 @@ webhooks-run-status-error = 错误
 webhooks-run-status-pending = 运行中
 
 # --- 复用对话 ---
-webhooks-reuse-toggle-label = 复用对话（每次触发都接续上一次的对话）
+webhooks-reuse-toggle-label = 延续同一对话——每次触发都写入同一个对话，而不是新开一个
 webhooks-reuse-rounds-prefix = 重放最近
 webhooks-reuse-rounds-suffix = 轮
 webhooks-reuse-rounds-aria = 要重放的历史轮数

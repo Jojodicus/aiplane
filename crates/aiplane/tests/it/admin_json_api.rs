@@ -1593,6 +1593,113 @@ async fn workspace_surfaces_round_trip() {
     assert_eq!(runs["runs"][0]["payload"], r#"{"event":"deploy"}"#);
 }
 
+/// A reusing schedule or webhook can be pointed at an existing chat of the
+/// owner's, so its runs continue there instead of in a chat of their own.
+#[tokio::test]
+async fn schedules_and_webhooks_continue_in_a_linked_chat() {
+    let (state, cookie) = setup().await;
+    let app = common::app((*state).clone());
+    let mine = session_core::db::create_session(&state.db, "boss")
+        .await
+        .unwrap();
+    common::seed_session(&state, "mallory", "mallory@example.com").await;
+    let theirs = session_core::db::create_session(&state.db, "mallory")
+        .await
+        .unwrap();
+    let schedule = |reuse: bool, link: &str| {
+        format!(
+            r#"{{"name":"digest","prompt":"hi","model":"model-a","cron":"0 9 * * *","reuse_conversation":{reuse},"reuse_rounds":5,"linked_session_id":"{link}"}}"#
+        )
+    };
+    let send = |method: rama::http::Method, path: String, payload: String| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let resp = app
+                .serve(req(method, &path, &cookie, Some(payload)))
+                .await
+                .unwrap();
+            let status = resp.status();
+            let json: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+            (status, json)
+        }
+    };
+
+    let (status, created) = send(
+        rama::http::Method::POST,
+        "/api/v0/scheduled".into(),
+        schedule(true, &mine.id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["last_session_id"], mine.id.as_str());
+    let action_id = created["id"].as_str().unwrap().to_string();
+
+    let (status, err) = send(
+        rama::http::Method::POST,
+        "/api/v0/scheduled".into(),
+        schedule(false, &mine.id),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a fresh-chat schedule has nothing to continue in"
+    );
+    assert!(err.to_string().contains("reuse_conversation"), "{err}");
+
+    let (status, err) = send(
+        rama::http::Method::POST,
+        "/api/v0/scheduled".into(),
+        schedule(true, &theirs.id),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "another user's chat is not linkable"
+    );
+    assert!(err.to_string().contains("no chat of yours"), "{err}");
+
+    // An edit that leaves the field out keeps the link; an empty one clears it.
+    let keep = r#"{"name":"digest","prompt":"hi","model":"model-a","cron":"0 9 * * *","reuse_conversation":true,"reuse_rounds":5}"#;
+    let (status, kept) = send(
+        rama::http::Method::PUT,
+        format!("/api/v0/scheduled/{action_id}"),
+        keep.into(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["last_session_id"], mine.id.as_str());
+    let (_, cleared) = send(
+        rama::http::Method::PUT,
+        format!("/api/v0/scheduled/{action_id}"),
+        schedule(true, ""),
+    )
+    .await;
+    assert!(cleared["last_session_id"].is_null(), "{cleared}");
+
+    let hook = format!(
+        r#"{{"name":"ci","prompt":"summarise","model":"model-a","reuse_conversation":true,"reuse_rounds":5,"linked_session_id":"{}"}}"#,
+        mine.id
+    );
+    let (status, created) = send(rama::http::Method::POST, "/api/v0/webhooks".into(), hook).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["webhook"]["last_session_id"], mine.id.as_str());
+    let hook_id = created["webhook"]["id"].as_str().unwrap().to_string();
+    let foreign = format!(
+        r#"{{"name":"ci","prompt":"summarise","model":"model-a","reuse_conversation":true,"reuse_rounds":5,"linked_session_id":"{}"}}"#,
+        theirs.id
+    );
+    let (status, _) = send(
+        rama::http::Method::PUT,
+        format!("/api/v0/webhooks/{hook_id}"),
+        foreign,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 /// Skills + integrations: list (feature off → global set), connectors
 /// admin CRUD gating, and the static-token connect flow.
 #[tokio::test]
