@@ -911,7 +911,6 @@ mod tests {
                     health_path: "/models".into(),
                     models: Vec::new(),
                     alias: None,
-                    probe_models: true,
                     supports_edit: false,
                     enabled: true,
                 }],

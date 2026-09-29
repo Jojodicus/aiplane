@@ -227,7 +227,7 @@ async fn seed_remembered_models(registry: &UpstreamRegistry, db: &Pool) {
     };
     for pool in registry.pools() {
         for backend in &pool.backends {
-            if !backend.probe_models_enabled() {
+            if !backend.discovers_models() {
                 continue;
             }
             if !backend.live_models().is_empty() {
@@ -410,13 +410,9 @@ async fn probe_once(
     // reports nothing and a freshly applied topology would know no window for
     // any model. Now one arrives within five seconds of the model being used.
     //
-    // Skipped when discovery is off: that path returns before the writes
-    // below, so asking would have been one request every five seconds whose
-    // answer is thrown away.
+    // Asked on a backend with configured models too: the catalog is pinned,
+    // but how much context each pinned model has is still the server's to say.
     let context = async {
-        if !backend.probe_models_enabled() {
-            return None;
-        }
         profile::read_context(
             http,
             &backend.base_url,
@@ -485,15 +481,6 @@ async fn probe_once(
         ));
     }
 
-    // Model discovery disabled for this backend: the probe is a pure liveness
-    // check, and the configured model set is authoritative. We reached a 2xx,
-    // so the backend is up — but we deliberately do NOT read/parse `/models`,
-    // because on an image backend (e.g. z.AI's general endpoint) that response
-    // is the *chat* catalog and would clobber the configured image model ids.
-    if !backend.probe_models_enabled() {
-        return ProbeOutcome::AliveNoData;
-    }
-
     // Parse the `/models` envelope. A backend that returns 200
     // with a different shape (or non-JSON entirely — e.g. plain
     // whisper.cpp) is alive but unparseable: we mark it healthy and
@@ -538,8 +525,12 @@ async fn probe_once(
         return ProbeOutcome::AliveNoData;
     };
 
-    let previous = backend.probe_models();
-    if previous != new_set {
+    // Configured models are the catalog, so the ids in this body are ignored:
+    // on an image backend (z.AI's general endpoint) or behind a System One
+    // pool (OpenRouter) they are a *different* capability's catalog. Only the
+    // windows below are read from it.
+    let previous = backend.live_models();
+    if backend.discovers_models() && previous != new_set {
         let added: Vec<&String> = new_set.difference(&previous).collect();
         let removed: Vec<&String> = previous.difference(&new_set).collect();
         tracing::info!(
@@ -757,7 +748,7 @@ mod tests {
         assert!(desc.contains("chain:"), "missing source chain: {desc}");
     }
 
-    // --- probe_models gate ---------------------------------------------------
+    // --- configured models pin the catalog ------------------------------------
 
     use std::collections::{HashMap, HashSet};
 
@@ -769,7 +760,7 @@ mod tests {
         BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig,
     };
 
-    fn image_backend(base_url: &str, probe_models: bool) -> BackendConfig {
+    fn image_backend(base_url: &str) -> BackendConfig {
         BackendConfig {
             name: "img".into(),
             base_url: base_url.into(),
@@ -780,7 +771,6 @@ mod tests {
             health_path: "/models".into(),
             models: vec!["glm-image".into()],
             alias: None,
-            probe_models,
             supports_edit: false,
             enabled: true,
         }
@@ -802,7 +792,7 @@ mod tests {
         server
     }
 
-    fn backend_arc(base_url: &str, probe_models: bool) -> std::sync::Arc<Backend> {
+    fn backend_arc(base_url: &str) -> std::sync::Arc<Backend> {
         let mut pools = HashMap::new();
         pools.insert(
             "images".to_string(),
@@ -816,7 +806,7 @@ mod tests {
                 strategy: PickerStrategy::RoundRobin,
                 models: Vec::new(),
                 fallback_offline: None,
-                backend: vec![image_backend(base_url, probe_models)],
+                backend: vec![image_backend(base_url)],
             },
         );
         let reg = UpstreamRegistry::new(&pools).unwrap();
@@ -850,13 +840,15 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let backend = backend_arc(&server.uri(), true);
+        let backend = backend_arc(&server.uri());
 
         let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
         assert!(
             matches!(outcome, ProbeOutcome::AliveWithModels),
             "expected AliveWithModels, got {outcome:?}"
         );
+        // Read on a backend with configured models too: pinning the catalog
+        // does not make the server's figure for a pinned model less true.
         assert_eq!(backend.context_window("glm-image"), Some(262_144));
         assert_eq!(backend.context_window("hosted-model"), None);
         assert_eq!(backend.context_window("broken"), None, "0 is not a window");
@@ -864,19 +856,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_models_false_keeps_config_models_over_chat_catalog() {
+    async fn configured_models_keep_a_chat_catalog_out() {
         let server = chat_catalog_server().await;
-        let backend = backend_arc(&server.uri(), false);
+        let backend = backend_arc(&server.uri());
 
         let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
-        // Reachable, but no discovery: config model set is untouched.
         assert!(
-            matches!(outcome, ProbeOutcome::AliveNoData),
-            "expected AliveNoData, got {outcome:?}"
+            !matches!(outcome, ProbeOutcome::Failed(_)),
+            "a 200 is alive, got {outcome:?}"
         );
         assert!(
-            backend.probe_models().is_empty(),
-            "probe must not populate the live set when probe_models = false"
+            backend.live_models().is_empty(),
+            "a backend with configured models must not discover"
         );
         assert_eq!(
             backend.models_snapshot(),
@@ -914,7 +905,6 @@ mod tests {
                 weight: 1,
                 max_inflight: 16,
                 health_path: "/models".into(),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 models: Vec::new(),
@@ -989,13 +979,11 @@ mod tests {
             chat.models_snapshot(),
             HashSet::from(["cached-chat".into()])
         );
-        assert!(chat.withheld_models().is_empty());
         assert!(system_one.live_models().is_empty());
         assert_eq!(
             system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()])
         );
-        assert!(system_one.withheld_models().is_empty());
 
         system_one.set_models(HashSet::from(["cached-chat".into()]));
         assert!(
@@ -1023,16 +1011,14 @@ mod tests {
                 Some(&db),
             )
             .await,
-            ProbeOutcome::AliveNoData
+            ProbeOutcome::AliveWithModels
         ));
         assert_eq!(chat.models_snapshot(), HashSet::from(["fresh-chat".into()]));
-        assert!(chat.withheld_models().is_empty());
         assert!(system_one.live_models().is_empty());
         assert_eq!(
             system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()])
         );
-        assert!(system_one.withheld_models().is_empty());
         assert!(registry.route("fresh-chat", PoolKind::Chat).is_ok());
         assert!(registry.route("fresh-chat", PoolKind::SystemOne).is_err());
 
@@ -1056,14 +1042,12 @@ mod tests {
             HashSet::from(["fresh-chat".into()]),
             "reload must carry the live chat catalog across"
         );
-        assert!(reloaded_chat.withheld_models().is_empty());
         assert!(reloaded_system_one.live_models().is_empty());
         assert_eq!(
             reloaded_system_one.models_snapshot(),
             HashSet::from(["typesafe/jev-1.13".into()]),
             "reload must leave the System One catalog pinned to config"
         );
-        assert!(reloaded_system_one.withheld_models().is_empty());
         assert!(registry.route("fresh-chat", PoolKind::Chat).is_ok());
         assert!(
             registry
@@ -1071,35 +1055,6 @@ mod tests {
                 .is_ok()
         );
         assert!(registry.route("fresh-chat", PoolKind::SystemOne).is_err());
-    }
-
-    #[tokio::test]
-    async fn probe_models_true_allowlist_withholds_chat_catalog() {
-        // The contrast case: with discovery on, the server's chat catalog
-        // (`glm-4.6`) is discovered — but the backend's configured `models`
-        // list (`glm-image`) is now an allowlist, so the unlisted chat model
-        // is *withheld* rather than clobbering the intended set. The
-        // intersection is empty here (the backend doesn't actually serve
-        // `glm-image`), so nothing is served and the discovered id shows up in
-        // the withheld set for the struck-through UI chip.
-        let server = chat_catalog_server().await;
-        let backend = backend_arc(&server.uri(), true);
-
-        let outcome = probe_once(&reqwest::Client::new(), "images", &backend, None).await;
-        assert!(
-            matches!(outcome, ProbeOutcome::AliveWithModels),
-            "expected AliveWithModels, got {outcome:?}"
-        );
-        assert!(
-            backend.models_snapshot().is_empty(),
-            "allowlist ∩ probe is empty → nothing served, got {:?}",
-            backend.models_snapshot()
-        );
-        assert_eq!(
-            backend.withheld_models(),
-            std::collections::HashSet::from(["glm-4.6".to_string()]),
-            "the discovered-but-unlisted chat model must be withheld"
-        );
     }
 }
 
@@ -1160,7 +1115,6 @@ mod detection_wiring {
                     health_path: "/models".into(),
                     models: Vec::new(),
                     alias: None,
-                    probe_models: true,
                     enabled: true,
                     supports_edit: false,
                 }],

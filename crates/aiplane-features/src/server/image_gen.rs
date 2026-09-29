@@ -569,7 +569,6 @@ mod tests {
             health_path: "/models".into(),
             models: vec!["test-image".into()],
             alias: None,
-            probe_models: false,
             supports_edit: false,
             enabled: true,
         }

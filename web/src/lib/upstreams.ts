@@ -5,7 +5,6 @@ export interface LiveBackend {
 	inflight: number;
 	max_inflight: number;
 	models: string[];
-	withheld: string[];
 	pool: string | null;
 	/** What kind of server this turned out to be. Never shown as a setting. */
 	profile: BackendProfileName;
@@ -57,7 +56,6 @@ export interface Backend {
 	weight: number;
 	max_inflight: number;
 	health_path: string;
-	probe_models: boolean;
 	supports_edit: boolean;
 	enabled: boolean;
 	models: string[];

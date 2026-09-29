@@ -794,7 +794,6 @@ mod tests {
                     health_path: "/models".into(),
                     models: vec!["unlimited-ocr".into()],
                     alias: None,
-                    probe_models: false,
                     supports_edit: false,
                     enabled: true,
                 }],

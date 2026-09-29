@@ -27,7 +27,6 @@
 	let aliases = $state(
 		untrack(() => backend?.aliases.map(({ alias, target }) => (target ? `${alias}=${target}` : alias)).join('\n') ?? '')
 	);
-	let probeModels = $state(untrack(() => backend?.probe_models ?? true));
 	let supportsEdit = $state(untrack(() => backend?.supports_edit ?? false));
 	let overwrite = $state(untrack(() => backend !== null));
 	let deleting = $state(false);
@@ -60,7 +59,6 @@
 				weight,
 				max_inflight: maxInflight,
 				health_path: healthPath,
-				probe_models: probeModels,
 				supports_edit: supportsEdit,
 				models: splitList(models),
 				aliases: parseAliases(aliases),
@@ -200,7 +198,6 @@
 		<textarea bind:this={aliasesInput} class="textarea textarea-bordered textarea-sm font-mono w-full" rows="3" bind:value={aliases}></textarea>
 	</label>
 	<div class="flex flex-wrap gap-4">
-		<label class="label gap-2"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={probeModels} /><span>{t('backends-field-probe-models')}</span></label>
 		<label class="label gap-2"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={supportsEdit} /><span>{t('backends-field-supports-edit')}</span></label>
 	</div>
 	<div class="flex flex-col gap-2">

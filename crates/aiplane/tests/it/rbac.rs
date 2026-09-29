@@ -46,7 +46,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn backend(name: &str, base_url: &str, supports_edit: bool) -> BackendConfig {
     BackendConfig {
         alias: None,
-        probe_models: true,
         supports_edit,
         enabled: true,
         name: name.into(),

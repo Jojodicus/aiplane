@@ -34,9 +34,8 @@ backends-field-health-path = Ruta de estado
 backends-field-pool-hint = Asigna este backend a un grupo. Un backend en varios grupos se reduce al elegido aquí.
 backends-field-weight = Peso
 backends-field-max-inflight = Máximo en curso
-backends-field-models = Modelos (separados por comas)
+backends-field-models = Modelos (separados por comas; en blanco = descubrir vía /models)
 backends-field-aliases = Alias (name=target por línea)
-backends-field-probe-models = Descubrir modelos mediante la sonda /models
 backends-field-supports-edit = Admite edición de imágenes
 backends-status-saturated = saturado
 backends-auth-failed-title = El upstream rechazó las credenciales de la sonda de salud (401/403), así que el descubrimiento de modelos está desactivado y nada nuevo puede enrutarse por este backend. Revisa la clave API; si usa una variable de entorno, comprueba que esté definida.
@@ -60,7 +59,7 @@ backends-test-button = Probar conexión
 backends-test-hint = Llama a esta URL con las credenciales de arriba. No se guarda nada.
 backends-test-insert-hint = Ids de modelos anunciados: haz clic para completar la línea de alias donde está el cursor:
 backends-test-ok = Alcanzable, autenticado ({ $source }), { $count } modelos descubiertos.
-backends-test-ok-no-models = Alcanzable y autenticado ({ $source }), pero la respuesta no es un envoltorio /models de OpenAI, así que el descubrimiento no puede leerla. Este backend solo podrá servir los ids que indiques en «Modelos».
+backends-test-ok-no-models = Alcanzable y autenticado ({ $source }), pero la respuesta no es una lista /models de OpenAI ni de TypeSafe, así que el descubrimiento no puede leerla. Este backend solo podrá servir los ids que indiques en «Modelos».
 backends-test-auth-failed = Rechazado con HTTP { $status }: la credencial fue denegada ({ $source }). Hasta que se corrija, el descubrimiento de modelos queda desactivado y el backend no anuncia nada.
 backends-test-http-error = { $url } respondió HTTP { $status }.
 backends-test-unreachable = No se pudo alcanzar { $url }: { $err }

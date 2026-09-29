@@ -34,9 +34,8 @@ backends-field-health-path = Health-Pfad
 backends-field-pool-hint = Weist dieses Backend einem Pool zu. Ein Backend in mehreren Pools wird auf den hier gewählten reduziert.
 backends-field-weight = Gewichtung
 backends-field-max-inflight = Max. gleichzeitig
-backends-field-models = Modelle (kommagetrennt)
+backends-field-models = Modelle (kommagetrennt; leer = über /models erkennen)
 backends-field-aliases = Aliase (name=target pro Zeile)
-backends-field-probe-models = Modelle über /models-Probe erkennen
 backends-field-supports-edit = Unterstützt Bildbearbeitung
 backends-status-saturated = ausgelastet
 backends-auth-failed-title = Der Upstream hat die Zugangsdaten des Health-Probes abgelehnt (401/403), damit ist die Modell-Erkennung aus — über dieses Backend kann nichts Neues routbar werden. API-Schlüssel prüfen; bei einer Env-Var prüfen, ob die Variable überhaupt gesetzt ist.
@@ -60,7 +59,7 @@ backends-test-button = Verbindung testen
 backends-test-hint = Ruft diese URL mit den obigen Zugangsdaten auf. Es wird nichts gespeichert.
 backends-test-insert-hint = Gemeldete Modell-Ids — klicken, um die Alias-Zeile am Cursor zu vervollständigen:
 backends-test-ok = Erreichbar, authentifiziert ({ $source }), { $count } Modelle gefunden.
-backends-test-ok-no-models = Erreichbar und authentifiziert ({ $source }), aber die Antwort ist kein OpenAI-/models-Envelope — die Erkennung kann sie nicht lesen. Dieses Backend kann nur die Ids bedienen, die du unter „Modelle“ einträgst.
+backends-test-ok-no-models = Erreichbar und authentifiziert ({ $source }), aber die Antwort ist weder eine OpenAI- noch eine TypeSafe-/models-Liste — die Erkennung kann sie nicht lesen. Dieses Backend kann nur die Ids bedienen, die du unter „Modelle“ einträgst.
 backends-test-auth-failed = Abgelehnt mit HTTP { $status }: die Zugangsdaten wurden verweigert ({ $source }). Bis das behoben ist, bleibt die Modell-Erkennung aus und das Backend meldet nichts.
 backends-test-http-error = { $url } antwortete mit HTTP { $status }.
 backends-test-unreachable = { $url } nicht erreichbar: { $err }

@@ -34,7 +34,7 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 
 `POST /v1/systemone` preserves TypeSafe's request and response contract. The gateway reads only the `model` field for routing, rewrites it when an alias resolves, and forwards every other field without translation. That keeps `noul`, `choice`, `score`, `instructions`, `criteria`, probabilities, confidence, and future protocol additions under the upstream contract rather than a gateway-owned schema.
 
-The selected backend receives `POST <base_url>/systemone`; System One requests are never translated into chat completions. One provider backend can belong to both the `chat` and `system_one` pools, sharing its identity, base URL, and API key. The explicit System One model allowlist belongs to the `system_one` pool, and pool-scoped model state keeps its catalog and wire protocol isolated from chat.
+The selected backend receives `POST <base_url>/systemone`; System One requests are never translated into chat completions. One provider backend can belong to both the `chat` and `system_one` pools, sharing its identity, base URL, and API key. System One models configured on the `system_one` pool pin that pool's catalog (the shared backend's `/models` is the chat catalog), and pool-scoped model state keeps its catalog and wire protocol isolated from chat. A dedicated System One server needs no list: its `/models`, in OpenAI's or TypeSafe's envelope, is discovered.
 
 Both rolling and pinned provider IDs are ordinary model IDs. For example, an operator can expose `jev-latest` as an alias for `~typesafe/jev-latest` while also offering the version-pinned `typesafe/jev-1.13`. `/v1/models` lists the routable alias and real IDs subject to the caller's pool and token restrictions.
 

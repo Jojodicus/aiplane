@@ -67,7 +67,6 @@ async fn state_with_chat_access(
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),
@@ -111,7 +110,6 @@ async fn state_with_aliased_chat_model(model: &str, alias: &str) -> RamaState {
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: Some(AliasSpec::Names(vec![alias.to_string()])),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),

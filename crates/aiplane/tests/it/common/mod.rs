@@ -43,7 +43,6 @@ pub const TEST_SECRET: [u8; 32] = [7u8; 32];
 pub fn mock_backend(name: &str, base_url: &str) -> BackendConfig {
     BackendConfig {
         alias: None,
-        probe_models: true,
         supports_edit: false,
         enabled: true,
         name: name.into(),
@@ -529,7 +528,6 @@ pub async fn state_with_admin_rbac_and_comfyui(upstream_url: &str) -> RamaState 
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),
@@ -616,7 +614,6 @@ async fn state_with_admin_rbac_cfg(upstream_url: &str, allow_impersonation: bool
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),

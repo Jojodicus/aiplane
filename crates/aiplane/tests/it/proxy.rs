@@ -1033,7 +1033,6 @@ async fn state_with_backend_api_key(
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: None,
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),
@@ -1092,7 +1091,6 @@ async fn state_with_alias_pool(upstream_url: &str) -> aiplane::rama_server::Rama
             models: Vec::new(),
             backend: vec![BackendConfig {
                 alias: Some(AliasSpec::Names(vec!["qwen".into()])),
-                probe_models: true,
                 supports_edit: false,
                 enabled: true,
                 name: "mock".into(),
