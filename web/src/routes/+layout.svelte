@@ -308,8 +308,10 @@
 
 			{#if sidebar.searching}
 				<div class="px-2 pb-1">
+					<!-- svelte-ignore a11y_autofocus -->
 					<input
 						class="input input-sm input-bordered w-full"
+						autofocus
 						placeholder={t('nav-search-placeholder')}
 						value={sidebar.query}
 						oninput={(e) => searchAsYouType((e.currentTarget as HTMLInputElement).value)}
