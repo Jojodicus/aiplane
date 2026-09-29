@@ -11,7 +11,8 @@
 //!      unhealthy; one success flips it back. The picker in `registry.rs`
 //!      skips unhealthy backends.
 //!   2. **Model discovery** — on every success the response body is parsed
-//!      as the OpenAI `/models` envelope (`{"data": [{"id": "..."}, ...]}`)
+//!      as the OpenAI `/models` envelope (`{"data": [{"id": "..."}, ...]}`),
+//!      or TypeSafe System One's (`{"models": [{"name": "..."}]}`),
 //!      and the backend's advertised-model set is replaced wholesale. The
 //!      router in `acquire_for` reads that set to decide which pool handles
 //!      a given model. No static route table.
@@ -493,7 +494,7 @@ async fn probe_once(
         return ProbeOutcome::AliveNoData;
     }
 
-    // Parse the OpenAI `/models` envelope. A backend that returns 200
+    // Parse the `/models` envelope. A backend that returns 200
     // with a different shape (or non-JSON entirely — e.g. plain
     // whisper.cpp) is alive but unparseable: we mark it healthy and
     // leave the model set unchanged, so the operator can either keep
@@ -525,14 +526,14 @@ async fn probe_once(
     // they did, the probe understood only vLLM's spelling of the window and
     // every llama.cpp model fell through to the global 32768 guess with the
     // real figure sitting in the body it had just read.
-    // `None` = not an OpenAI model envelope at all. Alive, but nothing to
+    // `None` = not a model envelope at all. Alive, but nothing to
     // learn, so the previous model set survives — a backend whose `/models`
     // answers in some other shape stays routable on what it advertised before
     // rather than being emptied into unroutability.
     let Some((new_set, windows)) = profile::read_models(&value) else {
         tracing::debug!(
             pool = %pool_name, backend = %backend.name,
-            "/models body was not an OpenAI model envelope; leaving model set unchanged"
+            "/models body was not a model envelope we understand; leaving model set unchanged"
         );
         return ProbeOutcome::AliveNoData;
     };
