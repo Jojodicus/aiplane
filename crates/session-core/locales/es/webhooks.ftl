@@ -62,6 +62,7 @@ webhooks-runs-page-name = Ejecuciones del webhook
 webhooks-runs-intro = Las activaciones y reejecuciones más recientes. Abre una ejecución para leer su conversación, o reejecuta su carga útil con un prompt diferente.
 webhooks-runs-empty = Aún no hay ejecuciones. Activa el webhook para ver su historial aquí.
 webhooks-run-open = abrir chat
+webhooks-run-chat-deleted = chat eliminado
 webhooks-run-rerun = reejecutar
 webhooks-run-source-fire = activado
 webhooks-run-source-rerun = reejecución

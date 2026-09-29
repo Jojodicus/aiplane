@@ -64,6 +64,7 @@ webhooks-runs-page-name = Webhook runs
 webhooks-runs-intro = The most recent fires and reruns. Open a run to read its conversation, or rerun its payload with a different prompt.
 webhooks-runs-empty = No runs yet. Fire the webhook to see its history here.
 webhooks-run-open = open chat
+webhooks-run-chat-deleted = chat deleted
 webhooks-run-rerun = rerun
 webhooks-run-source-fire = fired
 webhooks-run-source-rerun = rerun

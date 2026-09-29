@@ -98,6 +98,7 @@ scheduled-runs-heading = Runs · { $name }
 scheduled-runs-intro = Every recorded fire, newest first, with the chat it opened.
 scheduled-runs-empty = No runs yet. This action has not fired since it was created.
 scheduled-run-open = open chat
+scheduled-run-chat-deleted = chat deleted
 scheduled-run-status-ok = ok
 scheduled-run-status-error = error
 scheduled-run-status-pending = running

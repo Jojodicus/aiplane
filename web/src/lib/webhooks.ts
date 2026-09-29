@@ -13,6 +13,8 @@ export interface Webhook {
 	last_fired_at: string | null;
 	last_status: string | null;
 	last_session_id: string | null;
+	/** That chat has since been deleted; list responses only. */
+	last_chat_deleted?: boolean;
 	last_error: string | null;
 	has_payload: boolean;
 	/** Recorded fires. */
@@ -28,6 +30,8 @@ export interface WebhookRun {
 	fired_at: string;
 	source: string;
 	session_id: string | null;
+	/** The run opened a chat the owner has since deleted. */
+	chat_deleted: boolean;
 	prompt: string;
 	payload: string;
 }

@@ -722,6 +722,18 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Before anything can fire: no run pending now can still be running, so
+    // close them rather than let the history show them as running forever.
+    // Scheduled runs are swept by the worker itself, ahead of its first tick.
+    match rt::webhooks::sweep_interrupted_runs(&state.db).await {
+        Ok(0) => {}
+        Ok(swept) => tracing::info!(
+            swept,
+            "webhooks: closed runs a previous process left pending"
+        ),
+        Err(err) => tracing::warn!(error = %err, "webhooks: closing interrupted runs at startup"),
+    }
+
     // Scheduled actions: start the background loop that fires due actions
     // (the `scheduled_actions` table is created by migration 0021).
     rt::scheduled::worker::spawn(state.clone());

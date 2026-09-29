@@ -17,11 +17,13 @@
 //! occurrence, so the missed slots collapse into a single catch-up run on
 //! the first tick after startup rather than a backlog burst.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use rama::futures::FutureExt;
 use session_core::db as chat;
 use session_core::db::TurnStatus;
 
@@ -37,6 +39,16 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// a failed pass is logged and retried on the next tick.
 pub fn spawn(state: Arc<RamaState>) {
     tokio::spawn(async move {
+        match super::sweep_interrupted_runs(&state.db).await {
+            Ok(0) => {}
+            Ok(swept) => tracing::info!(
+                swept,
+                "scheduled: closed runs a previous process left pending"
+            ),
+            Err(err) => {
+                tracing::warn!(error = %err, "scheduled: closing interrupted runs at startup")
+            }
+        }
         loop {
             if let Err(err) = drain_once(&state).await {
                 tracing::warn!(error = %err, "scheduled-actions pass failed");
@@ -76,13 +88,20 @@ fn next_occurrence(action: &ScheduledAction, now: Timestamp) -> Option<Timestamp
     cron.next_after(now, &tz)
 }
 
+/// How one fire ended: `("ok" | "error", the chat it opened, error detail)`.
+type RunOutcome = (&'static str, Option<String>, Option<String>);
+
+/// What a run that panicked is closed with. The chat, if it got that far, is
+/// already linked by then, and its turn carries the detail.
+const RUN_CRASHED: &str = "the run stopped unexpectedly";
+
 /// Run one scheduled action end-to-end: open a chat session, persist the
 /// prompt + an in-progress assistant turn, drive it to completion
 /// headlessly, then record the outcome.
 async fn run_action(state: Arc<RamaState>, action: ScheduledAction, next: Option<Timestamp>) {
     // Open the history row first, so a run that is slow, or that dies with
     // the process, is still visible as *something that happened* rather than
-    // as a gap. Every exit below closes it through `record`.
+    // as a gap. The startup sweep closes the row if the process dies.
     let run_id = match super::record_run_start(&state.db, &action.id).await {
         Ok(id) => Some(id),
         Err(err) => {
@@ -91,102 +110,87 @@ async fn run_action(state: Arc<RamaState>, action: ScheduledAction, next: Option
             None
         }
     };
+    let (status, session_id, error) =
+        guard_run(&action.id, execute_run(&state, &action, run_id.as_deref())).await;
+    record(
+        &state,
+        &action,
+        run_id.as_deref(),
+        status,
+        session_id.as_deref(),
+        next,
+        error.as_deref(),
+    )
+    .await;
+}
+
+/// Turn a panic anywhere in a run into an `error` outcome. Without it the
+/// spawned task unwinds past `record`, and the run reads as running forever —
+/// which is how a tool panic once left a run with no chat linked.
+async fn guard_run(
+    action_id: &str,
+    run: impl std::future::Future<Output = RunOutcome>,
+) -> RunOutcome {
+    match AssertUnwindSafe(run).catch_unwind().await {
+        Ok(outcome) => outcome,
+        Err(panic) => {
+            let detail = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&'static str>().copied())
+                .unwrap_or("non-string panic payload");
+            tracing::error!(action = %action_id, detail, "scheduled run panicked");
+            ("error", None, Some(RUN_CRASHED.to_string()))
+        }
+    }
+}
+
+async fn execute_run(
+    state: &Arc<RamaState>,
+    action: &ScheduledAction,
+    run_id: Option<&str>,
+) -> RunOutcome {
+    let fail = |msg: &str| ("error", None, Some(msg.to_string()));
     // The owner's RBAC roles gate the run's tools. A `None` here means the
     // user row vanished between selection and run (FK cascade should have
-    // deleted the action too — defensive); record it and stop.
+    // deleted the action too — defensive).
     let user = match aiplane_core::server::db::users::find_by_id(&state.db, &action.user_id).await {
         Ok(Some(u)) => u,
-        Ok(None) => {
-            record(
-                &state,
-                &action,
-                run_id.as_deref(),
-                "error",
-                None,
-                next,
-                Some("schedule owner no longer exists"),
-            )
-            .await;
-            return;
-        }
+        Ok(None) => return fail("schedule owner no longer exists"),
         Err(err) => {
-            // Close the row rather than returning straight out: the comment
-            // above promises every exit goes through `record`, and a run left
-            // open reads as "still running" on the history page forever.
             tracing::warn!(action = %action.id, error = %err, "loading schedule owner");
-            record(
-                &state,
-                &action,
-                run_id.as_deref(),
-                "error",
-                None,
-                next,
-                Some("could not load the schedule owner"),
-            )
-            .await;
-            return;
+            return fail("could not load the schedule owner");
         }
     };
     // A scheduled fire draws from the owner's budget like any other call. If
     // they're over a limit, skip this fire and record it as an error (visible
     // in the schedule's run history) rather than running it for free.
-    {
-        let role_ids = state.role_ids_for(&user.roles);
-        if state
-            .enforcer
-            .check_for_model(
-                &action.user_id,
-                &role_ids,
+    let role_ids = state.role_ids_for(&user.roles);
+    if state
+        .enforcer
+        .check_for_model(
+            &action.user_id,
+            &role_ids,
+            &action.model,
+            state.upstreams.enforce_limits_for_model(
                 &action.model,
-                state.upstreams.enforce_limits_for_model(
-                    &action.model,
-                    aiplane_core::server::upstreams::PoolKind::Chat,
-                ),
-            )
-            .await
-            .is_err()
-        {
-            record(
-                &state,
-                &action,
-                run_id.as_deref(),
-                "error",
-                None,
-                next,
-                Some("usage limit reached — run skipped"),
-            )
-            .await;
-            return;
-        }
+                aiplane_core::server::upstreams::PoolKind::Chat,
+            ),
+        )
+        .await
+        .is_err()
+    {
+        return fail("usage limit reached — run skipped");
     }
-    match try_run_action(&state, &action, &user).await {
+    match try_run_action(state, action, &user, run_id).await {
         Ok((session_id, assistant_turn_id)) => {
-            // Read the run's assistant turn to classify the outcome.
-            let (status, error) = outcome_for(&state, &session_id, &assistant_turn_id).await;
-            record(
-                &state,
-                &action,
-                run_id.as_deref(),
-                status,
-                Some(&session_id),
-                next,
-                error.as_deref(),
-            )
-            .await;
+            let (status, error) = outcome_for(state, &session_id, &assistant_turn_id).await;
+            (status, Some(session_id), error)
         }
         Err(err) => {
             let msg = err.to_string();
             tracing::warn!(action = %action.id, error = %msg, "scheduled run failed to start");
-            record(
-                &state,
-                &action,
-                run_id.as_deref(),
-                "error",
-                None,
-                next,
-                Some(&msg),
-            )
-            .await;
+            fail(&msg)
         }
     }
 }
@@ -272,8 +276,14 @@ async fn try_run_action(
     state: &Arc<RamaState>,
     action: &ScheduledAction,
     user: &aiplane_core::server::db::users::User,
+    run_id: Option<&str>,
 ) -> Result<(String, String), super::DbError> {
     let (session_id, assistant_turn_id) = open_run_session(&state.db, action).await?;
+    if let Some(run_id) = run_id
+        && let Err(err) = super::attach_run_session(&state.db, run_id, &session_id).await
+    {
+        tracing::warn!(action = %action.id, error = %err, "linking scheduled run to its chat");
+    }
 
     // Tools follow the user's normal RBAC grant when enabled; an empty
     // role set when disabled means the driver offers no tools at all.
@@ -371,6 +381,18 @@ mod tests {
             reuse_rounds: 5,
             next_run_at: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_panicking_run_still_yields_an_error_outcome() {
+        let outcome = guard_run("a1", async { panic!("byte index is not a char boundary") }).await;
+        assert_eq!(outcome, ("error", None, Some(RUN_CRASHED.to_string())));
+    }
+
+    #[tokio::test]
+    async fn a_run_that_returns_passes_its_outcome_through() {
+        let outcome = guard_run("a1", async { ("ok", Some("sess-1".to_string()), None) }).await;
+        assert_eq!(outcome, ("ok", Some("sess-1".to_string()), None));
     }
 
     /// Default mode: each fire of the same action must open a fresh session +

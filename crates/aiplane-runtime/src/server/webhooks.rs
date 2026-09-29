@@ -346,6 +346,8 @@ pub struct WebhookRun {
     pub status: Option<String>,
     /// Chat session this run opened.
     pub session_id: Option<String>,
+    /// The run's chat has since been deleted by its owner.
+    pub chat_deleted: bool,
     pub error: Option<String>,
     pub prompt: String,
     pub payload: String,
@@ -354,8 +356,15 @@ pub struct WebhookRun {
     pub created_at: Timestamp,
 }
 
-const RUN_COLS: &str = "id, webhook_id, fired_at, status, session_id, error, prompt, payload, \
-     source, created_at";
+const RUN_COLS: &str = "r.id, r.webhook_id, r.fired_at, r.status, r.session_id, r.error, \
+     r.prompt, r.payload, r.source, r.created_at, \
+     (r.session_id IS NOT NULL AND s.id IS NULL) AS chat_deleted";
+
+/// Every run read goes through this join, so `chat_deleted` is always known.
+const RUN_FROM: &str = "webhook_runs r LEFT JOIN chat_sessions s ON s.id = r.session_id";
+
+/// What a run left pending by a dead process is closed with at startup.
+pub const RUN_INTERRUPTED: &str = "interrupted — the server stopped before this run finished";
 
 fn map_run(row: &SqliteRow) -> Result<WebhookRun, DbError> {
     Ok(WebhookRun {
@@ -364,6 +373,7 @@ fn map_run(row: &SqliteRow) -> Result<WebhookRun, DbError> {
         fired_at: parse_ts(row.try_get("fired_at")?, "fired_at")?,
         status: row.try_get("status")?,
         session_id: row.try_get("session_id")?,
+        chat_deleted: row.try_get("chat_deleted")?,
         error: row.try_get("error")?,
         prompt: row.try_get("prompt")?,
         payload: row.try_get("payload")?,
@@ -419,6 +429,38 @@ pub async fn finish_run(
     Ok(())
 }
 
+/// Close every run still pending at startup. An async fire runs detached from
+/// its request, so a restart mid-run leaves nothing that will ever finish it.
+/// A webhook whose newest run is one of them gets the same outcome on its
+/// list row. Returns how many runs were closed.
+///
+/// Only sound before the server accepts fires: a run pending *then* is
+/// necessarily a previous process's.
+pub async fn sweep_interrupted_runs(pool: &Pool) -> Result<u64, DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"UPDATE webhooks
+           SET last_status = 'error', last_error = ?1, last_fired_at = newest.fired_at
+           FROM (SELECT r.webhook_id, r.fired_at
+                 FROM webhook_runs r
+                 WHERE r.status IS NULL
+                   AND r.rowid = (SELECT rowid FROM webhook_runs
+                                  WHERE webhook_id = r.webhook_id
+                                  ORDER BY fired_at DESC, rowid DESC LIMIT 1)) AS newest
+           WHERE webhooks.id = newest.webhook_id"#,
+    )
+    .bind(RUN_INTERRUPTED)
+    .execute(&mut *tx)
+    .await?;
+    let done =
+        sqlx::query("UPDATE webhook_runs SET status = 'error', error = ? WHERE status IS NULL")
+            .bind(RUN_INTERRUPTED)
+            .execute(&mut *tx)
+            .await?;
+    tx.commit().await?;
+    Ok(done.rows_affected())
+}
+
 /// A webhook's most recent runs, newest first, capped at `limit`.
 pub async fn list_runs(
     pool: &Pool,
@@ -429,8 +471,8 @@ pub async fn list_runs(
     // insertion order), NOT `id` — `id` is a random UUID, so two runs sharing a
     // `fired_at` tick would otherwise come back in nondeterministic order.
     let sql = format!(
-        "SELECT {RUN_COLS} FROM webhook_runs WHERE webhook_id = ? \
-         ORDER BY fired_at DESC, rowid DESC LIMIT ?"
+        "SELECT {RUN_COLS} FROM {RUN_FROM} WHERE r.webhook_id = ? \
+         ORDER BY r.fired_at DESC, r.rowid DESC LIMIT ?"
     );
     let rows = sqlx::query(&sql)
         .bind(webhook_id)
@@ -478,7 +520,7 @@ pub async fn get_run(
     webhook_id: &str,
     run_id: &str,
 ) -> Result<Option<WebhookRun>, DbError> {
-    let sql = format!("SELECT {RUN_COLS} FROM webhook_runs WHERE webhook_id = ? AND id = ?");
+    let sql = format!("SELECT {RUN_COLS} FROM {RUN_FROM} WHERE r.webhook_id = ? AND r.id = ?");
     let row = sqlx::query(&sql)
         .bind(webhook_id)
         .bind(run_id)
@@ -580,6 +622,74 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_closes_pending_runs_and_the_row_that_shows_them() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let hook = create(&pool, sample("u1", "hash-sweep")).await.unwrap();
+        let chat = session_core::db::create_session(&pool, "u1").await.unwrap();
+        let done = record_run_start(&pool, &hook.id, &chat.id, "p", "{}", "fire")
+            .await
+            .unwrap();
+        finish_run(&pool, &done, "ok", None).await.unwrap();
+        mark_fired(&pool, &hook.id, "ok", Some(&chat.id), None)
+            .await
+            .unwrap();
+        let orphan = record_run_start(&pool, &hook.id, &chat.id, "p", "{}", "fire")
+            .await
+            .unwrap();
+
+        assert_eq!(sweep_interrupted_runs(&pool).await.unwrap(), 1);
+
+        let run = get_run(&pool, &hook.id, &orphan).await.unwrap().unwrap();
+        assert_eq!(run.status.as_deref(), Some("error"));
+        assert_eq!(run.error.as_deref(), Some(RUN_INTERRUPTED));
+        assert_eq!(run.session_id.as_deref(), Some(chat.id.as_str()));
+        let row = get(&pool, "u1", &hook.id).await.unwrap().unwrap();
+        assert_eq!(row.last_status.as_deref(), Some("error"));
+        assert_eq!(row.last_error.as_deref(), Some(RUN_INTERRUPTED));
+        assert_eq!(
+            get_run(&pool, &hook.id, &done)
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("ok")
+        );
+    }
+
+    #[tokio::test]
+    async fn runs_report_a_deleted_chat() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let hook = create(&pool, sample("u1", "hash-deleted")).await.unwrap();
+        let chat = session_core::db::create_session(&pool, "u1").await.unwrap();
+        let run = record_run_start(&pool, &hook.id, &chat.id, "p", "{}", "fire")
+            .await
+            .unwrap();
+        assert!(
+            !get_run(&pool, &hook.id, &run)
+                .await
+                .unwrap()
+                .unwrap()
+                .chat_deleted
+        );
+
+        session_core::db::delete_session(&pool, "u1", &chat.id)
+            .await
+            .unwrap();
+
+        assert!(
+            get_run(&pool, &hook.id, &run)
+                .await
+                .unwrap()
+                .unwrap()
+                .chat_deleted
+        );
+        assert!(list_runs(&pool, &hook.id, 50).await.unwrap()[0].chat_deleted);
     }
 
     #[tokio::test]

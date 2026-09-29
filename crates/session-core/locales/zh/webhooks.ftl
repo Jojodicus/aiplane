@@ -62,6 +62,7 @@ webhooks-runs-page-name = Webhook 运行记录
 webhooks-runs-intro = 最近的触发和重新运行。打开某次运行以阅读其对话，或使用不同的提示词重新运行其载荷。
 webhooks-runs-empty = 还没有运行记录。触发该 Webhook 后即可在此查看历史。
 webhooks-run-open = 打开对话
+webhooks-run-chat-deleted = 对话已删除
 webhooks-run-rerun = 重新运行
 webhooks-run-source-fire = 触发
 webhooks-run-source-rerun = 重新运行

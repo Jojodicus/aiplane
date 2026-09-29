@@ -67,7 +67,11 @@
 								{#if run.error}<p class="mt-0.5 text-xs text-error">{run.error}</p>{/if}
 							</div>
 							<div class="flex shrink-0 items-center gap-3 self-end text-sm sm:self-auto">
-								{#if run.session_id}<a class="link link-hover" href="{base}/chat/{run.session_id}">{t('scheduled-run-open')}</a>{/if}
+								{#if run.chat_deleted}
+									<span class="badge badge-sm badge-outline text-base-content/60">{t('scheduled-run-chat-deleted')}</span>
+								{:else if run.session_id}
+									<a class="link link-hover" href="{base}/chat/{run.session_id}">{t('scheduled-run-open')}</a>
+								{/if}
 							</div>
 						</li>
 					{:else}

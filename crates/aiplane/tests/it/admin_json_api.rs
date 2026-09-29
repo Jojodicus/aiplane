@@ -1432,6 +1432,72 @@ async fn workspace_surfaces_round_trip() {
         "scheduled model choices expose compliance metadata: {scheduled}"
     );
 
+    // The run history tells a deleted chat apart from a run that never
+    // opened one, so a dead link never reads as "no chat".
+    let action_id = scheduled["actions"][0]["id"].as_str().unwrap();
+    let kept = session_core::db::create_session(&state.db, "boss")
+        .await
+        .unwrap();
+    let gone = session_core::db::create_session(&state.db, "boss")
+        .await
+        .unwrap();
+    for session in [&kept.id, &gone.id] {
+        let run = aiplane_runtime::server::scheduled::record_run_start(&state.db, action_id)
+            .await
+            .unwrap();
+        aiplane_runtime::server::scheduled::finish_run(&state.db, &run, "ok", Some(session), None)
+            .await
+            .unwrap();
+    }
+    session_core::db::delete_session(&state.db, "boss", &gone.id)
+        .await
+        .unwrap();
+    let resp = app
+        .serve(req(
+            rama::http::Method::GET,
+            &format!("/api/v0/scheduled/{action_id}/runs"),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let runs: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+    let deleted_flag = |session: &str| {
+        runs["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["session_id"] == session)
+            .map(|run| run["chat_deleted"].clone())
+            .unwrap()
+    };
+    assert_eq!(deleted_flag(&kept.id), false);
+    assert_eq!(deleted_flag(&gone.id), true);
+
+    // The list row learns it too, so it never links into the deleted chat.
+    aiplane_runtime::server::scheduled::mark_ran(
+        &state.db,
+        action_id,
+        "ok",
+        Some(&gone.id),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let resp = app
+        .serve(req(
+            rama::http::Method::GET,
+            "/api/v0/scheduled",
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    let listed: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+    assert_eq!(listed["actions"][0]["last_chat_deleted"], true);
+
     // Webhooks: create returns the one-time secret.
     let resp = app
         .serve(req(

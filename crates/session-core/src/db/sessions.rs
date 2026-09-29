@@ -198,6 +198,25 @@ pub async fn latest_session(pool: &Pool, user_id: &str) -> Result<Option<Session
     row.as_ref().map(map_session).transpose()
 }
 
+/// Which of `ids` still name a session. Lets a page that holds chat ids it did
+/// not create (a schedule's runs, a webhook's fires) tell a deleted chat apart
+/// from a live one in one query rather than one per row.
+pub async fn existing_session_ids(
+    pool: &Pool,
+    ids: &[&str],
+) -> Result<std::collections::HashSet<String>, DbError> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let sql = format!("SELECT id FROM chat_sessions WHERE id IN ({placeholders})");
+    let mut query = sqlx::query_scalar::<_, String>(&sql);
+    for id in ids {
+        query = query.bind(*id);
+    }
+    Ok(query.fetch_all(pool).await?.into_iter().collect())
+}
+
 /// Delete a session (cascades to turns + tool_calls). Returns true iff
 /// a row was actually removed — caller uses this to send a clean toast
 /// vs a "not found" one.
