@@ -355,6 +355,12 @@ is *skipped* rather than failed — a tag must not go red over an item nobody ha
 created yet. (It did once: `v2609.2.0` gated on `CWS_SERVICE_ACCOUNT` alone, so
 the publish ran without an id and failed the release pipeline.)
 
+While a submission is **in review**, the store refuses the next upload, so a tag
+cut during a review goes red on this job alone — every image and the chart are
+already out. Re-run the failed job once the review clears
+(`gh run rerun <id> --failed`). The script prints the store's own error status
+and message for a refused call, never the raw body or any credential.
+
 `minimum_chrome_version` is **127**, which is where `chrome.action.openPopup()`
 arrived. On anything older the extension would install and then never be able
 to ask to be switched on, which is worse than refusing to install.

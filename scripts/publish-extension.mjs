@@ -38,7 +38,8 @@
 import { createSign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-const API = 'https://chromewebstore.googleapis.com';
+// Overridable so the tests can stand up a fake store; CI never sets it.
+const API = process.env.CWS_API ?? 'https://chromewebstore.googleapis.com';
 const SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
 
 class PublishError extends Error {}
@@ -85,17 +86,36 @@ async function accessToken(key) {
 	return body.access_token;
 }
 
-/** A store call, with the failure spelled out — these are hard to debug blind. */
-async function call(url, token, init = {}) {
-	const response = await fetch(url, {
+/**
+ * A store call, with the failure spelled out — these are hard to debug blind.
+ *
+ * Only the fields of Google's error envelope are reported, never the raw
+ * body: they name the reason ("the item is pending review") and nothing else,
+ * so they are safe in a public log where an arbitrary body is not.
+ */
+async function call(path, token, init = {}) {
+	const response = await fetch(`${API}${path}`, {
 		...init,
 		headers: { authorization: `Bearer ${token}`, ...(init.headers ?? {}) }
 	});
 	const text = await response.text();
 	if (!response.ok) {
-		throw new Error(`${init.method ?? 'GET'} ${url} → ${response.status}\n${text}`);
+		throw new PublishError(
+			`Chrome Web Store ${init.method ?? 'GET'} ${path} failed: ${describeStoreError(response.status, text)}`
+		);
 	}
 	return text ? JSON.parse(text) : {};
+}
+
+function describeStoreError(httpStatus, text) {
+	let error;
+	try {
+		error = JSON.parse(text).error;
+	} catch {}
+	const reason = [error?.status, error?.message].filter((part) => typeof part === 'string');
+	return reason.length > 0
+		? `HTTP ${httpStatus} ${reason.join(': ').slice(0, 500)}`
+		: `HTTP ${httpStatus} (no error details in the response)`;
 }
 
 async function main() {
@@ -136,14 +156,14 @@ async function main() {
 	// so a re-run of the same tag fails here rather than halfway through.
 	const payload = await readFile(zip);
 	console.log(`uploading ${zip} (${payload.length} bytes)`);
-	await call(`${API}/upload/v2/${item}:upload?uploadType=media`, token, {
+	await call(`/upload/v2/${item}:upload?uploadType=media`, token, {
 		method: 'POST',
 		headers: { 'content-type': 'application/zip' },
 		body: payload
 	});
 
 	console.log('publishing');
-	await call(`${API}/v2/${item}:publish`, token, {
+	await call(`/v2/${item}:publish`, token, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		// The default: submit for review and go live once it passes. A staged
@@ -154,7 +174,7 @@ async function main() {
 	// Say what actually happened. "Published" is misleading on its own: the
 	// item is in review, which for this extension (debugger permission, broad
 	// hosts) takes days rather than minutes.
-	const status = await call(`${API}/v2/${item}:fetchStatus`, token);
+	const status = await call(`/v2/${item}:fetchStatus`, token);
 	console.log(`submitted — status: ${JSON.stringify(status)}`);
 }
 
