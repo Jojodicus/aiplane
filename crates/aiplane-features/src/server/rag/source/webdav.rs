@@ -64,7 +64,8 @@ const FIELDS: &[ConfigField] = &[
     ConfigField {
         key: "base_url",
         label: "Server URL",
-        help: "Root of the server, e.g. https://cloud.example.com — no path.",
+        help: "Root of the server, e.g. https://cloud.example.com — no path. Plain \
+               http:// is accepted only for localhost.",
         kind: FieldKind::Url,
         required: true,
         default: None,
@@ -175,6 +176,12 @@ impl WebdavProvider {
         if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
             return Err(ProviderError::Config(format!(
                 "Server URL must start with http:// or https:// (got `{base_url}`)"
+            )));
+        }
+        if base_url.starts_with("http://") && !is_loopback(&base_url) {
+            return Err(ProviderError::Config(format!(
+                "`{base_url}` is plain http, which would send the app password in cleartext \
+                 on every request — use the server's https:// address"
             )));
         }
         let username = cfg.require("username")?.to_string();
@@ -657,6 +664,17 @@ fn merge(into: &mut DavResponse, from: DavResponse) {
 
 /// `HTTP/1.1 200 OK` → true. Anything non-2xx (typically `404 Not Found`
 /// for properties the server doesn't implement) → false.
+fn is_loopback(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| match u.host()? {
+            url::Host::Domain(d) => Some(d.eq_ignore_ascii_case("localhost")),
+            url::Host::Ipv4(ip) => Some(ip.is_loopback()),
+            url::Host::Ipv6(ip) => Some(ip.is_loopback()),
+        })
+        .unwrap_or(false)
+}
+
 fn is_success_status(status_line: &str) -> bool {
     status_line
         .split_whitespace()
@@ -836,6 +854,39 @@ mod tests {
             reqwest::Client::new(),
         )
         .expect("valid config")
+    }
+
+    fn config_error(base_url: &str) -> Option<String> {
+        let values = [("base_url", base_url), ("username", "svc")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let secrets = [("password".to_string(), "app-pw".to_string())]
+            .into_iter()
+            .collect();
+        WebdavProvider::from_config(
+            &ProviderConfig::new(values, secrets),
+            reqwest::Client::new(),
+        )
+        .err()
+        .map(|e| e.to_string())
+    }
+
+    #[test]
+    fn plain_http_to_a_remote_host_is_refused_because_basic_auth_would_leak() {
+        let err = config_error("http://cloud.example.com").expect("must be refused");
+        assert!(err.contains("https://"), "{err}");
+    }
+
+    #[test]
+    fn plain_http_to_loopback_is_allowed() {
+        for url in [
+            "http://127.0.0.1:8099",
+            "http://localhost:8080",
+            "http://[::1]:8080",
+        ] {
+            assert_eq!(config_error(url), None, "{url}");
+        }
     }
 
     #[test]

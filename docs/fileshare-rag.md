@@ -180,6 +180,11 @@ asserts that a nested edit moves the root etag, and that `oc:fileid` survives
 a MOVE. See [Testing](#testing) — if either stopped holding, a cheap re-sync
 would silently miss changes, or a reorganised folder would re-OCR itself.
 
+The provider authenticates with HTTP Basic, so every request carries the app
+password. A plain `http://` server URL is therefore refused unless it points
+at loopback (`localhost`, `127.0.0.0/8`, `::1`): the local test servers and
+the wiremock suite use that, and nothing else should.
+
 ### The Google Drive provider
 
 Drive is the second provider, and it was chosen partly because it breaks three
