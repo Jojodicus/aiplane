@@ -39,12 +39,15 @@ Default target: `origin/main`'s HEAD. If the user names a sha, use that — and 
 git fetch origin main --tags --quiet
 git status --short
 git rev-parse HEAD origin/main       # the release candidate (should match)
-gh run list --branch main --workflow ci.yml --limit 5 \
-  --json databaseId,headSha,status,conclusion,url
+gh run list --branch main --limit 20 \
+  --json databaseId,headSha,status,conclusion,workflowName,url \
+  | jq -c '.[] | select(.workflowName == "CI")'
 ```
 
-⚠️ Use `--workflow ci.yml`, **not** `--workflow CI`: filtering by the display name
-returns stale runs from weeks ago and makes a green HEAD look untested.
+⚠️ Never use `gh run list --workflow …` here, neither `CI` nor `ci.yml`: both
+have returned a run from weeks earlier while the current one was in progress,
+which makes a green HEAD look untested or an untested one look green. Filter
+on `workflowName` in the output instead.
 
 The run for the exact target sha must be `completed` / `success`.
 - **Running** → wait: `gh run watch <id> --exit-status`. Never tag on a guess.
@@ -87,13 +90,20 @@ from an earlier session does not.
 ## 4. Watch the tag pipeline
 
 ```bash
-gh run list --workflow ci.yml --limit 3 --json databaseId,headBranch,event,status,url
+gh run list --limit 10 --json databaseId,headBranch,workflowName,status,url \
+  | jq -c '.[] | select(.workflowName == "CI" and .headBranch == "v2609.3.0")'
 gh run watch <id> --exit-status
 ```
 
 The tag pipeline re-runs the **full** suite (lint, tests, release build) and only
 publishes if green — so a red tag build ships nothing. Last, it creates the
 GitHub Release entry. Expect ~20–30 minutes; run the watch in the background.
+
+A red **`chrome extension`** job alone is expected while an earlier extension
+submission is still in Web Store review: the store refuses the next upload, but
+every image and the chart are already published. Report it, and re-run the job
+once the review clears (`gh run rerun <id> --failed`). See
+`docs/browser-control.md`.
 
 ## 5. Verify
 
