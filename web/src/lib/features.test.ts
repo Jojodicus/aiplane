@@ -11,16 +11,17 @@ test('a feature page and its sub-pages resolve to the same feature', () => {
 	assert.equal(featureForRoute('/rag/42/edit'), 'rag');
 	assert.equal(featureForRoute('/rag/profiles'), 'rag');
 	assert.equal(featureForRoute('/usage'), 'usage');
+	assert.equal(featureForRoute('/settings/notifications'), 'push');
 	assert.equal(featureForRoute('/admin/limits'), 'limits');
 });
 
 test('both skills pages hang off the one skills switch', () => {
-	assert.equal(featureForRoute('/skills'), 'skills');
+	assert.equal(featureForRoute('/tools/skills'), 'skills');
 	assert.equal(featureForRoute('/admin/skills'), 'skills');
 });
 
 test('an ungated route needs no feature', () => {
-	for (const path of ['/', '/chat', '/chat/abc', '/memory', '/scheduled', '/tokens', '/admin/users']) {
+	for (const path of ['/', '/chat', '/chat/abc', '/settings/memory', '/scheduled', '/settings/tokens', '/admin/users']) {
 		assert.equal(featureForRoute(path), null, path);
 	}
 });
@@ -47,14 +48,14 @@ test('a gateway that reports no feature list gates nothing', () => {
 
 test('nav entries for a disabled feature are dropped, ungated ones stay', () => {
 	const links = [
-		['nav-memory', '/memory', 'folder'],
+		['nav-memory', '/settings/memory', 'folder'],
 		['nav-usage', '/usage', 'chart'],
 		['nav-comfyui', '/admin/comfyui', 'sparkles'],
 		['nav-rag', '/rag', 'database']
 	] as const;
 	assert.deepEqual(
 		visibleNavLinks(links, ['rag', 'push']).map(([, path]) => path),
-		['/memory', '/rag']
+		['/settings/memory', '/rag']
 	);
 	assert.deepEqual(visibleNavLinks(links, undefined).length, 4);
 });

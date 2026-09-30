@@ -69,7 +69,7 @@
 	}
 
 	async function toggle(tool: ToolEntry) {
-		if (saving) return;
+		if (saving || tool.configuration) return;
 		saving = tool.key;
 		notice = null;
 		try {
@@ -89,7 +89,6 @@
 </script>
 
 <div class="w-full">
-	<h1 class="mb-2 text-2xl font-bold">{t('tools-heading')}</h1>
 	<p class="mb-6 text-sm text-base-content/60">{t('tools-description')}</p>
 
 {#if error}

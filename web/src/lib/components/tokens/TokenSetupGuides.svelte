@@ -40,7 +40,7 @@
 	<div class="alert alert-info"><span>{t('tokens-guides-before')}</span></div>
 	<nav class="tabs tabs-box max-w-full overflow-x-auto" aria-label={t('tokens-guides-heading')}>
 		{#each GUIDE_TABS as guide}
-			<a href="{base}/tokens?tab=guides&client={guide}" class="tab whitespace-nowrap {client === guide ? 'tab-active' : ''}" aria-current={client === guide ? 'page' : undefined}>{t(labels[guide])}</a>
+			<a href="{base}/settings/tokens?tab=guides&client={guide}" class="tab whitespace-nowrap {client === guide ? 'tab-active' : ''}" aria-current={client === guide ? 'page' : undefined}>{t(labels[guide])}</a>
 		{/each}
 	</nav>
 

@@ -120,10 +120,9 @@ The rama proxy router resolves auth inline at the top of each handler (no middle
 4. Bump `last_used_at` on bearer hits (debounced — at most once per minute per token).
 5. Build a `UserContext` with `user_id`, role set, and the allowed-tools set derived from `Resolver::allowed_tools`.
 
-The distinction between API routes (`/v1/*`, `/api/v0/*`) and page routes (`/`, `/tokens`, `/chat`) only matters for the *failure* mode: API routes return 401 JSON, page routes 303 to `/login`. The lookup itself is the same.
+The distinction between API routes (`/v1/*`, `/api/v0/*`) and page routes (`/`, `/settings/tokens`, `/chat`) only matters for the *failure* mode: API routes return 401 JSON, page routes 303 to `/login`. The lookup itself is the same.
 
 ## What's intentionally out of scope (for now)
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.
 - **Service-to-service auth** — no machine accounts yet. When we add them, they're a separate token kind with their own table and explicit RBAC config.
-- **Per-model token scopes** — a token can already be scoped to a subset of its user's *tools* (and MCP ask/off policy) from the `/tokens` page; scoping a token to a subset of *models* (e.g. "transcription-only") is not yet implemented — every token can reach all of its user's permitted models.

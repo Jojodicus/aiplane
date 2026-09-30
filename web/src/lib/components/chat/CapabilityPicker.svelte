@@ -175,7 +175,7 @@
 				</footer>
 			{:else}
 				<div class="flex flex-1 items-center justify-center p-6 text-sm">
-					<p>{t('chat-render-no-tools-prefix')} <a class="link" href="{base}/integrations">{t('nav-integrations')}</a>{t('chat-render-no-tools-suffix')}</p>
+					<p>{t('chat-render-no-tools-prefix')} <a class="link" href="{base}/tools/integrations">{t('nav-integrations')}</a>{t('chat-render-no-tools-suffix')}</p>
 				</div>
 			{/if}
 		</div>

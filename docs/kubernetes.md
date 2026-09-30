@@ -364,7 +364,7 @@ screen redirects through it — so it gets its own hostname.
 
 4. In AIplane: `/admin/connectors` → **Google Workspace** → URL
    `http://localhost:8000/mcp` (no trailing slash) → Save → Enable. Users then
-   connect their own account at `/integrations`.
+   connect their own account at `/tools/integrations`.
 
 Its OAuth store gets a small PVC of its own (`<name>-gworkspace-oauth`). That
 is not a detail: the store holds AIplane's registered client, the

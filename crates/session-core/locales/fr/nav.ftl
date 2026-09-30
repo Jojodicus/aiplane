@@ -1,12 +1,12 @@
 # STATUS: llm-generated, unreviewed — pending native-speaker QA
 
 nav-brand = AIplane
+user-settings-heading = Mes paramètres
 nav-memory = Mémoire
 nav-scheduled = Planifié
 nav-webhooks = Webhooks
 nav-integrations = Intégrations
 nav-tools = Outils
-nav-tokens = Jetons
 nav-usage = Utilisation
 nav-users = Utilisateurs
 nav-admin-tokens = Jetons d'API
@@ -35,7 +35,6 @@ nav-sign-out = Se déconnecter
 
 nav-groups = Groupes
 
-nav-my-skills = Mes compétences
 nav-settings = Paramètres
 
 # The SPA shell's own chrome: the mobile drawer and the theme toggle,
@@ -62,3 +61,5 @@ login-continue-button = Continuer avec OIDC →
 login-source-link = Code source · AGPL-3.0
 login-page-title = Sign in — AIplane
 page-title-branded = { $title } — AIplane
+
+admin-access-heading = Accès et limites

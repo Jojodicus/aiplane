@@ -5,7 +5,7 @@ servers (Gmail, GitHub, Atlassian, Discord, …) at `/admin/connectors`. Each
 connector has a **scope**:
 
 - **per-user** — each user connects the ones they want, with **their own**
-  Google/GitHub/Atlassian account, at `/integrations`. Tokens are stored
+  Google/GitHub/Atlassian account, at `/tools/integrations`. Tokens are stored
   per-user, encrypted at rest, and refreshed in the background.
 - **global** — one shared identity for the whole gateway (e.g. a Discord bot).
   No per-user sign-in: the connector is enabled by the admin and its tools are
@@ -56,7 +56,7 @@ registered verbatim in the provider's OAuth app.
 Every connector has a **scope** (the `scope` column, set on the admin form):
 
 - **Per-user** (default) — each user connects their own account/token at
-  `/integrations`; the credential and connection live per-user. This is the
+  `/tools/integrations`; the credential and connection live per-user. This is the
   right model whenever the identity is the *user's* (Gmail, GitHub, …). All four
   auth models above apply.
 - **Global** — one shared identity for the whole gateway. There is no per-user
@@ -134,7 +134,7 @@ Workspace connector*. Two things worth flagging here:
   front. Trim the scopes on the connector for a narrower consent — changing them
   means users must disconnect + reconnect.
 
-Each user then opens `/integrations → Google Workspace → Connect` and authorizes
+Each user then opens `/tools/integrations → Google Workspace → Connect` and authorizes
 once with their own Google account — no per-user setup, no preview.
 
 ### The server's OAuth state must be persisted
@@ -259,7 +259,7 @@ directory-published or workspace-internal apps are permitted.
 4. Copy the **Client ID** and **Client Secret** from **Basic Information**.
 5. In `/admin/connectors`, edit Slack, enter client ID + secret, save, enable.
 
-Each user then authorizes their own Slack account at `/integrations`. Slack
+Each user then authorizes their own Slack account at `/tools/integrations`. Slack
 speaks streamable HTTP only — the legacy `/sse` transport isn't offered here.
 
 ---
@@ -298,7 +298,7 @@ connectors:
 Kiwi's MCP server (`https://mcp.kiwi.com`) is public and unauthenticated — no
 API key, no OAuth, nothing to configure. **Zero admin config**: just enable
 the connector in `/admin/connectors`. Users still connect individually at
-`/integrations` (there's no credential to enter — the click just opts the
+`/tools/integrations` (there's no credential to enter — the click just opts the
 tools into that user's chats).
 
 ---
@@ -310,7 +310,7 @@ internal ERP, the GitLab CE bridge above):
 
 1. In `/admin/connectors`, add a connector with **auth = static bearer** and the
    server's streamable-HTTP URL.
-2. Each user pastes their own token when connecting at `/integrations`.
+2. Each user pastes their own token when connecting at `/tools/integrations`.
 
 The server must actually have its MCP endpoint enabled. A `404` with a body
 like `MCP integrations are not enabled on this installation` means the *server*

@@ -24,7 +24,7 @@
 //!
 //! # SPA history fallback
 //!
-//! A client-side route like `/tokens` has no file on disk. Anything that
+//! A client-side route like `/settings/tokens` has no file on disk. Anything that
 //! is not an existing file (and not a traversal) falls back to
 //! `index.html`, which lets the SPA's router take over. This is the standard
 //! SPA-fallback behaviour a static host must provide.
@@ -92,17 +92,14 @@ pub async fn spa_get(req: Request) -> Response {
 ///
 /// Kept in step with `web/src/routes/` by
 /// [`tests::the_client_routes_match_the_spa_source`].
-const SPA_ROUTES: [&str; 13] = [
+const SPA_ROUTES: [&str; 10] = [
     "admin",
     "chat",
-    "integrations",
     "login",
-    "memory",
     "rag",
     "scheduled",
+    "settings",
     "setup",
-    "skills",
-    "tokens",
     "tools",
     "usage",
     "webhooks",
@@ -441,8 +438,8 @@ mod tests {
     #[tokio::test]
     async fn spa_history_route_falls_back_to_index_html() {
         let (_d, root) = spa_tempdir();
-        // `/tokens` is a client route with no file on disk.
-        let resp = serve(&root, &get("/tokens")).await;
+        // `/settings/tokens` is a client route with no file on disk.
+        let resp = serve(&root, &get("/settings/tokens")).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = drain(resp).await;
         let s = String::from_utf8_lossy(&body);

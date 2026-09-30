@@ -137,27 +137,21 @@
 	// template rather than once at module scope.
 	type NavLink = [string, string, NavIconName];
 	const workspaceLinks: NavLink[] = [
-		['nav-memory', '/memory', 'folder'],
 		['nav-scheduled', '/scheduled', 'clock'],
 		['nav-webhooks', '/webhooks', 'send'],
-		['nav-integrations', '/integrations', 'plug'],
-		['nav-my-skills', '/skills', 'sparkles'],
 		['nav-tools', '/tools', 'sliders']
 	];
 	const accountLinks: NavLink[] = [
-		['nav-tokens', '/tokens', 'key'],
+		['user-settings-heading', '/settings', 'users'],
 		['nav-usage', '/usage', 'chart']
 	];
 	const adminLinks: NavLink[] = [
-		['nav-users', '/admin/users', 'users'],
-		['nav-admin-tokens', '/admin/tokens', 'key'],
-		['nav-groups', '/admin/groups', 'users'],
+		['admin-access-heading', '/admin/users', 'users'],
 		['nav-models', '/admin/models', 'cpu'],
 		['nav-rag', '/rag', 'database'],
 		['nav-skills', '/admin/skills', 'sparkles'],
 		['nav-connectors', '/admin/connectors', 'plug'],
 		['nav-comfyui', '/admin/comfyui', 'sparkles'],
-		['nav-limits', '/admin/limits', 'sliders'],
 		['nav-settings', '/admin/settings', 'sliders']
 	];
 

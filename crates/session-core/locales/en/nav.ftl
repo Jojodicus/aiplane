@@ -5,12 +5,12 @@
 # binaries render the same chrome).
 
 nav-brand = AIplane
+user-settings-heading = My settings
 nav-memory = Memory
 nav-scheduled = Scheduled
 nav-webhooks = Webhooks
 nav-integrations = Integrations
 nav-tools = Tools
-nav-tokens = Tokens
 nav-usage = Usage
 nav-users = Users
 nav-admin-tokens = API tokens
@@ -38,7 +38,6 @@ nav-search-aria = Search
 
 nav-sign-out = Sign out
 
-nav-my-skills = My Skills
 nav-settings = Settings
 
 # The SPA shell's own chrome: the mobile drawer and the theme toggle,
@@ -65,3 +64,5 @@ login-continue-button = Continue with OIDC →
 login-source-link = Source code · AGPL-3.0
 login-page-title = Sign in — AIplane
 page-title-branded = { $title } — AIplane
+
+admin-access-heading = Access & limits

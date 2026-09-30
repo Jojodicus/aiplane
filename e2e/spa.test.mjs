@@ -187,7 +187,7 @@ test("the sidebar keeps navigation compact and gives scrolling to conversations"
     const account = page.getByRole("button", { name: "Toggle Account section" });
     assert.equal(await workspace.getAttribute("aria-expanded"), "true");
     assert.equal(await account.getAttribute("aria-expanded"), "false");
-    assert.equal(await page.getByRole("link", { name: "Memory" }).count(), 1);
+    assert.equal(await page.getByRole("link", { name: "Tools" }).count(), 1);
     assert.equal(await page.getByRole("link", { name: "Tokens" }).count(), 0);
 
     const scrollOwners = await page.locator("aside").evaluate((aside) => {
@@ -201,7 +201,7 @@ test("the sidebar keeps navigation compact and gives scrolling to conversations"
     assert.equal(scrollOwners.primary, "visible");
     assert.equal(scrollOwners.conversations, "auto");
 
-    for (const label of ["Chat", "Memory", "Scheduled", "Webhooks", "Integrations", "My Skills", "Tools"]) {
+    for (const label of ["Chat", "Scheduled", "Webhooks", "Tools"]) {
         assert.equal(
             await page.getByRole("link", { name: label, exact: true }).locator("svg").count(),
             1,
@@ -211,6 +211,7 @@ test("the sidebar keeps navigation compact and gives scrolling to conversations"
 
     await account.click();
     assert.equal(await account.getAttribute("aria-expanded"), "true");
+    assert.equal(await page.getByRole("link", { name: "My settings" }).locator("svg").count(), 1);
     assert.match((await ctx.cookies()).find((cookie) => cookie.name === "nav_sections")?.value ?? "", /account/);
     await page.reload({ waitUntil: "networkidle" });
     assert.equal(
@@ -227,9 +228,9 @@ test("the sidebar keeps navigation compact and gives scrolling to conversations"
 test("a deep protected route reaches login without losing its destination", async () => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
-    await page.goto(`${BASE}/tokens`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${BASE}/settings/tokens`, { waitUntil: "domcontentloaded" });
     await page.waitForURL((u) => u.pathname === "/login", { timeout: 5000 });
-    assert.equal(await page.locator('input[name="return_to"]').getAttribute("value"), "/tokens");
+    assert.equal(await page.locator('input[name="return_to"]').getAttribute("value"), "/settings/tokens");
     await ctx.close();
 });
 

@@ -114,3 +114,7 @@ tokens-python-step-2 = Installieren Sie das OpenAI-Python-Paket mit python -m pi
 tokens-python-step-3 = Speichern Sie das Beispiel als chat.py. Ersetzen Sie YOUR_MODEL_ID durch eine nutzbare Chat-Modell-ID.
 tokens-python-finish = Führen Sie python chat.py aus. Speichern Sie das Token in einer Umgebungsvariable, nicht im Skript.
 tokens-guides-model-note = Sie brauchen eine Modell-ID? Verfügbare Modelle stehen in der Modellauswahl des Chats oder unter GET /v1/models mit Ihrem Token.
+
+notifications-loading = Benachrichtigungseinstellungen werden geladen …
+notifications-unavailable = Benachrichtigungen sind auf diesem Gateway derzeit nicht verfügbar. Bitten Sie eine Administratorin oder einen Administrator, die Push-Einstellungen zu prüfen.
+notifications-admin-settings-link = Push-Einstellungen öffnen

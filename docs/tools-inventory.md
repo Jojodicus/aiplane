@@ -29,6 +29,12 @@ itself a stable contract.
   to `enable_tools`). Several tools share one key: users reason about
   "Memory", not about `remember` and `recall` separately.
 
+The `/tools` UI shows admins read-only rows for optional image, GeoIP, and
+sandbox tools when their backend is absent. Their switches are disabled and
+link to the operator setup page; the registry and model tool list still omit
+them. Registered tools with missing storage, RAG indexer, or push setup are
+also marked unavailable on this page.
+
 ## Always registered
 
 No configuration required. A tool here can still fail at runtime when its

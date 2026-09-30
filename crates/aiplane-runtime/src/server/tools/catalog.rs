@@ -872,6 +872,38 @@ pub fn entries(
     out
 }
 
+/// Catalog rows for tools whose registration requires an operator-managed
+/// backend. These are shown read-only to admins when the backend is absent.
+pub fn unregistered_configurable_entries(registry: &ToolRegistry) -> Vec<ToolEntry> {
+    const IDS: &[&str] = &[
+        "lookup_ip",
+        "generate_image",
+        "edit_image",
+        "run_in_sandbox",
+        "generate_document",
+        "convert_document",
+        "edit_presentation",
+        "capture_webpage",
+        "browse_page",
+        "read_sandbox_output",
+        "render_excalidraw",
+        "render_typst",
+        "render_video",
+    ];
+    IDS.iter()
+        .filter(|id| !registry.contains(id))
+        .filter_map(|id| {
+            display_meta(id).map(|(title, description)| ToolEntry {
+                key: (*id).to_string(),
+                title: title.to_string(),
+                tech: (*id).to_string(),
+                description: description.to_string(),
+                category: category_for(id),
+            })
+        })
+        .collect()
+}
+
 /// Drop every granted tool id whose toggle key the user disabled.
 /// Honours the per-template typst collapse: disabling `typst_<id>` removes
 /// that template's render + `_edit`/`_read`/`_pptx` ids at once.
@@ -881,6 +913,19 @@ pub fn retain_enabled(allowed: &mut Vec<String>, disabled_keys: &HashSet<String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn configurable_tools_have_catalog_rows_even_without_a_registered_backend() {
+        let registry = super::ToolRegistry::new();
+        let entries = super::unregistered_configurable_entries(&registry);
+        for id in [
+            "lookup_ip",
+            "generate_image",
+            "run_in_sandbox",
+            "browse_page",
+        ] {
+            assert!(entries.iter().any(|entry| entry.key == id), "missing {id}");
+        }
+    }
     use super::*;
     use crate::server::tools::time::CurrentTimestamp;
 

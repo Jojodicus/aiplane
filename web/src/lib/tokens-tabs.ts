@@ -1,4 +1,4 @@
-export const TOKEN_TABS = ['tokens', 'guides', 'account'] as const;
+export const TOKEN_TABS = ['tokens', 'guides'] as const;
 export type TokenTab = (typeof TOKEN_TABS)[number];
 
 export const GUIDE_TABS = ['opencode', 'claude', 'python'] as const;

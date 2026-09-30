@@ -51,7 +51,7 @@
 #
 # Then in the (native) gateway: /admin/connectors → Google Workspace → URL
 # http://localhost:8000/mcp (no trailing slash) → Save → Enable, then
-# /integrations → Connect.
+# /tools/integrations → Connect.
 #
 # ── Full stack (Linux server, behind a TLS reverse proxy) ──────────────────
 # Put a reverse proxy in front (it terminates TLS for both the gateway and the

@@ -6,7 +6,7 @@
 //! in-memory SQLite, a wiremock OpenAI-style chat + transcription
 //! backend, and a pre-seeded session — then listens on 127.0.0.1:8080.
 //!
-//! Every page is reachable here: `/`, `/login`, `/tokens`, `/chat`,
+//! Every page is reachable here: `/`, `/login`, `/settings/tokens`, `/chat`,
 //! `/theme/toggle`, the `/api/v0/*` JSON routes — same code path as
 //! production, the only thing faked is the upstream LLM and the OIDC
 //! handoff. Use this for browser-driven debugging of anything on the
@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use aiplane::rama_server::{RamaState, SessionStore, router};
 use aiplane_core::server::config::{
-    ComfyuiConfig, FeedbackConfig, GatewayConfig, RagConfig, SkillsConfig,
+    ComfyuiConfig, FeedbackConfig, GatewayConfig, RagConfig, SkillsConfig, TypstConfig,
 };
 use aiplane_core::server::rbac::RoleConfig;
 use aiplane_core::server::rbac::{Resolver, config::RbacConfig, config::RoleMapping};
@@ -39,11 +39,11 @@ use aiplane_core::server::upstreams::{
 };
 use aiplane_core::server::{Config, db};
 use aiplane_features::server::comfyui::{ChatUpdateRegistry, Client, ComfyuiStore};
+use aiplane_features::server::push::PushSender;
 use aiplane_features::server::skills::{SkillStore, UserSkillStore};
 use aiplane_runtime::server::AppState;
 use aiplane_runtime::server::comfyui_tool::ComfyuiHandle;
-use aiplane_runtime::server::tools::{ToolRegistry, echo, time};
-use aiplane_tools::{fetch_url, location, read_skill, search_web};
+use aiplane_tools::{enable_tools, read_skill};
 use jiff::{Timestamp, ToSpan};
 use rama::net::address::SocketAddress;
 use wiremock::matchers::{method, path};
@@ -481,6 +481,11 @@ async fn main() -> anyhow::Result<()> {
             },
             RoleMapping {
                 oidc_claim: "groups".into(),
+                oidc_value: "admin".into(),
+                role: "admin".into(),
+            },
+            RoleMapping {
+                oidc_claim: "groups".into(),
                 oidc_value: "engineering".into(),
                 role: "engineering".into(),
             },
@@ -497,6 +502,10 @@ async fn main() -> anyhow::Result<()> {
         ],
     };
     let config = Config {
+        typst: Some(TypstConfig {
+            templates_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/typst-templates"),
+        }),
         skills: Some(SkillsConfig {
             dir: skills_dir.clone(),
         }),
@@ -574,13 +583,19 @@ async fn main() -> anyhow::Result<()> {
     }
     let user_skill_store = Arc::new(UserSkillStore::new(skills_dir.join(".users")));
     let skill_store = Arc::new(SkillStore::load(skills_dir));
+    let typst_family = aiplane::tool_families::typst();
+    let typst_metas = aiplane_runtime::server::state::typst_template_metas(&config);
+    let base_tools = aiplane::tool_registry::base_registry(rbac.clone(), None)
+        .with(aiplane_tools::generate_image::GenerateImage)
+        .with(aiplane_tools::edit_image::EditImage)
+        .with_family_replaced(
+            aiplane_core::server::tool_naming::TYPST_PREFIX,
+            typst_family(&config, &Default::default()),
+        );
+    let bootstrap_tool = enable_tools::EnableTools::from_registry(&base_tools);
     let tools = Arc::new(
-        ToolRegistry::new()
-            .with(echo::Echo)
-            .with(time::CurrentTimestamp)
-            .with(fetch_url::FetchUrl)
-            .with(search_web::SearchWeb)
-            .with(location::GetUserLocation)
+        base_tools
+            .with(bootstrap_tool)
             .with(read_skill::ReadSkill::new(
                 skill_store.clone(),
                 user_skill_store.clone(),
@@ -601,10 +616,18 @@ async fn main() -> anyhow::Result<()> {
         )),
         chat_updates: ChatUpdateRegistry::default(),
     });
-    let app = AppState::new(config, pool.clone(), registry, tools, rbac)
+    let mut app = AppState::new(config, pool.clone(), registry, tools, rbac)
         .with_skills(skill_store)
         .with_user_skills(user_skill_store)
+        .with_typst_templates(typst_metas)
+        .with_tool_family_builder(typst_family)
         .with_comfyui(comfyui);
+    if app.config().push.enabled {
+        match PushSender::new(&app.db, &app.crypto, app.config().push.contact.clone()).await {
+            Ok(sender) => app = app.with_push(Arc::new(sender)),
+            Err(err) => tracing::warn!(error = %err, "dev UI Web Push unavailable"),
+        }
+    }
     // Enabled usage handle (90-day retention) so the /usage page renders real
     // aggregates instead of the "metrics disabled" banner. Spawn before the
     // pool is moved into the session store.
@@ -663,7 +686,7 @@ async fn main() -> anyhow::Result<()> {
         "dev gateway listening on http://{}",
         std::env::var("DEV_UI_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string())
     );
-    eprintln!("authed pages: /, /tokens, /chat, /theme/toggle, /api/v0/*");
+    eprintln!("authed pages: /, /settings/tokens, /chat, /theme/toggle, /api/v0/*");
     eprintln!("seed cookie (paste into playwright / curl):");
     eprintln!("    id={cookie}");
     eprintln!("non-admin (engineering) seed cookie:");
@@ -1383,7 +1406,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
         .await?;
     }
 
-    // --- API tokens (for the /tokens screenshot) — a mix of active (one
+    // --- API tokens (for the /settings/tokens screenshot) — a mix of active (one
     // recently used, one never) and a revoked one, all owned by `dev`. The
     // `hash` is a throwaway string: the page only lists tokens, it doesn't
     // authenticate with them. `created_at` is backdated; `touch`/`revoke`
@@ -1425,7 +1448,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
         }
     }
 
-    // Per-token scope + quota, so the /tokens panels and the /admin/tokens
+    // Per-token scope + quota, so the /settings/tokens panels and the /admin/tokens
     // register show a configured token rather than three default ones.
     if let Some((_, prod_id)) = token_ids.iter().find(|(n, _)| n == "Production API") {
         // The owner limits their own token to the two chat models.
@@ -1515,7 +1538,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
     use usage_db::{UsageKind, UsageRecord, UsageSource};
     let mut usage_rows: Vec<UsageRecord> = Vec::new();
     // Attribute the API traffic to the seeded token, so the per-token
-    // breakdown on /usage and the spend line on /tokens have real data.
+    // breakdown on /usage and the spend line on /settings/tokens have real data.
     let prod_token_id: Option<String> = token_ids
         .iter()
         .find(|(n, _)| n == "Production API")

@@ -5,7 +5,7 @@ import { selectedTokenTab, selectedGuideTab } from './tokens-tabs.ts';
 test('tokens page defaults to management and accepts only known tabs', () => {
 	assert.equal(selectedTokenTab(''), 'tokens');
 	assert.equal(selectedTokenTab('?tab=guides'), 'guides');
-	assert.equal(selectedTokenTab('?tab=account'), 'account');
+	assert.equal(selectedTokenTab('?tab=account'), 'tokens');
 	assert.equal(selectedTokenTab('?tab=unknown'), 'tokens');
 });
 

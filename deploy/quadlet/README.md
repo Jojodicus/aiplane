@@ -152,7 +152,7 @@ name is non-loopback.
 
 Then in AIplane's `/admin/connectors`, point **GitLab (self-managed / CE)**
 at `http://gitlab-mcp:3002/mcp` → Save → Enable. Each user connects at
-`/integrations` and pastes their own GitLab personal access token (scope
+`/tools/integrations` and pastes their own GitLab personal access token (scope
 `api`, or `read_api` for read-only). Full details, including the compose
 equivalent: [`../README.md`](../README.md#gitlab-self-managed--community-edition).
 

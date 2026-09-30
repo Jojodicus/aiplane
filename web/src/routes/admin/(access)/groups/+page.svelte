@@ -82,7 +82,7 @@
 <section class="flex w-full flex-col gap-4">
 	<header class="flex flex-col gap-3">
 		<div>
-			<h1 class="text-2xl font-bold">{t('groups-heading')}</h1>
+			<h2 class="text-xl font-semibold">{t('groups-heading')}</h2>
 			<p class="max-w-3xl text-sm text-base-content/70">{t('groups-intro')}</p>
 		</div>
 		<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('groups-heading')}>
@@ -108,7 +108,7 @@
 				<AdminGroupForm seedOidcValue={seedOidcValue} toolIds={data.tools.map((tool) => tool.id)} toolFamilies={data.tool_families} mcpTools={data.mcp_tools} skillNames={data.skill_names} onsave={save} />
 			{/key}
 			<div class="flex flex-col gap-4">
-				<h2 class="text-lg font-semibold">{t('groups-existing-heading')}</h2>
+				<h3 class="text-lg font-semibold">{t('groups-existing-heading')}</h3>
 				{#if data.groups.length === 0}
 					<p class="text-sm text-base-content/60">{t('groups-empty')}</p>
 				{:else}

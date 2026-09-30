@@ -57,7 +57,7 @@
 
 <section class="flex w-full flex-col gap-4">
 	<header class="flex flex-col gap-1">
-		<h1 class="text-2xl font-bold">{t('admin-users-heading')}</h1>
+		<h2 class="text-xl font-semibold">{t('admin-users-heading')}</h2>
 		{#if data?.allow_impersonation}
 			<p class="text-sm text-base-content/70">
 				{t('admin-users-desc-allowed-prefix')} <strong>{t('admin-users-impersonate-button')}</strong> {t('admin-users-desc-allowed-suffix')}
@@ -106,7 +106,7 @@
 
 		<section class="card mt-2 border border-base-300 bg-base-100">
 			<div class="card-body gap-2">
-				<h2 class="card-title text-base">{t('admin-users-audit-heading')}</h2>
+				<h3 class="card-title text-base">{t('admin-users-audit-heading')}</h3>
 				{#if data.audit.length === 0}
 					<p class="text-sm text-base-content/60">{t('admin-users-audit-empty')}</p>
 				{:else}

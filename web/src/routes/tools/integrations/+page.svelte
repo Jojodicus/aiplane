@@ -63,7 +63,6 @@
 </script>
 
 <div class="w-full">
-	<h1 class="mb-2 text-2xl font-bold">{t('integrations-heading')}</h1>
 	<p class="mb-6 text-sm text-base-content/60">{t('integrations-intro')}</p>
 	{#if error}<div class="alert alert-error mb-4"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-warning mb-4"><span>{notice}</span></div>{/if}

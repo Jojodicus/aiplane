@@ -32,3 +32,12 @@ tool-category-skills = Skills
 tool-category-images-media = Images & Media
 tool-category-comfyui-workflows = ComfyUI workflows
 tool-category-scheduled-actions = Scheduled actions
+
+tools-configure-link = Configure
+tools-needs-storage = Needs file storage.
+tools-needs-rag = Needs a knowledge base.
+tools-needs-push = Needs push notifications.
+tools-needs-geoip = Needs a GeoIP database.
+tools-needs-image-backend = Needs an image backend.
+tools-needs-sandbox = Needs a sandbox runner.
+tools-needs-sandbox-network = Needs sandbox network access.

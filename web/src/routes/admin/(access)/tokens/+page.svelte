@@ -44,7 +44,7 @@
 
 <section class="flex w-full flex-col gap-4">
 	<header class="flex flex-col gap-2">
-		<h1 class="text-2xl font-bold">{t('admin-tokens-heading')}</h1>
+		<h2 class="text-xl font-semibold">{t('admin-tokens-heading')}</h2>
 		<p class="text-sm text-base-content/70">{t('admin-tokens-blurb')}</p>
 	</header>
 

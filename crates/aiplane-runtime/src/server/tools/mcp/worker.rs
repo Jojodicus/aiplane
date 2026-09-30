@@ -137,7 +137,7 @@ async fn notify_needs_reconnect(state: &Arc<RamaState>, user_id: &str, connector
                 "push-connector-reconnect-body",
                 &i18n::args([("connector", name.clone().into())]),
             ),
-            url: "/integrations".to_string(),
+            url: "/tools/integrations".to_string(),
             // One connector, one notification — a later ping for the same
             // connector replaces it rather than stacking.
             tag: format!("connector-{connector_key}"),

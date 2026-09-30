@@ -53,7 +53,7 @@
 			const installed = await adminJson<{ name: string }>('/api/v0/skills', { method: 'POST', body });
 			notice = t('my-skills-toast-installed', { name: installed.name });
 			await refresh();
-			await goto(`/skills?skill=${encodeURIComponent(installed.name)}`);
+			await goto(`/tools/skills?skill=${encodeURIComponent(installed.name)}`);
 		} catch (caught) { notice = String(caught); }
 	}
 
@@ -62,7 +62,7 @@
 			const saved = await adminPost<{ name: string }>('/api/v0/skills', { name, manifest });
 			details = {};
 			await refresh();
-			await goto(`/skills?skill=${encodeURIComponent(saved.name)}`);
+			await goto(`/tools/skills?skill=${encodeURIComponent(saved.name)}`);
 		} catch (caught) { notice = String(caught); }
 	}
 
@@ -72,7 +72,7 @@
 			await adminDelete(`/api/v0/skills/${encodeURIComponent(selected.name)}`);
 			details = {};
 			await refresh();
-			await goto('/skills');
+			await goto('/tools/skills');
 		} catch (caught) { notice = String(caught); }
 	}
 
@@ -80,7 +80,7 @@
 </script>
 
 <div class="w-full">
-	<div class="flex items-center gap-2"><NavIcon name="sparkles" size={20} /><h1 class="m-0 text-2xl font-bold">{t('my-skills-heading')}</h1></div>
+	<div class="flex items-center gap-2"><NavIcon name="sparkles" size={20} /><h2 class="m-0 text-xl font-bold">{t('my-skills-heading')}</h2></div>
 	<p class="mb-4 mt-1 text-sm text-base-content/60">{t('my-skills-intro')}</p>
 	{#if error}<div class="alert alert-error mb-4 text-sm"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-warning mb-4 text-sm"><span>{notice}</span></div>{/if}

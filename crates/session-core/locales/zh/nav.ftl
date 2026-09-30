@@ -1,12 +1,12 @@
 # STATUS: llm-generated, unreviewed — pending native-speaker QA
 
 nav-brand = AIplane
+user-settings-heading = 我的设置
 nav-memory = 记忆
 nav-scheduled = 计划任务
 nav-webhooks = Webhook
 nav-integrations = 集成
 nav-tools = 工具
-nav-tokens = 令牌
 nav-usage = 用量
 nav-users = 用户
 nav-admin-tokens = API 令牌
@@ -35,7 +35,6 @@ nav-sign-out = 退出登录
 
 nav-groups = 组
 
-nav-my-skills = 我的技能
 nav-settings = 设置
 
 # The SPA shell's own chrome: the mobile drawer and the theme toggle,
@@ -62,3 +61,5 @@ login-continue-button = 使用 OIDC 继续 →
 login-source-link = 源代码 · AGPL-3.0
 login-page-title = Sign in — AIplane
 page-title-branded = { $title } — AIplane
+
+admin-access-heading = 访问与限额

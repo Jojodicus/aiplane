@@ -1,3 +1,5 @@
+import { sectionTabs, selectedSectionTab } from './section-tabs.ts';
+
 /**
  * Sidebar highlighting.
  *
@@ -11,6 +13,8 @@
  * for any entry whose path is a string prefix of another.
  */
 export function navItemActive(pathname: string, base: string, path: string): boolean {
+	const current = base && pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
+	if (path === '/admin/users' && selectedSectionTab(current, sectionTabs.adminAccess)) return true;
 	const target = `${base}${path}`;
 	return pathname === target || pathname === path || under(pathname, target) || under(pathname, path);
 }

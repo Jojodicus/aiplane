@@ -24,3 +24,4 @@
 
 pub mod rama_server;
 pub mod tool_families;
+pub mod tool_registry;

@@ -16,8 +16,9 @@ export const FEATURE_ROUTES: readonly (readonly [string, string])[] = [
 	['/admin/comfyui', 'comfyui'],
 	['/admin/limits', 'limits'],
 	['/admin/skills', 'skills'],
+	['/settings/notifications', 'push'],
 	['/rag', 'rag'],
-	['/skills', 'skills'],
+	['/tools/skills', 'skills'],
 	['/usage', 'usage']
 ] as const;
 

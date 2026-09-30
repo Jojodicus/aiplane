@@ -56,7 +56,7 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
 
     // Seed the canonical fixture so the list starts from a known state.
     await page.goto(`${BASE}/__dev/seed-session`);
-    await page.goto(`${BASE}/tokens`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/settings/tokens`, { waitUntil: "networkidle" });
     await page.locator("#token-list, ul.divide-y li, .card-body li").first().waitFor({
         timeout: 5000,
     });
@@ -134,7 +134,7 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
     await page.getByRole("link", { name: "Account", exact: true }).click();
     await page.getByRole("heading", { name: "Account", exact: true }).waitFor();
     assert.equal(await page.getByRole("heading", { name: "Your tokens", exact: true }).count(), 0);
-    await page.getByRole("link", { name: "Tokens", exact: true }).click();
+    await page.getByRole("navigation", { name: "My settings" }).getByRole("link", { name: "API tokens", exact: true }).click();
     assert.ok(await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth));
 
     // Revoke the new row (confirm() is native — accept it).
@@ -159,7 +159,7 @@ test("setup guides show the current gateway URL and each client setup", async ()
     const ctx = await browser.newContext();
     await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
     const page = await ctx.newPage();
-    await page.goto(`${BASE}/tokens?tab=guides`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/settings/tokens?tab=guides`, { waitUntil: "networkidle" });
 
     await page.getByRole("heading", { name: "Set up a client" }).waitFor();
     assert.match(await page.locator("article pre").first().textContent(), /"baseURL": ".*\/v1"/);

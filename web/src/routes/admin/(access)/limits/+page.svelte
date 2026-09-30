@@ -33,7 +33,7 @@
 </script>
 
 <div class="flex w-full flex-col gap-4">
-	<header class="flex flex-col gap-1"><h1 class="m-0 text-2xl font-semibold">{t('limits-heading')}</h1><p class="m-0 text-sm text-base-content/70">{t('limits-intro')}</p></header>
+	<header class="flex flex-col gap-1"><h2 class="m-0 text-xl font-semibold">{t('limits-heading')}</h2><p class="m-0 text-sm text-base-content/70">{t('limits-intro')}</p></header>
 	{#if error}<div class="alert alert-error"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-success"><span>{notice}</span></div>{/if}
 	{#if data}<AdminLimitForm {data} {editing} onsave={save} /><AdminLimitsTable {data} onedit={(rule) => { editing = rule; }} onremove={remove} />

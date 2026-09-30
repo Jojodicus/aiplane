@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The per-user `/integrations` connector store.
+//! The per-user connector flow for the `/tools/integrations` page.
 //!
 //! Every signed-in user can connect their own accounts (Gmail, Google
 //! Calendar/Drive, GitHub, GitLab, Atlassian, …) to the assistant by
@@ -30,9 +30,6 @@ use aiplane_core::server::db::mcp_catalog::{self, AuthKind};
 use aiplane_core::server::db::user_mcp::{self, NewConnection, PendingOauth};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::i18n::{self, Lang, t, t_args};
-
-// ---------------------------------------------------------------------------
-// GET /integrations
 
 // ---------------------------------------------------------------------------
 // POST /integrations/{key}/connect  → redirect to the provider
@@ -65,7 +62,7 @@ pub async fn integrations_connect(
     if connector.is_global() {
         // Global connectors are shared by everyone — there's no per-user
         // connection to make. Their tools are already live on this page.
-        return redirect("/integrations");
+        return redirect("/tools/integrations");
     }
     if connector.auth == AuthKind::None {
         // No credentials to negotiate — the connection row exists only so the
@@ -102,7 +99,7 @@ pub async fn integrations_connect(
             );
         }
         state.mcp.invalidate(&user.id, &key).await;
-        return redirect("/integrations");
+        return redirect("/tools/integrations");
     }
     if connector.auth != AuthKind::OAuth2 {
         return flow_error_page(
@@ -460,7 +457,7 @@ pub async fn integrations_callback(
         );
     }
     state.mcp.invalidate(&user.id, &pending.connector_key).await;
-    redirect("/integrations")
+    redirect("/tools/integrations")
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +475,7 @@ pub async fn integrations_retry(
 ) -> Response {
     let (_session, user) = require_session!(state, req);
     state.mcp.invalidate(&user.id, &key).await;
-    redirect("/integrations")
+    redirect("/tools/integrations")
 }
 
 // ---------------------------------------------------------------------------

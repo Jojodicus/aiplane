@@ -10,7 +10,7 @@
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<h2 class="m-0 text-xl font-semibold">{skill.title}</h2>
 		<div class="flex shrink-0 flex-wrap items-center gap-1">
-			<a href={`/skills?skill=${encodeURIComponent(skill.name)}&edit=1`} class="btn btn-ghost btn-sm">{t('my-skills-edit-button')}</a>
+			<a href={`/tools/skills?skill=${encodeURIComponent(skill.name)}&edit=1`} class="btn btn-ghost btn-sm">{t('my-skills-edit-button')}</a>
 			<a href={`/api/v0/skills/${encodeURIComponent(skill.name)}/archive`} download={`${skill.name}.skill`} class="btn btn-ghost btn-sm" title={t('my-skills-download-title')}>{t('my-skills-download-button')}</a>
 			<button type="button" class="btn btn-ghost btn-sm text-error" title={t('my-skills-delete-title')} onclick={ondelete}>{t('my-skills-delete-button')}</button>
 		</div>

@@ -12,7 +12,7 @@ the environment variables it already supports.
 
 ## Set it up
 
-1. **Mint a token.** Sign in to AIplane, open `/tokens`, create one.
+1. **Mint a token.** Sign in to AIplane, open `/settings/tokens`, create one.
    It looks like `gwk_…`.
 
 2. **Alias the model names Claude Code sends.** Claude Code asks for ids like
@@ -36,7 +36,7 @@ the environment variables it already supports.
 
    ```bash
    export ANTHROPIC_BASE_URL=https://aiplane.example.com
-   export ANTHROPIC_AUTH_TOKEN=gwk_…            # a token from /tokens
+   export ANTHROPIC_AUTH_TOKEN=gwk_…            # a token from /settings/tokens
    export ANTHROPIC_MODEL=default                # an alias from /admin/upstreams
    export ANTHROPIC_DEFAULT_HAIKU_MODEL=default  # background tasks go here too
    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
@@ -224,7 +224,7 @@ sandbox, your connected MCP integrations — because the tool loop splits a turn
 between the two: gateway-owned calls run server-side and invisibly, and calls
 Claude Code owns are handed back for it to execute.
 
-This is off by default. Turn on **tool use** for the token on `/tokens` to
+This is off by default. Turn on **tool use** for the token on `/settings/tokens` to
 enable it, and pick which capabilities that token may use there. With it off,
 `/v1/messages` is pure format translation.
 

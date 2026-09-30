@@ -30,3 +30,12 @@ tool-category-skills = Скиллы
 tool-category-images-media = Изображения и медиа
 tool-category-comfyui-workflows = Рабочие процессы ComfyUI
 tool-category-scheduled-actions = Запланированные действия
+
+tools-configure-link = Настроить
+tools-needs-storage = Требуется файловое хранилище.
+tools-needs-rag = Требуется база знаний.
+tools-needs-push = Требуются push-уведомления.
+tools-needs-geoip = Требуется база данных GeoIP.
+tools-needs-image-backend = Требуется сервер генерации изображений.
+tools-needs-sandbox = Требуется сервер для песочницы.
+tools-needs-sandbox-network = Требуется доступ к сети из песочницы.

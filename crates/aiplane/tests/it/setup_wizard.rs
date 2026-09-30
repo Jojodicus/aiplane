@@ -149,7 +149,7 @@ async fn a_fresh_gateway_sends_every_page_to_the_wizard() {
 
     for path in [
         "/",
-        "/tokens",
+        "/settings/tokens",
         "/chat",
         "/usage",
         // `/login` in particular: without this the first thing a new
@@ -162,8 +162,8 @@ async fn a_fresh_gateway_sends_every_page_to_the_wizard() {
         "/admin/users",
         "/webhooks",
         "/scheduled",
-        "/integrations",
-        "/memory",
+        "/tools/integrations",
+        "/settings/memory",
         // Not a route at all. A 404 telling an operator nothing is a worse
         // answer than the wizard they are looking for.
         "/whatever-this-is",
@@ -412,7 +412,7 @@ async fn an_open_recovery_window_does_not_disturb_anyone() {
 
     // Same for the SPA shell: whatever it answers, it is not a 303 to `/setup`.
     let resp = app
-        .serve(common::req(Method::GET, "/tokens"))
+        .serve(common::req(Method::GET, "/settings/tokens"))
         .await
         .unwrap();
     assert_ne!(

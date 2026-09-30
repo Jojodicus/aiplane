@@ -31,14 +31,16 @@ after(async () => {
 });
 
 const PAGES = [
-    ["/memory", "Preferences", "Memory — AIplane"],
+	["/settings", "Account", "My settings — AIplane"],
+	["/settings/notifications", "Notifications", "Notifications — AIplane"],
+    ["/settings/memory", "Preferences", "Memory — AIplane"],
     ["/scheduled", "Your scheduled actions", "Scheduled actions — AIplane"],
     ["/scheduled/new", "Create scheduled action", "New scheduled action"],
     ["/webhooks", "Your webhooks", "Webhooks — AIplane"],
     ["/webhooks/new", "Create webhook", "New webhook"],
-    ["/skills", "Skills", "My Skills — AIplane"],
-    ["/integrations", "Integrations", "Integrations — AIplane"],
-    ["/tokens", "Create token", "API tokens — AIplane"],
+    ["/tools/skills", "Skills", "My Skills — AIplane"],
+    ["/tools/integrations", "Integrations", "Integrations — AIplane"],
+    ["/settings/tokens", "Create token", "API tokens — AIplane"],
     ["/usage", "Requests", "Your usage — AIplane"],
     ["/tools", "Tools", "Tools — AIplane"],
     ["/admin/groups", "New group", "AIplane groups"],
@@ -55,6 +57,69 @@ const PAGES = [
     ["/rag/new", "Queue indexing", "Index a new collection", true],
     ["/rag/profiles", "New profile", "Extraction profiles — AIplane", true],
 ];
+
+test("personal and tool tabs navigate between their pages", async () => {
+    const ctx = await browser.newContext();
+    await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/settings`, { waitUntil: "networkidle" });
+    await page.getByRole("navigation", { name: "My settings" }).getByRole("link", { name: "Memory" }).click();
+    await page.waitForURL(`${BASE}/settings/memory`);
+    await page.getByRole("navigation", { name: "My settings" }).getByRole("link", { name: "API tokens" }).click();
+    await page.waitForURL(`${BASE}/settings/tokens`);
+    await page.goto(`${BASE}/tools`, { waitUntil: "networkidle" });
+    await page.getByRole("navigation", { name: "Tools" }).getByRole("link", { name: "Integrations" }).click();
+    await page.waitForURL(`${BASE}/tools/integrations`);
+    await ctx.close();
+});
+
+test("notifications settings show device controls when push is available", async () => {
+    const ctx = await browser.newContext();
+    await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/settings/notifications`, { waitUntil: "networkidle" });
+    await page.getByText("Get a notification on this device when an assistant turn you started finishes while you're away from the app.").waitFor();
+    await ctx.close();
+});
+
+test("notifications settings explain when push is unavailable", async () => {
+    const ctx = await browser.newContext();
+    await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
+    await ctx.route("**/api/v0/tokens/details", async (route) => {
+        const response = await route.fetch();
+        const details = await response.json();
+        await route.fulfill({ response, json: { ...details, push_enabled: false } });
+    });
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/settings/notifications`, { waitUntil: "networkidle" });
+    await page.getByRole("alert").getByText("Notifications are unavailable on this gateway.").waitFor();
+    await ctx.close();
+});
+
+test("admin access tabs retain all four management pages", async (t) => {
+    const cookie = await devSessionCookie();
+    const admin = await fetch(`${BASE}/api/v0/admin/groups`, { headers: { cookie: `id=${cookie}` } });
+    if (!admin.ok) {
+        t.skip("the debug user has no admin role");
+        return;
+    }
+    const ctx = await browser.newContext();
+    await ctx.addCookies([{ name: "id", value: cookie, url: BASE }]);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/admin/users`, { waitUntil: "networkidle" });
+    const tabs = page.getByRole("navigation", { name: "Access & limits" });
+    for (const [label, path, content] of [
+        ["Users", "/admin/users", "Users"],
+        ["API tokens", "/admin/tokens", "API tokens"],
+        ["Groups", "/admin/groups", "New group"],
+        ["Limits", "/admin/limits", "Add or update a limit"],
+    ]) {
+        await tabs.getByRole("link", { name: label, exact: true }).click();
+        await page.waitForURL(`${BASE}${path}`);
+        await page.getByText(content, { exact: false }).first().waitFor();
+    }
+    await ctx.close();
+});
 
 for (const [path, label, expectedTitle, explicitlyAdmin = false] of PAGES) {
     const isAdminPage = explicitlyAdmin || path.startsWith("/admin");
@@ -109,7 +174,7 @@ test("memory keeps its three semantic sections and direct editing", async () => 
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "dark" });
     await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
     const page = await ctx.newPage();
-    await page.goto(`${BASE}/memory`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/settings/memory`, { waitUntil: "networkidle" });
     for (const heading of ["Preferences", "Project context", "Facts"]) {
         assert.equal(await page.getByRole("heading", { name: heading, exact: true }).count(), 1);
     }
@@ -161,7 +226,7 @@ test("integrations preserve token connection, health feedback, and mobile layout
     await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
     const page = await ctx.newPage();
     try {
-        await page.goto(`${BASE}/integrations`, { waitUntil: "networkidle" });
+        await page.goto(`${BASE}/tools/integrations`, { waitUntil: "networkidle" });
         const card = page.getByRole("heading", { name: connectorTitle }).locator("xpath=ancestor::section");
         await card.getByLabel("Your API token", { exact: true }).fill("test-token");
         const connected = page.waitForResponse((response) => response.url().endsWith(`/api/v0/integrations/${connectorKey}/token`));
@@ -186,7 +251,7 @@ test("personal skills preserve inline authoring, editing, rendering, and deletio
     const page = await ctx.newPage();
     const slug = `mobile-skill-${Date.now()}`;
     const title = `Mobile Skill ${Date.now()}`;
-    await page.goto(`${BASE}/skills`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/tools/skills`, { waitUntil: "networkidle" });
     assert.equal(await page.locator('input[type="file"][accept=".skill,.zip"]').count(), 1);
     await page.getByRole("link", { name: "New skill", exact: true }).click();
     const editor = page.locator('textarea[name="content"]');
@@ -208,7 +273,7 @@ test("personal skills preserve inline authoring, editing, rendering, and deletio
     const deleted = page.waitForResponse((response) => response.url().endsWith(`/api/v0/skills/${slug}`) && response.request().method() === "DELETE");
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     assert.equal((await deleted).status(), 204);
-    await page.waitForURL(`${BASE}/skills`);
+    await page.waitForURL(`${BASE}/tools/skills`);
     assert.equal(await page.getByRole("link", { name: title, exact: true }).count(), 0);
     await ctx.close();
 });
@@ -231,7 +296,7 @@ test("scheduled actions keep the complete schedule workflow on mobile", async ()
     // The zone is picked from the platform's IANA list, not typed.
     assert.equal(await page.getByRole("combobox", { name: "Timezone", exact: true }).count(), 1);
     assert.equal(await page.getByRole("checkbox", { name: /Allow tools/ }).isChecked(), true);
-    assert.equal(await page.getByRole("checkbox", { name: /Reuse the previous run/ }).isChecked(), false);
+    assert.equal(await page.getByRole("checkbox", { name: /Continue one conversation/ }).isChecked(), false);
 
     await page.getByRole("radio", { name: "Hourly", exact: true }).check();
     assert.equal(await page.getByRole("spinbutton", { name: "Hour", exact: true }).count(), 0);
@@ -257,7 +322,7 @@ test("webhooks preserve security, reuse, reveal, and edit workflows on mobile", 
     await page.getByRole("checkbox", { name: /Wait for the response/ }).check();
     await page.getByRole("checkbox", { name: /Allow tools/ }).check();
     await page.getByText(/Anyone with the trigger URL can send content/).waitFor();
-    await page.getByRole("checkbox", { name: /Reuse the conversation/ }).check();
+    await page.getByRole("checkbox", { name: /Continue one conversation/ }).check();
     await page.getByRole("spinbutton", { name: "Rounds of history to replay" }).fill("3");
     const createResponse = page.waitForResponse((response) => response.url().endsWith("/api/v0/webhooks") && response.request().method() === "POST");
     await page.getByRole("button", { name: "Create webhook", exact: true }).click();
@@ -282,7 +347,7 @@ test("webhooks preserve security, reuse, reveal, and edit workflows on mobile", 
     assert.equal(await page.title(), "Edit webhook — AIplane");
     assert.equal(await page.getByRole("checkbox", { name: /Wait for the response/ }).isChecked(), true);
     assert.equal(await page.getByRole("checkbox", { name: /Allow tools/ }).isChecked(), true);
-    assert.equal(await page.getByRole("checkbox", { name: /Reuse the conversation/ }).isChecked(), true);
+    assert.equal(await page.getByRole("checkbox", { name: /Continue one conversation/ }).isChecked(), true);
     assert.ok(await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth));
 
     await page.getByRole("link", { name: /Back/ }).click();

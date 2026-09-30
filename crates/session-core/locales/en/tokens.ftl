@@ -117,3 +117,7 @@ tokens-python-step-2 = Install the OpenAI Python package with python -m pip inst
 tokens-python-step-3 = Save this example as chat.py. Replace YOUR_MODEL_ID with a chat model ID you can use.
 tokens-python-finish = Run python chat.py. Keep the token in an environment variable, not in the script.
 tokens-guides-model-note = Need a model ID? Your available models are shown in the chat model picker or by GET /v1/models with your token.
+
+notifications-loading = Loading notification settings…
+notifications-unavailable = Notifications are unavailable on this gateway. Ask an administrator to check Push settings.
+notifications-admin-settings-link = Open Push settings

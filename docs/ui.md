@@ -24,7 +24,7 @@ The whole stack:
 What it does, and why:
 
 - **Mounted at the root, registered last.** `GET /` and `GET /{*name}` are the final two routes in `router.rs`. rama matches in registration order, so a catch-all registered any earlier would swallow the API, proxy and auth routes. Anything added after them would be unreachable.
-- **History fallback.** A client route like `/tokens` has no file on disk. Anything that is not an existing file falls back to `index.html` so the client router can resolve it. This is the standard contract an SPA needs from a static host.
+- **History fallback.** A client route like `/settings/tokens` has no file on disk. The server falls back to `index.html` for the SPA's top-level route allowlist (`SPA_ROUTES` in `crates/aiplane/src/rama_server/spa.rs`); unknown paths return 404. Add a new top-level client route to that list or a hard load will fail while client navigation works.
 - **Cache policy by kind.** SvelteKit emits content-hashed asset filenames, whose bytes never change at a given URL — those get `public, max-age=31536000, immutable`. `index.html` and `sw.js` get `no-cache`, or an update would never reach a browser; the manifest gets a short revalidating max-age.
 - **Traversal guard.** The relative path is normalised *on its own* before being joined to the root, so a leading `..` with nothing to consume is refused. Normalising after the join would let the root's own components absorb the `..` — safe, but it would silently turn the guard into a no-op.
 - **Case is preserved.** rama lowercases only the *matched* path for route lookup; the `Request` handed to the handler keeps the original URI, so `req.uri().path()` still carries the case of a content-hashed filename. (Same precedent as `retrieve_model` — see [the note in `router.rs`](../crates/aiplane/src/rama_server/router.rs).)
@@ -101,14 +101,38 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
-The `/tokens` page uses the same URL-backed `tabs-border` layout as the admin
-models and groups pages. `?tab=tokens` manages tokens, `?tab=guides` contains
-client setup guides, and `?tab=account` holds the account summary and device
-notification settings. A newly minted or rotated secret stays above the tabs
-until the page is left, so switching to a guide does not hide the one-time value.
-The guide's `client` query parameter selects OpenCode, Claude Code, or Python;
-code examples use the browser's current origin so they also work on
-self-hosted domains. All guide instructions live in the six Fluent catalogs.
+The personal pages use one shared `SectionTabs` navigation component with
+path-backed tabs. `/tools` contains built-in tool controls (including location
+sharing), `/tools/integrations` the user's MCP connections, and `/tools/skills`
+their private skills. `/settings` contains the account summary;
+`/settings/notifications`, `/settings/memory`, and `/settings/tokens` keep the
+corresponding personal controls separate. The skills and notifications tabs
+follow their optional feature switches. The OAuth callback and connect/retry POST endpoints stay
+under `/integrations/*`; they redirect back to `/tools/integrations`.
+The built-in tools tab shows the full registered catalog. A tool that lacks
+required storage, an indexer, or push is disabled with a reason; admins also
+see unregistered image, GeoIP, and sandbox tools as read-only rows linking to
+the matching operator setup page. These placeholder rows are not offered to
+the model or persisted as user tool preferences.
+
+The admin sidebar has one **Access & limits** entry. Its four path-backed tabs
+keep `/admin/users`, `/admin/tokens`, `/admin/groups` and `/admin/limits` at
+their existing URLs, with their existing forms and APIs. The Limits tab follows
+the optional limits feature switch. Group grant and identity subtabs remain
+inside the Groups tab. `/admin/settings` stays a separate sidebar page.
+
+The Notifications tab shows device controls when Web Push initialized. If the
+feature is configured but its sender failed to initialize, the tab shows an
+unavailable message and an admin link to operator settings instead of an empty
+page.
+
+Within `/settings/tokens`, `?tab=tokens` manages tokens and `?tab=guides`
+contains client setup guides. A newly minted or rotated secret stays above
+these inner tabs until the page is left, so switching to a guide does not hide
+the one-time value. The guide's `client` query parameter selects OpenCode,
+Claude Code, or Python; code examples use the browser's current origin so they
+also work on self-hosted domains. All guide instructions live in the six Fluent
+catalogs.
 
 Long or data-driven choices use the shared `SearchableSelect` combobox instead
 of a native select. It searches labels, stored values, descriptions, keywords and

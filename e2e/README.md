@@ -19,7 +19,7 @@ That runs every `e2e/*.test.mjs`:
 - `spa.test.mjs` — the SvelteKit SPA at the root: shell boot, signed-out redirect into OIDC, signed-in identity from `GET /api/v0/me`.
 - `spa-chat.test.mjs` — the SPA chat round trip (issue #22 P2): create a conversation, submit a turn, watch the reply stream in over the JSON-SSE event protocol. Needs an AIplane with a chat upstream — `AIPLANE_STATIC_DIR=target/frontend/build mise run dev-ui` — and skips with a pointer at that command when AIplane has no pools.
 
-The `e2e` mise task points `PLAYWRIGHT_DIR` at the mise-installed `npm:@playwright/cli` tool automatically; export it yourself only to override.
+The `e2e` mise task finds Playwright in the mise-installed `npm:@playwright/cli` package; export `PLAYWRIGHT_DIR` only to override it.
 
 Set `CHROMIUM_HEADED=1` to watch the browser locally:
 
@@ -57,8 +57,8 @@ Both answer `303` with an ordinary `Set-Cookie: id=…` session.
   `dev-ui` as the server) a full chat turn streaming into the SPA.
 - The anonymous funnel: `/` and protected pages bounce to `/login` with
   `return_to`; the login page's OIDC form.
-- Authenticated `/tokens`: identity + roles in the app shell and account
-  card, the canonical three rows with active/revoked badges, token create
+- Authenticated `/settings` and `/settings/tokens`: identity + roles on the account
+  tab, the canonical three token rows with active/revoked badges, token create
   (one-time `gwk_` plaintext banner), refused empty-name create, revoke
   flipping the row's badge via the SSE patch, sign-out.
 - The authenticated chat scaffold: composer textarea, model picker, send

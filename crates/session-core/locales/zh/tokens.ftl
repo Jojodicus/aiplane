@@ -114,3 +114,7 @@ tokens-python-step-2 = 运行 python -m pip install openai 安装 OpenAI Python 
 tokens-python-step-3 = 将示例保存为 chat.py。把 YOUR_MODEL_ID 替换为可用的聊天模型 ID。
 tokens-python-finish = 运行 python chat.py。请将令牌保存在环境变量中，不要写入脚本。
 tokens-guides-model-note = 需要模型 ID？可在聊天模型选择器中查看可用模型，也可以带上令牌请求 GET /v1/models。
+
+notifications-loading = 正在加载通知设置…
+notifications-unavailable = 此网关目前无法使用通知。请让管理员检查推送设置。
+notifications-admin-settings-link = 打开推送设置

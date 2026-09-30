@@ -208,7 +208,7 @@ async fn non_v1_paths_are_untouched() {
 
     // OPTIONS on a non-/v1 path is not intercepted by the CORS layer.
     let resp = app
-        .serve(preflight("/tokens", "https://evil.example"))
+        .serve(preflight("/settings/tokens", "https://evil.example"))
         .await
         .unwrap();
     assert_ne!(

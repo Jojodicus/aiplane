@@ -57,7 +57,7 @@ const result = await client.systemOne({
 
 The gateway's existing `GET /v1/models` remains OpenAI-shaped. The SDK's `systemOne()` method is compatible; its separate `models.list()` method expects TypeSafe's different model-list envelope and is not currently supported.
 
-> The web UI is a SvelteKit SPA served from `/`; its client routes (`/chat`, `/tokens`, `/admin/*`, …) and the session-scoped `/api/v0/*` and `/auth/*` routes are separate surfaces, not part of the OpenAI-compatible API. See [`ui.md`](ui.md).
+> The web UI is a SvelteKit SPA served from `/`; its client routes (`/chat`, `/settings/tokens`, `/admin/*`, …) and the session-scoped `/api/v0/*` and `/auth/*` routes are separate surfaces, not part of the OpenAI-compatible API. See [`ui.md`](ui.md).
 
 ## Authentication
 

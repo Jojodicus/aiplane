@@ -22,6 +22,7 @@ use super::{internal, json_ok, not_found, read_json};
 
 use aiplane_core::server::db::{user_tool_prefs, users};
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::server::tools::catalog;
 
 // ---------------------------------------------------------------------------
 // GET /tools
@@ -34,7 +35,19 @@ use aiplane_runtime::rama_server::state::RamaState;
 /// same grouping the page renders.
 pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, user) = require_session_json!(state, req);
-    let entries = tool_toggles::entries_for_roles(&state, &user.roles);
+    let mut entries = tool_toggles::entries_for_roles(&state, &user.roles);
+    let admin = super::is_admin(&state, &user);
+    let registered = state.tools();
+    if admin {
+        entries.extend(catalog::unregistered_configurable_entries(&registered));
+        entries.sort_by(|left, right| {
+            left.category
+                .order()
+                .cmp(&right.category.order())
+                .then_with(|| left.key.cmp(&right.key))
+        });
+    }
+    let config = state.config();
     let disabled = user_tool_prefs::disabled_for_user(&state.db, &user.id)
         .await
         .unwrap_or_default();
@@ -42,13 +55,24 @@ pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) 
     let tools: Vec<_> = entries
         .into_iter()
         .map(|e| {
+            let availability = tool_configuration(
+                &e.key,
+                &config,
+                registered.contains(&e.key),
+                state.push.is_some(),
+                state.indexer.is_some(),
+            );
             serde_json::json!({
                 "key": e.key,
                 "title": e.title,
                 "tech": e.tech,
                 "description": e.description,
                 "category": e.category.key(),
-                "enabled": !disabled.contains(&e.key),
+                "enabled": availability.is_none() && !disabled.contains(&e.key),
+                "configuration": availability.map(|(reason, url)| serde_json::json!({
+                    "reason": reason,
+                    "url": if admin { Some(url) } else { None },
+                })),
             })
         })
         .collect();
@@ -67,6 +91,91 @@ pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) 
         rama::http::StatusCode::OK,
         serde_json::json!({ "tools": tools, "location": location }),
     )
+}
+
+fn tool_configuration(
+    key: &str,
+    config: &aiplane_core::server::Config,
+    registered: bool,
+    push_ready: bool,
+    rag_ready: bool,
+) -> Option<(&'static str, &'static str)> {
+    if !registered
+        && matches!(
+            key,
+            "lookup_ip"
+                | "generate_image"
+                | "edit_image"
+                | "run_in_sandbox"
+                | "generate_document"
+                | "convert_document"
+                | "edit_presentation"
+                | "capture_webpage"
+                | "browse_page"
+                | "read_sandbox_output"
+                | "render_excalidraw"
+                | "render_typst"
+                | "render_video"
+        )
+    {
+        return Some(match key {
+            "lookup_ip" => ("tools-needs-geoip", "/admin/settings"),
+            "generate_image" | "edit_image" => {
+                ("tools-needs-image-backend", "/admin/models?tab=upstreams")
+            }
+            "capture_webpage" | "browse_page" if config.sandbox.is_some() => {
+                ("tools-needs-sandbox-network", "/admin/settings")
+            }
+            _ => ("tools-needs-sandbox", "/admin/settings"),
+        });
+    }
+    if key == "notify_user" && (!config.push.enabled || !push_ready) {
+        return Some(("tools-needs-push", "/admin/settings"));
+    }
+    if key.starts_with("rag_") && (config.rag.is_none() || !rag_ready) {
+        return Some(("tools-needs-rag", "/admin/settings"));
+    }
+    if (matches!(
+        key,
+        "fetch_attachment"
+            | "upload_attachment"
+            | "generate_qr_code"
+            | "load_image_url"
+            | "generate_image"
+            | "edit_image"
+            | "comfyui"
+    ) || key.starts_with("typst_"))
+        && config.chat.s3.is_none()
+    {
+        return Some(("tools-needs-storage", "/admin/settings"));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unconfigured_tools_have_specific_setup_destinations() {
+        let config = aiplane_core::server::Config::default();
+        assert_eq!(
+            tool_configuration("generate_image", &config, false, false, false),
+            Some(("tools-needs-image-backend", "/admin/models?tab=upstreams"))
+        );
+        assert_eq!(
+            tool_configuration("run_in_sandbox", &config, false, false, false),
+            Some(("tools-needs-sandbox", "/admin/settings"))
+        );
+        assert_eq!(
+            tool_configuration("rag_search", &config, true, false, false),
+            Some(("tools-needs-rag", "/admin/settings"))
+        );
+        assert_eq!(
+            tool_configuration("read_skill", &config, true, false, false),
+            None
+        );
+    }
 }
 
 #[derive(serde::Deserialize)]

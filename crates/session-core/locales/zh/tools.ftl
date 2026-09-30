@@ -30,3 +30,12 @@ tool-category-skills = 技能
 tool-category-images-media = 图像与媒体
 tool-category-comfyui-workflows = ComfyUI 工作流
 tool-category-scheduled-actions = 计划操作
+
+tools-configure-link = 配置
+tools-needs-storage = 需要文件存储。
+tools-needs-rag = 需要知识库。
+tools-needs-push = 需要推送通知。
+tools-needs-geoip = 需要 GeoIP 数据库。
+tools-needs-image-backend = 需要图像后端。
+tools-needs-sandbox = 需要沙盒运行服务。
+tools-needs-sandbox-network = 需要沙盒网络访问权限。

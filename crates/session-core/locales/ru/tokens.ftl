@@ -114,3 +114,7 @@ tokens-python-step-2 = Установите пакет OpenAI для Python ко
 tokens-python-step-3 = Сохраните пример как chat.py. Замените YOUR_MODEL_ID на доступный ID чат-модели.
 tokens-python-finish = Запустите python chat.py. Храните токен в переменной окружения, а не в скрипте.
 tokens-guides-model-note = Нужен ID модели? Доступные модели есть в выборе модели чата или в GET /v1/models с вашим токеном.
+
+notifications-loading = Загрузка настроек уведомлений…
+notifications-unavailable = Уведомления недоступны на этом шлюзе. Попросите администратора проверить настройки Push.
+notifications-admin-settings-link = Открыть настройки Push

@@ -53,12 +53,16 @@ test("the admin layout renders its section nav", async () => {
     const page = await ctx.newPage();
     await page.goto(`${BASE}/admin/groups`, { waitUntil: "networkidle" });
     await page.waitForSelector("text=Groups", { timeout: 5000 });
-    // The nav is the VERTICAL sidebar (root layout) with active highlighting:
-    for (const label of ["Users", "Models", "Limits", "Settings", "Tokens", "Upstreams"]) {
+    // Access management shares one sidebar entry; operator settings remain separate.
+    for (const label of ["Access & limits", "Models", "Settings"]) {
         assert.ok(
             (await page.locator(`aside a:has-text("${label}")`).count()) >= 1,
             `the sidebar must link to ${label}`,
         );
+    }
+    const tabs = page.getByRole("navigation", { name: "Access & limits" });
+    for (const [label, path] of [["Users", "/admin/users"], ["API tokens", "/admin/tokens"], ["Groups", "/admin/groups"], ["Limits", "/admin/limits"]]) {
+        assert.equal(await tabs.getByRole("link", { name: label, exact: true }).getAttribute("href"), path);
     }
     await ctx.close();
 });

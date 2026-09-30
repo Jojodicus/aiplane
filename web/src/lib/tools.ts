@@ -7,6 +7,7 @@ export interface ToolEntry {
 	description: string;
 	category: string;
 	enabled: boolean;
+	configuration: { reason: string; url: string | null } | null;
 }
 
 export interface LocationSharingState {

@@ -114,3 +114,7 @@ tokens-python-step-2 = Installez le paquet Python OpenAI avec python -m pip inst
 tokens-python-step-3 = Enregistrez cet exemple dans chat.py. Remplacez YOUR_MODEL_ID par l’identifiant d’un modèle de chat accessible.
 tokens-python-finish = Exécutez python chat.py. Gardez le jeton dans une variable d’environnement, pas dans le script.
 tokens-guides-model-note = Besoin d’un identifiant de modèle ? Les modèles accessibles sont dans le sélecteur du chat ou via GET /v1/models avec votre jeton.
+
+notifications-loading = Chargement des paramètres de notification…
+notifications-unavailable = Les notifications ne sont pas disponibles sur cette passerelle. Demandez à un administrateur de vérifier les paramètres Push.
+notifications-admin-settings-link = Ouvrir les paramètres Push

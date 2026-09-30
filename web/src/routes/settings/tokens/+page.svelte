@@ -6,8 +6,6 @@
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import ManagedTokenRow from '$lib/components/tokens/ManagedTokenRow.svelte';
-	import PushNotificationsCard from '$lib/components/tokens/PushNotificationsCard.svelte';
-	import TokenAccountCard from '$lib/components/tokens/TokenAccountCard.svelte';
 	import TokenSetupGuides from '$lib/components/tokens/TokenSetupGuides.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import { selectedTokenTab } from '$lib/tokens-tabs';
@@ -82,12 +80,10 @@
 </script>
 
 <div class="flex w-full flex-col gap-4">
-	<h1 class="mb-2 text-2xl font-bold">{t('tokens-page-heading')}</h1>
 	<p class="text-sm text-base-content/60">{t('tokens-intro')}</p>
 	<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('tokens-page-heading')}>
-		<a class:tab-active={selected === 'tokens'} class="tab whitespace-nowrap" href="{base}/tokens?tab=tokens" aria-current={selected === 'tokens' ? 'page' : undefined}>{t('tokens-tab-tokens')}</a>
-		<a class:tab-active={selected === 'guides'} class="tab whitespace-nowrap" href="{base}/tokens?tab=guides" aria-current={selected === 'guides' ? 'page' : undefined}>{t('tokens-tab-guides')}</a>
-		<a class:tab-active={selected === 'account'} class="tab whitespace-nowrap" href="{base}/tokens?tab=account" aria-current={selected === 'account' ? 'page' : undefined}>{t('tokens-tab-account')}</a>
+		<a class:tab-active={selected === 'tokens'} class="tab whitespace-nowrap" href="{base}/settings/tokens?tab=tokens" aria-current={selected === 'tokens' ? 'page' : undefined}>{t('tokens-tab-tokens')}</a>
+		<a class:tab-active={selected === 'guides'} class="tab whitespace-nowrap" href="{base}/settings/tokens?tab=guides" aria-current={selected === 'guides' ? 'page' : undefined}>{t('tokens-tab-guides')}</a>
 	</nav>
 	{#if error}<div class="alert alert-error mb-4"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-info mb-4"><span>{notice}</span></div>{/if}
@@ -124,10 +120,7 @@
 	</div></section>
 	{:else if selected === 'guides'}
 		<TokenSetupGuides />
-	{:else}
-		{#if details?.push_enabled}<PushNotificationsCard />{/if}
-		{#if details}<TokenAccountCard account={details.account} />{/if}
-	{/if}
+		{/if}
 </div>
 
 <EditModal

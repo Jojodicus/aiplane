@@ -254,7 +254,7 @@ required scopes"* unless the gateway requests the service scopes up front. Trim
 the scope list on the connector if you want a narrower consent — **changing it
 requires users to disconnect + reconnect**.
 
-Users then connect once at **/integrations → Google Workspace → Connect**.
+Users then connect once at **/tools/integrations → Google Workspace → Connect**.
 
 ---
 
@@ -293,7 +293,7 @@ needs nothing, as loopback is always allowed.
 Then in AIplane: **/admin/connectors → GitLab (self-managed / CE)** → set the
 MCP server URL (`http://gitlab-mcp:3002/mcp` full-stack, or
 `http://localhost:3333/mcp` for a native gateway) → Save → Enable. Each user
-connects at **/integrations** and pastes a GitLab **personal access token**
+connects at **/tools/integrations** and pastes a GitLab **personal access token**
 (scope `api`, or `read_api` for read-only).
 
 ---

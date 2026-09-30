@@ -17,7 +17,7 @@
 #
 # Then in the gateway: /admin/connectors → "GitLab (self-managed / CE)" → set the
 # MCP server URL to http://gitlab-mcp:3002/mcp → Save → Enable. Each user pastes
-# their GitLab PAT (scope `api`, or `read_api` for read-only) at /integrations.
+# their GitLab PAT (scope `api`, or `read_api` for read-only) at /tools/integrations.
 
 [Unit]
 Description=GitLab self-managed/CE MCP bridge (per-user PAT)

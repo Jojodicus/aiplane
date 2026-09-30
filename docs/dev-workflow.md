@@ -259,10 +259,10 @@ normalised, so it's `aiplane_core`, not `aiplane-core`.
 Every authed surface — the SPA's screens and the `/api/v0/*` JSON routes behind them — is gated by OIDC, which makes ad-hoc browser debugging (browser automation, devtools, screenshotting bugs) annoying: you'd otherwise need a full OIDC provider wired up just to *see* a page. The `dev-ui` mise task short-circuits that:
 
 ```bash
-AIPLANE_STATIC_DIR=target/frontend/build mise run dev-ui
+mise run dev-ui
 ```
 
-(`dev-ui` does not build or point at the SPA itself, so pass the variable if you want the UI and not just the API. Run `mise run build-web` once first.)
+The mise task builds the SPA and sets `AIPLANE_STATIC_DIR`.
 
 This runs the `dev_ui` example (`crates/aiplane/examples/dev_ui.rs`), which boots the real rama gateway on `127.0.0.1:8080` against:
 
@@ -270,6 +270,18 @@ This runs the `dev_ui` example (`crates/aiplane/examples/dev_ui.rs`), which boot
 - an in-process **`wiremock` chat pool** that serves `GET /models` (advertising `demo-model` + `demo-model-pro`) and `POST /chat/completions` (a streaming variant emitting two SSE deltas + `[DONE]`, plus non-streaming and feedback-extraction variants);
 - an in-process **`wiremock` transcription pool** that serves `GET /models` (advertising `demo-whisper` + `demo-whisper-large`) and `POST /audio/transcriptions` (a stubbed JSON response);
 - a pre-seeded **`dev@example.com`** user with an `admin` role (every model / tool / skill granted), the `examples/demo-skills` bundle loaded, and representative demo data (a finished chat conversation, scheduled actions, RAG collections, and an MCP connector catalog) so the screens render populated.
+
+The example maps the debug `/__dev/session` user's `admin` group to the admin
+role, so that URL shows the same setup hints as the printed admin seed cookie.
+It uses the same built-in tool registry as the real binary and loads
+the example Typst templates. Tools whose operator backend is missing (GeoIP,
+sandbox) still appear to the seeded admin as disabled rows with setup links.
+The mock has no file storage or RAG indexer, so dependent tools, including the
+tools for its mock image pool, are also shown disabled. It initializes the
+same Web Push sender as production so device notification settings can be
+tested. Unavailable tools are visible for layout testing, while unregistered
+placeholder tools are absent
+from the model's tool list.
 
 The example imports that same feature configuration into its in-memory settings
 rows before serving. Consequently, saving an unrelated `/admin/settings`
