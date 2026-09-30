@@ -7,7 +7,7 @@
 import type { ExtensionStatus } from './browser-bridge';
 
 /** The Chrome Web Store item id — the same one CI publishes to as `CWS_EXTENSION_ID`. */
-const CHROME_WEB_STORE_ID = '';
+const CHROME_WEB_STORE_ID = 'pijfnljjigfcgjpgolcajnpmiimebkik';
 
 export const chromeWebStoreUrl = `https://chromewebstore.google.com/detail/${CHROME_WEB_STORE_ID}`;
 
