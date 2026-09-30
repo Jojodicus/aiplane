@@ -323,12 +323,25 @@ pub fn requires_chat_session(tool_id: &str) -> bool {
         // Off the chat path there is no page to relay through, so there is
         // nothing for a /v1 caller to call.
         || tool_id == "browser_control"
+        || tool_id == "show_screenshot"
         // Creating or deleting a scheduled action needs a human "yes" (the
         // action later runs *as the user*, unattended), and that confirmation
         // is an `ask_user` card — so these need the same live chat turn.
         // Listing is read-only and stays available off-chat.
         || tool_id == "schedule_action"
         || tool_id == "delete_scheduled_action"
+}
+
+/// The toggle keys that govern at least one tool a `/v1` caller can use —
+/// what an API token's tool panel may offer. A key whose every tool is
+/// [`requires_chat_session`] is a switch that never does anything for a token,
+/// because the proxy path drops those ids before the token's choice is read.
+pub fn api_keys<'a>(tool_ids: impl IntoIterator<Item = &'a str>) -> HashSet<String> {
+    tool_ids
+        .into_iter()
+        .filter(|id| !requires_chat_session(id))
+        .map(|id| entry_key_for(id).to_string())
+        .collect()
 }
 
 /// `mcp__<server>__<tool>` → `mcp__<server>` (the per-server toggle key).
@@ -358,7 +371,7 @@ pub fn category_for(tool_id: &str) -> Category {
         // Grouped with the other ways of reaching a page, because that is where
         // a user goes looking for it — while being the only one that acts *as
         // them*, which is what its display copy has to make unmistakable.
-        "browser_control" => Category::Web,
+        "browser_control" | "show_screenshot" => Category::Web,
         "fetch_attachment" | "upload_attachment" | "offer_download" | "zip_attachments"
         | "list_attachments" | "read_skill" => Category::Documents,
         "generate_image" | "edit_image" | "generate_qr_code" | "load_image_url" => Category::Media,
@@ -469,6 +482,13 @@ fn display_meta(tool_id: &str) -> Option<(&'static str, &'static str)> {
              It only works while this conversation is open, it needs the browser extension \
              installed and switched on, and the extension asks you before anything is \
              clicked, typed or submitted.",
+        ),
+        "show_screenshot" => (
+            "Screenshots from your browser",
+            "Lets the assistant show you what it sees in your browser — the whole page, one \
+             section, or a single element — as an image in its reply. Without it the \
+             assistant can still look at pages to find its way, but cannot show you any of \
+             them. Needs the browser extension, like \"Your own browser\".",
         ),
         "ask_user" => (
             "Clarifying questions",
@@ -693,6 +713,7 @@ pub fn entries(
     let mut document_seen = false;
     let mut schedule_seen = false;
     let mut mcp_servers_seen: HashSet<String> = HashSet::new();
+    let mut plain_seen: HashSet<String> = HashSet::new();
 
     for id in allowed {
         if is_hidden(id) {
@@ -843,11 +864,18 @@ pub fn entries(
             }
             continue;
         }
-        let Some(tool) = registry.get(id) else {
+        // Keyed exactly as enforcement keys it, so a group sharing one key
+        // (the attach family) is one row rather than one live switch and two
+        // that `retain_enabled` never looks up.
+        let key = entry_key_for(id);
+        if !plain_seen.insert(key.to_string()) {
+            continue;
+        }
+        let Some(tool) = registry.get(key).or_else(|| registry.get(id)) else {
             continue;
         };
         let def = tool.schema();
-        let (title, description) = match display_meta(id) {
+        let (title, description) = match display_meta(key) {
             Some((t, d)) => (t.to_string(), d.to_string()),
             None => (
                 def.function.name.clone(),
@@ -855,11 +883,11 @@ pub fn entries(
             ),
         };
         out.push(ToolEntry {
-            key: id.clone(),
+            key: key.to_string(),
             title,
             tech: def.function.name,
             description,
-            category: category_for(id),
+            category: category_for(key),
         });
     }
 

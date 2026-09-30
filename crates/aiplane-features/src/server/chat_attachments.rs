@@ -578,6 +578,19 @@ pub fn to_data_uri(mime: &str, bytes: &[u8]) -> String {
     out
 }
 
+/// The inverse of [`to_data_uri`]: `(mime, bytes)`. Only the base64 form —
+/// a percent-encoded `data:` URI is text, and nothing that hands us an image
+/// produces one.
+pub fn from_data_uri(uri: &str) -> Result<(String, Vec<u8>), String> {
+    let rest = uri
+        .strip_prefix("data:")
+        .ok_or_else(|| "not a data: URI".to_string())?;
+    let (mime, payload) = rest
+        .split_once(";base64,")
+        .ok_or_else(|| "data: URI is not base64-encoded".to_string())?;
+    Ok((mime.to_string(), decode_base64(payload)?))
+}
+
 /// RFC 4648 base64 encoder (standard alphabet, padded). Hand-rolled
 /// to keep us off a direct `base64` dep — pairs with the matching
 /// decoder over in `tools::upload_attachment` so we're symmetric on
@@ -641,7 +654,22 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod base64_tests {
-    use super::decode_base64;
+    use super::{decode_base64, from_data_uri, to_data_uri};
+
+    #[test]
+    fn a_data_uri_decodes_back_to_its_mime_and_bytes() {
+        let uri = to_data_uri("image/jpeg", b"hello world");
+        let (mime, bytes) = from_data_uri(&uri).unwrap();
+        assert_eq!(mime, "image/jpeg");
+        assert_eq!(bytes, b"hello world");
+    }
+
+    #[test]
+    fn a_data_uri_that_is_not_base64_is_refused() {
+        let err = from_data_uri("data:image/png,rawtext").unwrap_err();
+        assert!(err.contains("base64"), "{err}");
+        assert!(from_data_uri("https://example.com/a.png").is_err());
+    }
 
     #[test]
     fn decode_base64_round_trip_simple() {

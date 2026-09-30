@@ -87,6 +87,11 @@ const MAX_URL_LEN: usize = 2_000;
 /// Dropping the image and saying so leaves the rest of the batch usable.
 const MAX_SCREENSHOT_CHARS: usize = 3_000_000;
 
+/// Longest edge of a `region`, in CSS pixels. The extension's own capture
+/// ceiling (`MAX_CAPTURE_PX` in `extension/src/capture.js`); refusing here gives the
+/// model the error instead of a silently clamped image.
+const MAX_CAPTURE_PX: u32 = 8_000;
+
 /// Ceiling on a single `wait_for`. Several of these plus a confirmation still
 /// have to fit inside the tool's own wait, or the user approves something the
 /// gateway has already given up on.
@@ -171,7 +176,11 @@ impl Tool for BrowserControl {
                                                     modifiers?}: Enter, Escape, Tab, a … \
                                                     scroll {direction?, ref?}: a viewport, or \
                                                     bring an element into view. screenshot \
-                                                    {full_page?}. set_viewport {width, \
+                                                    {full_page? | ref? | region?}: the \
+                                                    viewport, the whole page, one element, or \
+                                                    a rectangle — only you see it; use \
+                                                    `show_screenshot` to show the user. \
+                                                    set_viewport {width, \
                                                     height, mobile?}: resize, or emulate a \
                                                     phone. wait_for {text?, timeout_ms?}: \
                                                     wait for the page to catch up. list_tabs."
@@ -180,7 +189,7 @@ impl Tool for BrowserControl {
                                 "ref": {
                                     "type": "string",
                                     "description": "The element to act on, for click / hover / \
-                                                    type_text / scroll. Copy it from a \
+                                                    type_text / scroll / screenshot. Copy it from a \
                                                     `read_page` or `find` result — never guess \
                                                     one, and never reuse one from before the \
                                                     page changed."
@@ -205,6 +214,7 @@ impl Tool for BrowserControl {
                                 "direction": { "type": "string", "enum": ["up", "down"], "description": "For `scroll`. Default down." },
                                 "max_chars": { "type": "integer", "description": "For `read_page`: cap the returned text." },
                                 "full_page": { "type": "boolean", "description": "For `screenshot`: capture beyond the viewport." },
+                                "region": region_schema(),
                                 "width": { "type": "integer", "description": "For `set_viewport`." },
                                 "height": { "type": "integer", "description": "For `set_viewport`." },
                                 "mobile": {
@@ -249,37 +259,64 @@ impl Tool for BrowserControl {
             let reply = request_actions(fb, turn_id, actions).await;
             audit(&ctx, turn_id, &summary, writes, reply.as_ref()).await;
 
-            match reply {
-                Some(BrowserReply::Done { results }) => Ok(done(results, None)),
-                Some(BrowserReply::Failed { error, results }) => Ok(done(results, Some(error))),
-                Some(BrowserReply::Refused { reason }) => Ok(json!({
-                    "ok": false,
-                    "refused": true,
-                    "reason": reason,
-                    "note": "The user declined this in their browser. That is an answer, not a \
-                             failure: do not retry it, tell them what you wanted to do and why, \
-                             and let them decide.",
-                })),
-                Some(BrowserReply::NoExtension) => Ok(json!({
-                    "ok": false,
-                    "reason": "no_extension",
-                    "note": "The conversation is open in a browser, but no browser extension is \
-                             paired and armed — so nothing ran. Tell the user that acting in \
-                             their browser needs the extension installed, paired with this \
-                             gateway, and switched on for this session. Meanwhile, use \
-                             fetch_url if the page is public.",
-                })),
-                None => Ok(json!({
-                    "ok": false,
-                    "reason": "no_response",
-                    "attempted": summary,
-                    "note": "Nothing came back from the browser in time — the tab may have been \
-                             closed or the extension may be waiting on a confirmation nobody \
-                             answered. Do not assume any of it happened. Say so and ask.",
-                })),
-            }
+            Ok(answer(reply, &summary))
         })
     }
+}
+
+/// What the model is told about a batch, for every way it can end. Shared with
+/// `show_screenshot`, which reaches the browser the same way and owes the model
+/// the same explanation when the browser did not do what was asked.
+pub(crate) fn answer(reply: Option<BrowserReply>, attempted: &[&'static str]) -> Value {
+    match reply {
+        Some(BrowserReply::Refused { reason }) => json!({
+            "ok": false,
+            "refused": true,
+            "reason": reason,
+            "note": "The user declined this in their browser. That is an answer, not a \
+                     failure: do not retry it, tell them what you wanted to do and why, \
+                     and let them decide.",
+        }),
+        Some(BrowserReply::NoExtension) => json!({
+            "ok": false,
+            "reason": "no_extension",
+            "note": "The conversation is open in a browser, but no browser extension is \
+                     paired and armed — so nothing ran. Tell the user that acting in \
+                     their browser needs the extension installed, paired with this \
+                     gateway, and switched on for this session. Meanwhile, use \
+                     fetch_url if the page is public.",
+        }),
+        Some(BrowserReply::Done { results }) => done(results, None),
+        Some(BrowserReply::Failed { error, results }) => done(results, Some(error)),
+        None => json!({
+            "ok": false,
+            "reason": "no_response",
+            "attempted": attempted,
+            "note": "Nothing came back from the browser in time — the tab may have been \
+                     closed or the extension may be waiting on a confirmation nobody \
+                     answered. Do not assume any of it happened. Say so and ask.",
+        }),
+    }
+}
+
+/// JSON schema of a capture rectangle. Shared with `show_screenshot`, so the
+/// two tools describe the same area the same way.
+pub(crate) fn region_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["x", "y", "width", "height"],
+        "description": "For `screenshot`: a rectangle of the page in CSS pixels, measured \
+                        from the top-left of the document (not the viewport). A screenshot \
+                        result reports the area it covered as `clip` — use that to turn a \
+                        spot in the image into page coordinates.",
+        "properties": {
+            "x": { "type": "integer", "minimum": 0 },
+            "y": { "type": "integer", "minimum": 0 },
+            "width": { "type": "integer", "minimum": 1, "maximum": MAX_CAPTURE_PX },
+            "height": { "type": "integer", "minimum": 1, "maximum": MAX_CAPTURE_PX }
+        }
+    })
 }
 
 /// Shape the successful (or partly successful) result the model sees.
@@ -292,7 +329,7 @@ impl Tool for BrowserControl {
 /// JSON. A data URI inside a `role:"tool"` string is just a very long string —
 /// the model cannot see it, and a full-page PNG would spend six figures of
 /// context saying so. As parts, a vision model actually looks at the page.
-fn done(mut results: Vec<Value>, error: Option<String>) -> Value {
+pub(crate) fn done(mut results: Vec<Value>, error: Option<String>) -> Value {
     let mut images: Vec<String> = Vec::new();
     for (i, result) in results.iter_mut().enumerate() {
         let Some(shot) = result.get("screenshot").and_then(Value::as_str) else {
@@ -355,7 +392,7 @@ fn summary_json(results: Vec<Value>, error: Option<String>) -> Value {
 /// typed text or page content. A failed write is logged and the call proceeds;
 /// the action already happened, and refusing to report it would be worse than a
 /// missing row.
-async fn audit(
+pub(crate) async fn audit(
     ctx: &ToolContext,
     turn_id: &str,
     actions: &[&'static str],
@@ -420,7 +457,7 @@ fn parse_action(raw: Value) -> Result<BrowserAction, ToolError> {
         ToolError::InvalidArgs(format!(
             "{e} \u{2014} actions are navigate {{url}}, read_page {{max_chars?}}, find {{text}}, \
              click {{ref}}, type_text {{ref, text, submit?}}, press_key {{key}}, \
-             scroll {{direction}}, screenshot, list_tabs"
+             scroll {{direction}}, screenshot {{full_page? | ref? | region?}}, list_tabs"
         ))
     })?;
     validate(&action)?;
@@ -433,7 +470,7 @@ fn parse_action(raw: Value) -> Result<BrowserAction, ToolError> {
 /// not trust us. Both sides resolve the URL with a real parser rather than
 /// matching a prefix, so the two cannot end up disagreeing about a malformed
 /// one.
-fn validate(action: &BrowserAction) -> Result<(), ToolError> {
+pub(crate) fn validate(action: &BrowserAction) -> Result<(), ToolError> {
     let bounded = |value: &str, key: &str, max: usize| -> Result<(), ToolError> {
         if value.trim().is_empty() {
             return Err(ToolError::InvalidArgs(format!("`{key}` must not be empty")));
@@ -523,10 +560,32 @@ fn validate(action: &BrowserAction) -> Result<(), ToolError> {
                 ));
             }
         }
-        BrowserAction::ReadPage { .. }
-        | BrowserAction::GoBack
-        | BrowserAction::Screenshot { .. }
-        | BrowserAction::ListTabs => {}
+        BrowserAction::Screenshot {
+            full_page,
+            r#ref,
+            region,
+        } => {
+            let areas = [*full_page, r#ref.is_some(), region.is_some()];
+            if areas.iter().filter(|set| **set).count() > 1 {
+                return Err(ToolError::InvalidArgs(
+                    "a screenshot takes one of `full_page`, `ref` or `region` — they name \
+                     different areas; send two screenshots to get two"
+                        .into(),
+                ));
+            }
+            if let Some(r) = r#ref {
+                bounded(r, "ref", MAX_REF_LEN)?;
+            }
+            if let Some(region) = region {
+                let edge = 1..=MAX_CAPTURE_PX;
+                if !edge.contains(&region.width) || !edge.contains(&region.height) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "`region` width and height must be 1-{MAX_CAPTURE_PX} CSS pixels"
+                    )));
+                }
+            }
+        }
+        BrowserAction::ReadPage { .. } | BrowserAction::GoBack | BrowserAction::ListTabs => {}
     }
     Ok(())
 }
@@ -537,7 +596,7 @@ fn validate(action: &BrowserAction) -> Result<(), ToolError> {
 /// own completion (the relay always answers, including for "no extension"), so
 /// there is nothing on screen to take down. The timeout is the backstop for a
 /// page that went away mid-batch.
-async fn request_actions(
+pub(crate) async fn request_actions(
     fb: &ChatFeedback,
     turn_id: &str,
     actions: Vec<BrowserAction>,
@@ -657,7 +716,11 @@ mod tests {
         for a in [
             BrowserAction::ReadPage { max_chars: None },
             BrowserAction::Find { text: "hi".into() },
-            BrowserAction::Screenshot { full_page: false },
+            BrowserAction::Screenshot {
+                full_page: false,
+                r#ref: None,
+                region: None,
+            },
             BrowserAction::ListTabs,
             BrowserAction::WaitFor {
                 text: None,
@@ -800,6 +863,52 @@ mod tests {
         // same invented verb.
         assert!(msg.contains("navigate"), "{msg}");
         assert!(msg.contains("set_viewport"), "{msg}");
+    }
+
+    #[test]
+    fn a_screenshot_can_be_cut_to_one_element_or_one_region() {
+        let by_ref = parse_action(json!({"action": "screenshot", "ref": "e4"})).unwrap();
+        assert!(
+            matches!(by_ref, BrowserAction::Screenshot { r#ref: Some(ref r), .. } if r == "e4")
+        );
+
+        let by_region = parse_action(json!({
+            "action": "screenshot",
+            "region": {"x": 0, "y": 120, "width": 800, "height": 300}
+        }))
+        .unwrap();
+        let BrowserAction::Screenshot {
+            region: Some(region),
+            ..
+        } = by_region
+        else {
+            panic!("region must survive parsing: {by_region:?}");
+        };
+        assert_eq!((region.y, region.height), (120, 300));
+    }
+
+    #[test]
+    fn a_screenshot_names_one_area_not_several() {
+        for raw in [
+            json!({"action": "screenshot", "full_page": true, "ref": "e4"}),
+            json!({"action": "screenshot", "ref": "e4",
+                   "region": {"x": 0, "y": 0, "width": 10, "height": 10}}),
+        ] {
+            let err = parse_action(raw).unwrap_err().to_string();
+            assert!(err.contains("one of"), "{err}");
+        }
+    }
+
+    #[test]
+    fn an_empty_or_absurd_region_is_refused() {
+        for (width, height) in [(0, 100), (100, 0), (MAX_CAPTURE_PX + 1, 100)] {
+            let raw = json!({"action": "screenshot",
+                             "region": {"x": 0, "y": 0, "width": width, "height": height}});
+            assert!(
+                parse_action(raw).is_err(),
+                "{width}x{height} must be refused"
+            );
+        }
     }
 
     #[test]

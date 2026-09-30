@@ -60,7 +60,7 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     };
 
     let capabilities =
-        super::tool_toggles::capabilities_for_user(&state, &user.roles, &user.id).await;
+        super::tool_toggles::token_capabilities_for_user(&state, &user.roles, &user.id).await;
     let mut token_details = Vec::with_capacity(token_rows.len());
     for token in token_rows {
         let lists = model_lists.get(&token.id).cloned().unwrap_or_default();

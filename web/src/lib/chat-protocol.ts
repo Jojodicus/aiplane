@@ -174,7 +174,12 @@ export type BrowserAction =
 	| { action: 'type_text'; ref: string; text: string; replace?: boolean; submit?: boolean }
 	| { action: 'press_key'; key: string; modifiers?: ('ctrl' | 'shift' | 'alt' | 'meta')[] }
 	| { action: 'scroll'; direction?: 'up' | 'down'; ref?: string }
-	| { action: 'screenshot'; full_page?: boolean }
+	| {
+			action: 'screenshot';
+			full_page?: boolean;
+			ref?: string;
+			region?: { x: number; y: number; width: number; height: number };
+		}
 	| { action: 'set_viewport'; width: number; height: number; mobile?: boolean }
 	| { action: 'wait_for'; text?: string; timeout_ms?: number }
 	| { action: 'list_tabs' };

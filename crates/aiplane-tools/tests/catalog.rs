@@ -133,6 +133,39 @@ mod catalog_tests {
     }
 
     #[test]
+    fn api_keys_are_the_toggles_a_token_can_actually_use() {
+        let keys = api_keys([
+            "browser_control",
+            "show_screenshot",
+            "search_web",
+            "schedule_action",
+            "list_scheduled_actions",
+            "create_document",
+            "typst_letter",
+            "typst_letter_edit",
+        ]);
+        // Listing schedules works off the chat path, so the shared switch does
+        // reach a token; every canvas and template tool needs a live turn.
+        for key in ["search_web", "schedule"] {
+            assert!(
+                keys.contains(key),
+                "{key} must be offered for tokens: {keys:?}"
+            );
+        }
+        for key in [
+            "browser_control",
+            "show_screenshot",
+            "document",
+            "typst_letter",
+        ] {
+            assert!(
+                !keys.contains(key),
+                "{key} can never run for a token: {keys:?}"
+            );
+        }
+    }
+
+    #[test]
     fn prettify_humanises_slugs() {
         assert_eq!(prettify("quarterly_report"), "Quarterly report");
         assert_eq!(prettify("letter"), "Letter");

@@ -668,8 +668,12 @@ async function perform(action, tabFor) {
 			return { went_back: true };
 		}
 		case 'screenshot': {
-			const dataUrl = await cdp.screenshot(tab.id, { fullPage: Boolean(action.full_page) });
-			return { screenshot: dataUrl, full_page: Boolean(action.full_page) };
+			const { dataUrl, clip } = await cdp.screenshot(tab.id, {
+				fullPage: Boolean(action.full_page),
+				ref: action.ref ?? null,
+				region: action.region ?? null
+			});
+			return { screenshot: dataUrl, clip, full_page: Boolean(action.full_page) };
 		}
 		case 'set_viewport':
 			return await cdp.setViewport(tab.id, {

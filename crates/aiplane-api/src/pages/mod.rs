@@ -359,7 +359,9 @@ pub use chat::chat_attachment;
 // per-token panel (`tool_toggles`). The resolver helpers are re-exported
 // so the JSON token API can validate toggle keys against the same source.
 mod tool_toggles;
-pub use tool_toggles::{capabilities_for_user, entries_for_roles, valid_keys};
+pub use tool_toggles::{
+    capabilities_for_user, entries_for_roles, token_capabilities_for_user, valid_keys,
+};
 
 // ---------------------------------------------------------------------------
 // Tools
