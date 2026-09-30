@@ -77,6 +77,13 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
     await plaintext.waitFor({ state: "visible", timeout: 5000 });
     const text = (await plaintext.textContent()) ?? "";
     assert.match(text.trim(), /^gwk_[0-9a-f]{64}$/);
+    const mintedCard = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "Token created" }) });
+    const copyButton = mintedCard.getByRole("button", { name: "Copy token" });
+    const tokenBox = await mintedCard.locator("pre").boundingBox();
+    const copyBox = await copyButton.boundingBox();
+    assert.ok(tokenBox && copyBox && (tokenBox.x + tokenBox.width <= copyBox.x || tokenBox.y + tokenBox.height <= copyBox.y));
+    await mintedCard.getByRole("button", { name: "Close" }).click();
+    await mintedCard.waitFor({ state: "hidden" });
     assert.equal(await page.locator("li.py-3").count(), 4);
 
     const row = page.locator("li.py-3").filter({ hasText: "spa-e2e-token" });
@@ -85,16 +92,18 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
     await row.getByRole("checkbox", { name: "Tool use", exact: true }).check();
     assert.equal((await saved).status(), 200);
     assert.equal((await refreshed).status(), 200);
-    let capabilities = await openEditor(page, row, "Capabilities");
-    const firstTool = capabilities.getByRole("checkbox", { name: /Toggle/ }).first();
+    await row.getByRole("button", { name: /Capabilities/ }).click();
+    const capabilities = page.locator("dialog[open]");
+    const firstTool = capabilities.locator("ul.divide-y > li").first();
     await firstTool.waitFor();
     saved = page.waitForResponse((response) => response.url().includes("/tools") && response.request().method() === "PUT");
     refreshed = page.waitForResponse((response) => response.url().endsWith("/api/v0/tokens/details") && response.request().method() === "GET");
-    await firstTool.uncheck();
+    await firstTool.getByRole("button", { name: /On — always available/ }).click();
     assert.equal((await saved).status(), 200);
     assert.equal((await refreshed).status(), 200);
-    assert.equal(await capabilities.getByRole("checkbox", { name: /Toggle/ }).first().isChecked(), false);
-    await closeEditor(page);
+    assert.equal(await firstTool.getByRole("button", { name: /On — always available/ }).getAttribute("aria-pressed"), "true");
+    await capabilities.getByRole("button", { name: "Close", exact: true }).click();
+    await capabilities.waitFor({ state: "hidden" });
     const mcp = row.getByRole("checkbox", { name: "Allow ask-mode MCP tools over API", exact: true });
     await mcp.waitFor();
     await page.waitForTimeout(100);
@@ -122,7 +131,10 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
     await quota.getByText("42 requests / day", { exact: false }).waitFor();
     await closeEditor(page);
     await row.getByText("Quota: 1 rule(s)", { exact: true }).waitFor();
+    await page.getByRole("link", { name: "Account", exact: true }).click();
     await page.getByRole("heading", { name: "Account", exact: true }).waitFor();
+    assert.equal(await page.getByRole("heading", { name: "Your tokens", exact: true }).count(), 0);
+    await page.getByRole("link", { name: "Tokens", exact: true }).click();
     assert.ok(await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth));
 
     // Revoke the new row (confirm() is native — accept it).
@@ -140,6 +152,25 @@ test("tokens preserve scopes, quotas, identity, and CRUD on mobile", async () =>
         null,
         { timeout: 5000 },
     );
+    await ctx.close();
+});
+
+test("setup guides show the current gateway URL and each client setup", async () => {
+    const ctx = await browser.newContext();
+    await ctx.addCookies([{ name: "id", value: await devSessionCookie(), url: BASE }]);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/tokens?tab=guides`, { waitUntil: "networkidle" });
+
+    await page.getByRole("heading", { name: "Set up a client" }).waitFor();
+    assert.match(await page.locator("article pre").first().textContent(), /"baseURL": ".*\/v1"/);
+    await page.getByRole("link", { name: "Claude Code", exact: true }).click();
+    await page.locator("article pre", { hasText: "ANTHROPIC_BASE_URL=" }).waitFor();
+    assert.match(await page.locator("article pre").textContent(), /ANTHROPIC_BASE_URL=/);
+    await page.getByRole("link", { name: "Python (OpenAI)", exact: true }).click();
+    await page.locator("article pre", { hasText: "chat.completions.create" }).waitFor();
+    assert.match(await page.locator("article pre").last().textContent(), /chat\.completions\.create/);
+    assert.equal(await page.getByRole("link", { name: "Open WebUI", exact: true }).count(), 0);
+    assert.ok(await page.locator("main").evaluate((element) => element.scrollWidth <= element.clientWidth));
     await ctx.close();
 });
 

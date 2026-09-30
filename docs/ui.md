@@ -101,6 +101,15 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
+The `/tokens` page uses the same URL-backed `tabs-border` layout as the admin
+models and groups pages. `?tab=tokens` manages tokens, `?tab=guides` contains
+client setup guides, and `?tab=account` holds the account summary and device
+notification settings. A newly minted or rotated secret stays above the tabs
+until the page is left, so switching to a guide does not hide the one-time value.
+The guide's `client` query parameter selects OpenCode, Claude Code, or Python;
+code examples use the browser's current origin so they also work on
+self-hosted domains. All guide instructions live in the six Fluent catalogs.
+
 Long or data-driven choices use the shared `SearchableSelect` combobox instead
 of a native select. It searches labels, stored values, descriptions, keywords and
 badges; supports arrow keys, Enter and Escape; and bounds long result lists to

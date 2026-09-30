@@ -4,7 +4,7 @@
 # the page.
 
 tokens-page-heading = API tokens
-tokens-intro = Bearer tokens for the OpenAI-compatible API. The plaintext is shown only at creation time — store it somewhere safe.
+tokens-intro = Tokens for apps and code that connect to AIplane. The full token is shown only when you create or rotate it — copy it and keep it private.
 
 tokens-create-heading = Create token
 tokens-name-label = Name
@@ -93,3 +93,27 @@ tokens-limits-remove = Remove
 tokens-limits-removed-toast = Token quota removed.
 tokens-limits-admin-badge = set by admin
 tokens-models-admin-set = An operator also restricts this token to: { $models }. Your own selection narrows that further; it cannot widen it.
+
+# Client setup guides and token-page tabs.
+tokens-tab-tokens = Tokens
+tokens-tab-guides = Setup guides
+tokens-tab-account = Account
+tokens-guides-heading = Set up a client
+tokens-guides-intro = Choose an app below and follow the steps. You can use the same token in more than one app, but a separate token per app is easier to manage.
+tokens-guides-before = First, create a token in the Tokens tab and copy it. The full token is shown only once. Keep it private.
+tokens-guide-opencode = OpenCode
+tokens-guide-claude = Claude Code
+tokens-guide-python = Python (OpenAI)
+tokens-opencode-step-1 = Create a token in the Tokens tab and copy it.
+tokens-opencode-step-2 = In OpenCode, run /connect, choose Other, enter aiplane as the provider ID, then paste your token.
+tokens-opencode-step-3 = Save this configuration in ~/.config/opencode/opencode.jsonc. Replace YOUR_MODEL_ID with a chat model ID you can use.
+tokens-opencode-finish = Run opencode, then use /models to choose aiplane/YOUR_MODEL_ID.
+tokens-claude-step-1 = Create a token in the Tokens tab and copy it.
+tokens-claude-step-2 = Choose a chat model ID you can use. Your administrator may have set up an alias for Claude Code.
+tokens-claude-step-3 = Paste these commands into your terminal. Replace the token and model ID first.
+tokens-claude-finish = Claude Code uses the base URL without /v1. If you get a model-not-found error, ask your administrator which alias to use.
+tokens-python-step-1 = Create a token in the Tokens tab and copy it.
+tokens-python-step-2 = Install the OpenAI Python package with python -m pip install openai, then set OPENAI_API_KEY to your token in your terminal.
+tokens-python-step-3 = Save this example as chat.py. Replace YOUR_MODEL_ID with a chat model ID you can use.
+tokens-python-finish = Run python chat.py. Keep the token in an environment variable, not in the script.
+tokens-guides-model-note = Need a model ID? Your available models are shown in the chat model picker or by GET /v1/models with your token.

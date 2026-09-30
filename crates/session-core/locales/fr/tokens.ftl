@@ -1,7 +1,7 @@
 # STATUS: llm-generated, unreviewed — pending native-speaker QA
 
 tokens-page-heading = Jetons API
-tokens-intro = Jetons Bearer pour l'API compatible OpenAI. Le texte en clair n'est affiché qu'à la création — conservez-le en lieu sûr.
+tokens-intro = Jetons pour les applications et le code qui se connectent à AIplane. La valeur complète n’est affichée qu’à la création ou au renouvellement — copiez-la et gardez-la secrète.
 
 tokens-create-heading = Créer un jeton
 tokens-name-label = Nom
@@ -90,3 +90,27 @@ tokens-limits-remove = Supprimer
 tokens-limits-removed-toast = Quota du jeton supprimé.
 tokens-limits-admin-badge = défini par l'administrateur
 tokens-models-admin-set = Un opérateur restreint aussi ce jeton à : { $models }. Votre sélection ne peut que réduire cela, pas l'élargir.
+
+# Client setup guides and token-page tabs.
+tokens-tab-tokens = Jetons
+tokens-tab-guides = Guides de configuration
+tokens-tab-account = Compte
+tokens-guides-heading = Configurer un client
+tokens-guides-intro = Choisissez une application ci-dessous et suivez les étapes. Un jeton peut servir dans plusieurs applications, mais un jeton par application est plus facile à gérer.
+tokens-guides-before = Créez d’abord un jeton dans l’onglet Jetons et copiez-le. Sa valeur complète n’est affichée qu’une fois. Gardez-la secrète.
+tokens-guide-opencode = OpenCode
+tokens-guide-claude = Claude Code
+tokens-guide-python = Python (OpenAI)
+tokens-opencode-step-1 = Créez un jeton dans l’onglet Jetons et copiez-le.
+tokens-opencode-step-2 = Dans OpenCode, lancez /connect, choisissez Other, saisissez aiplane comme identifiant du fournisseur, puis collez votre jeton.
+tokens-opencode-step-3 = Enregistrez cette configuration dans ~/.config/opencode/opencode.jsonc. Remplacez YOUR_MODEL_ID par l’identifiant d’un modèle de chat accessible.
+tokens-opencode-finish = Lancez opencode, puis choisissez aiplane/YOUR_MODEL_ID avec /models.
+tokens-claude-step-1 = Créez un jeton dans l’onglet Jetons et copiez-le.
+tokens-claude-step-2 = Choisissez l’identifiant d’un modèle de chat accessible. Votre administrateur a peut-être créé un alias pour Claude Code.
+tokens-claude-step-3 = Collez ces commandes dans votre terminal. Remplacez d’abord le jeton et l’identifiant du modèle.
+tokens-claude-finish = Claude Code utilise l’URL de base sans /v1. Si le modèle est introuvable, demandez à votre administrateur quel alias utiliser.
+tokens-python-step-1 = Créez un jeton dans l’onglet Jetons et copiez-le.
+tokens-python-step-2 = Installez le paquet Python OpenAI avec python -m pip install openai, puis définissez OPENAI_API_KEY avec votre jeton dans le terminal.
+tokens-python-step-3 = Enregistrez cet exemple dans chat.py. Remplacez YOUR_MODEL_ID par l’identifiant d’un modèle de chat accessible.
+tokens-python-finish = Exécutez python chat.py. Gardez le jeton dans une variable d’environnement, pas dans le script.
+tokens-guides-model-note = Besoin d’un identifiant de modèle ? Les modèles accessibles sont dans le sélecteur du chat ou via GET /v1/models avec votre jeton.

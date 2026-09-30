@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import ManagedTokenRow from '$lib/components/tokens/ManagedTokenRow.svelte';
 	import PushNotificationsCard from '$lib/components/tokens/PushNotificationsCard.svelte';
 	import TokenAccountCard from '$lib/components/tokens/TokenAccountCard.svelte';
+	import TokenSetupGuides from '$lib/components/tokens/TokenSetupGuides.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import { selectedTokenTab } from '$lib/tokens-tabs';
 	import type { ManagedToken, TokenManagementDetails } from '$lib/tokens';
 
 	let details = $state<TokenManagementDetails | null>(null);
@@ -19,6 +23,7 @@
 	// Two fields is a dialog, not a card wedged above the list — the tokens a
 	// user came to manage should be the first thing on the page.
 	let creating = $state(false);
+	let selected = $derived(selectedTokenTab(page.url.search));
 
 	function openCreate() {
 		name = '';
@@ -76,23 +81,33 @@
 	onMount(refresh);
 </script>
 
-<div class="w-full">
+<div class="flex w-full flex-col gap-4">
 	<h1 class="mb-2 text-2xl font-bold">{t('tokens-page-heading')}</h1>
-	<p class="mb-6 text-sm text-base-content/60">{t('tokens-intro')}</p>
+	<p class="text-sm text-base-content/60">{t('tokens-intro')}</p>
+	<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('tokens-page-heading')}>
+		<a class:tab-active={selected === 'tokens'} class="tab whitespace-nowrap" href="{base}/tokens?tab=tokens" aria-current={selected === 'tokens' ? 'page' : undefined}>{t('tokens-tab-tokens')}</a>
+		<a class:tab-active={selected === 'guides'} class="tab whitespace-nowrap" href="{base}/tokens?tab=guides" aria-current={selected === 'guides' ? 'page' : undefined}>{t('tokens-tab-guides')}</a>
+		<a class:tab-active={selected === 'account'} class="tab whitespace-nowrap" href="{base}/tokens?tab=account" aria-current={selected === 'account' ? 'page' : undefined}>{t('tokens-tab-account')}</a>
+	</nav>
 	{#if error}<div class="alert alert-error mb-4"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-info mb-4"><span>{notice}</span></div>{/if}
 
 	{#if minted}
 		<section class="card mb-6"><div class="card-body">
-			<h2 class="card-title text-base"><span class="text-success">✓</span>{t('tokens-minted-heading')}</h2>
+			<div class="flex items-center justify-between gap-3">
+				<h2 class="card-title text-base"><span class="text-success">✓</span>{t('tokens-minted-heading')}</h2>
+				<button type="button" class="btn btn-ghost btn-sm btn-square" onclick={() => (minted = null)} aria-label={t('tokens-panel-close')} title={t('tokens-panel-close')}>×</button>
+			</div>
 			<p class="text-sm text-base-content/70">{t('tokens-minted-copy-warning')}</p>
-			<div class="relative"><pre class="m-0 w-full min-w-0 select-all whitespace-pre-wrap break-all rounded-md border border-base-300 bg-base-100 p-3 pr-12 font-mono text-xs">{minted.plaintext}</pre><button class="btn btn-ghost btn-sm btn-square absolute right-1.5 top-1.5" onclick={() => navigator.clipboard?.writeText(minted?.plaintext ?? '')} aria-label={t('tokens-copy-aria')}>{t('webhooks-copy')}</button></div>
+			<div class="flex flex-col items-start gap-2 sm:flex-row sm:items-start">
+				<pre class="m-0 w-full min-w-0 flex-1 select-all whitespace-pre-wrap break-all rounded-box border border-base-300 bg-base-100 p-3 font-mono text-xs">{minted.plaintext}</pre>
+				<button type="button" class="btn btn-sm shrink-0" onclick={() => navigator.clipboard?.writeText(minted?.plaintext ?? '')} aria-label={t('tokens-copy-aria')}>{t('webhooks-copy')}</button>
+			</div>
 			<p class="mb-0 mt-3 text-xs text-base-content/60">{t('tokens-minted-name', { name: minted.name })}</p>
 		</div></section>
 	{/if}
 
-	{#if details?.push_enabled}<PushNotificationsCard />{/if}
-
+	{#if selected === 'tokens'}
 	<section class="card border border-base-300"><div class="card-body">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<h2 class="card-title">{t('tokens-list-heading')}</h2>
@@ -107,7 +122,12 @@
 			{/each}</ul>
 		{/if}
 	</div></section>
-	{#if details}<TokenAccountCard account={details.account} />{/if}
+	{:else if selected === 'guides'}
+		<TokenSetupGuides />
+	{:else}
+		{#if details?.push_enabled}<PushNotificationsCard />{/if}
+		{#if details}<TokenAccountCard account={details.account} />{/if}
+	{/if}
 </div>
 
 <EditModal

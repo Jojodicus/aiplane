@@ -1,7 +1,7 @@
 # STATUS: llm-generated, unreviewed — pending native-speaker QA
 
 tokens-page-heading = Tokens de API
-tokens-intro = Tokens Bearer para la API compatible con OpenAI. El texto plano solo se muestra al crearlo — guárdelo en un lugar seguro.
+tokens-intro = Tokens para aplicaciones y código que se conectan a AIplane. El valor completo solo se muestra al crear o renovar el token: cópialo y guárdalo en privado.
 
 tokens-create-heading = Crear token
 tokens-name-label = Nombre
@@ -90,3 +90,27 @@ tokens-limits-remove = Quitar
 tokens-limits-removed-toast = Cuota del token eliminada.
 tokens-limits-admin-badge = fijada por el administrador
 tokens-models-admin-set = Un operador también restringe este token a: { $models }. Tu selección solo puede reducir eso, no ampliarlo.
+
+# Client setup guides and token-page tabs.
+tokens-tab-tokens = Tokens
+tokens-tab-guides = Guías de configuración
+tokens-tab-account = Cuenta
+tokens-guides-heading = Configurar un cliente
+tokens-guides-intro = Elige una aplicación y sigue los pasos. Puedes usar un token en varias aplicaciones, pero un token por aplicación es más fácil de administrar.
+tokens-guides-before = Primero crea un token en la pestaña Tokens y cópialo. El valor completo solo se muestra una vez. Guárdalo en privado.
+tokens-guide-opencode = OpenCode
+tokens-guide-claude = Claude Code
+tokens-guide-python = Python (OpenAI)
+tokens-opencode-step-1 = Crea un token en la pestaña Tokens y cópialo.
+tokens-opencode-step-2 = En OpenCode, ejecuta /connect, elige Other, escribe aiplane como ID de proveedor y pega tu token.
+tokens-opencode-step-3 = Guarda esta configuración en ~/.config/opencode/opencode.jsonc. Sustituye YOUR_MODEL_ID por el ID de un modelo de chat disponible.
+tokens-opencode-finish = Ejecuta opencode y usa /models para elegir aiplane/YOUR_MODEL_ID.
+tokens-claude-step-1 = Crea un token en la pestaña Tokens y cópialo.
+tokens-claude-step-2 = Elige el ID de un modelo de chat disponible. Es posible que tu administrador haya creado un alias para Claude Code.
+tokens-claude-step-3 = Pega estos comandos en tu terminal. Primero sustituye el token y el ID del modelo.
+tokens-claude-finish = Claude Code usa la URL base sin /v1. Si aparece un error de modelo no encontrado, pregunta a tu administrador qué alias usar.
+tokens-python-step-1 = Crea un token en la pestaña Tokens y cópialo.
+tokens-python-step-2 = Instala el paquete Python de OpenAI con python -m pip install openai y define OPENAI_API_KEY con tu token en la terminal.
+tokens-python-step-3 = Guarda este ejemplo como chat.py. Sustituye YOUR_MODEL_ID por el ID de un modelo de chat disponible.
+tokens-python-finish = Ejecuta python chat.py. Guarda el token en una variable de entorno, no en el script.
+tokens-guides-model-note = ¿Necesitas un ID de modelo? Los modelos disponibles aparecen en el selector del chat o en GET /v1/models con tu token.

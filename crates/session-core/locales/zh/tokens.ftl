@@ -1,7 +1,7 @@
 # STATUS: llm-generated, unreviewed — pending native-speaker QA
 
 tokens-page-heading = API 令牌
-tokens-intro = 用于兼容 OpenAI 的 API 的 Bearer 令牌。明文仅在创建时显示一次——请妥善保存。
+tokens-intro = 用于连接 AIplane 的应用和代码的令牌。完整令牌仅在创建或轮换时显示，请复制并妥善保管。
 
 tokens-create-heading = 创建令牌
 tokens-name-label = 名称
@@ -90,3 +90,27 @@ tokens-limits-remove = 移除
 tokens-limits-removed-toast = 令牌配额已移除。
 tokens-limits-admin-badge = 由管理员设置
 tokens-models-admin-set = 运营方还将此令牌限制为：{ $models }。你的选择只能在此基础上进一步收紧，无法放宽。
+
+# Client setup guides and token-page tabs.
+tokens-tab-tokens = 令牌
+tokens-tab-guides = 设置指南
+tokens-tab-account = 账户
+tokens-guides-heading = 设置客户端
+tokens-guides-intro = 选择下面的应用并按步骤操作。一个令牌可以用于多个应用，但每个应用使用单独的令牌更方便管理。
+tokens-guides-before = 先在“令牌”标签页创建并复制令牌。完整令牌只显示一次，请妥善保管。
+tokens-guide-opencode = OpenCode
+tokens-guide-claude = Claude Code
+tokens-guide-python = Python (OpenAI)
+tokens-opencode-step-1 = 在“令牌”标签页创建并复制令牌。
+tokens-opencode-step-2 = 在 OpenCode 中运行 /connect，选择 Other，输入 aiplane 作为提供商 ID，然后粘贴令牌。
+tokens-opencode-step-3 = 将此配置保存到 ~/.config/opencode/opencode.jsonc。把 YOUR_MODEL_ID 替换为可用的聊天模型 ID。
+tokens-opencode-finish = 运行 opencode，然后用 /models 选择 aiplane/YOUR_MODEL_ID。
+tokens-claude-step-1 = 在“令牌”标签页创建并复制令牌。
+tokens-claude-step-2 = 选择可用的聊天模型 ID。管理员可能已为 Claude Code 设置别名。
+tokens-claude-step-3 = 将这些命令粘贴到终端。先替换令牌和模型 ID。
+tokens-claude-finish = Claude Code 使用不带 /v1 的基础 URL。如果提示找不到模型，请向管理员询问应使用哪个别名。
+tokens-python-step-1 = 在“令牌”标签页创建并复制令牌。
+tokens-python-step-2 = 运行 python -m pip install openai 安装 OpenAI Python 包，然后在终端将 OPENAI_API_KEY 设为你的令牌。
+tokens-python-step-3 = 将示例保存为 chat.py。把 YOUR_MODEL_ID 替换为可用的聊天模型 ID。
+tokens-python-finish = 运行 python chat.py。请将令牌保存在环境变量中，不要写入脚本。
+tokens-guides-model-note = 需要模型 ID？可在聊天模型选择器中查看可用模型，也可以带上令牌请求 GET /v1/models。
