@@ -167,6 +167,10 @@ single-replica restart, and migrations applying unattended — are spelled out i
 A release is **a tag and nothing else.** There is no version commit to make,
 nothing to bump, and no file to edit.
 
+In Claude Code, `/release-software`
+([`.claude/skills/release-software/`](../.claude/skills/release-software/SKILL.md))
+runs the steps below end to end.
+
 **1. Decide the number.** It is derived, not chosen:
 
 ```bash

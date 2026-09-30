@@ -2,8 +2,9 @@
 **/*.rs.bk
 Cargo.lock.bak
 
-# Claude Code session state
-.claude/
+# Claude Code session state stays local; the project skills are shared
+.claude/*
+!.claude/skills/
 
 # Local config and secrets
 *.local.toml
