@@ -45,6 +45,7 @@ pub mod rag_documents;
 pub mod read_skill;
 pub mod schedule;
 pub mod search_web;
+pub mod show_screenshot;
 pub mod text_edit;
 pub mod typst_render;
 pub mod upload_attachment;

@@ -169,6 +169,17 @@ pub struct BrowserRequest {
     pub actions: Vec<BrowserAction>,
 }
 
+/// A rectangle of the page in CSS pixels, measured from the top-left of the
+/// document rather than the viewport, so it names the same content wherever
+/// the page happens to be scrolled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CaptureRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// One step the extension performs in the user's browser.
 ///
 /// Typed, not free-form JSON: the extension has to decide what a step *is* —
@@ -235,10 +246,16 @@ pub enum BrowserAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         r#ref: Option<String>,
     },
-    /// Capture the page. `full_page` goes beyond the viewport.
+    /// Capture the page: the viewport, the whole page (`full_page`), one
+    /// element (`ref`), or a rectangle of it (`region`) — at most one of the
+    /// last three.
     Screenshot {
         #[serde(default)]
         full_page: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<CaptureRegion>,
     },
     /// Resize the assistant's viewport, optionally emulating a phone (touch
     /// events, mobile user agent, device pixel ratio).

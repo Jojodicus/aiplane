@@ -87,6 +87,11 @@ impl EnableTools {
         self
     }
 
+    /// The toggle keys this tool lets the model turn on, in advertised order.
+    pub fn keys(&self) -> Vec<String> {
+        self.full_catalog().into_iter().map(|t| t.key).collect()
+    }
+
     fn snapshot_catalog(registry: &ToolRegistry) -> Vec<EnableTarget> {
         let mut seen = std::collections::HashSet::new();
         let mut catalog: Vec<EnableTarget> = registry

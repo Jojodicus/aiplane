@@ -20,6 +20,8 @@
  * no device-pixel-ratio conversion, including under viewport emulation.
  */
 
+import { captureClip } from './capture.js';
+
 const PROTOCOL = '1.3';
 
 /** Tab ids we hold a debugger session on. */
@@ -279,36 +281,54 @@ export async function setViewport(tabId, { width, height, mobile }) {
 }
 
 /**
- * Capture the page.
+ * Capture the page: the viewport, the whole document, one element (`ref`) or a
+ * rectangle (`region`). Returns the image and the `clip` it covers, so whoever
+ * looks at the picture can turn a spot in it back into page coordinates.
  *
  * `Page.captureScreenshot` works on a tab that is not in front, which
  * `chrome.tabs.captureVisibleTab` does not — that alone is worth the debugger
  * session, because the assistant's window sits behind the user's.
  */
-export async function screenshot(tabId, { fullPage = false } = {}) {
-	const params = { format: 'png', captureBeyondViewport: fullPage };
-	if (fullPage) {
-		const { contentSize } = await send(tabId, 'Page.getLayoutMetrics');
-		if (contentSize) {
-			params.clip = {
-				x: 0,
-				y: 0,
-				width: Math.min(contentSize.width, MAX_CAPTURE_PX),
-				height: Math.min(contentSize.height, MAX_CAPTURE_PX),
-				scale: 1
-			};
-		}
+export async function screenshot(tabId, { fullPage = false, ref = null, region = null } = {}) {
+	const { page, element } = await geometry(tabId, ref);
+	if (ref && !element) {
+		throw new Error(`no visible element with ref ${ref} — read the page again`);
 	}
+	const clip = captureClip({ fullPage, region, element }, page);
+	const cut = fullPage || Boolean(ref) || Boolean(region);
+	// Beyond-viewport capture only when asked for an area: for the plain
+	// viewport it makes Chrome relayout the page for nothing.
+	const params = cut
+		? { format: 'png', captureBeyondViewport: true, clip: { ...clip, scale: 1 } }
+		: { format: 'png', captureBeyondViewport: false };
 	const { data } = await send(tabId, 'Page.captureScreenshot', params);
-	return downscale(`data:image/png;base64,${data}`);
+	return { dataUrl: await downscale(`data:image/png;base64,${data}`), clip };
 }
 
-/**
- * Hard ceiling on what is captured at all, before any downscaling. A page can
- * be fifty thousand pixels tall; asking the browser to rasterise that produces
- * an image nobody will look at and can exhaust the tab's memory.
- */
-const MAX_CAPTURE_PX = 8_000;
+/** Scroll offset, viewport and document size — plus one element's box. */
+async function geometry(tabId, ref) {
+	const { result } = await send(tabId, 'Runtime.evaluate', {
+		expression: `(() => {
+			const doc = document.documentElement;
+			const page = {
+				scrollX, scrollY,
+				viewportWidth: innerWidth, viewportHeight: innerHeight,
+				contentWidth: Math.max(doc.scrollWidth, document.body?.scrollWidth ?? 0),
+				contentHeight: Math.max(doc.scrollHeight, document.body?.scrollHeight ?? 0)
+			};
+			const ref = ${JSON.stringify(ref)};
+			const el = ref && document.querySelector('[data-gw-ref=' + JSON.stringify(ref) + ']');
+			const r = el && el.getBoundingClientRect();
+			const element = r && (r.width > 0 || r.height > 0)
+				? { left: r.left, top: r.top, width: r.width, height: r.height }
+				: null;
+			return JSON.stringify({ page, element });
+		})()`,
+		returnByValue: true
+	});
+	if (!result?.value) throw new Error('could not measure the page');
+	return JSON.parse(result.value);
+}
 
 /**
  * Longest edge a model actually benefits from. Vision encoders downsample to

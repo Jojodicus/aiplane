@@ -22,6 +22,30 @@ pub struct CapabilityEntry {
     pub icon: Option<String>,
 }
 
+/// The capabilities an API token of this account can use: everything
+/// [`capabilities_for_user`] lists, minus the tools that only run inside a chat
+/// session. The token panel shows exactly these and the token-tools endpoint
+/// accepts exactly these, so neither offers nor stores a switch `/v1` ignores.
+pub async fn token_capabilities_for_user(
+    state: &RamaState,
+    roles: &[String],
+    user_id: &str,
+) -> Vec<CapabilityEntry> {
+    let tools = state.tools();
+    let usable = catalog::api_keys(tools.ids());
+    capabilities_for_user(state, roles, user_id)
+        .await
+        .into_iter()
+        .filter(|entry| {
+            entry.kind != "tool"
+                || entry
+                    .key
+                    .starts_with(aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX)
+                || usable.contains(&entry.key)
+        })
+        .collect()
+}
+
 /// The account's granted capabilities, shared by chat and token pickers.
 pub async fn capabilities_for_user(
     state: &RamaState,

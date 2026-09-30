@@ -32,7 +32,7 @@ use shared::api::{
 };
 use uuid::Uuid;
 
-use aiplane_api::pages::capabilities_for_user;
+use aiplane_api::pages::token_capabilities_for_user;
 use aiplane_core::rama_server::session::Session;
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::{token_tool_prefs, tokens, users};
@@ -1281,7 +1281,7 @@ async fn validate_token_states(
     requested: &std::collections::BTreeMap<String, String>,
 ) -> Result<std::collections::HashMap<String, i64>, String> {
     let allowed: std::collections::HashSet<String> =
-        capabilities_for_user(state, &user.roles, &user.id)
+        token_capabilities_for_user(state, &user.roles, &user.id)
             .await
             .into_iter()
             .map(|entry| {

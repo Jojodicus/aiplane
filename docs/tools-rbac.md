@@ -192,8 +192,19 @@ Related tools collapse onto **one** toggle key, because users reason in
 capabilities rather than function names: `remember` + `recall` → `memory`; the
 canvas tools (including `export_document`) → `document`; a typst template's
 render / edit / read / pptx family → its render id; all `comfyui_*` →
-`comfyui`; all of one MCP server's tools → `mcp__<server>`. `entry_key_for`
-maps id → key, `retain_enabled` applies a disabled set.
+`comfyui`; all of one MCP server's tools → `mcp__<server>`; `offer_download` +
+`zip_attachments` → `upload_attachment`. `entry_key_for` maps id → key,
+`retain_enabled` applies a disabled set.
+
+Every surface that lists toggles (`/tools`, the chat composer's picker, a
+token's panel) renders `catalog::entries`, and every surface that enforces one
+(discovery, the per-conversation overlay, token states, RBAC) goes through
+`entry_key_for`. They have to agree key for key: a listed key nothing looks up
+is a switch that does nothing — `offer_download` and `zip_attachments` were
+exactly that, each listed on its own while `upload_attachment` governed them.
+`every_listed_toggle_is_the_key_discovery_and_enforcement_use` in
+`crates/aiplane/src/tool_registry.rs` holds the two sides together over the
+real registry.
 
 The advertised order is deliberate: `enable_tools` first (identical across
 every conversation), then the tail sorted by toggle key then id. That keeps the
@@ -277,7 +288,10 @@ the live tool id at call time.
 - **Per-user toggles** — each user turns their granted tools on and off on
   `/tools`.
 - **Per-token scoping** — a `gwk_…` token has the same Off / Auto / On
-  capability picker as chat. It includes connected MCP integrations and
+  capability picker as chat, minus the capabilities whose every tool is
+  chat-only (`catalog::api_keys`): the `/v1` path drops those before a token's
+  choice is read, so their switch would do nothing. The token-tools endpoint
+  refuses the same keys. It includes connected MCP integrations and
   permitted skills. Missing built-in tools default to Auto; missing MCP
   integrations and skills default to Off. Explicit Auto is stored for the
   latter two families. The token's master tool switch remains an outer gate.

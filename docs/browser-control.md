@@ -170,7 +170,7 @@ is the honest signal that something else is driving.
 | `type_text` | yes | clicks the field, then `Input.insertText` (so frameworks see `beforeinput`/`input`), `replace` and `submit` |
 | `press_key` | yes | real key events with `ctrl`/`shift`/`alt`/`meta`; a modifier other than shift suppresses text, so `ctrl+a` selects instead of typing "a" |
 | `scroll` | no | a real wheel event — scroll-jacking pages and infinite lists listen for the wheel, not for a position that changed by itself. With `ref`, scrolls that element into view |
-| `screenshot` | no | `Page.captureScreenshot`, works on a tab that is not in front. `full_page` goes beyond the viewport (capped at 4000×16000) |
+| `screenshot` | no | `Page.captureScreenshot`, works on a tab that is not in front. One of: the viewport (default), `full_page`, one element by `ref` (with an 8px margin), or a `region` `{x, y, width, height}` in document CSS pixels. Either edge is capped at 8000 CSS px before downscaling to 1400 px. The result carries the `clip` it covered, so a spot in the image maps back to page coordinates. **Only the model sees it** — see [Showing the user](#showing-the-user) |
 | `set_viewport` | no | resize, or emulate a phone: touch events, mobile user agent and a 3× pixel ratio together, because metrics alone leave a server-side responsive site sending the desktop page |
 | `wait_for` | no | wait for text, or just wait (max 30s). A page is usually still assembling when `navigate` returns |
 | `list_tabs` | no | the title and address of every open tab. Allowed under the blanket grant; refused under "only sites I approve", because it belongs to no site |
@@ -203,6 +203,31 @@ A write on a page whose address does not resolve to an http(s) origin — the
 fresh `about:blank` tab, a `chrome://` page — is refused rather than run: with
 no origin there is no domain to name in a confirmation, and an unnamed
 confirmation is no confirmation.
+
+## Showing the user
+
+A `screenshot` step goes back to the model as an `image_url` part on the tool
+message. That is what an agent needs to find its way around a page, and the user
+never sees it: the chat renders tool calls, not the images inside them. A model
+that says "here is the screenshot" after one is pointing at nothing, which is
+exactly the report that led to this section.
+
+`show_screenshot` is the other half. It sends one `screenshot` step through the
+same extension and the same rendezvous, then stores the image as a chat
+attachment (`screenshot.png`, `screenshot-2.png`, … per reply) and splices the
+marker into the turn, so it renders inline where the model is writing. The model
+gets the same image back, so what it says about the picture is about the one the
+user has in front of them.
+
+It is its own tool rather than a flag on the batch on purpose: presenting is a
+capability with its own row on `/tools`, its own key for `enable_tools`, and a
+switch a user can turn off without losing the browser. Like `browser_control` it
+is chat-only, so it appears in neither the `/v1` tool list nor a token's panel.
+Without `[chat.s3]` it refuses *before* asking the browser for anything — a
+capture with nowhere to go is a page rendered for nothing.
+
+It is audited as its own step name, `show_screenshot`, with no URL, like every
+other batch.
 
 ## When the conversation is open more than once
 

@@ -52,6 +52,10 @@ pub fn base_registry(
         // deployment where nobody installed the extension gets a clean "no
         // extension" rather than a hang.
         .with(aiplane_tools::browser_control::BrowserControl)
+        // The same browser, but the capture goes into the reply: the user
+        // cannot see a `browser_control` screenshot. Needs [chat.s3] at
+        // runtime and says so before touching the browser.
+        .with(aiplane_tools::show_screenshot::ShowScreenshot)
         // Reach the user when they aren't watching: a finished long job, or a
         // scheduled action that found something. Runtime-gated on `[push]`
         // being configured plus a subscribed device, so it stays registered
@@ -129,6 +133,7 @@ mod tests {
         let tools = base_registry(rbac, None);
         for id in [
             "browser_control",
+            "show_screenshot",
             "dns_lookup",
             "create_document",
             "fetch_attachment",
@@ -140,6 +145,60 @@ mod tests {
             "wikipedia",
         ] {
             assert!(tools.contains(id), "missing built-in tool {id}");
+        }
+    }
+
+    /// One toggle key per capability, everywhere. `/tools`, the chat composer
+    /// and the token panel all render `catalog::entries`; discovery
+    /// (`enable_tools`), the per-chat overlay, token prefs and RBAC all resolve
+    /// through `entry_key_for`. A row whose key the enforcement side never
+    /// looks up is a switch that does nothing — `offer_download` and
+    /// `zip_attachments` were exactly that, listed on their own while
+    /// `upload_attachment` governed them — and a key missing from either side
+    /// is a tool the user cannot find or cannot turn off.
+    #[test]
+    fn every_listed_toggle_is_the_key_discovery_and_enforcement_use() {
+        use rt::tools::catalog::{self, BOOTSTRAP_TOOL_ID, entry_key_for, is_hidden};
+        use std::collections::BTreeSet;
+
+        let registry = base_registry(std::sync::Arc::new(Resolver::empty()), None);
+        let ids: Vec<String> = registry.ids().map(str::to_string).collect();
+        let enforced: BTreeSet<String> = ids
+            .iter()
+            .filter(|id| !is_hidden(id) && id.as_str() != BOOTSTRAP_TOOL_ID)
+            .map(|id| entry_key_for(id).to_string())
+            .collect();
+
+        let rows = catalog::entries(&registry, &ids, &[], &[]);
+        let listed: Vec<String> = rows.iter().map(|row| row.key.clone()).collect();
+        let listed_set: BTreeSet<String> = listed.iter().cloned().collect();
+        assert_eq!(
+            listed.len(),
+            listed_set.len(),
+            "a key is listed twice: {listed:?}"
+        );
+        assert_eq!(
+            listed_set, enforced,
+            "the tool list and the enforcement keys disagree — a key only on the left is a \
+             dead switch, one only on the right is a tool nobody can see or turn off"
+        );
+
+        let discoverable: BTreeSet<String> =
+            aiplane_tools::enable_tools::EnableTools::from_registry(&registry)
+                .keys()
+                .into_iter()
+                .collect();
+        assert_eq!(
+            discoverable, enforced,
+            "enable_tools advertises different keys than the tool list shows"
+        );
+
+        for row in &rows {
+            assert!(
+                row.title != row.tech,
+                "`{}` renders with its raw id as the title — give it display copy",
+                row.key
+            );
         }
     }
 }

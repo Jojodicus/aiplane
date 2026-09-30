@@ -75,8 +75,14 @@ async fn state_with_tool_grants(upstream_uri: &str, granted_tools: Vec<String>) 
     common::seed_pool_models(&registry, "pool", 0, &["model-a"]);
 
     // Real tool registry (Echo + CurrentTimestamp) so company_echo is
-    // dispatchable.
-    let tools = Arc::new(ToolRegistry::new().with(Echo).with(CurrentTimestamp));
+    // dispatchable; `browser_control` as the chat-only tool a token panel
+    // must not offer.
+    let tools = Arc::new(
+        ToolRegistry::new()
+            .with(Echo)
+            .with(CurrentTimestamp)
+            .with(aiplane_tools::browser_control::BrowserControl),
+    );
 
     let rbac = Resolver::build(
         RbacConfig {
@@ -223,6 +229,64 @@ async fn token_capability_route_persists_auto_and_rejects_ungranted_keys() {
             .status(),
         StatusCode::BAD_REQUEST
     );
+}
+
+/// A token only ever reaches `/v1`, where chat-only tools are dropped before
+/// its choices are read. Offering a switch for one would be a switch that never
+/// does anything, and accepting it would store a choice nothing honours.
+#[tokio::test]
+async fn token_panel_offers_only_tools_a_token_can_use() {
+    let state = state_with_tool_grants(
+        "http://unused.invalid",
+        vec!["get_current_timestamp".into(), "browser_control".into()],
+    )
+    .await;
+    seed_engineer_with_bearer(&state).await;
+    let token_id = tokens::list_for_user(&state.db, "alice").await.unwrap()[0]
+        .id
+        .clone();
+    let session = state.sessions.create("alice").await.unwrap();
+    let cookie = state.sessions.sign(&session.id);
+    let app = common::app(state);
+
+    let details = app
+        .serve(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/v0/tokens/details")
+                .header("cookie", format!("id={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&common::read_body(details).await).unwrap();
+    let keys: Vec<&str> = body["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["key"].as_str())
+        .collect();
+    assert!(keys.contains(&"get_current_timestamp"), "{keys:?}");
+    assert!(!keys.contains(&"browser_control"), "{keys:?}");
+
+    let put = app
+        .serve(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/api/v0/tokens/{token_id}/tools"))
+                .header("cookie", format!("id={cookie}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"tools_enabled": true, "tool_states": {"browser_control": "on"}})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::BAD_REQUEST);
 }
 
 #[derive(Default)]
