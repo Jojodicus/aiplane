@@ -40,6 +40,7 @@ const PAGES = [
     ["/webhooks/new", "Create webhook", "New webhook"],
     ["/tools/skills", "Skills", "My Skills — AIplane"],
     ["/tools/integrations", "Integrations", "Integrations — AIplane"],
+    ["/tools/browser", "Setup", "Browser extension — AIplane"],
     ["/settings/tokens", "Create token", "API tokens — AIplane"],
     ["/usage", "Requests", "Your usage — AIplane"],
     ["/tools", "Tools", "Tools — AIplane"],

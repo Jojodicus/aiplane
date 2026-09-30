@@ -103,8 +103,10 @@ both regions; the document itself must not become the chat scroll container.
 
 The personal pages use one shared `SectionTabs` navigation component with
 path-backed tabs. `/tools` contains built-in tool controls (including location
-sharing), `/tools/integrations` the user's MCP connections, and `/tools/skills`
-their private skills. `/settings` contains the account summary;
+sharing), `/tools/integrations` the user's MCP connections, `/tools/skills`
+their private skills, and `/tools/browser` the setup of the browser-control
+extension: live status through `browser-bridge.ts`, the store link, the
+`.zip` download, and the steps (see [`browser-control.md`](browser-control.md#for-users)). `/settings` contains the account summary;
 `/settings/notifications`, `/settings/memory`, and `/settings/tokens` keep the
 corresponding personal controls separate. The skills and notifications tabs
 follow their optional feature switches. The OAuth callback and connect/retry POST endpoints stay

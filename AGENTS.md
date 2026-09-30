@@ -245,6 +245,7 @@ Start in [`docs/README.md`](docs/README.md) for the index. The topical docs:
 | Multi-provider routing, load balancing, health checks | [`docs/upstreams.md`](docs/upstreams.md) |
 | Tool registry, role→tool mapping, execution loop | [`docs/tools-rbac.md`](docs/tools-rbac.md) |
 | Which tools exist, their gates and toggle keys | [`docs/tools-inventory.md`](docs/tools-inventory.md) |
+| Browser control — the Chrome extension, its trust boundary, the store | [`docs/browser-control.md`](docs/browser-control.md) |
 | Web UI — the SvelteKit SPA, the JSON API, the SSE protocol | [`docs/ui.md`](docs/ui.md) |
 | Testing strategy and required coverage | [`docs/testing.md`](docs/testing.md) |
 | Versioning + how a release is cut | [`docs/releases.md`](docs/releases.md) |

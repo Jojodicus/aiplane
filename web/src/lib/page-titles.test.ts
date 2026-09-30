@@ -16,6 +16,7 @@ const branded = [
 	['/webhooks/abc/runs', 'webhooks-runs-page-name'],
 	['/tools/integrations', 'integrations-heading'],
 	['/tools/skills', 'my-skills-heading'],
+	['/tools/browser', 'tools-browser-tab'],
 	['/tools', 'tools-heading'],
 	['/settings', 'user-settings-heading'],
 	['/settings/notifications', 'tokens-push-heading'],

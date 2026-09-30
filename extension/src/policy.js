@@ -54,9 +54,9 @@ export const KNOWN_ACTIONS = new Set([
  *
  * `all_sites` is the default: one broad grant, asked for once, because per-site
  * prompts are what makes this kind of tool unusable for most people. The cost
- * of that default is that the write confirmation below becomes the only thing
- * standing between a prompt-injected page and a click — which is why it cannot
- * be turned off for every domain at once, only remembered per domain.
+ * of that default is that nothing but the on/off switch stands between a
+ * prompt-injected page and a click; see docs/browser-control.md → "The trust
+ * boundary" for why writes are no longer confirmed one by one.
  */
 export const SITE_ACCESS_MODES = ['all_sites', 'approved_sites'];
 export const DEFAULT_SETTINGS = {
@@ -110,9 +110,9 @@ export function originOf(url) {
 /**
  * Decide what has to happen before `actions` may run against `pageUrl`.
  *
- * Returns `{ ok }` when everything may proceed, or `{ ok: false, reason }` when
- * the batch must be refused outright, plus the set of domains whose writes need
- * a confirmation the user has not already given.
+ * Returns `{ ok: true, origins }` when the batch may proceed — `origins` being
+ * every origin it will touch, for the host-permission check — or
+ * `{ ok: false, reason }` when it must be refused outright.
  */
 export function evaluateBatch(actions, pageUrl, settings) {
 	const conf = withDefaults(settings);

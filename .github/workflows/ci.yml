@@ -220,6 +220,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `mise run stage-extension` stamps the extension's version from the
+          # tags, and derive-version.sh refuses a shallow clone.
+          fetch-depth: 0
       # The Dockerfile COPYs the binaries built by the `ci` job — it does not
       # compile anything. Pull them back into target/release/.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -238,6 +242,16 @@ jobs:
       # COPYed /app/aiplane is runnable.
       - name: Restore executable bits
         run: chmod +x target/release/aiplane target/release/typst
+
+      # The extension download the /tools/browser page links to. Packaged here
+      # rather than in the `ci` job, whose shallow checkout cannot derive a
+      # version, and not taken from the `extension` job, so a failed store
+      # publish on a tag cannot hold back the image.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install_args: node@24
+      - name: mise run stage-extension
+        run: mise run stage-extension
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Image tags + labels
