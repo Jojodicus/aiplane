@@ -4,7 +4,8 @@ export const sectionTabs = {
 	tools: [
 		{ path: '/tools', label: 'tools-heading' },
 		{ path: '/tools/integrations', label: 'integrations-heading' },
-		{ path: '/tools/skills', label: 'my-skills-heading', feature: 'skills' }
+		{ path: '/tools/skills', label: 'my-skills-heading', feature: 'skills' },
+		{ path: '/tools/browser', label: 'tools-browser-tab' }
 	],
 	settings: [
 		{ path: '/settings', label: 'tokens-tab-account' },

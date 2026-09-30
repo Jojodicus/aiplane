@@ -11,6 +11,7 @@ const exactTitles: Record<string, PageTitleDescriptor> = {
 	'/webhooks': { key: 'webhooks-heading', branded: true },
 	'/tools/integrations': { key: 'integrations-heading', branded: true },
 	'/tools/skills': { key: 'my-skills-heading', branded: true },
+	'/tools/browser': { key: 'tools-browser-tab', branded: true },
 	'/tools': { key: 'tools-heading', branded: true },
 	'/settings': { key: 'user-settings-heading', branded: true },
 	'/settings/notifications': { key: 'tokens-push-heading', branded: true },

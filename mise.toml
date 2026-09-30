@@ -183,7 +183,7 @@ dir = "{{ config_root }}"
 [tasks.dev-served]
 description = "Production-shaped local check: build the SPA and serve it directly from the debug gateway on :8080, without HMR."
 depends = ["build-web"]
-run = "AIPLANE_STATIC_DIR=target/frontend/build mise run dev-gateway"
+run = "mise run stage-extension && AIPLANE_STATIC_DIR=target/frontend/build mise run dev-gateway"
 dir = "{{ config_root }}"
 
 [tasks.dev-build]
@@ -340,7 +340,7 @@ run = "npm --prefix web run check"
 description = "Stub gateway for local UI debugging: real rama server on :8080 against a wiremock chat + transcription backend with a pre-seeded session. Prints the session cookie to stdout so playwright (or curl) can drive any authed page (/, /settings/tokens, /chat, /api/v0/*) without OIDC. See docs/dev-workflow.md → 'Debugging the UI'."
 depends = ["build-web"]
 env = { AIPLANE_STATIC_DIR = "target/frontend/build" }
-run = "cargo run --example dev_ui -p aiplane"
+run = "mise run stage-extension && cargo run --example dev_ui -p aiplane"
 
 [tasks.test]
 description = "Run the workspace tests (cargo-nextest — parallel, compact report)."
@@ -419,6 +419,16 @@ node -e '
 rm -rf "$STAGE"
 echo "$OUT"
 '''
+
+[tasks.stage-extension]
+description = "Package the Chrome extension and drop it into the SPA build as target/frontend/build/downloads/aiplane-browser-control.zip, the download the /tools/browser page links to. Run after `build-web` (which recreates target/frontend/); the container job in CI runs it before the image build so every image carries the extension of its own commit."
+depends = ["package-extension"]
+dir = "{{ config_root }}"
+run = """
+set -eu
+mkdir -p target/frontend/build/downloads
+cp target/aiplane-browser-control-*.zip target/frontend/build/downloads/aiplane-browser-control.zip
+"""
 
 [tasks.extension-screenshots]
 description = "Capture the three 1280×800 Chrome Web Store screenshots into extension/store/. Drives a Chromium with the extension loaded unpacked and a dev-UI gateway behind it, so every pixel is the real product; see the header of extension/store/shots.mjs for the two things automation cannot drive (Chrome's own permission dialog, and which tab is in front) and what stands in for them. Needs a dev-UI gateway on :8080 — start `mise run dev-ui` in another terminal first, and pass the cookie it prints."

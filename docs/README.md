@@ -23,6 +23,7 @@ This directory holds the design docs for **croit AIplane**. The agent-facing ent
 | [`ocr.md`](ocr.md) | Internal document-OCR sidecar contract and Unlimited-OCR deployment requirements |
 | [`fileshare-rag.md`](fileshare-rag.md) | **Fileshare RAG** — indexing a file share (Nextcloud, ownCloud, OpenCloud, WebDAV) into RAG: the provider abstraction, extraction ladder, document profiles, structured queries, incremental sync |
 | [`nextcloud-rag-plan.md`](nextcloud-rag-plan.md) | The design record behind `fileshare-rag.md`: what was decided and why, what is deliberately not built, and the cited external protocol behaviour |
+| [`browser-control.md`](browser-control.md) | **Browser control** — the Chrome extension that lets a conversation act in the user's own logged-in browser: user setup (`/tools/browser`), the transport over the chat session, the trust boundary, site access, publishing to the Chrome Web Store |
 | [`connectors.md`](connectors.md) | Per-user MCP connector catalog — operator setup for Google/GitHub/Atlassian/GitLab + troubleshooting |
 | [`ui.md`](ui.md) | The SvelteKit SPA in `web/` — how it is built and served, the generated OpenAPI contract, the chat event protocol, theming, PWA |
 | [`testing.md`](testing.md) | Test layers, mocking strategy, coverage targets |

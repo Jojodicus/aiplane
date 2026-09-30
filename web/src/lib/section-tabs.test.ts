@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { sectionTabs, selectedSectionTab } from './section-tabs.ts';
 
 test('tools tabs link to each user capability page', () => {
-	assert.deepEqual(sectionTabs.tools.map(({ path }) => path), ['/tools', '/tools/integrations', '/tools/skills']);
+	assert.deepEqual(sectionTabs.tools.map(({ path }) => path), ['/tools', '/tools/integrations', '/tools/skills', '/tools/browser']);
 });
 
 test('settings tabs keep account, notifications, memory, and tokens separate', () => {

@@ -302,6 +302,7 @@ fn content_type(ext: &str) -> &'static str {
         "wasm" => "application/wasm",
         "map" => "application/json; charset=utf-8",
         "txt" | "md" => "text/plain; charset=utf-8",
+        "zip" => "application/zip",
         _ => "application/octet-stream",
     }
 }
@@ -586,6 +587,8 @@ mod tests {
         );
         assert_eq!(content_type("woff2"), "font/woff2");
         assert_eq!(content_type("wasm"), "application/wasm");
+        // The browser extension's download (`mise run stage-extension`).
+        assert_eq!(content_type("zip"), "application/zip");
         // Unknown extension must not be mislabelled as text.
         assert_eq!(content_type("bin"), "application/octet-stream");
     }
