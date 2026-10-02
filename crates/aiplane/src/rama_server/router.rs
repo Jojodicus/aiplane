@@ -243,6 +243,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             pages::json_principals::revoke_token,
         )
         // Agent definitions (docs/agents.md §2): can_manage_agents plus a share.
+        .with_get(
+            "/api/v0/agent-resources",
+            pages::json_agent_resources::resources,
+        )
         .with_get("/api/v0/agents", pages::json_agents::list)
         .with_post("/api/v0/agents", pages::json_agents::create)
         .with_get("/api/v0/agents/{id}", pages::json_agents::detail)
@@ -252,6 +256,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             pages::json_agents::update_draft,
         )
         .with_post("/api/v0/agents/{id}/publish", pages::json_agents::publish)
+        .with_post(
+            "/api/v0/agents/{id}/test-turn",
+            pages::json_agent_test::test_turn,
+        )
         .with_get("/api/v0/agents/{id}/versions", pages::json_agents::versions)
         .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
         .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)

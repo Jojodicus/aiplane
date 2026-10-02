@@ -9,6 +9,7 @@ user-settings-heading = My settings
 nav-memory = Memory
 nav-scheduled = Scheduled
 nav-webhooks = Webhooks
+nav-agents = Agents
 nav-integrations = Integrations
 nav-tools = Tools
 nav-usage = Usage

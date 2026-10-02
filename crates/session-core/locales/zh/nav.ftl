@@ -5,6 +5,7 @@ user-settings-heading = 我的设置
 nav-memory = 记忆
 nav-scheduled = 计划任务
 nav-webhooks = Webhook
+nav-agents = 智能体
 nav-integrations = 集成
 nav-tools = 工具
 nav-usage = 用量
