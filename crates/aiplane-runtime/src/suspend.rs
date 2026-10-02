@@ -52,6 +52,11 @@ pub struct SuspendRequest {
     /// this call waits on that run's pause, which a resume settles first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child: Option<ChildPause>,
+    /// What the inbox shows next to the request, stored with the pause
+    /// (`run_context`): a handoff's question, the visitor's last message and
+    /// the slots the model may see. Never anything a resume relies on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Value>,
 }
 
 /// The paused sub-agent run a call is waiting on.
@@ -73,6 +78,21 @@ impl SuspendRequest {
             timeout_secs: timeout.as_secs(),
             on_timeout: TimeoutFallback::Deny,
             child: None,
+            context: None,
+        }
+    }
+
+    /// Ask a person other than the one chatting to answer `question`, with
+    /// `context` shown next to it in the inbox. Denied if nobody answers in
+    /// time.
+    pub fn human_answer(question: impl Into<String>, timeout: Duration, context: Value) -> Self {
+        Self {
+            kind: SuspensionKind::HumanAnswer,
+            message: Some(question.into()),
+            timeout_secs: timeout.as_secs(),
+            on_timeout: TimeoutFallback::Deny,
+            child: None,
+            context: Some(context),
         }
     }
 
@@ -86,6 +106,7 @@ impl SuspendRequest {
             timeout_secs: timeout.as_secs(),
             on_timeout: TimeoutFallback::Deny,
             child: None,
+            context: None,
         }
     }
 }

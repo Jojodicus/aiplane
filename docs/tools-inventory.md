@@ -258,6 +258,7 @@ connected server. The drift guard matches them by prefix.
 | `mcp__<server>__<tool>` | per-user MCP connectors, connected lazily per request | `mcp__<server>` — one key per integration |
 | `set_<slot>` | one per slot of an agent's `state` whose `set_by` lists `llm` (`agents::slot_tools`, [`agents.md`](agents.md#what-85-built)) | none — never in the chat catalog or registry; offered only inside an agent run, and needs no grant |
 | `forward_request` | one per agent run whose spec has `routes` (`agents::router`, [`agents.md`](agents.md#what-8788-built)): takes no arguments; picks an open route and runs its sub-agent | none — like `set_<slot>`, run-scoped and never registered |
+| `request_human` | one per main-agent run whose spec has a `human` route (`agents::human`, [`agents.md`](agents.md#what-96-built)): takes `{question}`; hands the conversation to a person on an open human route and waits for their answer | none — run-scoped and never registered |
 | `verify_<id>_request_code`, `verify_<id>_submit_code` | two per `mcp_code` verifier of an agent (`agents::verifier::otp`, [`agents.md`](agents.md#what-95-built)): take no arguments; send a one-time code through the agent's connector and pause for the visitor to type it into a secure field | none — run-scoped like `set_<slot>` |
 | `verify_<id>` | one per `lookup` verifier (`agents::verifier::lookup`): takes no arguments; checks slots the visitor filled against a granted tool | none — run-scoped like `set_<slot>` |
 

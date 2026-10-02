@@ -18,8 +18,12 @@
 	} from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 	import AgentEditor from './AgentEditor.svelte';
+	import AnalyticsPanel from './AnalyticsPanel.svelte';
+	import TestsPanel from './TestsPanel.svelte';
 	import GrantsPanel from './GrantsPanel.svelte';
 	import SharingPanel from './SharingPanel.svelte';
+	import RespondersPanel from './RespondersPanel.svelte';
+	import ChannelsPanel from './ChannelsPanel.svelte';
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
 	import TestChat from './TestChat.svelte';
 	import VersionsPanel from './VersionsPanel.svelte';
@@ -33,7 +37,7 @@
 	 */
 	let { id }: { id: string } = $props();
 
-	const TABS = ['edit', 'json', 'grants', 'test', 'versions', 'sharing'] as const;
+	const TABS = ['edit', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'sharing'] as const;
 	type Tab = (typeof TABS)[number];
 	const asTab = (v: string | null): Tab => (TABS.find((x) => x === v) ?? 'edit');
 
@@ -231,6 +235,8 @@
 				<GrantsPanel agentId={id} grants={detail.grants} {resources} {writable} onchanged={() => refresh(true)} />
 			{:else if tab === 'test'}
 				<TestChat agentId={id} {dirty} onsave={async () => void (await save())} />
+			{:else if tab === 'tests'}
+				<TestsPanel agentId={id} {versions} liveVersion={detail.live_version} {dirty} {writable} onsave={async () => void (await save())} />
 			{:else if tab === 'versions'}
 				<VersionsPanel
 					agentId={id}
@@ -242,8 +248,14 @@
 					onpublish={publish}
 					onchanged={() => refresh(true)}
 				/>
+			{:else if tab === 'analytics'}
+				<AnalyticsPanel agentId={id} {versions} />
 			{:else}
-				<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
+				<div class="space-y-6">
+					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
+					<RespondersPanel agentId={id} {writable} />
+					<ChannelsPanel agentId={id} {writable} />
+				</div>
 			{/if}
 		</div>
 	{/if}

@@ -15,8 +15,8 @@
 //!    own principal in a child session, with a task rendered from state, the
 //!    route's bound arguments and its own budget and finish contract. Its
 //!    outcome comes back as this tool's result: data, which the main agent's
-//!    injection policy screens like any other result. A `human` target is
-//!    not available until #96.
+//!    injection policy screens like any other result. A `human` target
+//!    hands the conversation to a person ([`crate::agents::human`]).
 //!    A sub-agent run that pauses for a decision pauses this call with it, on
 //!    the same request ([`dispatch_result`]); [`crate::agents::resume`]
 //!    continues the child first, then this call with the child's outcome.
@@ -38,6 +38,7 @@ use shared::api::ToolDef;
 
 use super::bind::{BindSource, render_task};
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
+use super::human::{answered, hand_off, human_routes};
 use super::profile::{Role, RunOptions, RunProfile, pool_model};
 use super::state::{AgentState, SlotView, StateSchema};
 use crate::finish::{IncompleteReason, RunOutcome};
@@ -45,7 +46,8 @@ use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
 use crate::server::tools::runner::current_call_id;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
-use crate::suspend::{ChildPause, SuspendRequest, tool_suspend};
+use crate::suspend::{ChildPause, Suspend, SuspendRequest, tool_suspend};
+use session_core::db::{Decision, TurnRole};
 
 pub const FORWARD_TOOL_NAME: &str = "forward_request";
 
@@ -273,14 +275,24 @@ impl ForwardRequest {
         let name = route.name();
         let spec = self.spec.routes.get(name).cloned().unwrap_or_default();
         let Some(agent_id) = spec.get("agent").and_then(Value::as_str) else {
-            return Ok(json!({
-                "forwarded": false,
-                "route": name,
-                "reason": "human_unavailable",
-                "message": "This request is for a person, and handing a conversation over to a \
-                            person is not available yet. Tell the visitor you cannot forward it \
-                            right now.",
-            }));
+            let Some(human) = human_routes(&self.spec.routes).remove(name) else {
+                return Err(ToolError::Failed(format!(
+                    "route `{name}` names neither a sub-agent nor a person. Do not retry."
+                )));
+            };
+            let question = match human.description.clone() {
+                Some(description) => description,
+                None => last_visitor_message(ctx).await,
+            };
+            return hand_off(
+                ctx,
+                &human,
+                &question,
+                &self.spec.schema,
+                self.options.lang,
+                FORWARD_TOOL_NAME,
+            )
+            .await;
         };
         let task = match render_task(
             spec.get("task").and_then(Value::as_str).unwrap_or_default(),
@@ -377,6 +389,22 @@ impl ForwardRequest {
     }
 }
 
+/// The visitor's last message, as the question of a handoff whose route
+/// describes nothing.
+async fn last_visitor_message(ctx: &ToolContext) -> String {
+    let Some(session) = ctx.session_id.as_deref() else {
+        return String::new();
+    };
+    session_core::db::list_turns(&ctx.db, session)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find(|t| t.turn.role == TurnRole::User)
+        .and_then(|t| t.turn.user_content.clone())
+        .unwrap_or_default()
+}
+
 /// Who dispatched a sub-agent run: the principal its audit rows go to.
 #[derive(Clone, Copy)]
 pub(crate) struct Caller<'a> {
@@ -420,6 +448,7 @@ pub(crate) async fn dispatch_result(
                 turn_id: child_turn,
                 expires_at: paused.expires_at,
             }),
+            context: None,
         }));
     }
     let outcome = outcome.unwrap_or_else(|| RunOutcome::Incomplete {
@@ -468,6 +497,9 @@ impl Tool for ForwardRequest {
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
+            if let Suspend::Decided(Decision::Value { value }) = &ctx.suspend {
+                return Ok(answered(value));
+            }
             if let Some(keys) = args.as_object().filter(|m| !m.is_empty()) {
                 let named: Vec<String> = keys.keys().map(|k| format!("`{k}`")).collect();
                 return Err(ToolError::InvalidArgs(format!(

@@ -69,7 +69,7 @@ web/
 │       │                       survive client-side navigation)
 │       ├── +layout.ts         prerender = false, ssr = false
 │       ├── +page.svelte       dashboard
-│       ├── login/ chat/ chat/[id]/ tokens/ tools/ memory/ scheduled/
+│       ├── login/ chat/ chat/[id]/ inbox/ tokens/ tools/ memory/ scheduled/
 │       ├── webhooks/ skills/ integrations/ usage/ setup/ rag/ rag/profiles/
 │       └── admin/             +layout.svelte + models, upstreams, users, groups,
 │                              tokens, limits, settings, skills, connectors,
@@ -270,12 +270,12 @@ Invariants worth knowing before you touch either side:
 - **The DB is the replayer.** There is no `Last-Event-ID` replay. A client that reconnects simply re-attaches, and the first `snapshot` — rebuilt from SQLite — subsumes anything missed. The worker runs to completion independently of any HTTP listener and writes its progress to the DB as it goes, so closing a tab mid-stream loses nothing.
 - **Deltas append, unless `full: true`.** `full` marks a cursor reset: the row was rewritten and `text_delta` carries the *whole* text, so the client must replace its buffer rather than append. A client cannot detect a rewrite on its own, which is why the server says so. There are no delete events by design.
 - **Flushes are coalesced** to ≥120 ms per subscriber with a trailing flush, so the final state always lands. Each flush reads one turn, not the conversation.
-- **A suspended turn is answered over JSON, not the stream.** `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` takes `{"decision": "allow_once" | "deny" | "value", "value"?: …, "request_id"?: …}`; owner-only, `202` once the turn's worker runs again, after which the client re-attaches. `409 not_suspended` when the turn is not waiting or `request_id` names an older pause, `400 decision_not_offered` for a decision its `options` lack, `409 turn_in_progress` when no slot is free. A message sent into a paused conversation is queued behind it (`placement: "queued"`), and `…/cancel` on it gives the decision up. The SPA does not render `suspended` yet — no shipped tool suspends; the approval card comes with #96, and these strings go through the Fluent catalogs then.
+- **A suspended turn is answered over JSON, not the stream.** `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` takes `{"decision": "allow_once" | "deny" | "value", "value"?: …, "request_id"?: …}`; owner-only, `202` once the turn's worker runs again, after which the client re-attaches. `409 not_suspended` when the turn is not waiting or `request_id` names an older pause, `400 decision_not_offered` for a decision its `options` lack, `409 turn_in_progress` when no slot is free. A message sent into a paused conversation is queued behind it (`placement: "queued"`), and `…/cancel` on it gives the decision up. The chat page does not render `suspended` yet; a person's paused run (a scheduled action or a webhook) is answered from the [inbox](#inbox), which calls this same resume.
 - **The stream ends at `turn_finalized` / `suspended` / `idle`.** The server closes there, so `chat.svelte.ts` closes the `EventSource` too (on the first and last; until it knows `suspended`, a paused turn costs it one reconnect, which answers `snapshot` + `idle`) — letting it auto-reconnect would loop snapshot/idle forever on a quiet session. After a submit (or any suspected change) `attach()` reopens, and the fresh snapshot is the replay.
 - **An interrupted worker leaves a terminal turn.** The shared worker harness catches driver and tool panics, records the assistant turn and any still-running tool calls as `errored`, and broadcasts `Finalized`; its caller then releases the worker slot. On attach, if the owner has no live worker, the events handler also errors any already-present `in_progress` assistant turns before sending the snapshot. It targets only turn IDs read before rechecking the worker registry, so a newly starting turn cannot be mistaken for an orphan. Viewers of a shared conversation never perform this recovery because they cannot see the owner's worker in their own registry lookup.
 - **Every scheduled or webhook run links its chat and ends terminal.** A run's history row gets its `session_id` the moment the chat is opened (webhooks at `record_run_start`, schedules via `attach_run_session`, which also moves the action's `last_session_id` so a reusing schedule keeps its thread); closing a run with no session never erases that link. The scheduler wraps each run in a panic guard, so the row is always closed through `record`. A process that dies mid-run leaves rows pending; `sweep_interrupted_runs` closes them at startup as `error` — before the scheduler's first tick and before the server accepts webhook fires, so nothing live can be caught by it — and corrects the list row when the orphan was the newest run. The runs lists join `chat_sessions` and report `chat_deleted`; list rows get `last_chat_deleted`, and the SPA shows "chat deleted" instead of linking to a 404.
 - **A reusing schedule or webhook can continue in any of its owner's chats.** Reuse always meant "append to `last_session_id`"; the form's *Continue in* picker (`LinkedChatPicker`) sets that pointer directly through `linked_session_id` on create/update — an id links that chat, `""` lets the next run open a fresh one, an absent field leaves it alone (a run may have moved it since the form opened). The server accepts only the caller's own chat, and only with `reuse_conversation` on. The picker starts on `last_session_id` even before reuse is switched on, because that is where a reusing run would continue; a deleted one reads as "a new chat", which is what the next run does.
-- **The public embed stream speaks the same frames, buffered.** `GET /api/v0/embed/events` (visitor token, read with `fetch` streaming) sends `snapshot`, then either `idle` or — once the running turn is terminal — its whole answer as one `turn_delta` with `full: true` and `turn_finalized`. When the conversation waits for a decision, or the running turn pauses, the stream ends with `suspended` (the visitor view above) instead; the visitor answers a `secure_input` with `POST /api/v0/embed/resume {request_id, decision, value?}` (the widget's masked code field) and re-attaches. A host page's signed identity token goes to `POST /api/v0/embed/identity {token}`. A message sent meanwhile is queued (`placement: "queued"`) and shows in the snapshot's `waiting_turn_ids`. Tool calls, reasoning and unfinished answers are stripped from what a visitor receives. See [`agents.md`](agents.md#what-91-built) and [agent-run suspend](agents.md#what-agent-run-suspend-built).
+- **The public embed stream speaks the same frames, buffered.** `GET /api/v0/embed/events` (visitor token, read with `fetch` streaming) sends `snapshot`, then either `idle` or — once the running turn is terminal — its whole answer as one `turn_delta` with `full: true` and `turn_finalized`. When the conversation waits for a decision, or the running turn pauses, the stream ends with `suspended` (the visitor view above) instead. A request staff answer has empty `options`: the widget shows that it waits and re-attaches every 10 s until the answer arrives. The visitor answers a `secure_input` with `POST /api/v0/embed/resume {request_id, decision, value?}` (the widget's masked code field) and re-attaches. A host page's signed identity token goes to `POST /api/v0/embed/identity {token}`. A message sent meanwhile is queued (`placement: "queued"`) and shows in the snapshot's `waiting_turn_ids`. Tool calls, reasoning and unfinished answers are stripped from what a visitor receives. See [`agents.md`](agents.md#what-91-built) and [agent-run suspend](agents.md#what-agent-run-suspend-built).
 - **Markdown is the wire format.** The server sends text; the client renders it (`marked` → `DOMPurify` → `{@html}`). Model output is untrusted input like any other, so the sanitise step is not optional.
 
 The rest of the conversation surface is ordinary JSON. `GET /api/v0/chat/landing`
@@ -418,7 +418,7 @@ are in `web/src/lib/components/agents/`.
 
 - **`/agents`**: the agents shared with the caller, and a dialog to create one.
 - **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
-  Save draft / Publish / Delete, and six tabs (`?tab=` keeps the choice in the
+  Save draft / Publish / Delete, and eight tabs (`?tab=` keeps the choice in the
   URL):
   - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
@@ -434,8 +434,35 @@ are in `web/src/lib/components/agents/`.
     suggestions come from `/api/v0/agent-resources`. The server's refusal
     (`grant_exceeds_manager`, unknown resource) is shown verbatim.
   - *Test chat*: see below.
+  - *Tests*: stored test cases and suite runs (`TestsPanel`, see
+    [`agents.md`](agents.md#what-99-built)). A case form edits the conversation
+    script (visitor messages, and trusted slot writes as `host` or
+    `verifier:<id>` between them) and the deterministic expectations (last turn
+    finished, output-filter outcome, route chosen or none, gates with the slots
+    they still miss, sub-agents and tools called or not, bound values, answer
+    contains or not) plus an optional rubric. The source selector runs the saved
+    draft (saving an unsaved buffer first) or any published version; the run
+    shows each case as a Goal / Plan / Action card with every check, what was
+    expected and what happened, and the conversation. The rubric verdict is a
+    separate dashed block labelled as model-judged, and never colours pass or
+    fail. A warning shows when the draft or the cases changed since the latest
+    draft run, because the publish guard
+    (`publish.require_passing_tests`, a checkbox in Settings) would refuse it.
+    The pure half, `web/src/lib/agent-tests.ts` (form model to and from the
+    stored case, run state), is unit-tested.
   - *Versions*: draft vs live, the publish blockers (`publish_issues`), every
     snapshot with its JSON, and "make live" (rollback).
+  - *Analytics*: what the agent did over the last 7, 30 or 90 days, for all
+    versions or one (`GET /api/v0/agents/{id}/analytics`, see
+    [`agents.md`](agents.md#what-100-built)). `AnalyticsPanel` shows stat tiles
+    (conversations, messages, sub-agent runs, gate refusals, output-filter
+    blocks, limit refusals, human handoffs, model calls, tokens, cost when
+    priced), a per-day bar chart with a metric switch, and breakdown tables
+    (routes chosen, closed gates by route and missing slot, why sub-agent runs
+    did not finish, output-filter actions, limit refusals by kind). The chart
+    is a plain inline SVG (`fill-primary`, daisyUI tokens): no chart library.
+    Its pure half, `web/src/lib/agent-analytics.ts`, is unit-tested. Route,
+    slot and reason names are shown as the identifiers they are.
   - *Sharing*: shares with access change and revoke; `share_needs_agent_manager`
     and `last_writer` are shown verbatim. A `read` share sees everything
     read-only (the editor is a disabled `fieldset`).
@@ -466,6 +493,36 @@ are in `web/src/lib/components/agents/`.
 - **Not built yet.** Embed keys and the visitor widget (#91, #94), a `state`
   or `gate` SSE event so the debug view could stream, and conversation
   history for test sessions (they are stored with `agent_version = 0`).
+
+## Inbox
+
+`/inbox` (sidebar: Workspace → Inbox, for every signed-in person) lists what
+waits for them: an agent's approvals and handoffs when they are an admin, a
+manager with a `write` share or one of the agent's responders, and their own
+paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
+[`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
+`web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
+
+- **An item** shows the agent (or the run's title), its kind and deadline,
+  and what the person needs to decide: a handoff's question, the visitor's
+  last message, the slots and, when the route hands it over, the transcript;
+  an approval's tool and its arguments, pretty-printed. The buttons follow
+  the item's `options`: Approve once / Deny, or an answer field with Send /
+  Decline. A manager's item links to the agent, an owner's to the chat; a
+  responder's links nowhere, since they may open nothing else.
+- **`?item=<id>`**, the link every notification carries, scrolls to and
+  highlights that item.
+- **Live.** `web/src/lib/inbox.svelte.ts` keeps one `EventSource` per tab on
+  `GET /api/v0/agents/inbox/events`; each `inbox {count}` frame updates the
+  sidebar badge (hidden at 0) and makes the open page refetch the list. The
+  stream ends after ten minutes and `EventSource` reconnects on its own,
+  which is what it is for here, unlike the chat stream.
+- **Workbench.** The agent workbench's Sharing tab has two more cards:
+  *Responders* (users or groups who answer without a share; they need no
+  agent-management permission) and *Notification channels* (Slack or Discord
+  incoming webhooks; the URL is write-only, the list shows its host, whether
+  the message carries details, and its language). A `read` share sees both
+  read-only.
 
 ## Reactive state
 

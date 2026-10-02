@@ -1,0 +1,55 @@
+# STATUS: llm-generated, unreviewed — pending native-speaker QA
+
+nav-inbox = Boîte de réception
+nav-inbox-count = { $count } en attente
+inbox-heading = Boîte de réception
+inbox-intro = Les validations et questions qu'attendent les agents et vos propres exécutions planifiées. Votre réponse reprend la conversation là où elle s'est arrêtée.
+inbox-empty = Rien ne vous attend.
+inbox-kind-approval = Validation
+inbox-kind-handoff = Question pour une personne
+inbox-item-agent = Agent { $name }
+inbox-item-run = Votre exécution : { $name }
+inbox-open-chat = Ouvrir le chat
+inbox-open-agent = Ouvrir l'agent
+inbox-asked-at = Demandé { $date }
+inbox-expires-in = Expire dans { $minutes } min
+inbox-question = Question
+inbox-visitor-message = Dernier message du visiteur
+inbox-slots = Ce que l'agent sait
+inbox-slot-trusted = défini par { $by }
+inbox-transcript = Conversation jusqu'ici
+inbox-transcript-visitor = Visiteur
+inbox-transcript-agent = Agent
+inbox-tool = Veut exécuter { $tool } avec
+inbox-answer-label = Votre réponse
+inbox-approve = Valider une fois
+inbox-send-answer = Envoyer la réponse
+inbox-deny = Refuser
+inbox-decline = Décliner
+inbox-answer-required = Rédigez d'abord une réponse.
+inbox-already-settled = Cet élément a déjà reçu une réponse ou a expiré.
+inbox-sent = Réponse envoyée ; la conversation continue.
+
+agents-responders-heading = Répondants
+agents-responders-intro = Utilisateurs et groupes autorisés à répondre aux validations et questions de cet agent dans la boîte de réception. Ils ne voient que l'élément en attente et son contexte, jamais la spécification ni les conversations, et n'ont pas besoin du droit de gestion des agents.
+agents-responders-empty = Aucun répondant pour l'instant. Les gestionnaires avec un partage en écriture peuvent aussi répondre.
+agents-responders-add = Ajouter un répondant
+agents-responders-remove = Retirer
+
+agents-channels-heading = Canaux de notification
+agents-channels-intro = Canaux Slack ou Discord avertis dès qu'une conversation attend l'équipe, en plus des notifications push à toutes les personnes autorisées à répondre.
+agents-channels-empty = Aucun canal pour l'instant.
+agents-channels-kind = Service
+agents-channels-kind-slack = Slack
+agents-channels-kind-discord = Discord
+agents-channels-name = Nom
+agents-channels-lang = Langue
+agents-channels-url = URL du webhook entrant
+agents-channels-url-help = Stockée chiffrée et jamais réaffichée. Seul l'hôte est affiché.
+agents-channels-details = Inclure la question ou le nom de l'outil dans le message (sinon seulement l'agent, le type et un lien vers la boîte de réception)
+agents-channels-details-on = Avec détails
+agents-channels-add = Ajouter un canal
+agents-channels-remove = Retirer
+
+embed-waiting-staff = Un membre de notre équipe vous répondra ici sous peu. Vous pouvez laisser cette fenêtre ouverte.
+embed-waiting-approval = Un membre de notre équipe examine votre demande. La réponse apparaîtra ici.

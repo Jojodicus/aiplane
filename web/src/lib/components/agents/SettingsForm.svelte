@@ -128,6 +128,12 @@
 				<FieldIssues {issues} path="publish.retention_days" />
 			</label>
 		</div>
+		<label class="flex items-center gap-2">
+			<input type="checkbox" class="checkbox checkbox-sm" checked={spec.publish?.require_passing_tests === true} onchange={(e) => (publish().require_passing_tests = e.currentTarget.checked)} />
+			<span class="label-text">{t('agents-publish-require-tests')}</span>
+		</label>
+		<p class="-mt-2 text-xs text-base-content/60">{t('agents-publish-require-tests-hint')}</p>
+		<FieldIssues {issues} path="publish.require_passing_tests" />
 		<div class="space-y-2">
 			<span class="label-text">{t('agents-publish-filter')}</span>
 			<p class="text-xs text-base-content/60">{t('agents-publish-filter-hint')}</p>

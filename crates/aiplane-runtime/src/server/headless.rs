@@ -209,6 +209,7 @@ async fn drive_inner(
     let finish = p.finish.map(FinishRun::new);
     let session_id = p.session_id.clone();
     let person = p.principal.user_id().map(str::to_string);
+    let persons_run = person.is_some();
     let assistant_turn_id = p.assistant_turn_id.clone();
     let tool_ctx = crate::openai_driver::build_tool_context(
         state,
@@ -224,10 +225,11 @@ async fn drive_inner(
             model: Some(p.model.clone()),
             // Session path: access is exactly the user's group grant.
             pool_access: None,
-            // An agent run pauses and is resumed through `agents::resume`.
-            // Nothing resumes a scheduled or webhook run yet, so a tool
-            // needing a decision refuses there instead of pausing.
-            suspendable: p.agent.is_some(),
+            // An agent run pauses and is resumed through `agents::resume`; a
+            // person's scheduled or webhook run pauses like their chat does,
+            // and its owner answers it from the inbox through the chat's
+            // resume path.
+            suspendable: true,
         },
     );
     let driver = Box::new(crate::openai_driver::OpenAiDriver {
@@ -261,12 +263,26 @@ async fn drive_inner(
         steers: session_core::workers::SteerInbox::default(),
     };
     session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
+    if persons_run {
+        announce_if_waiting(state, &assistant_turn_id).await;
+    }
 
     let run = finish?;
     Some(match run.take() {
         Some(outcome) => outcome,
         None => unsettled_outcome(&state.db, &session_id, &assistant_turn_id).await,
     })
+}
+
+/// Tell a person's run's owner that it waits for them, when it paused.
+async fn announce_if_waiting(state: &Arc<RamaState>, turn_id: &str) {
+    match chat::get_suspension(&state.db, turn_id).await {
+        Ok(Some(paused)) => {
+            crate::agents::inbox::announce_in_background(state.clone(), paused.request_id)
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(error = %err, turn = %turn_id, "reading a run's pause"),
+    }
 }
 
 /// The outcome of a contracted run the driver never settled: it errored,

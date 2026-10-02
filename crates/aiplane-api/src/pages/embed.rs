@@ -748,7 +748,7 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 /// The runner contract says the turn is terminal when `run` returns; a
 /// runner that broke it (or panicked) must not leave the visitor waiting
 /// forever with every later message refused as `turn_in_progress`.
-async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
+pub(crate) async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
     match chat::get_turn(&state.db, session_id, turn_id).await {
         Ok(Some(t)) if t.status == TurnStatus::InProgress => {
             tracing::warn!(turn = %turn_id, "agent turn runner returned with the turn unfinished");

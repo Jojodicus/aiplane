@@ -8,11 +8,18 @@
 //! agent's live version through the ordinary headless loop, and the seam the
 //! public endpoint runs a visitor's turn through (`embed`), with its visitor
 //! limits and owner budget, the retention sweeper (`retention`), and the
-//! identity verifiers that write trusted slots (`verifier`).
+//! identity verifiers that write trusted slots (`verifier`). Human in the
+//! loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
+//! `inbox` (who answers what, and the notification).
 
+pub mod approval;
 pub mod bind;
 pub mod embed;
+pub mod eval;
+pub mod eval_judge;
 pub mod gate;
+pub mod human;
+pub mod inbox;
 pub mod output_filter;
 pub mod profile;
 pub mod resume;

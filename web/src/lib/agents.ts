@@ -9,6 +9,8 @@
  * judge: nothing here validates, it only keeps the validator's answers
  * attached to the field they are about (by `path`).
  */
+import type { AgentAnalytics } from './agent-analytics.ts';
+import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request } from './api.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
@@ -48,6 +50,37 @@ export interface Share {
 	subject_kind: 'user' | 'group';
 	subject_id: string;
 	access: 'read' | 'write';
+}
+
+/** Someone who may answer the agent's inbox items without a share (#96). */
+export interface Responder {
+	subject_kind: 'user' | 'group';
+	subject_id: string;
+	added_by: string;
+	added_at: string;
+}
+
+export type ChannelKind = 'slack' | 'discord';
+export const CHANNEL_KINDS: ChannelKind[] = ['slack', 'discord'];
+
+/** A Slack or Discord incoming webhook the agent's waiting turns are announced on. The URL is never read back. */
+export interface NotifyChannel {
+	id: string;
+	kind: ChannelKind;
+	name: string;
+	url_host: string;
+	details: boolean;
+	lang: string;
+	created_by: string;
+	created_at: string;
+}
+
+export interface NewChannel {
+	kind: ChannelKind;
+	name: string;
+	url: string;
+	details: boolean;
+	lang: string;
 }
 
 export interface AuditEntry {
@@ -210,10 +243,32 @@ export const agentsApi = {
 		call<{ live_version: number | null; versions: AgentVersion[] }>(`/api/v0/agents/${id}/versions`),
 	setLive: (id: string, version: number) =>
 		call<{ live_version: number }>(`/api/v0/agents/${id}/live`, json('POST', { version })),
+	analytics: (id: string, query: string) =>
+		call<AgentAnalytics>(`/api/v0/agents/${id}/analytics?${query}`),
+	tests: (id: string) => call<TestsListing>(`/api/v0/agents/${id}/tests`),
+	createTest: (id: string, body: CaseBody) => call<{ case: TestCase }>(`/api/v0/agents/${id}/tests`, json('POST', body)),
+	updateTest: (id: string, caseId: string, body: CaseBody) =>
+		call<{ case: TestCase }>(`/api/v0/agents/${id}/tests/${caseId}`, json('PUT', body)),
+	deleteTest: (id: string, caseId: string) => call<void>(`/api/v0/agents/${id}/tests/${caseId}`, json('DELETE')),
+	runTests: (id: string, source: string) => call<TestRun>(`/api/v0/agents/${id}/tests/run`, json('POST', { source })),
+	testRuns: (id: string) => call<{ runs: TestRun[] }>(`/api/v0/agents/${id}/test-runs`),
+	testRun: (id: string, runId: string) => call<TestRun>(`/api/v0/agents/${id}/test-runs/${runId}`),
 	remove: (id: string) => call<void>(`/api/v0/agents/${id}`, json('DELETE')),
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>
 		call<void>(`/api/v0/agents/${id}/shares/revoke`, json('POST', share)),
+	responders: (id: string) =>
+		call<{ responders: Responder[] }>(`/api/v0/agents/${id}/responders`).then((r) => r.responders),
+	addResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
+		call<unknown>(`/api/v0/agents/${id}/responders`, json('POST', r)),
+	removeResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
+		call<void>(`/api/v0/agents/${id}/responders/revoke`, json('POST', r)),
+	channels: (id: string) =>
+		call<{ channels: NotifyChannel[] }>(`/api/v0/agents/${id}/channels`).then((r) => r.channels),
+	addChannel: (id: string, channel: NewChannel) =>
+		call<{ channel: NotifyChannel }>(`/api/v0/agents/${id}/channels`, json('POST', channel)).then((r) => r.channel),
+	removeChannel: (id: string, channelId: string) =>
+		call<void>(`/api/v0/agents/${id}/channels/${channelId}`, json('DELETE')),
 	grant: (id: string, kind: GrantKind, ref: string) =>
 		call<{ added: boolean }>(`/api/v0/system-principals/${id}/grants`, json('POST', { kind, ref })),
 	revokeGrant: (id: string, kind: GrantKind, ref: string) =>

@@ -40,7 +40,7 @@ pub(crate) struct Fx {
     pub(crate) plain: String,
 }
 
-async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
+pub(crate) async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
     let now = jiff::Timestamp::now();
     users::upsert(
         &state.db,

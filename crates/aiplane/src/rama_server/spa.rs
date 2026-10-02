@@ -92,10 +92,11 @@ pub async fn spa_get(req: Request) -> Response {
 ///
 /// Kept in step with `web/src/routes/` by
 /// [`tests::the_client_routes_match_the_spa_source`].
-const SPA_ROUTES: [&str; 11] = [
+const SPA_ROUTES: [&str; 12] = [
     "admin",
     "agents",
     "chat",
+    "inbox",
     "login",
     "rag",
     "scheduled",

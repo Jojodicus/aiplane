@@ -9,6 +9,7 @@ import { EmbedApi, EmbedError } from './api.ts';
 import { applyFrame, emptyConversation, fromTurns, type Conversation, type Message } from './conversation.ts';
 import { isSafeHref, parseBlocks, type Block, type Inline } from './markdown.ts';
 import { secureInputForm, secureRequest } from './secure-input.ts';
+import { trackWaiting, waitingFromTurns, waitingLabel, WAIT_POLL_MS, type Waiting } from './waiting.ts';
 
 export interface WidgetOptions {
 	api: EmbedApi;
@@ -102,6 +103,7 @@ export class Widget {
 	private error: string | null = null;
 	private open = false;
 	private stream: AbortController | null = null;
+	private waiting: Waiting | null = null;
 	private rendered = new Map<string, { el: HTMLElement; signature: string }>();
 
 	private readonly launcher: HTMLButtonElement;
@@ -172,9 +174,10 @@ export class Widget {
 			const session = await this.o.api.resume();
 			if (!session) return;
 			this.state = fromTurns(session.turns, session.live_turn_id);
+			this.waiting = waitingFromTurns(session.turns);
 			this.setTitle(session.agent.display);
 			this.renderLog();
-			if (this.state.pending) void this.follow();
+			if (this.state.pending || this.waiting) void this.follow();
 		} catch {
 			// The panel works without the old transcript; sending reports real trouble.
 		}
@@ -203,6 +206,7 @@ export class Widget {
 		this.stream?.abort();
 		this.o.api.forget();
 		this.state = emptyConversation();
+		this.waiting = null;
 		this.notice = null;
 		this.error = null;
 		this.renderLog();
@@ -275,6 +279,7 @@ export class Widget {
 			try {
 				for await (const frame of this.o.api.events(controller.signal)) {
 					applyFrame(this.state, frame);
+					this.waiting = trackWaiting(this.waiting, frame);
 					this.syncInput();
 					this.renderLog();
 				}
@@ -288,6 +293,12 @@ export class Widget {
 					return this.renderLog();
 				}
 				if (attempt === MAX_REATTACH) return this.fail(errorKey(error));
+			}
+			if (this.waiting && !controller.signal.aborted) {
+				// Staff answer on their own time; look again until they did.
+				attempt = -1;
+				await new Promise((resolve) => setTimeout(resolve, WAIT_POLL_MS));
+				continue;
 			}
 			if (!this.state.pending) return;
 			await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
@@ -328,6 +339,14 @@ export class Widget {
 						{ role: 'status' },
 						h('div', 'chat-bubble flex items-center gap-2 text-sm', {}, ...(this.o.reducedMotion ? [] : [h('span', 'loading loading-dots loading-sm', { 'aria-hidden': 'true' })]), t('embed-working'))
 					)
+			});
+		}
+		if (this.waiting && !this.state.pending) {
+			const label = t(waitingLabel(this.waiting));
+			items.push({
+				key: 'waiting',
+				signature: label,
+				build: () => h('div', 'alert alert-info alert-soft text-sm', { role: 'status' }, label)
 			});
 		}
 		if (this.error) {

@@ -102,7 +102,7 @@ const MAIN_KEYS: &[&str] = &[
     "budget",
 ];
 const INSTRUCTION_KEYS: &[&str] = &["orchestration", "response"];
-const TOOL_RESOURCE_KEYS: &[&str] = &["bind", "permission"];
+const TOOL_RESOURCE_KEYS: &[&str] = &["bind", "permission", "approval_timeout"];
 const PERMISSIONS: &[&str] = &["always_allow", "always_ask"];
 const BUDGET_KEYS: &[&str] = &["rounds", "seconds", "tokens"];
 const SLOT_KEYS: &[&str] = &[
@@ -134,7 +134,10 @@ const SLOT_TYPES: &[&str] = &[
 const ROUTER_KEYS: &[&str] = &["kind", "pool", "order"];
 const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
 const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "human"];
-const HUMAN_KEYS: &[&str] = &["notify", "inbox"];
+const HUMAN_KEYS: &[&str] = &["notify", "inbox", "timeout", "transcript"];
+/// Where a handoff may be announced: Web Push to whoever may answer it, and
+/// the agent's Slack and Discord channels.
+pub const NOTIFY_CHANNELS: &[&str] = &["push", "slack", "discord"];
 const FINISH_KEYS: &[&str] = &["schema"];
 const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
 const PUBLISH_KEYS: &[&str] = &[
@@ -144,6 +147,7 @@ const PUBLISH_KEYS: &[&str] = &[
     "rate_limits",
     "budget",
     "output_filter",
+    "require_passing_tests",
 ];
 const RATE_SCOPES: &[&str] = &["visitor", "ip"];
 const RATE_KEYS: &[&str] = &["max", "per"];
@@ -751,6 +755,9 @@ impl<'a> Check<'a> {
             if let Some(perm) = r.get("permission") {
                 self.one_of(perm, &join(&p, "permission"), PERMISSIONS);
             }
+            if let Some(timeout) = r.get("approval_timeout") {
+                self.duration(timeout, &join(&p, "approval_timeout"));
+            }
             if let Some(bind) = r.get("bind") {
                 self.bind(bind, &join(&p, "bind"), true);
             }
@@ -1067,10 +1074,36 @@ impl<'a> Check<'a> {
             (None, Some(human)) => {
                 if let Some(h) = self.object(human, &join(path, "human"), HUMAN_KEYS) {
                     if let Some(n) = h.get("notify") {
-                        self.string_list(n, &join(path, "human.notify"));
+                        let at = join(path, "human.notify");
+                        for (item_path, item) in self.string_list(n, &at) {
+                            if !NOTIFY_CHANNELS.contains(&item) {
+                                self.issue(
+                                    &item_path,
+                                    format!(
+                                        "`{item}` is not a notification channel — use {}",
+                                        NOTIFY_CHANNELS
+                                            .iter()
+                                            .map(|c| format!("`{c}`"))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                );
+                            }
+                        }
                     }
                     if let Some(i) = h.get("inbox") {
                         self.string(i, &join(path, "human.inbox"));
+                    }
+                    if let Some(t) = h.get("timeout") {
+                        self.duration(t, &join(path, "human.timeout"));
+                    }
+                    if let Some(t) = h.get("transcript")
+                        && !t.is_boolean()
+                    {
+                        self.issue(
+                            &join(path, "human.transcript"),
+                            "`transcript` is `true` or `false`",
+                        );
                     }
                 }
                 for key in ["task", "bind"] {
@@ -1401,6 +1434,15 @@ impl<'a> Check<'a> {
         if let Some(x) = map.get("retention_days") {
             self.positive_int(x, "publish.retention_days", None);
         }
+        if let Some(x) = map.get("require_passing_tests")
+            && !x.is_boolean()
+        {
+            self.issue(
+                "publish.require_passing_tests",
+                "must be true or false: true blocks publishing until the latest test run of this                  draft is green"
+                    .to_string(),
+            );
+        }
         if let Some(rates) = map.get("rate_limits")
             && let Some(rates) = self.object(rates, "publish.rate_limits", RATE_SCOPES)
         {
@@ -1642,6 +1684,49 @@ mod tests {
                 "main.tool_resources.rag_search",
                 "main.tool_resources.rag_search.permission"
             ]
+        );
+    }
+
+    #[test]
+    fn an_approval_timeout_and_a_human_routes_settings_are_checked() {
+        let issues = check(
+            json!({
+                "main": { "tools": ["rag_search"], "tool_resources": {
+                    "rag_search": { "permission": "always_ask", "approval_timeout": "soon" } } },
+                "state": { "issue": { "type": "string", "set_by": ["llm"] } },
+                "routes": { "people": {
+                    "when": { "slot": "issue", "set": true },
+                    "human": { "notify": ["push", "pager"], "timeout": "1x", "transcript": "yes" }
+                } }
+            }),
+            Stage::Draft,
+        );
+        let found = paths(&issues);
+        for expected in [
+            "main.tool_resources.rag_search.approval_timeout",
+            "routes.people.human.notify[1]",
+            "routes.people.human.timeout",
+            "routes.people.human.transcript",
+        ] {
+            assert!(found.contains(&expected), "{expected} in {found:?}");
+        }
+        let fine = check(
+            json!({
+                "main": { "tools": ["rag_search"], "tool_resources": {
+                    "rag_search": { "permission": "always_ask", "approval_timeout": "2h" } } },
+                "state": { "issue": { "type": "string", "set_by": ["llm"] } },
+                "routes": { "people": {
+                    "when": { "slot": "issue", "set": true },
+                    "human": { "notify": ["push", "slack"], "timeout": "30m", "transcript": true }
+                } }
+            }),
+            Stage::Draft,
+        );
+        assert!(
+            !paths(&fine)
+                .iter()
+                .any(|p| p.contains("approval_timeout") || p.contains("human")),
+            "{fine:?}"
         );
     }
 
@@ -2456,6 +2541,20 @@ mod tests {
             "{}",
             over[0].message
         );
+    }
+
+    #[test]
+    fn require_passing_tests_is_a_boolean() {
+        let ok = check(
+            json!({ "publish": { "require_passing_tests": true } }),
+            Stage::Draft,
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+        let bad = check(
+            json!({ "publish": { "require_passing_tests": "yes" } }),
+            Stage::Draft,
+        );
+        assert_eq!(paths(&bad), ["publish.require_passing_tests"]);
     }
 
     #[test]

@@ -116,6 +116,27 @@ for visitors who ask for reduced motion.
 - Answers are shown as text. A small markdown subset (paragraphs, lists, code,
   bold, emphasis, `http(s)` links) is built with DOM calls, never as HTML.
 
+## When the agent asks a person
+
+An agent can hand a conversation to your staff (a `human` route) or wait for
+their approval before a tool runs (`permission: always_ask`). The visitor
+then sees a notice that a member of staff will answer, and the widget checks
+for the answer every 10 seconds. The visitor can keep typing: a message sent
+meanwhile waits and is answered after the staff member's.
+
+Your staff answer in AIplane's inbox (`/inbox`). Whoever holds a `write`
+share on the agent, and the users and groups listed as the agent's
+**responders**, see the item; responders see only the item, not the agent's
+settings or its other conversations. They can be told by Web Push and by
+Slack or Discord incoming webhooks you add under the agent's Sharing tab.
+Those messages carry the agent's name, what kind of request it is and a link
+to the inbox; they carry the question only if you turn on details for the
+channel, and never what the visitor wrote.
+
+If nobody answers in time (30 minutes unless the route sets `timeout`), the
+visitor is told so in their language and the conversation goes on. See
+[`agents.md`](agents.md#what-96-built) for the spec keys.
+
 ## Content Security Policy
 
 If your site sends a CSP, allow the gateway for two things:

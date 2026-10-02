@@ -231,7 +231,8 @@ CREATE TABLE agent_shares (
 - Every share takes effect only for a holder of `can_manage_agents`.
 - *Chosen:* `read` shows the spec and the agent's conversations, and those
   hold visitor data, so a read share needs the permission too. Support staff
-  who only answer handoffs use the HiL inbox (#96), which needs no share.
+  who only answer handoffs use the HiL inbox (#96), which needs no share:
+  they are the agent's *responders* ([#96](#what-96-built)).
 
 **Grants are not versioned.** They belong to the principal and persist until
 reconfigured, as decided. If a live spec references a tool whose grant was
@@ -278,7 +279,7 @@ routes:
     task: "{issue_summary}"
   human:
     when: { slot: issue, set: true }
-    human: { notify: [push], inbox: support }   # phase 4
+    human: { notify: [push, slack], inbox: support, timeout: 30m }   # #96
 finish: { schema: { type: object, required: [answer], properties: {
             answer: { type: string }, facts: { type: array, items: { type: string } },
             needs_human: { type: boolean } } } }
@@ -294,6 +295,7 @@ publish:
   output_filter:
     patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" }
     action: withhold                    # withhold (default) | redact
+  require_passing_tests: false          # true: publish needs a green test run of this draft (#99)
 ```
 
 A sub-agent's spec uses the same layout. It has no `state`, `routes` or
@@ -319,8 +321,10 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
   a parameter of that name must bind it too. Otherwise it is not offered,
   and a call to it is refused. A `const` bind fixes a setting and makes no
   name a subject.
-- **`permission`**: `always_allow`, the default, or `always_ask`, which suspends
-  the call for human approval (phase 4).
+- **`permission`**: `always_allow` or `always_ask`, which suspends the call
+  for staff approval. Without one, a tool its server marks destructive and
+  not read-only asks. `approval_timeout` (default `1h`) bounds the wait, and
+  nobody approving is a deny ([#96](#what-96-built)).
 
 **Checks when a spec is validated** (on save, again on publish):
 - Every reference must exist and be granted to this agent's principal.
@@ -512,7 +516,7 @@ registered for that run, need no grant, and do not exist anywhere else.
 |---|---|---|
 | `set_<slot>(value)` | main agent | validates in code and writes `agent_state` with provenance `llm` |
 | `forward_request()` | main agent | evaluates the router over open gates (§4). On no open route it returns the failing conditions as a structured list. Otherwise it runs the sub-agent and returns its `finish` result |
-| `request_human(reason)` | main agent, when a `human` route exists | phase 4 |
+| `request_human(question)` | main agent, when a `human` route exists | hands the conversation to a person on an open human route and waits for their answer ([#96](#what-96-built)) |
 | `verify_<id>_request_code()`, `verify_<id>_submit_code()`, `verify_<id>()` | main agent | the verifier flows ([#95](#what-95-built)); no arguments |
 | `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
 
@@ -739,7 +743,8 @@ grants.
     is checked in code again, so a closed, unknown or malformed answer
     forwards nothing (`no_route_chosen`).
   - Dispatch happens only through the `OpenRoute` that `RouteGates::open`
-    returns. A `human` route answers `human_unavailable` until #96.
+    returns. A `human` route hands the conversation to a person
+    ([#96](#what-96-built)).
 - **Dispatch** (#88). It is the five steps of
   [Sub-agent dispatch](#sub-agent-dispatch):
   1. Render `task` from the main agent's state with `bind::render_task`. A
@@ -908,7 +913,8 @@ agent runs pause and resume durably, sub-agent runs included.
 - **Which runs pause.** `ToolContext.suspend` is `Available` on the chat path
   and on every agent run (`headless::drive` turns it on when `DriveParams.agent`
   is set), in both `drive_opened` entry points: the public endpoint's runner
-  and the test chat. Scheduled and webhook runs still refuse.
+  and the test chat. Since #96 a person's scheduled and webhook runs pause
+  too ([below](#what-96-built)).
 - **The main agent's turn.** `drive_opened` (and `drive_opened_from`, the
   same with a resume) returns `AgentReply { status: suspended, answer: None,
   suspension: Some(view) }` when the turn paused. The output filter runs only
@@ -1008,8 +1014,146 @@ agent runs pause and resume durably, sub-agent runs included.
   secure_input(…))` and checks `Decided(Value)`; the widget renders the
   `suspended` frame's field and posts `/api/v0/embed/resume`. `permission:
   always_ask` wraps the tool in `AskFirst`; the inbox lists suspended agent
-  turns and answers through the staff route; the push notification on pause
-  and the scheduled/webhook resume path are still #96's.
+  turns and answers through the same resume as the staff route. Built in
+  [#96](#what-96-built).
+
+### What #96 built
+
+Human in the loop on top of the agent-run suspend: per-tool approval, a
+handoff to a person, an inbox where both are answered, notifications when a
+turn starts waiting, and a resume path for a person's scheduled and webhook
+runs. Migration `0087_human_in_the_loop.sql`.
+
+- **Per-tool approval** (`agents::approval`). `tool_resources.<tool>.permission`
+  decides whether a call pauses for staff: `always_ask` wraps the tool in
+  `AskFirst`, `always_allow` runs it as granted. Without a `permission` a tool
+  asks first exactly when it is known to change something: the new
+  `Tool::changes_state()` is `true` only for an MCP tool its server marks
+  destructive and not read-only (built-in tools say nothing, so they are
+  `false`). `tool_resources.<tool>.approval_timeout` (a duration, default
+  `1h`) is how long the approval may take; an approval nobody gives is a deny
+  (#96's decision; `SuspensionKind::timeout_fallback` enforces it). The gate
+  sits outside the bound arguments, so an approved call still gets the
+  gateway's values; a withheld tool is refused without asking anyone.
+- **Handoff** (`agents::human`). A route with `human` is a target like a
+  sub-agent. Keys: `notify` (`push`, `slack`, `discord`; absent = every
+  channel), `inbox` (a label the inbox shows), `timeout` (default `30m`),
+  `transcript` (`false` by default). Two ways in:
+  - `request_human(question)`, a synthetic tool offered to the main agent
+    whenever the spec has a `human` route. It needs an open human route
+    (`router.order` first, else name order) and answers `no_open_route` with
+    what is missing otherwise. *Chosen:* the argument is the question for
+    staff, not a free-form reason, and it takes no other key.
+  - `forward_request` picking a human route (it answered `human_unavailable`
+    before). The route's `description` is the question, else the visitor's
+    last message.
+
+  Either pauses the call as `human_answer` with the question as `message` and
+  a handoff stored in the pause's `run_context` (`{handoff: {route, question,
+  visitor_message, slots, lang, inbox, notify, transcript?}}`).
+  `SuspendRequest` gained `context` for this. `slots` is the model's view
+  (a value only where the model wrote it, `set_by` otherwise), so a
+  verifier's value never reaches the inbox; the transcript (the last 20 turns,
+  each cut to 2000 characters) goes along only with `transcript: true`. The
+  handoff is audited as `human_handoff` with the run chain (#100's analytics
+  count that kind).
+- **The answer goes through the main agent.** *Chosen over verbatim:* the
+  staff answer is the waiting call's result (`{answered: true, answer,
+  note}`) and the model passes it on in the visitor's language. The visitor
+  and the staff member need not share a language, the conversation stays one
+  the model continues, and the answer still passes the output filter (#89; a
+  tool result is trusted text, so identifiers staff quote pass). A staff
+  `deny` is a tool error the model explains.
+- **Nobody answers.** When a handoff's deadline passes, `run_claimed` does not
+  ask the model: the waiting call is settled as unanswered and the turn ends
+  with `agent-human-no-answer` in the language recorded at the handoff
+  (`RunOptions.lang`, which the public runner now sets from the visitor's
+  `Accept-Language`). A message queued behind it runs afterwards as usual.
+- **Responders** (`agent_responders`, `db::agent_responders`). Users or
+  groups who answer an agent's approvals and handoffs without a share — the
+  support staff of §2. They need no `can_manage_agents`. Managed with a share
+  like the rest of the agent; adding and removing one is audited
+  (`responder_added`, `responder_removed`).
+- **The inbox** (`agents::inbox`). An item is a conversation's own pause
+  (`chat::pending_suspensions`; a sub-agent's pause shows through its
+  conversation's, with the innermost call's tool and arguments for an
+  approval):
+  - an agent conversation's `approval` or `human_answer`, outside the test
+    chat (`agent_version = 0` stays in the test chat), for an admin, a manager
+    with a `write` share, or a responder (`standing: manager | responder`);
+  - a person's own paused conversation — a scheduled or webhook run — for its
+    owner only (`standing: owner`).
+
+  A responder gets the item and its minimal context: question, handoff
+  context, an approval's tool and arguments, agent display name. Every other
+  agent route refuses them (`403`, no agent-management permission), and so
+  does the staff resume route.
+- **Notifications.** Once per pause (`chat_turn_suspensions.notified_at`,
+  set with `WHERE notified_at IS NULL`; a new pause is a new row), off the
+  turn's path (`inbox::announce_in_background`), when an agent conversation's
+  turn pauses (`drive_opened_from`, so a resumed turn that pauses again
+  notifies again) or a person's headless run does:
+  - **Web Push** to everyone who may answer: users holding a `write` share
+    directly or through a group, and responders (admins without a share are
+    not notified — they may answer everything and would be told everything),
+    or the run's owner. Title and body from the catalog in each
+    subscription's language; the link is `/inbox?item=<request_id>`.
+  - **Slack and Discord** incoming webhooks (`agent_notify_channels`,
+    `db::agent_channels`, `aiplane_features::server::notify_channels`). The
+    URL is the credential: sealed at rest (and in the reseal pass), never
+    returned by the API, never in a log line or an audit row; only its host
+    is kept in clear. A URL must be `https` on `hooks.slack.com` or
+    `discord.com`/`discordapp.com` `/api/webhooks/…` (loopback `http` only,
+    for tests). A message holds the agent, the kind and the absolute inbox
+    link (`public_url`); with the channel's `details` on, also the question or
+    the tool name (cut to 300 characters). No visitor message, transcript or
+    slot value is ever sent. Slack text is escaped, Discord gets
+    `allowed_mentions: {parse: []}`. A channel has its own catalog `lang`. A
+    failed post is logged and skipped. Mail is not built.
+- **Headless runs pause.** `headless::drive` makes every run suspendable,
+  not only agent runs. A person's scheduled or webhook run that pauses is
+  recorded as `waiting` (the SPA shows it as pending), notifies its owner and
+  is answered from the inbox through the chat's own resume
+  (`pages::chat::resume_turn`), so it continues as the owner's chat with the
+  owner's tools; its expiry is the chat sweeper's. No built-in tool pauses a
+  person's run yet; the path exists for the first that does (an MCP tool in
+  `ask` mode is the obvious one).
+- **API** (`aiplane-api::pages::json_inbox`). The inbox routes need a session
+  only; everyone may ask, most see nothing.
+
+  | Method | Path | Who | Purpose |
+  |---|---|---|---|
+  | GET | `/api/v0/agents/inbox` | session | `{items, count}`: each `{id (request_id), kind, standing, agent?, session_id, turn_id, title?, question?, call?: {name, arguments}, context?, options, created_at, expires_at}` |
+  | POST | `/api/v0/agents/inbox/{id}/answer` | who may answer it | `{decision, value?}`; `202 {turn_id}`, the turn runs in the background and the visitor gets it on their stream. `404 inbox_item_not_found` for anyone else, `409 not_suspended` / `turn_in_progress`, `400 decision_not_offered` |
+  | GET | `/api/v0/agents/inbox/events` | session | SSE: `inbox {count}` on attach and whenever the set changes (checked every 3 s), keep-alive comments, ends after 10 minutes for `EventSource` to reconnect |
+  | GET/POST | `/api/v0/agents/{id}/responders` | read / write share | list; add `{subject_kind: user\|group, subject_id}` (`201`, `200` if already one, `404` for an unknown user or group) |
+  | POST | `/api/v0/agents/{id}/responders/revoke` | write share | `{subject_kind, subject_id}`; `204` |
+  | GET/POST | `/api/v0/agents/{id}/channels` | read / write share | list without URL; add `{kind: slack\|discord, name, url, details?, lang?}`; `422 invalid_webhook_url`, `409 channel_name_taken` |
+  | DELETE | `/api/v0/agents/{id}/channels/{channel_id}` | write share | `204` |
+
+  The inbox answer and the staff route both end in `agents::resume::claim` /
+  `run_claimed` with `ResumedBy::Staff`, so `run_resumed` names the answerer
+  as `actor_id`.
+- **Widget and SPA.** The widget shows a waiting notice for a `suspended`
+  frame with empty `options` and re-attaches every 10 s until the answer
+  arrives ([`embed.md`](embed.md#when-the-agent-asks-a-person)); the SPA has
+  `/inbox` with a live sidebar badge and the Responders and Notification
+  channels cards in the workbench's Sharing tab ([`ui.md`](ui.md#inbox)).
+- **Tests.** `agents/run/tests/hil.rs`: an `always_ask` tool pauses, staff
+  approve and it runs, staff deny and it is a tool error, nobody answers and
+  it is denied; `always_allow`; `request_human` to a responder whose answer
+  reaches the visitor through the model, with the handoff's context and
+  audit; the unanswered handoff in German with no model call; a human route
+  through `forward_request`; one Slack post per pause, only on the channels
+  the route names; a person's paused run in their own inbox only.
+  `tests/it/embed/hil.rs`: the whole path over HTTP (visitor waits, responder
+  answers from the inbox, visitor receives), what a responder cannot reach,
+  who cannot answer, responder and channel management (no URL ever shown),
+  and a scheduled run that paused, resumed from its owner's inbox.
+- **Not built.** Answering in a Slack or Discord thread (inbox only, as the
+  issue left open), mail, and an approval card in a person's interactive chat
+  (its pauses are in the inbox, but the chat page does not render `suspended`
+  yet).
 
 ## 4. Gates and validation
 
@@ -1326,7 +1470,8 @@ untrusted audiences.
   `web/embed/locales.generated.ts`, checked by
   `i18n_drift::the_embed_catalog_matches_the_fluent_sources`.
 - **Not built here:** the secure-input field, which #95 added
-  ([below](#what-95-built)), and the view for a turn waiting on staff (#96).
+  ([below](#what-95-built)). The waiting view for a request staff answer came
+  with [#96](#what-96-built).
 - **`dev-ui`** now installs `LiveAgentRunner` and seeds a published agent on
   the `chat` pool with a fixed embed key for `http://localhost:8000`.
 
@@ -1552,6 +1697,182 @@ verifiers:
   - `assurance` is a free label; levels and their names are still open.
   - No magic-link variant.
 
+### What #100 built
+
+Analytics for a manager: what an agent did over a period, derived from rows
+that already exist. No second event store.
+
+- **Migration `0086_agent_analytics.sql`**: one index,
+  `agent_audit (principal_id, kind, created_at)`. `0085` is left free on
+  purpose, because a concurrent branch may claim it.
+- **`GET /api/v0/agents/{id}/analytics?from=&to=&version=`** (`read` share,
+  admins always; same 403/404 rules as the other agent routes). `from` and `to`
+  are RFC 3339 instants or `YYYY-MM-DD` UTC days; a day as `to` includes that
+  whole day. Default: the last 30 days. Longer than 366 days, `from >= to`, an
+  unparseable bound or `version < 1` is a 400 that says what to change.
+  `version` narrows to one published version.
+- **Response** (counts and route, slot and reason names only; no visitor
+  content, no session or visitor ids):
+  `{from, to, version, currency, conversations, turns, sub_agents: {dispatched,
+  finished, incomplete, incomplete_by_reason: {kind: n}}, gate_refusals:
+  {total, by_route: {route: n}, by_missing_slot: [{route, slot, count}]},
+  routes_chosen: {route: n}, output_blocks: {total, by_action}, limit_refusals:
+  {total, by_kind}, human_handoffs, usage: {requests, prompt_tokens,
+  completion_tokens, tokens, cost}, daily: [{day, conversations, turns, tokens,
+  cost, refusals}]}`. `daily` has one UTC-day bucket for every day of the range,
+  quiet ones as zeros.
+- **Where each number comes from.**
+  - `conversations`: root conversations (`parent_turn_id IS NULL`) the agent's
+    principal owns, by `created_at`. `turns`: their `user` turns, by the turn's
+    `created_at`. A conversation the retention sweeper deleted is gone from
+    both.
+  - `routes_chosen`: `route_decision` rows with a `picked` route.
+    `gate_refusals`: `route_decision` rows with `reason: no_open_route` (no
+    route was open for the request); each closed route counts once in `by_route`
+    and each of its unmet slots once in `by_missing_slot`. A decision the
+    classifier declined (`picked` null, any other reason) is not a gate refusal.
+  - `sub_agents`: `sub_agent_dispatched` and `sub_agent_finished` rows;
+    `incomplete_by_reason` is `outcome.reason.kind`.
+  - `output_blocks`: `output_blocked`, by `action` (`redacted`, `withheld`).
+  - `limit_refusals`: `limit_refused`, by `limit` (`visitor_rate`, `ip_rate`,
+    `budget`).
+  - `human_handoffs`: audit rows of kind `human_handoff`
+    (`agent_analytics::HUMAN_HANDOFF_KIND`). #96 is not merged, so nothing
+    writes that kind yet and the count is 0; it starts moving the day #96
+    writes it, provided it records the agent's chain.
+  - `usage`: `usage_events` with `agent_id` = the agent, which includes the
+    sub-agents' calls and the classifier's. Tokens are `total_tokens`, or
+    prompt + completion when that is missing. Needs `[usage] enabled`.
+- **What is never counted.** Builder test conversations (`agent_version = 0`;
+  their audit and usage rows carry the draft version in the chain's main
+  frame), another agent's rows, and a run of this agent as somebody else's
+  sub-agent (the chain's main frame names the other agent).
+- **Version filter.** A row's version is the main frame of its serialized call
+  chain (`frames[0].version`); conversations use `chat_sessions.agent_version`.
+  `limit_refused` rows have no chain, because a refusal happens before any
+  version runs, so they are left out while a version is selected (the SPA says
+  so).
+- **Why Rust and not SQL aggregation.** The version sits inside a JSON string
+  and timestamps are RFC 3339 with fractional seconds of varying length, which
+  do not order as text. SQL narrows by whole days (index-friendly) and
+  `db::agent_analytics::compute` applies the exact range and the version. The
+  cost is one pass over the agent's rows for the period; a range is capped at
+  366 days.
+- **SPA.** An *Analytics* tab on `/agents/{id}`
+  ([`ui.md`](ui.md#agent-builder)).
+- **Tests.** `crates/aiplane/tests/it/agent_analytics.rs` seeds two agents,
+  two versions, a test conversation, out-of-range rows and a visitor's text and
+  id, and asserts every number exactly, the daily series, the version filter,
+  no leakage between agents, no visitor content, and the share rules.
+
+### What #99 built
+
+Evaluation: stored test cases per agent, run against the draft or a published
+version and judged on more than the final answer.
+
+- **Migration `0089_agent_tests.sql`**: `agent_test_cases`, `agent_test_runs`,
+  `agent_test_results`. `0087` and `0088` are claimed by the concurrent
+  branches (#96, #95); renumber if either lands under another number, and the pinned line in
+  `aiplane-core/tests/migration-checksums.txt` with it. Rows live
+  in `aiplane-core::server::db::agent_tests`; the logic in
+  `aiplane-runtime::agents::eval` (and `eval_judge` for the rubric).
+- **Case.** `{name, script, expect, rubric?}`; the name is unique per agent. A
+  case is validated when stored (`422 invalid_test_case` with `issues[{path,
+  message}]`): a case that checks nothing, or names an unknown key, is refused.
+- **Script.** An ordered list of steps: `{"say": "<visitor message>"}` or
+  `{"write": {"slot", "value", "writer"}}`, with `writer` either `host` or
+  `verifier:<id>`. A write goes through `write_trusted` with a `TrustedWriter`
+  built from that text, so the slot's `set_by` and its type still apply; a
+  refused write fails the case with the reason. It is the only place text
+  becomes a trusted writer, and only the test runner reaches it: no public or
+  visitor path accepts a script. The model's own `llm` writes cannot be
+  scripted. The first step must be a `say`, because the conversation only
+  exists once the visitor has spoken. A turn that suspends (an approval, a
+  secure input) before the last step stops the script: a script cannot answer
+  it.
+- **Expectations** (`expect`, all deterministic; an omitted key is not
+  checked):
+
+  | Key | Meaning |
+  |---|---|
+  | `gates.<route>` | `{open: bool, missing?: [slot]}`: the gate after the last step; for a closed gate, these slots must still be among what it misses |
+  | `route` | the route `forward_request` picked last (`"billing"`), or `null` for none |
+  | `sub_agents` | `{called?: [route], not_called?: [route]}`, by route name |
+  | `bound` | `[{route, name, equals}]`: the route was dispatched, and its `bind` resolves `name` to `equals` |
+  | `tools` | `{called?: [tool], not_called?: [tool]}`: allowed `tool_call` decisions of the run, `set_<slot>` and `forward_request` included |
+  | `answer` | `{contains?: [text], not_contains?: [text]}`, case-insensitive, on the last answer as delivered (after the output filter) |
+  | `filter` | `passed`, `withheld` or `redacted`: what the output filter did to the last answer |
+  | `finished` | `true`: the last turn ended with an answer; `false`: it did not |
+
+  `bound` reads the values from the final state with the same resolver
+  dispatch uses, so a state change after the dispatch can differ from what was
+  passed. `tools` and `sub_agents` read the audit rows of the whole
+  conversation, nested sub-agents included.
+- **Rubric.** Optional free text per case. After the deterministic checks, one
+  non-streaming call on the agent's `main.pool`, as its principal, grades the
+  visitor messages and the agent's answers (nothing else: no slot values, no
+  tool results) as `{passed, reason}`. It is reported as `report.rubric`
+  (`verdict`: `passed`, `failed`, `error`, `skipped`) and counted apart in the
+  run's `rubric`. It never changes a case's `passed`, a run's `green` or the
+  publish guard.
+- **Goal-Plan-Action report.** Each case yields `{passed, error, goal, plan,
+  action, rubric, turns, debug}`; each section is `{passed, checks: [{check,
+  passed, expected, actual, message}]}`.
+  - *Goal*: `finished`, `answer.*`, `filter`: did the conversation end as meant.
+  - *Plan*: `gates.*`, `route`: did the gates hold and the router choose right.
+  - *Action*: `sub_agents.*`, `tools.*`, `bound`: were the right things called.
+
+  `passed` holds when the script ran through and every check in the three
+  sections holds. `turns` carries each message with its status and answer;
+  `debug` is the test chat's debug payload after the last step ([#90](#what-90-built)).
+- **Running.** Each case is its own conversation through `run_draft_turn`, the
+  test chat's door: version 0 (`DRAFT_VERSION`), the agent's grants, gates,
+  binds and budgets, its tools really running. A version is tested by passing
+  its stored spec as the draft, so no second execution path exists and nothing
+  about "live" is overridden. A sub-agent a case dispatches to runs its live
+  version, as in the test chat. Cases run one after the other in the order
+  they were created.
+- **Test data.** Version-0 conversations are what analytics leave out
+  ([#100](#what-100-built)) and what retention sweeps like any conversation; a
+  stored result keeps its report after the conversation is swept (`session_id`
+  carries no foreign key). The `agent_tests` integration suite runs a suite and
+  shows the analytics response unchanged and the conversation at version 0.
+- **API** (`aiplane-api::pages::json_agent_tests`; the share rules of the other
+  agent routes: `read` lists, `write` writes and runs, admins hold both):
+
+  | Method | Path | Share | Purpose |
+  |---|---|---|---|
+  | GET | `/api/v0/agents/{id}/tests` | read | `{cases, latest_draft_run, latest_draft_run_current}` |
+  | POST | `/api/v0/agents/{id}/tests` | write | create `{name, script, expect, rubric?}`; 201, 409 on a taken name |
+  | PUT | `/api/v0/agents/{id}/tests/{case}` | write | replace a case |
+  | DELETE | `/api/v0/agents/{id}/tests/{case}` | write | delete a case; 204 |
+  | POST | `/api/v0/agents/{id}/tests/run` | write | `{source: "draft" \| "version:N"}`: run every case, synchronously; 201 with the stored run and its results. 400 without cases or with another `source`, 404 for an unknown version |
+  | GET | `/api/v0/agents/{id}/test-runs` | read | the newest 50 runs, without results |
+  | GET | `/api/v0/agents/{id}/test-runs/{run}` | read | one run with a result per case |
+
+  A run is `{id, source, version, started_by, started_at, finished_at, passed,
+  failed, green, rubric?, results?}`; `green` means no failed case and at least
+  one passed. `passed` and `failed` count the deterministic result only.
+- **Publish guard.** `publish.require_passing_tests: true` (a boolean in the
+  spec, validated on save) makes `POST …/publish` answer `422
+  agent_tests_failing` unless the newest draft run is green **for the draft and
+  the suite as they are now**: each run stores a hash of the spec it ran and of
+  the cases, so editing either makes the last run stale and the message says
+  to run the suite again. With failing cases, `error.failing` lists `[{case_id,
+  case_name, problems}]` with the failed checks in words; with no cases or no
+  matching run it is empty. Rolling back (`/live`) is not guarded: it publishes
+  nothing new.
+- **Deviations.** A run is synchronous, like the test chat: the request returns
+  when the suite is done. A case cannot write state before the first message.
+  The judge's call writes no usage row.
+- **Tests.** `crates/aiplane/tests/it/agent_evaluation.rs` runs a passing
+  suite, a failing gate and route expectation, a trusted write with a bound
+  value, a refused trusted write, the filter outcome, a version run, the
+  publish guard through its whole cycle (no cases, no run, failing, edited
+  suite, green, changed draft), the rubric reported apart, validation, the
+  share rules, and analytics unchanged by a run. Parsing and judging are unit
+  tests in `eval.rs`.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -1559,12 +1880,11 @@ upward.
 
 | Piece | Crate | Why there |
 |---|---|---|
-| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
+| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
-| `request_human` | `aiplane-tools` | tool implementation; registered like every other tool |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
@@ -1597,7 +1917,9 @@ use `regex`, and hashing uses the token helpers.
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken`; verifier tools in `aiplane-runtime`, not `aiplane-tools` ([built](#what-95-built)) |
-| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind |
+| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; responders instead of a share for support staff; Slack and Discord incoming webhooks; answers in the inbox only |
+| #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
+| #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #97 later | — | unchanged |
 
 ## Deferred

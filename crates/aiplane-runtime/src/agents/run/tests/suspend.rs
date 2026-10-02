@@ -51,7 +51,7 @@ async fn support(world: &World, tools: &[&str]) -> String {
     id
 }
 
-async fn visitor_says(world: &World, agent: &str, message: &str) -> AgentReply {
+pub(super) async fn visitor_says(world: &World, agent: &str, message: &str) -> AgentReply {
     run_turn(
         &world.state,
         AgentTurn {
@@ -65,7 +65,7 @@ async fn visitor_says(world: &World, agent: &str, message: &str) -> AgentReply {
     .unwrap()
 }
 
-fn answer(reply: &AgentReply, decision: Decision, by: ResumedBy) -> AgentResume<'_> {
+pub(super) fn answer(reply: &AgentReply, decision: Decision, by: ResumedBy) -> AgentResume<'_> {
     AgentResume {
         agent_id: "",
         session_id: &reply.session_id,
@@ -76,7 +76,7 @@ fn answer(reply: &AgentReply, decision: Decision, by: ResumedBy) -> AgentResume<
     }
 }
 
-fn staff() -> ResumedBy {
+pub(super) fn staff() -> ResumedBy {
     ResumedBy::Staff {
         user_id: "u1".into(),
     }
@@ -108,7 +108,7 @@ pub(super) async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> St
     all
 }
 
-async fn wait_settled(world: &World, session: &str, turn: &str) -> chat::Turn {
+pub(super) async fn wait_settled(world: &World, session: &str, turn: &str) -> chat::Turn {
     for _ in 0..400 {
         let t = chat::get_turn(world.db(), session, turn)
             .await

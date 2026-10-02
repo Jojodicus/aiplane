@@ -247,6 +247,14 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agent-resources",
             pages::json_agent_resources::resources,
         )
+        // The inbox (docs/agents.md "What #96 built"): before `/agents/{id}`,
+        // because rama matches in registration order.
+        .with_get("/api/v0/agents/inbox", pages::json_inbox::list)
+        .with_get("/api/v0/agents/inbox/events", pages::json_inbox::events)
+        .with_post(
+            "/api/v0/agents/inbox/{id}/answer",
+            pages::json_inbox::answer,
+        )
         .with_get("/api/v0/agents", pages::json_agents::list)
         .with_post("/api/v0/agents", pages::json_agents::create)
         .with_get("/api/v0/agents/{id}", pages::json_agents::detail)
@@ -264,13 +272,60 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume",
             pages::json_agent_test::resume_turn,
         )
+        .with_get("/api/v0/agents/{id}/tests", pages::json_agent_tests::list)
+        .with_post("/api/v0/agents/{id}/tests", pages::json_agent_tests::create)
+        .with_post(
+            "/api/v0/agents/{id}/tests/run",
+            pages::json_agent_tests::run,
+        )
+        .with_put(
+            "/api/v0/agents/{id}/tests/{case}",
+            pages::json_agent_tests::update,
+        )
+        .with_delete(
+            "/api/v0/agents/{id}/tests/{case}",
+            pages::json_agent_tests::delete,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test-runs",
+            pages::json_agent_tests::runs,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test-runs/{run}",
+            pages::json_agent_tests::run_detail,
+        )
         .with_get("/api/v0/agents/{id}/versions", pages::json_agents::versions)
+        .with_get(
+            "/api/v0/agents/{id}/analytics",
+            pages::json_agents::analytics,
+        )
         .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
         .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)
         .with_post("/api/v0/agents/{id}/shares", pages::json_agents::share)
         .with_post(
             "/api/v0/agents/{id}/shares/revoke",
             pages::json_agents::revoke_share,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/responders",
+            pages::json_inbox::responders,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/responders",
+            pages::json_inbox::add_responder,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/responders/revoke",
+            pages::json_inbox::revoke_responder,
+        )
+        .with_get("/api/v0/agents/{id}/channels", pages::json_inbox::channels)
+        .with_post(
+            "/api/v0/agents/{id}/channels",
+            pages::json_inbox::create_channel,
+        )
+        .with_delete(
+            "/api/v0/agents/{id}/channels/{channel_id}",
+            pages::json_inbox::delete_channel,
         )
         .with_get(
             "/api/v0/agents/{id}/embed-keys",

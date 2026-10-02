@@ -36,6 +36,8 @@ const PARTIAL: &str = "Let me check the ord";
 mod limits;
 // Suspended agent runs: secure input, approvals, resume.
 mod suspend;
+// Human in the loop: the inbox, responders, channels (#96).
+mod hil;
 // Identity verifiers: a one-time code through the agent's connector, a
 // website's signed identity token.
 mod verifiers;
