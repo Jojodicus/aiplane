@@ -78,6 +78,11 @@ pub enum AuditKind {
     /// An A2A caller started, answered or cancelled a task (#102): which
     /// caller, token, context and task. Never the message text.
     A2aTask,
+    /// One iteration of a `loop` route (#103): the worker's and the critic's
+    /// child runs, and whether the critic accepted.
+    LoopIteration,
+    /// A `loop` route ended: how many iterations, and why it stopped.
+    LoopFinished,
 }
 
 impl AuditKind {
@@ -116,6 +121,8 @@ impl AuditKind {
             Self::VerifierOutcome => "verifier_outcome",
             Self::HostIdentity => "host_identity",
             Self::A2aTask => "a2a_task",
+            Self::LoopIteration => "loop_iteration",
+            Self::LoopFinished => "loop_finished",
         }
     }
 }

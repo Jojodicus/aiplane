@@ -19,6 +19,7 @@
 //! round. See docs/tools-rbac.md → "Run budgets".
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use aiplane_core::server::reasoning::{Effort, HARD_ROUND_CAP};
@@ -81,6 +82,21 @@ impl Budget {
         self.tokens
     }
 
+    /// This budget, tightened to `seconds` and `tokens` where those are
+    /// lower: a run inside a larger allowance gets no more than what is left
+    /// of it.
+    pub fn capped(self, seconds: Option<u64>, tokens: Option<u64>) -> Self {
+        let min = |own: Option<u64>, cap: Option<u64>| match (own, cap) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Self {
+            rounds: self.rounds,
+            seconds: min(self.seconds, seconds),
+            tokens: min(self.tokens, tokens),
+        }
+    }
+
     /// The time or token limit that has run out, if any. Rounds are counted by
     /// the loop itself.
     pub fn exhausted(&self, elapsed: Duration, tokens_used: u64) -> Option<Limit> {
@@ -113,6 +129,24 @@ impl Budget {
     }
 }
 
+/// Tokens spent by several runs together, so an allowance can span them: a
+/// `loop` route's budget covers every worker and critic run it starts. The
+/// driver adds each round's tokens to the meter its agent run carries.
+#[derive(Debug, Default)]
+pub struct SpendMeter {
+    tokens: AtomicU64,
+}
+
+impl SpendMeter {
+    pub fn add(&self, tokens: u64) {
+        self.tokens.fetch_add(tokens, Ordering::Relaxed);
+    }
+
+    pub fn tokens(&self) -> u64 {
+        self.tokens.load(Ordering::Relaxed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +168,26 @@ mod tests {
             assert_eq!(b.rounds(), effort.max_rounds());
             assert_eq!((b.seconds(), b.tokens()), (None, None));
         }
+    }
+
+    #[test]
+    fn a_cap_only_ever_tightens_a_budget() {
+        let own = Budget::new(8, Some(60), None);
+        let capped = own.capped(Some(20), Some(500));
+        assert_eq!(
+            (capped.rounds(), capped.seconds(), capped.tokens()),
+            (8, Some(20), Some(500))
+        );
+        let loose = own.capped(Some(600), None);
+        assert_eq!((loose.seconds(), loose.tokens()), (Some(60), None));
+    }
+
+    #[test]
+    fn a_meter_sums_what_several_runs_spend() {
+        let meter = SpendMeter::default();
+        meter.add(600);
+        meter.add(150);
+        assert_eq!(meter.tokens(), 750);
     }
 
     #[test]

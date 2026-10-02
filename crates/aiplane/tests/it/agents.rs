@@ -809,3 +809,99 @@ async fn admin_access_does_not_extend_to_a_manager_without_a_share() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn an_a2a_route_saves_once_granted_with_its_credential_sealed() {
+    const CARD: &str = "https://partner.example.com/.well-known/agent-card.json";
+    const TOKEN: &str = "partner-token-that-must-not-be-stored";
+    let fx = fixture().await;
+    let id = fx.create(&fx.alice, "support").await;
+    let spec = json!({
+        "state": { "issue": { "type": "string", "set_by": ["llm"] } },
+        "routes": { "partner": {
+            "when": { "slot": "issue", "set": true },
+            "task": "Warranty question: {issue}",
+            "a2a": {
+                "card_url": CARD,
+                "auth": { "kind": "bearer", "token": TOKEN },
+                "finish": { "schema": { "type": "object", "required": ["answer"],
+                                        "properties": { "answer": { "type": "string" } } } }
+            }
+        } }
+    });
+    let (status, body) = fx.put_draft(&fx.alice, &id, spec.clone()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["issues"][0]["path"],
+        "routes.partner.a2a.card_url"
+    );
+    assert_eq!(
+        fx.grant(&fx.alice, &id, "a2a_agent", CARD).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fx.grant(&fx.root, &id, "a2a_agent", CARD).await,
+        StatusCode::CREATED
+    );
+
+    let (status, body) = fx.put_draft(&fx.alice, &id, spec).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let auth = &body["draft_spec"]["routes"]["partner"]["a2a"]["auth"];
+    assert!(auth.get("token").is_none(), "{auth}");
+    assert!(auth["token_sealed"].is_string(), "{auth}");
+    let (_, read) = fx.get(&fx.alice, &format!("/api/v0/agents/{id}")).await;
+    assert!(!read.to_string().contains(TOKEN), "{read}");
+
+    let (status, body) = fx
+        .put_draft(&fx.alice, &id, read["agent"]["draft_spec"].clone())
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a GET → PUT round trip keeps the sealed token: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_loop_route_saves_from_the_json_tab_and_names_its_problems() {
+    let fx = fixture().await;
+    let main = fx.create(&fx.alice, "support").await;
+    let writer = fx.create(&fx.alice, "writer").await;
+    let reviewer = fx.create(&fx.alice, "reviewer").await;
+    let spec = |worker: &str, critic: &str, max: u64| {
+        json!({
+            "state": { "issue": { "type": "string", "set_by": ["llm"] } },
+            "routes": { "offer": {
+                "when": { "slot": "issue", "set": true },
+                "task": "Write an offer for: {issue}",
+                "loop": { "worker": worker, "critic": critic, "max_iterations": max }
+            } }
+        })
+    };
+    let (status, body) = fx
+        .put_draft(&fx.alice, &main, spec(&writer, &reviewer, 3))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["draft_spec"]["routes"]["offer"]["loop"]["worker"],
+        writer
+    );
+
+    let (status, body) = fx.put_draft(&fx.alice, &main, spec(&main, &main, 11)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let paths: Vec<&str> = body["error"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "routes.offer.loop.worker",
+            "routes.offer.loop.critic",
+            "routes.offer.loop.critic",
+            "routes.offer.loop.max_iterations"
+        ]
+    );
+}

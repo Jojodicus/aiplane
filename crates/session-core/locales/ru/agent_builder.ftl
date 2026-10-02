@@ -262,3 +262,6 @@ agents-test-answer = Передать инструменту
 agents-test-approve = Одобрить один раз
 agents-test-deny = Отклонить
 agents-test-expires = Истекает { $at }
+
+agents-debug-loop-worker = исполнитель, итерация { $iteration }
+agents-debug-loop-critic = критик, итерация { $iteration }

@@ -262,3 +262,7 @@ agents-test-answer = Send to the tool
 agents-test-approve = Approve once
 agents-test-deny = Deny
 agents-test-expires = Expires { $at }
+
+# The test chat's debug view: which loop iteration (#103) a worker or critic run was.
+agents-debug-loop-worker = worker, iteration { $iteration }
+agents-debug-loop-critic = critic, iteration { $iteration }

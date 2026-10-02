@@ -13,6 +13,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use thiserror::Error;
 
 pub mod a2a_contexts;
+pub mod agent_a2a_tasks;
 pub mod agent_analytics;
 pub mod agent_audit;
 pub mod agent_channels;

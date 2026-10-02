@@ -224,6 +224,18 @@ impl World {
         tools: crate::server::tools::ToolRegistry,
         db_path: Option<&std::path::Path>,
     ) -> Self {
+        Self::build_with(pools, erp, metered, tools, db_path, Default::default()).await
+    }
+
+    /// [`Self::build`] with the operator's `[agents]` settings.
+    async fn build_with(
+        pools: &[(&str, &str, &MockServer)],
+        erp: Option<&MockServer>,
+        metered: bool,
+        tools: crate::server::tools::ToolRegistry,
+        db_path: Option<&std::path::Path>,
+        agents: aiplane_core::server::config::AgentsConfig,
+    ) -> Self {
         let db =
             aiplane_core::server::db::open(db_path.unwrap_or(std::path::Path::new(":memory:")))
                 .await
@@ -277,6 +289,7 @@ impl World {
                 upstream_wait_secs: 0,
                 ..Default::default()
             },
+            agents,
             ..Default::default()
         };
         let app = crate::server::AppState::new(
@@ -1395,6 +1408,8 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
     );
 }
 
+mod a2a;
 mod hil;
+mod loop_route;
 mod suspend;
 mod verifiers;

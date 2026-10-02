@@ -2024,6 +2024,232 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
   `principal_grants` rebuild keeps every grant).
 
+### What #101 built
+
+An external agent as a route target: a route may hand the visitor's request
+to another platform's agent that speaks A2A v1.0 (the JSON-RPC binding the
+gateway's own server speaks, [#102](#what-102-built)). Code in
+`aiplane-runtime::agents::a2a_client` (`guard`, `card`, the exchange) and
+`agents/spec/route_kinds.rs` (validation); the waiting task in
+`aiplane-core::server::db::agent_a2a_tasks` (migration `0091`).
+
+```yaml
+routes:
+  partner:
+    when: { all: [ { slot: issue, set: true }, { slot: verified, provenance: host } ] }
+    task: "Warranty question: {issue}"
+    bind: { customer: state.verified.customer_id }   # sent as one `data` part
+    a2a:
+      card_url: https://partner.example.com/.well-known/agent-card.json
+      auth: { kind: bearer, token: "…" }              # sealed on save as token_sealed
+      # or { kind: api_key, scheme?: <card scheme>, token }
+      # or { kind: oauth_client_credentials, client_id, client_secret, scopes? }
+      finish: { schema: { type: object, required: [answer], properties: { answer: { type: string } } } }
+      budget: { seconds: 120 }                        # default 120, at most 900
+```
+
+- **Target kinds are keys.** A route's target is its one key besides `when`,
+  `description`, `task` and `bind`: `agent`, `human`, `a2a` and `loop` ([#103](#what-103-built)). Everything a kind needs lives under that key, its
+  own `finish` and `budget` included, so a builder that does not know a kind
+  (#104's canvas) still finds a route's shared keys where they always are. A
+  route naming two targets is one issue at `routes.<r>`.
+- **What leaves the gateway.** `SendMessage` with a text part (the rendered
+  `task`) and, when the route binds anything, one `data` part with the bound
+  values (`{"customer": "K-12345"}`). Never the transcript, the slots or a
+  word the model wrote. Headers: `A2A-Version: 1.0`, the credential, nothing
+  else. `configuration.returnImmediately` is `false`; a task the peer still
+  reports as submitted or working is polled with `GetTask` every 500 ms.
+- **The card** (`card.rs`) is fetched from `card_url` and cached for five
+  minutes per URL. It must have `name`, `capabilities` and a
+  `supportedInterfaces` entry with `protocolBinding: JSONRPC` and a `1.x`
+  `protocolVersion`; the first such entry is the endpoint, and its `tenant`
+  is sent along. `securitySchemes` and `securityRequirements` decide the
+  auth. Skills, modes and signatures are not checked; a signed card is not
+  verified. The 0.3 card shape (`url`, `preferredTransport`) is not read.
+- **Auth, limited to what a principal can hold.** `auth.kind` picks one of
+  the card's schemes (by `scheme` name, else the first of its type):
+  `bearer` → `httpAuthSecurityScheme` with `scheme: Bearer`; `api_key` →
+  `apiKeySecurityScheme` in a header (a query or cookie key is refused, so a
+  secret never sits in a URL); `oauth_client_credentials` →
+  `oauth2SecurityScheme.flows.clientCredentials.tokenUrl`, a
+  `client_credentials` form post, the token cached per token URL and client
+  until 30 s before it expires. `token` and `client_secret` are sealed on
+  every save (`a2a_client::seal_secrets`, next to the host-JWT secret) and
+  stored as `token_sealed` / `client_secret_sealed`; a GET → PUT round trip
+  keeps them. A card that requires auth when the route brings none, or offers
+  no scheme of the route's kind, ends the route `incomplete` saying which.
+  Not built: OpenID Connect, mTLS, authorization-code flows — each needs a
+  person or a client certificate the principal does not have.
+- **The grant.** *Chosen:* a new grant kind, `a2a_agent`, whose `ref` is the
+  exact card URL (migration `0091` rebuilds `principal_grants` once more, its
+  CHECK now `… 'a2a_caller', 'a2a_agent'`; `tests/migration_0091.rs` boots a
+  0090 database and checks every grant survives). Reusing connector grants
+  would mean an `mcp_catalog` row the MCP manager would try to connect to.
+  The validator requires the grant (`routes.<r>.a2a.card_url`, with the
+  `POST …/grants {"kind": "a2a_agent", "ref": …}` to make), and the dispatch
+  checks it again, so a revoked grant sends nothing (`forwarded: false,
+  reason: not_granted`). **Grant-time cap:** an external agent is nothing a
+  manager holds, and the grant lets visitor-derived data leave the gateway, so
+  only an admin may make it (`403 grant_exceeds_manager` otherwise); the ref
+  must pass `check_card_url` (https, or http to a loopback host; no
+  credentials or fragment in it).
+- **SSRF** (`guard.rs`). The card URL, the endpoint the card names and the
+  OAuth token URL are each resolved before every connection; every address
+  must pass, and the request goes out on a client pinned to exactly those
+  addresses (`resolve_to_addrs`), with redirects off, so a second DNS answer
+  cannot swap in a private one. Always refused: unspecified, link-local
+  (169.254.0.0/16 with the metadata endpoint, fe80::/10), broadcast,
+  multicast, and their IPv4-mapped forms. Refused unless
+  `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true` (`Config.agents`, environment
+  only like `$AIPLANE_TRUSTED_PROXIES`): loopback, RFC 1918, 100.64.0.0/10,
+  fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
+  reused: it allows private ranges on purpose (an admin curates the MCP
+  catalog) and checks literal addresses only.
+- **The result** is the first `data` object among the completed task's
+  artifact parts (then its status message), else the first text part that
+  parses as a JSON object (a fenced block too); a direct `message` answer is
+  read the same way. It must pass the route's `a2a.finish.schema` (the #78
+  subset validator), else the outcome is `incomplete` with reason `failed`
+  naming the violations. So is no structured result, a task that ends
+  `FAILED`/`REJECTED`/`CANCELED` (with the peer's status text, cut to 300
+  characters), `AUTH_REQUIRED`, a JSON-RPC error, a non-2xx answer, an answer
+  over 1 MiB, or a guard refusal. Running past `budget.seconds` is
+  `seconds_exhausted`. The tool result is `{forwarded: true, route,
+  remote_agent, outcome, note}`; the main agent's `Flag` policy screens it
+  like a sub-agent's (an injection is flagged and audited).
+- **`input-required`.** *Chosen:* the run pauses only when the peer's status
+  message carries a `data` part — a structured request for input — and the
+  run can pause. The call then suspends as `secure_input` with the catalog
+  text `agent-a2a-input-required` (never the peer's own words, which a
+  visitor would otherwise read as ours) and a 10-minute deadline, and records
+  the remote task and context ids in `agent_a2a_tasks` keyed by the waiting
+  turn and call. The visitor's value goes back as `{"data": {"value": …}}`
+  on that `taskId`/`contextId` when `forward_request` runs again with
+  `Decided(Value)` (it takes the row, so a task is continued once; without a
+  row the value is a staff answer to a handoff, as before), and the driver's
+  secure-input scrub keeps the value out of everything stored. Free-text
+  `input-required` is `incomplete`: a route cannot hold a conversation with
+  the peer, and the model must not answer it on the visitor's behalf.
+- **Audit and debug.** `sub_agent_dispatched` and `sub_agent_finished` with
+  `{route, target: "a2a", card_url, dispatch_id, resumed, remote_agent?,
+  outcome?}` on the calling principal with its chain; the test chat's
+  `debug.sub_agents` pairs them by `dispatch_id` (a sub-agent's by its child
+  `turn_id`). #100's analytics count them as sub-agent dispatches.
+- **Validation** (`spec/route_kinds.rs`, on save and publish): `task`
+  required, `bind` as for a sub-agent route (and the same trusted-gate rule
+  for state binds), `a2a` keys `card_url`/`auth`/`finish`/`budget` only,
+  the card URL's shape and grant, `auth.kind` and its keys (exactly one of
+  the plain or sealed secret, `client_id` for client credentials),
+  `finish.schema` through `FinishContract::new` (required on publish), and
+  `budget.seconds` in 1–900.
+- **Tests.** `agents/run/tests/a2a.rs` runs a main agent against a wiremock
+  A2A peer (card, JSON-RPC endpoint and token endpoint): the task and bound
+  values sent and nothing of the transcript, the bearer header, the checked
+  result returned and audited, the credential stored sealed only; a
+  violating, a prose, a failed and a free-text `input-required` answer each
+  `incomplete`; polling a working task; structured `input-required` paused
+  and answered by the visitor, the value at the peer and nowhere else; a
+  loopback peer refused without the switch, with nothing fetched; a revoked
+  grant; a slow peer past `budget.seconds`; one OAuth token and one card
+  fetch for two dispatches; an injection flagged. Pure halves in
+  `a2a_client/tests.rs`, `guard.rs`, `card.rs`; the grant cap and the sealed
+  save over HTTP in `tests/it/system_principals.rs` and `tests/it/agents.rs`.
+- **Not built.** Streaming (`SendStreamingMessage`), push notifications,
+  file parts, the 0.3 protocol, card signature checks, and answering a
+  free-text `input-required`.
+
+### What #103 built
+
+A route kind that drafts, critiques and revises (Google ADK's LoopAgent
+pattern): a worker sub-agent and a critic sub-agent take turns until the
+critic accepts. Code in `aiplane-runtime::agents::router::loop_route` (the
+run) and `agents/spec/route_kinds.rs` (validation). No migration.
+
+```yaml
+routes:
+  offer:
+    when: { slot: issue, set: true }
+    task: "Write an offer for: {issue}"
+    bind: { customer: state.verified.customer_id }   # passed to both, as route.<name>
+    loop:
+      worker: <agent id>                  # finishes with the result
+      critic: <agent id>                  # finishes with { accepted: boolean, feedback?: string }
+      max_iterations: 3                   # default 3, at most 10
+      budget: { seconds: 300, tokens: 60000 }   # caps the sum of every child run; optional
+```
+
+- **One iteration** is a worker child run, then a critic child run, each a
+  sub-agent run exactly as a sub-agent route starts one (`run_child`, shared
+  with it): its own principal, live version, grants, finish contract and
+  `main.budget`, a child session under the main turn, the call chain
+  extended. Neither sees the transcript:
+  - the worker's first task is the route's rendered `task`; from the second
+    iteration on, that task plus its previous result and the critic's
+    `feedback`, both marked as data;
+  - the critic's task is the original task and the worker's result, with
+    the instruction to set `accepted` and say in `feedback` what to change.
+- **Stopping.** The loop ends when the critic's result has `accepted: true`
+  (`stopped: accepted`), after `max_iterations` (`max_iterations`), when the
+  route's budget is spent before the next child run (`budget`), or when a
+  child run ends `incomplete` (`worker_incomplete`, `critic_incomplete`).
+- **The route budget caps the sum.** `seconds` counts from the start of the
+  loop; `tokens` counts every round of every child run, and of anything they
+  dispatch: `RunOptions.spend` carries a `SpendMeter` into the children's
+  runs, and the driver adds each round's tokens to the meter of the agent
+  run it drives. Each child's own budget is tightened to what is left
+  (`Budget::capped`), so a child ends on its own `seconds`/`tokens` limit
+  rather than being cut off; the loop checks the remainder before every
+  child run. Without `budget` only the children's own budgets and
+  `forward_request`'s 15-minute ceiling apply.
+- **What returns to the main agent** is the worker's last result:
+  `{forwarded: true, route, loop: {worker, critic, iterations, accepted,
+  stopped}, outcome, note}`. `outcome` is the worker's last `finished`
+  result even when the critic never accepted it (`accepted: false` says so),
+  the worker's own `incomplete` when it did not finish, or `incomplete` with
+  `tokens_exhausted`/`seconds_exhausted` when the budget ran out before any
+  result. The main agent's `Flag` policy screens it like any tool result.
+- **A child that pauses** (an approval, a secure input) is withdrawn
+  (`cancel_suspended_turn`) and counts as `incomplete`. *Chosen:* the next
+  step of the loop needs its result now, and resuming a loop mid-iteration
+  would need the loop's own state stored with the pause. Agents with
+  `always_ask` tools make poor workers and critics.
+- **Audit.** Every child run writes `sub_agent_dispatched` and
+  `sub_agent_finished` with `loop: {route, iteration, role: worker|critic}`;
+  each critic verdict writes `loop_iteration` (`{route, iteration,
+  accepted, feedback}`); the end writes `loop_finished` (`{route, worker,
+  critic, iterations, accepted, stopped, tokens}`). All on the calling
+  principal with its chain.
+- **Test-chat debug view.** `debug.sub_agents` lists every worker and
+  critic run with its outcome, and the SPA's debug panel badges each with
+  its role and iteration (`agents-debug-loop-worker`/`-critic`);
+  `debug.loops` lists the `loop_iteration` and `loop_finished` rows in order,
+  each with its `event`.
+- **Validation** (save and publish): `task` required, `bind` as for a
+  sub-agent route; `loop` keys `worker`, `critic`, `max_iterations`,
+  `budget` only. `worker` and `critic` go through the sub-agent check
+  (existing agent, not the agent itself, live to publish) and the graph
+  check: `routed_agents` now yields a loop's worker and critic, so a loop
+  that reaches the main agent again is a cycle at `routes.<r>.loop.<role>`
+  and counts toward the depth of 3, and a worker or critic that binds a
+  tool demands a trusted gate. The worker and the critic must differ.
+  Against the critic's live version, its `finish.schema` must list
+  `accepted` as a required `boolean` (`feedback`, if declared, a
+  `string`); against both, the route passes exactly the `route.<name>`
+  values either binds; on publish the worker needs a `finish.schema`.
+  `max_iterations` is 1–10, `budget.seconds` 1–900, `budget.tokens` ≥ 1.
+- **Tests.** `agents/run/tests/loop_route.rs` on wiremock models: the critic
+  rejects once with feedback and accepts the revision (tasks and feedback as
+  each child saw them, no transcript, audit rows); `max_iterations` reached
+  with the last draft unaccepted; the route's token budget spent by the
+  worker before the critic runs; a worker that never finishes; the test
+  chat's `debug` showing worker 1, critic 1, worker 2, critic 2 and the loop
+  rows; the validator refusing a critic without a boolean `accepted`, a
+  worker that is also the critic, the agent itself, a critic that routes
+  back (cycle) and out-of-range settings. `tests/it/agents.rs` saves a loop
+  route through the JSON tab's `PUT …/draft`.
+- **Not built.** A configurable acceptance field name, a separate critic
+  rubric outside its spec, parallel workers, and resuming a paused child.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2034,10 +2260,11 @@ upward.
 | Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
-| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
+| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
+| The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-core` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
@@ -2073,6 +2300,8 @@ use `regex`, and hashing uses the token helpers.
 | #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |
+| #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
+| #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred

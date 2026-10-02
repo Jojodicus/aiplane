@@ -262,3 +262,6 @@ agents-test-answer = Enviar a la herramienta
 agents-test-approve = Aprobar una vez
 agents-test-deny = Rechazar
 agents-test-expires = Caduca { $at }
+
+agents-debug-loop-worker = redactor, iteración { $iteration }
+agents-debug-loop-critic = revisor, iteración { $iteration }

@@ -258,7 +258,7 @@ fn parse_grant(body: &GrantBody) -> Result<(GrantKind, &str), Response> {
     let kind = GrantKind::parse(&body.kind).ok_or_else(|| {
         bad_request(format!(
             "`{}` is not a grant kind — use one of tool, connector, skill, rag_collection, pool, \
-             a2a_caller",
+             a2a_caller, a2a_agent",
             body.kind
         ))
     })?;
@@ -376,6 +376,28 @@ async fn manager_holds(
             guard_agent_principal(state, manager, reference, Access::Write).await?;
             true
         }
+        GrantKind::A2aAgent => {
+            if let Err(why) = aiplane_runtime::agents::a2a_client::check_card_url(reference) {
+                return Err(bad_request(format!(
+                    "`{reference}` cannot be granted as an A2A agent: {why}"
+                )));
+            }
+            // An external agent is nothing a person holds, and a grant on one
+            // lets an agent send visitor data off the gateway: the
+            // operator's call.
+            if !state.rbac.is_admin(&role_ids) {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    "grant_exceeds_manager",
+                    &format!(
+                        "cannot grant A2A agent `{reference}`: an external agent receives what \
+                         its route sends it, so only an admin may grant one. Ask an admin to \
+                         make this grant."
+                    ),
+                ));
+            }
+            true
+        }
     };
     if held {
         return Ok(());
@@ -400,6 +422,7 @@ fn kind_label(kind: GrantKind) -> &'static str {
         GrantKind::RagCollection => "RAG collection",
         GrantKind::Pool => "pool",
         GrantKind::A2aCaller => "A2A caller",
+        GrantKind::A2aAgent => "A2A agent",
     }
 }
 

@@ -77,8 +77,11 @@
 		{#each debug.sub_agents as call, i (i)}
 			<div class="mb-2">
 				<div class="flex flex-wrap items-center gap-2">
-					<span class="font-mono">{call.sub_agent ?? call.sub_agent_id}</span>
+					<span class="font-mono">{call.sub_agent ?? call.remote_agent ?? call.card_url ?? call.sub_agent_id}</span>
 					{#if call.route}<span class="badge badge-outline badge-sm">{call.route}</span>{/if}
+					{#if call.loop}
+						<span class="badge badge-ghost badge-sm">{t(call.loop.role === 'critic' ? 'agents-debug-loop-critic' : 'agents-debug-loop-worker', { iteration: call.loop.iteration })}</span>
+					{/if}
 					{#if call.outcome}
 						<span class="badge badge-sm {call.outcome.status === 'finished' ? 'badge-success' : 'badge-warning'}">{call.outcome.status}</span>
 					{:else}

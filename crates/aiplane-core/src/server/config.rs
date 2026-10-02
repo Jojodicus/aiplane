@@ -144,6 +144,25 @@ pub struct Config {
     /// `[push] enabled = false` to turn the feature (and its endpoints) off.
     #[serde(default)]
     pub push: PushConfig,
+    /// Agent builder knobs that belong to the operator, not to an agent's
+    /// spec, set from the environment by [`Config::load`]; the defaults are
+    /// the safe ones. See `docs/agents.md` → "What #101 built".
+    #[serde(default)]
+    pub agents: AgentsConfig,
+}
+
+/// What agent runs may reach outside the gateway.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentsConfig {
+    /// Let an A2A route reach an agent card or endpoint that resolves to a
+    /// private, loopback or carrier-grade NAT address, and over plain `http`.
+    /// Off by default: a route then reaches only public `https` hosts, so a
+    /// spec cannot point the gateway at its own network. Set by
+    /// `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS`. Link-local
+    /// (including the cloud metadata address), unspecified, broadcast and
+    /// multicast addresses stay refused either way.
+    pub a2a_allow_private_networks: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1238,7 +1257,28 @@ impl Config {
         {
             config.gateway.public_url_import_only = url;
         }
+        config.agents.a2a_allow_private_networks = flag_from(
+            A2A_PRIVATE_VAR,
+            crate::server::env::var(A2A_PRIVATE_VAR).ok().as_deref(),
+        )?;
         Ok(config)
+    }
+}
+
+/// Environment only, like `$AIPLANE_TRUSTED_PROXIES`: whether the gateway may
+/// reach its own network is a fact about where it runs, not a setting an
+/// admin screen should be able to flip.
+pub const A2A_PRIVATE_VAR: &str = "AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS";
+
+/// A boolean environment variable: unset or empty is `false`; anything other
+/// than the usual spellings stops the boot rather than guess.
+fn flag_from(name: &str, value: Option<&str>) -> Result<bool, ConfigError> {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("" | "0" | "false" | "no" | "off") => Ok(false),
+        Some("1" | "true" | "yes" | "on") => Ok(true),
+        Some(other) => Err(ConfigError::Conflict(format!(
+            "${name} is `{other}`; set it to `true` or `false`"
+        ))),
     }
 }
 
@@ -1288,6 +1328,23 @@ fn bind_address_from(env_ip: Option<&str>, env_port: Option<&str>) -> SocketAddr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_private_network_switch_is_off_unless_spelled_on() {
+        for off in [None, Some(""), Some("0"), Some("false"), Some(" OFF ")] {
+            assert!(!flag_from(A2A_PRIVATE_VAR, off).unwrap(), "{off:?}");
+        }
+        for on in ["1", "true", "Yes", "on"] {
+            assert!(flag_from(A2A_PRIVATE_VAR, Some(on)).unwrap(), "{on}");
+        }
+        let refused = flag_from(A2A_PRIVATE_VAR, Some("maybe"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains(A2A_PRIVATE_VAR) && refused.contains("true"),
+            "{refused}"
+        );
+    }
 
     #[test]
     fn unset_data_dir_keeps_the_historical_relative_paths() {

@@ -39,7 +39,7 @@ use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
 use super::state::{self, AgentState, StateSchema, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
-use crate::budget::Budget;
+use crate::budget::{Budget, SpendMeter};
 use crate::finish::FinishContract;
 use crate::rama_server::state::RamaState;
 use crate::server::headless::DriveParams;
@@ -101,6 +101,10 @@ pub struct RunOptions {
     /// output filter's fallback). English until the caller knows the
     /// visitor's.
     pub lang: Lang,
+    /// Where every run started with these options adds the tokens it spends:
+    /// set by a `loop` route, whose budget covers all of its child runs (and
+    /// anything they dispatch). `None` counts nowhere.
+    pub spend: Option<Arc<SpendMeter>>,
 }
 
 impl Default for RunOptions {
@@ -109,6 +113,7 @@ impl Default for RunOptions {
             now: state::system_clock(),
             classifier: None,
             lang: Lang::En,
+            spend: None,
         }
     }
 }
@@ -300,6 +305,7 @@ impl RunProfile {
             permissions: Permissions::from_spec(&spec),
             schema: (!schema.is_empty()).then_some(schema),
             pools,
+            spend: options.spend.clone(),
         };
         Ok(Self {
             budget: budget(&spec),
@@ -396,9 +402,18 @@ pub struct AgentRun {
     permissions: Permissions,
     schema: Option<Arc<StateSchema>>,
     pools: PoolAccess,
+    spend: Option<Arc<SpendMeter>>,
 }
 
 impl AgentRun {
+    /// Count `tokens` this run's round spent against the allowance it runs
+    /// inside, if any.
+    pub fn record_spend(&self, tokens: u64) {
+        if let Some(meter) = &self.spend {
+            meter.add(tokens);
+        }
+    }
+
     /// The pools this run's own model calls may use: `main.pool`, if the
     /// principal holds a grant on it. The turn's rounds and the compaction
     /// of its conversation both route through it.
@@ -607,6 +622,7 @@ mod tests {
             permissions: Permissions::default(),
             schema: None,
             pools: PoolAccess::all(),
+            spend: None,
         }
     }
 
