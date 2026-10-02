@@ -13,6 +13,7 @@ const branded = [
 	['/webhooks', 'webhooks-heading'],
 	['/agents', 'agents-heading'],
 	['/agents/abc', 'agents-heading'],
+	['/inbox', 'inbox-heading'],
 	['/webhooks/abc/edit', 'webhooks-edit-heading'],
 	['/webhooks/abc/rerun', 'webhooks-rerun-page-name'],
 	['/webhooks/abc/runs', 'webhooks-runs-page-name'],

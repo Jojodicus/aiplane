@@ -374,6 +374,7 @@ pub mod json_admin;
 pub mod json_agent_resources;
 pub mod json_agent_test;
 pub mod json_agents;
+pub mod json_inbox;
 pub mod json_principals;
 pub mod json_skills;
 pub mod json_tokens;

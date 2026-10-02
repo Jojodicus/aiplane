@@ -95,7 +95,7 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
 /// Synthetic tools of an agent run. They are never registered nor offered to
 /// a person's chat, so `/tools` never renders them and the catalog checks do
 /// not apply; the inventory still documents them.
-const RUN_SCOPED: &[&str] = &["forward_request"];
+const RUN_SCOPED: &[&str] = &["forward_request", "request_human"];
 
 fn repo_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is <root>/crates/gateway.

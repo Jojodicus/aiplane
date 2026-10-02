@@ -60,6 +60,16 @@ pub enum AuditKind {
     LimitRefused,
     /// The retention sweeper deleted conversations; counts only.
     ConversationsSwept,
+    /// The main agent handed the conversation to a human (`request_human`
+    /// or a `human` route), with the run chain. #100's analytics count it.
+    HumanHandoff,
+    /// A responder was added to or removed from an agent's inbox.
+    ResponderAdded,
+    ResponderRemoved,
+    /// A Slack or Discord notification channel was added or removed. The
+    /// URL is never in the detail.
+    ChannelCreated,
+    ChannelDeleted,
 }
 
 impl AuditKind {
@@ -90,6 +100,11 @@ impl AuditKind {
             Self::EmbedKeyRevoked => "embed_key_revoked",
             Self::LimitRefused => "limit_refused",
             Self::ConversationsSwept => "conversations_swept",
+            Self::HumanHandoff => "human_handoff",
+            Self::ResponderAdded => "responder_added",
+            Self::ResponderRemoved => "responder_removed",
+            Self::ChannelCreated => "channel_created",
+            Self::ChannelDeleted => "channel_deleted",
         }
     }
 }

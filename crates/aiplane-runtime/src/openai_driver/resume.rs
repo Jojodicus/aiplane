@@ -123,7 +123,7 @@ pub(super) async fn pause(
         on_timeout: request.kind.timeout_fallback(request.on_timeout),
         expires_at,
         created_at: now,
-        run_context: None,
+        run_context: request.context,
     };
     let paused = chat::suspend_turn(&d.state.db, &suspension)
         .await

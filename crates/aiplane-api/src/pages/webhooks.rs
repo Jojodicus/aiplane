@@ -259,7 +259,9 @@ pub(super) fn build_input(prompt: &str, method: &str, content_type: &str, payloa
     )
 }
 
-/// Classify a finished run: `("ok" | "error", error_message, output_text)`.
+/// Classify a finished run: `("ok" | "waiting" | "error", error_message,
+/// output_text)`. `waiting` is a run that paused for a decision its owner
+/// gives in the inbox.
 pub(super) async fn outcome(
     db: &aiplane_core::server::db::Pool,
     session_id: &str,
@@ -268,6 +270,7 @@ pub(super) async fn outcome(
     match chat::get_turn(db, session_id, turn_id).await {
         Ok(Some(turn)) => match turn.status {
             TurnStatus::Completed => ("ok", None, turn.content),
+            TurnStatus::Suspended => ("waiting", None, None),
             _ => (
                 "error",
                 turn.error_message.or(Some("run did not complete".into())),

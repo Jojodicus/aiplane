@@ -50,6 +50,37 @@ export interface Share {
 	access: 'read' | 'write';
 }
 
+/** Someone who may answer the agent's inbox items without a share (#96). */
+export interface Responder {
+	subject_kind: 'user' | 'group';
+	subject_id: string;
+	added_by: string;
+	added_at: string;
+}
+
+export type ChannelKind = 'slack' | 'discord';
+export const CHANNEL_KINDS: ChannelKind[] = ['slack', 'discord'];
+
+/** A Slack or Discord incoming webhook the agent's waiting turns are announced on. The URL is never read back. */
+export interface NotifyChannel {
+	id: string;
+	kind: ChannelKind;
+	name: string;
+	url_host: string;
+	details: boolean;
+	lang: string;
+	created_by: string;
+	created_at: string;
+}
+
+export interface NewChannel {
+	kind: ChannelKind;
+	name: string;
+	url: string;
+	details: boolean;
+	lang: string;
+}
+
 export interface AuditEntry {
 	kind: string;
 	actor_id: string | null;
@@ -214,6 +245,18 @@ export const agentsApi = {
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>
 		call<void>(`/api/v0/agents/${id}/shares/revoke`, json('POST', share)),
+	responders: (id: string) =>
+		call<{ responders: Responder[] }>(`/api/v0/agents/${id}/responders`).then((r) => r.responders),
+	addResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
+		call<unknown>(`/api/v0/agents/${id}/responders`, json('POST', r)),
+	removeResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
+		call<void>(`/api/v0/agents/${id}/responders/revoke`, json('POST', r)),
+	channels: (id: string) =>
+		call<{ channels: NotifyChannel[] }>(`/api/v0/agents/${id}/channels`).then((r) => r.channels),
+	addChannel: (id: string, channel: NewChannel) =>
+		call<{ channel: NotifyChannel }>(`/api/v0/agents/${id}/channels`, json('POST', channel)).then((r) => r.channel),
+	removeChannel: (id: string, channelId: string) =>
+		call<void>(`/api/v0/agents/${id}/channels/${channelId}`, json('DELETE')),
 	grant: (id: string, kind: GrantKind, ref: string) =>
 		call<{ added: boolean }>(`/api/v0/system-principals/${id}/grants`, json('POST', { kind, ref })),
 	revokeGrant: (id: string, kind: GrantKind, ref: string) =>

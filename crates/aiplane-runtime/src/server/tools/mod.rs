@@ -506,6 +506,15 @@ pub trait Tool: Send + Sync + 'static {
     fn sensitive_args(&self) -> bool {
         false
     }
+
+    /// Whether the tool is known to change something outside the
+    /// conversation. Only an MCP server says so today (a destructive tool
+    /// that is not read-only); everything else is `false` because nothing
+    /// is known about it. An agent asks for approval before such a call
+    /// unless its spec sets the tool's `permission` (`docs/agents.md`).
+    fn changes_state(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

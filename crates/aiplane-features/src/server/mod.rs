@@ -11,6 +11,7 @@ pub mod file_refs;
 pub mod geoip;
 pub mod image_gen;
 pub mod issue_tracker;
+pub mod notify_channels;
 pub mod ocr;
 pub mod pdf;
 pub mod push;

@@ -338,6 +338,10 @@ impl Tool for BoundTool {
     fn sensitive_args(&self) -> bool {
         self.inner.sensitive_args()
     }
+
+    fn changes_state(&self) -> bool {
+        self.inner.changes_state()
+    }
 }
 
 #[cfg(test)]

@@ -576,6 +576,95 @@ pub async fn expired_run_suspensions(
     Ok(expired.into_iter().map(|(_, s)| s).collect())
 }
 
+/// A conversation's own pause, with what the inbox needs to know about the
+/// conversation: who owns it and, for an agent's, which version runs. A
+/// pause inside a sub-agent run is never one of these: its conversation's
+/// turn mirrors it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingSuspension {
+    pub suspension: TurnSuspension,
+    pub session_id: String,
+    pub owner: SessionOwner,
+    pub agent_version: Option<i64>,
+    pub title: Option<String>,
+    pub notified_at: Option<Timestamp>,
+}
+
+const PENDING_SELECT: &str = "SELECT s.turn_id, s.request_id, s.kind, s.message, s.tool_call, \
+     s.tail, s.budget_used, s.child_turn, s.on_timeout, s.expires_at, s.created_at, \
+     s.run_context, s.notified_at, t.session_id, cs.user_id, cs.principal_id, \
+     cs.agent_version, cs.title \
+     FROM chat_turn_suspensions s \
+     JOIN chat_turns t ON t.id = s.turn_id \
+     JOIN chat_sessions cs ON cs.id = t.session_id \
+     WHERE cs.parent_turn_id IS NULL";
+
+fn map_pending(row: &SqliteRow) -> Result<PendingSuspension, DbError> {
+    let user: Option<String> = row.try_get("user_id")?;
+    let principal: Option<String> = row.try_get("principal_id")?;
+    let owner = match (user, principal) {
+        (Some(user), _) => SessionOwner::User(user),
+        (None, Some(principal)) => SessionOwner::Principal(principal),
+        (None, None) => {
+            return Err(DbError::Decode {
+                column: "user_id",
+                source: anyhow::anyhow!("a conversation without an owner"),
+            });
+        }
+    };
+    Ok(PendingSuspension {
+        suspension: map_suspension(row)?,
+        session_id: row.try_get("session_id")?,
+        owner,
+        agent_version: row.try_get("agent_version")?,
+        title: row.try_get("title")?,
+        notified_at: parse_optional_ts(row.try_get("notified_at")?, "notified_at")?,
+    })
+}
+
+/// Every conversation's own pause, oldest first: a person's chat (a
+/// scheduled or webhook run included) and an agent conversation alike.
+pub async fn pending_suspensions(pool: &Pool) -> Result<Vec<PendingSuspension>, DbError> {
+    let rows = sqlx::query(&format!(
+        "{PENDING_SELECT} ORDER BY s.created_at, s.turn_id"
+    ))
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(map_pending).collect()
+}
+
+/// The conversation's own pause that `request_id` names, if it still waits.
+pub async fn pending_by_request(
+    pool: &Pool,
+    request_id: &str,
+) -> Result<Option<PendingSuspension>, DbError> {
+    let row = sqlx::query(&format!("{PENDING_SELECT} AND s.request_id = ?"))
+        .bind(request_id)
+        .fetch_optional(pool)
+        .await?;
+    row.as_ref().map(map_pending).transpose()
+}
+
+/// Record that the pause `request_id` was announced. `true` only for the
+/// first call per pause, so whoever gets `true` sends the notification and
+/// nobody else does.
+pub async fn mark_suspension_notified(
+    pool: &Pool,
+    request_id: &str,
+    now: Timestamp,
+) -> Result<bool, DbError> {
+    let updated = sqlx::query(
+        "UPDATE chat_turn_suspensions SET notified_at = ? \
+          WHERE request_id = ? AND notified_at IS NULL",
+    )
+    .bind(now.to_string())
+    .bind(request_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated > 0)
+}
+
 /// The client views of every suspension in a session, by turn id — the
 /// one-query-then-bucket read `list_turns` does for its side tables.
 pub(crate) async fn suspension_views_for_session(
@@ -990,6 +1079,81 @@ mod tests {
                 .map(|p| p.turn_id),
             Some("next".into())
         );
+    }
+
+    #[tokio::test]
+    async fn the_inbox_lists_each_conversations_own_pause_and_never_a_sub_agents() {
+        let pool = pool().await;
+        let chat = running_turn(&pool, "own").await;
+        assert!(
+            suspend_turn(&pool, &suspension("own", in_an_hour()))
+                .await
+                .unwrap()
+        );
+        let root = running_run_turn(&pool, "main", None).await;
+        let mut parent = suspension("main", in_an_hour());
+        parent.child_turn = Some("child".into());
+        assert!(suspend_turn(&pool, &parent).await.unwrap());
+        running_run_turn(&pool, "child", Some("main")).await;
+        assert!(
+            suspend_turn(&pool, &suspension("child", in_an_hour()))
+                .await
+                .unwrap()
+        );
+
+        let pending = pending_suspensions(&pool).await.unwrap();
+        let turns: Vec<&str> = pending
+            .iter()
+            .map(|p| p.suspension.turn_id.as_str())
+            .collect();
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        assert!(turns.contains(&"own") && turns.contains(&"main"));
+        let main = pending
+            .iter()
+            .find(|p| p.suspension.turn_id == "main")
+            .unwrap();
+        assert_eq!(main.owner, SessionOwner::Principal("p1".into()));
+        assert_eq!(main.session_id, root);
+        assert_eq!(main.agent_version, Some(1));
+        let own = pending_by_request(&pool, "req-own").await.unwrap().unwrap();
+        assert_eq!(own.owner, SessionOwner::User("u1".into()));
+        assert_eq!(own.session_id, chat);
+        assert!(
+            pending_by_request(&pool, "req-child")
+                .await
+                .unwrap()
+                .is_none(),
+            "a sub-agent's pause is answered through its conversation's"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pause_is_announced_once() {
+        let pool = pool().await;
+        running_turn(&pool, "a1").await;
+        assert!(
+            suspend_turn(&pool, &suspension("a1", in_an_hour()))
+                .await
+                .unwrap()
+        );
+        let now = Timestamp::now();
+        assert!(
+            mark_suspension_notified(&pool, "req-a1", now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !mark_suspension_notified(&pool, "req-a1", now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !mark_suspension_notified(&pool, "req-gone", now)
+                .await
+                .unwrap()
+        );
+        let pending = pending_by_request(&pool, "req-a1").await.unwrap().unwrap();
+        assert!(pending.notified_at.is_some());
     }
 
     #[test]

@@ -717,7 +717,7 @@ call only while the turn lives in memory; this pause is durable.
   `suspended` (see [`ui.md`](ui.md#chat-streaming-the-json-event-protocol)).
   One decision at a time: a second suspend request in the same round is
   answered with an error. Where the run cannot pause (`ToolContext::suspend`
-  is `Unavailable`: `/v1`, scheduled and webhook runs), the envelope is
+  is `Unavailable`: `/v1`), the envelope is
   answered with an error too, and a well-behaved tool refuses on its own
   first. The timeout fallback is the kind's (`SuspensionKind::timeout_fallback`),
   whatever the tool asked: an approval always falls back to deny.
@@ -750,8 +750,12 @@ call only while the turn lives in memory; this pause is durable.
 `AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) is the first
 consumer: it keeps the wrapped tool's id and schema, pauses every call for an
 `approval`, runs the tool only on `Decided(AllowOnce)`, and refuses where
-pausing is impossible. Nothing in the shipped registry is wrapped yet — the
-`permission: always_ask` configuration that selects tools for it is #96.
+pausing is impossible. Nothing in the shipped registry is wrapped; an agent's
+spec wraps its own tools with `tool_resources.<tool>.permission: always_ask`,
+and a tool whose `Tool::changes_state()` is true (an MCP tool marked
+destructive and not read-only) asks by default
+([`agents.md`](agents.md#what-96-built)). Scheduled and webhook runs pause
+like a chat since #96, and their owner answers from the inbox.
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which
 suspends every ancestor turn and resumes innermost first

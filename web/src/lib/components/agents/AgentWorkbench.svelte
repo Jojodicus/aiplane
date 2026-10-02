@@ -20,6 +20,8 @@
 	import AgentEditor from './AgentEditor.svelte';
 	import GrantsPanel from './GrantsPanel.svelte';
 	import SharingPanel from './SharingPanel.svelte';
+	import RespondersPanel from './RespondersPanel.svelte';
+	import ChannelsPanel from './ChannelsPanel.svelte';
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
 	import TestChat from './TestChat.svelte';
 	import VersionsPanel from './VersionsPanel.svelte';
@@ -243,7 +245,11 @@
 					onchanged={() => refresh(true)}
 				/>
 			{:else}
-				<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
+				<div class="space-y-6">
+					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
+					<RespondersPanel agentId={id} {writable} />
+					<ChannelsPanel agentId={id} {writable} />
+				</div>
 			{/if}
 		</div>
 	{/if}

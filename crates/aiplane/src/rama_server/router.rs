@@ -247,6 +247,14 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agent-resources",
             pages::json_agent_resources::resources,
         )
+        // The inbox (docs/agents.md "What #96 built"): before `/agents/{id}`,
+        // because rama matches in registration order.
+        .with_get("/api/v0/agents/inbox", pages::json_inbox::list)
+        .with_get("/api/v0/agents/inbox/events", pages::json_inbox::events)
+        .with_post(
+            "/api/v0/agents/inbox/{id}/answer",
+            pages::json_inbox::answer,
+        )
         .with_get("/api/v0/agents", pages::json_agents::list)
         .with_post("/api/v0/agents", pages::json_agents::create)
         .with_get("/api/v0/agents/{id}", pages::json_agents::detail)
@@ -271,6 +279,27 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_post(
             "/api/v0/agents/{id}/shares/revoke",
             pages::json_agents::revoke_share,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/responders",
+            pages::json_inbox::responders,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/responders",
+            pages::json_inbox::add_responder,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/responders/revoke",
+            pages::json_inbox::revoke_responder,
+        )
+        .with_get("/api/v0/agents/{id}/channels", pages::json_inbox::channels)
+        .with_post(
+            "/api/v0/agents/{id}/channels",
+            pages::json_inbox::create_channel,
+        )
+        .with_delete(
+            "/api/v0/agents/{id}/channels/{channel_id}",
+            pages::json_inbox::delete_channel,
         )
         .with_get(
             "/api/v0/agents/{id}/embed-keys",

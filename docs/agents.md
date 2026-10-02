@@ -231,7 +231,8 @@ CREATE TABLE agent_shares (
 - Every share takes effect only for a holder of `can_manage_agents`.
 - *Chosen:* `read` shows the spec and the agent's conversations, and those
   hold visitor data, so a read share needs the permission too. Support staff
-  who only answer handoffs use the HiL inbox (#96), which needs no share.
+  who only answer handoffs use the HiL inbox (#96), which needs no share:
+  they are the agent's *responders* ([#96](#what-96-built)).
 
 **Grants are not versioned.** They belong to the principal and persist until
 reconfigured, as decided. If a live spec references a tool whose grant was
@@ -278,7 +279,7 @@ routes:
     task: "{issue_summary}"
   human:
     when: { slot: issue, set: true }
-    human: { notify: [push], inbox: support }   # phase 4
+    human: { notify: [push, slack], inbox: support, timeout: 30m }   # #96
 finish: { schema: { type: object, required: [answer], properties: {
             answer: { type: string }, facts: { type: array, items: { type: string } },
             needs_human: { type: boolean } } } }
@@ -319,8 +320,10 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
   a parameter of that name must bind it too. Otherwise it is not offered,
   and a call to it is refused. A `const` bind fixes a setting and makes no
   name a subject.
-- **`permission`**: `always_allow`, the default, or `always_ask`, which suspends
-  the call for human approval (phase 4).
+- **`permission`**: `always_allow` or `always_ask`, which suspends the call
+  for staff approval. Without one, a tool its server marks destructive and
+  not read-only asks. `approval_timeout` (default `1h`) bounds the wait, and
+  nobody approving is a deny ([#96](#what-96-built)).
 
 **Checks when a spec is validated** (on save, again on publish):
 - Every reference must exist and be granted to this agent's principal.
@@ -512,7 +515,7 @@ registered for that run, need no grant, and do not exist anywhere else.
 |---|---|---|
 | `set_<slot>(value)` | main agent | validates in code and writes `agent_state` with provenance `llm` |
 | `forward_request()` | main agent | evaluates the router over open gates (§4). On no open route it returns the failing conditions as a structured list. Otherwise it runs the sub-agent and returns its `finish` result |
-| `request_human(reason)` | main agent, when a `human` route exists | phase 4 |
+| `request_human(question)` | main agent, when a `human` route exists | hands the conversation to a person on an open human route and waits for their answer ([#96](#what-96-built)) |
 | `verify_<id>(…)` | main agent | the verifier flow (#95) |
 | `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
 
@@ -739,7 +742,8 @@ grants.
     is checked in code again, so a closed, unknown or malformed answer
     forwards nothing (`no_route_chosen`).
   - Dispatch happens only through the `OpenRoute` that `RouteGates::open`
-    returns. A `human` route answers `human_unavailable` until #96.
+    returns. A `human` route hands the conversation to a person
+    ([#96](#what-96-built)).
 - **Dispatch** (#88). It is the five steps of
   [Sub-agent dispatch](#sub-agent-dispatch):
   1. Render `task` from the main agent's state with `bind::render_task`. A
@@ -908,7 +912,8 @@ agent runs pause and resume durably, sub-agent runs included.
 - **Which runs pause.** `ToolContext.suspend` is `Available` on the chat path
   and on every agent run (`headless::drive` turns it on when `DriveParams.agent`
   is set), in both `drive_opened` entry points: the public endpoint's runner
-  and the test chat. Scheduled and webhook runs still refuse.
+  and the test chat. Since #96 a person's scheduled and webhook runs pause
+  too ([below](#what-96-built)).
 - **The main agent's turn.** `drive_opened` (and `drive_opened_from`, the
   same with a resume) returns `AgentReply { status: suspended, answer: None,
   suspension: Some(view) }` when the turn paused. The output filter runs only
@@ -1008,8 +1013,146 @@ agent runs pause and resume durably, sub-agent runs included.
   secure_input(…))` and checks `Decided(Value)`; the widget renders the
   `suspended` frame's field and posts `/api/v0/embed/resume`. `permission:
   always_ask` wraps the tool in `AskFirst`; the inbox lists suspended agent
-  turns and answers through the staff route; the push notification on pause
-  and the scheduled/webhook resume path are still #96's.
+  turns and answers through the same resume as the staff route. Built in
+  [#96](#what-96-built).
+
+### What #96 built
+
+Human in the loop on top of the agent-run suspend: per-tool approval, a
+handoff to a person, an inbox where both are answered, notifications when a
+turn starts waiting, and a resume path for a person's scheduled and webhook
+runs. Migration `0087_human_in_the_loop.sql`.
+
+- **Per-tool approval** (`agents::approval`). `tool_resources.<tool>.permission`
+  decides whether a call pauses for staff: `always_ask` wraps the tool in
+  `AskFirst`, `always_allow` runs it as granted. Without a `permission` a tool
+  asks first exactly when it is known to change something: the new
+  `Tool::changes_state()` is `true` only for an MCP tool its server marks
+  destructive and not read-only (built-in tools say nothing, so they are
+  `false`). `tool_resources.<tool>.approval_timeout` (a duration, default
+  `1h`) is how long the approval may take; an approval nobody gives is a deny
+  (#96's decision; `SuspensionKind::timeout_fallback` enforces it). The gate
+  sits outside the bound arguments, so an approved call still gets the
+  gateway's values; a withheld tool is refused without asking anyone.
+- **Handoff** (`agents::human`). A route with `human` is a target like a
+  sub-agent. Keys: `notify` (`push`, `slack`, `discord`; absent = every
+  channel), `inbox` (a label the inbox shows), `timeout` (default `30m`),
+  `transcript` (`false` by default). Two ways in:
+  - `request_human(question)`, a synthetic tool offered to the main agent
+    whenever the spec has a `human` route. It needs an open human route
+    (`router.order` first, else name order) and answers `no_open_route` with
+    what is missing otherwise. *Chosen:* the argument is the question for
+    staff, not a free-form reason, and it takes no other key.
+  - `forward_request` picking a human route (it answered `human_unavailable`
+    before). The route's `description` is the question, else the visitor's
+    last message.
+
+  Either pauses the call as `human_answer` with the question as `message` and
+  a handoff stored in the pause's `run_context` (`{handoff: {route, question,
+  visitor_message, slots, lang, inbox, notify, transcript?}}`).
+  `SuspendRequest` gained `context` for this. `slots` is the model's view
+  (a value only where the model wrote it, `set_by` otherwise), so a
+  verifier's value never reaches the inbox; the transcript (the last 20 turns,
+  each cut to 2000 characters) goes along only with `transcript: true`. The
+  handoff is audited as `human_handoff` with the run chain (#100's analytics
+  count that kind).
+- **The answer goes through the main agent.** *Chosen over verbatim:* the
+  staff answer is the waiting call's result (`{answered: true, answer,
+  note}`) and the model passes it on in the visitor's language. The visitor
+  and the staff member need not share a language, the conversation stays one
+  the model continues, and the answer still passes the output filter (#89; a
+  tool result is trusted text, so identifiers staff quote pass). A staff
+  `deny` is a tool error the model explains.
+- **Nobody answers.** When a handoff's deadline passes, `run_claimed` does not
+  ask the model: the waiting call is settled as unanswered and the turn ends
+  with `agent-human-no-answer` in the language recorded at the handoff
+  (`RunOptions.lang`, which the public runner now sets from the visitor's
+  `Accept-Language`). A message queued behind it runs afterwards as usual.
+- **Responders** (`agent_responders`, `db::agent_responders`). Users or
+  groups who answer an agent's approvals and handoffs without a share — the
+  support staff of §2. They need no `can_manage_agents`. Managed with a share
+  like the rest of the agent; adding and removing one is audited
+  (`responder_added`, `responder_removed`).
+- **The inbox** (`agents::inbox`). An item is a conversation's own pause
+  (`chat::pending_suspensions`; a sub-agent's pause shows through its
+  conversation's, with the innermost call's tool and arguments for an
+  approval):
+  - an agent conversation's `approval` or `human_answer`, outside the test
+    chat (`agent_version = 0` stays in the test chat), for an admin, a manager
+    with a `write` share, or a responder (`standing: manager | responder`);
+  - a person's own paused conversation — a scheduled or webhook run — for its
+    owner only (`standing: owner`).
+
+  A responder gets the item and its minimal context: question, handoff
+  context, an approval's tool and arguments, agent display name. Every other
+  agent route refuses them (`403`, no agent-management permission), and so
+  does the staff resume route.
+- **Notifications.** Once per pause (`chat_turn_suspensions.notified_at`,
+  set with `WHERE notified_at IS NULL`; a new pause is a new row), off the
+  turn's path (`inbox::announce_in_background`), when an agent conversation's
+  turn pauses (`drive_opened_from`, so a resumed turn that pauses again
+  notifies again) or a person's headless run does:
+  - **Web Push** to everyone who may answer: users holding a `write` share
+    directly or through a group, and responders (admins without a share are
+    not notified — they may answer everything and would be told everything),
+    or the run's owner. Title and body from the catalog in each
+    subscription's language; the link is `/inbox?item=<request_id>`.
+  - **Slack and Discord** incoming webhooks (`agent_notify_channels`,
+    `db::agent_channels`, `aiplane_features::server::notify_channels`). The
+    URL is the credential: sealed at rest (and in the reseal pass), never
+    returned by the API, never in a log line or an audit row; only its host
+    is kept in clear. A URL must be `https` on `hooks.slack.com` or
+    `discord.com`/`discordapp.com` `/api/webhooks/…` (loopback `http` only,
+    for tests). A message holds the agent, the kind and the absolute inbox
+    link (`public_url`); with the channel's `details` on, also the question or
+    the tool name (cut to 300 characters). No visitor message, transcript or
+    slot value is ever sent. Slack text is escaped, Discord gets
+    `allowed_mentions: {parse: []}`. A channel has its own catalog `lang`. A
+    failed post is logged and skipped. Mail is not built.
+- **Headless runs pause.** `headless::drive` makes every run suspendable,
+  not only agent runs. A person's scheduled or webhook run that pauses is
+  recorded as `waiting` (the SPA shows it as pending), notifies its owner and
+  is answered from the inbox through the chat's own resume
+  (`pages::chat::resume_turn`), so it continues as the owner's chat with the
+  owner's tools; its expiry is the chat sweeper's. No built-in tool pauses a
+  person's run yet; the path exists for the first that does (an MCP tool in
+  `ask` mode is the obvious one).
+- **API** (`aiplane-api::pages::json_inbox`). The inbox routes need a session
+  only; everyone may ask, most see nothing.
+
+  | Method | Path | Who | Purpose |
+  |---|---|---|---|
+  | GET | `/api/v0/agents/inbox` | session | `{items, count}`: each `{id (request_id), kind, standing, agent?, session_id, turn_id, title?, question?, call?: {name, arguments}, context?, options, created_at, expires_at}` |
+  | POST | `/api/v0/agents/inbox/{id}/answer` | who may answer it | `{decision, value?}`; `202 {turn_id}`, the turn runs in the background and the visitor gets it on their stream. `404 inbox_item_not_found` for anyone else, `409 not_suspended` / `turn_in_progress`, `400 decision_not_offered` |
+  | GET | `/api/v0/agents/inbox/events` | session | SSE: `inbox {count}` on attach and whenever the set changes (checked every 3 s), keep-alive comments, ends after 10 minutes for `EventSource` to reconnect |
+  | GET/POST | `/api/v0/agents/{id}/responders` | read / write share | list; add `{subject_kind: user\|group, subject_id}` (`201`, `200` if already one, `404` for an unknown user or group) |
+  | POST | `/api/v0/agents/{id}/responders/revoke` | write share | `{subject_kind, subject_id}`; `204` |
+  | GET/POST | `/api/v0/agents/{id}/channels` | read / write share | list without URL; add `{kind: slack\|discord, name, url, details?, lang?}`; `422 invalid_webhook_url`, `409 channel_name_taken` |
+  | DELETE | `/api/v0/agents/{id}/channels/{channel_id}` | write share | `204` |
+
+  The inbox answer and the staff route both end in `agents::resume::claim` /
+  `run_claimed` with `ResumedBy::Staff`, so `run_resumed` names the answerer
+  as `actor_id`.
+- **Widget and SPA.** The widget shows a waiting notice for a `suspended`
+  frame with empty `options` and re-attaches every 10 s until the answer
+  arrives ([`embed.md`](embed.md#when-the-agent-asks-a-person)); the SPA has
+  `/inbox` with a live sidebar badge and the Responders and Notification
+  channels cards in the workbench's Sharing tab ([`ui.md`](ui.md#inbox)).
+- **Tests.** `agents/run/tests/hil.rs`: an `always_ask` tool pauses, staff
+  approve and it runs, staff deny and it is a tool error, nobody answers and
+  it is denied; `always_allow`; `request_human` to a responder whose answer
+  reaches the visitor through the model, with the handoff's context and
+  audit; the unanswered handoff in German with no model call; a human route
+  through `forward_request`; one Slack post per pause, only on the channels
+  the route names; a person's paused run in their own inbox only.
+  `tests/it/embed/hil.rs`: the whole path over HTTP (visitor waits, responder
+  answers from the inbox, visitor receives), what a responder cannot reach,
+  who cannot answer, responder and channel management (no URL ever shown),
+  and a scheduled run that paused, resumed from its owner's inbox.
+- **Not built.** Answering in a Slack or Discord thread (inbox only, as the
+  issue left open), mail, and an approval card in a person's interactive chat
+  (its pauses are in the inbox, but the chat page does not render `suspended`
+  yet).
 
 ## 4. Gates and validation
 
@@ -1325,8 +1468,8 @@ untrusted audiences.
 - **Strings** are the `embed-*` Fluent keys. `gen-locales` also writes
   `web/embed/locales.generated.ts`, checked by
   `i18n_drift::the_embed_catalog_matches_the_fluent_sources`.
-- **Not built here:** the secure-input field (#95) and resuming a suspended
-  turn (#96); the widget has no UI for either yet.
+- **Not built here:** the secure-input field (#95). The waiting view for a
+  request staff answer came with [#96](#what-96-built).
 - **`dev-ui`** now installs `LiveAgentRunner` and seeds a published agent on
   the `chat` pool with a fixed embed key for `http://localhost:8000`.
 
@@ -1435,7 +1578,7 @@ upward.
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
-| Verifier tools (`mcp_code`, lookup), `request_human` | `aiplane-tools` | tool implementations; registered like every other tool |
+| Verifier tools (`mcp_code`, lookup) | `aiplane-tools` | tool implementations; registered like every other tool |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
@@ -1468,7 +1611,7 @@ helpers.
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken` |
-| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind |
+| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; responders instead of a share for support staff; Slack and Discord incoming webhooks; answers in the inbox only |
 | #97 later | — | unchanged |
 
 ## Deferred

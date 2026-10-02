@@ -20,6 +20,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "Das Gespräch ist abgelaufen, deshalb wurde ein neues gestartet.",
   "embed-speaker-agent": "Assistent",
   "embed-speaker-you": "Sie",
+  "embed-waiting-approval": "Ein Mitglied unseres Teams prüft Ihre Anfrage. Die Antwort erscheint hier.",
+  "embed-waiting-staff": "Ein Mitglied unseres Teams antwortet Ihnen hier in Kürze. Sie können dieses Fenster geöffnet lassen.",
   "embed-working": "Ihre Antwort wird vorbereitet…"
  },
  "en": {
@@ -39,6 +41,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "The conversation timed out, so a new one was started.",
   "embed-speaker-agent": "Assistant",
   "embed-speaker-you": "You",
+  "embed-waiting-approval": "A member of our team is reviewing your request. The answer will appear here.",
+  "embed-waiting-staff": "A member of our team will answer here shortly. You can keep this window open.",
   "embed-working": "Working on your answer…"
  },
  "es": {
@@ -58,6 +62,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "La conversación caducó, así que se inició una nueva.",
   "embed-speaker-agent": "Asistente",
   "embed-speaker-you": "Usted",
+  "embed-waiting-approval": "Un miembro de nuestro equipo está revisando tu solicitud. La respuesta aparecerá aquí.",
+  "embed-waiting-staff": "Un miembro de nuestro equipo te responderá aquí en breve. Puedes dejar esta ventana abierta.",
   "embed-working": "Preparando su respuesta…"
  },
  "fr": {
@@ -77,6 +83,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "La conversation a expiré, une nouvelle a donc été lancée.",
   "embed-speaker-agent": "Assistant",
   "embed-speaker-you": "Vous",
+  "embed-waiting-approval": "Un membre de notre équipe examine votre demande. La réponse apparaîtra ici.",
+  "embed-waiting-staff": "Un membre de notre équipe vous répondra ici sous peu. Vous pouvez laisser cette fenêtre ouverte.",
   "embed-working": "Préparation de votre réponse…"
  },
  "ru": {
@@ -96,6 +104,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "Время разговора истекло, поэтому начат новый.",
   "embed-speaker-agent": "Ассистент",
   "embed-speaker-you": "Вы",
+  "embed-waiting-approval": "Сотрудник нашей команды рассматривает ваш запрос. Ответ появится здесь.",
+  "embed-waiting-staff": "Сотрудник нашей команды скоро ответит здесь. Можете не закрывать это окно.",
   "embed-working": "Готовим ответ…"
  },
  "zh": {
@@ -115,6 +125,8 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-session-restarted": "对话已超时，已开始新的对话。",
   "embed-speaker-agent": "助手",
   "embed-speaker-you": "您",
+  "embed-waiting-approval": "我们的工作人员正在审核您的请求。回复将显示在这里。",
+  "embed-waiting-staff": "我们的工作人员很快会在这里回复您。您可以保持此窗口打开。",
   "embed-working": "正在准备回答…"
  }
 };

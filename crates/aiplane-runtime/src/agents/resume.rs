@@ -29,10 +29,12 @@ use aiplane_core::server::db::{DbError, agents as agents_db};
 use aiplane_core::server::run_chain::{CallSite, Frame, MAX_DEPTH, RunChain};
 use serde_json::{Value, json};
 use session_core::db::{
-    self as chat, Answerer, Decision, RunSession, TurnRole, TurnStatus, TurnSuspension,
+    self as chat, Answerer, Decision, DenyReason, RunSession, SuspensionKind, TurnRole, TurnStatus,
+    TurnSuspension,
 };
 use session_core::i18n::Lang;
 
+use super::human::end_unanswered;
 use super::profile::{AgentRunError, Role, RunOptions, RunProfile, SpecSource};
 use super::router::{Caller, dispatch_result};
 use super::run::{AgentReply, OpenedTurn, drive_opened, drive_opened_from, root_chain};
@@ -341,6 +343,7 @@ pub async fn run_claimed(
         decision,
         by,
     } = claimed;
+    let options = RunOptions { lang, ..options };
     let (profiles, chains, opened) = match rebuild(state, &levels, &options, lang).await {
         Ok(rebuilt) => rebuilt,
         Err(err) => {
@@ -381,6 +384,29 @@ pub async fn run_claimed(
         answered_by = by.as_str(),
         "resuming a suspended agent run"
     );
+
+    if levels.len() == 1
+        && innermost.kind == SuspensionKind::HumanAnswer
+        && matches!(
+            decision,
+            Decision::Deny {
+                reason: DenyReason::Timeout
+            }
+        )
+    {
+        let answer = end_unanswered(&state.db, innermost, lang)
+            .await
+            .map_err(DbError::from)?;
+        run_queued(state, &profiles[0], &opened).await?;
+        return Ok(AgentReply {
+            session_id: opened.session_id.clone(),
+            turn_id: opened.turn_id.clone(),
+            status: TurnStatus::Completed,
+            answer: Some(answer),
+            error: None,
+            suspension: None,
+        });
+    }
 
     let mut child_result = None;
     for i in (1..levels.len()).rev() {
