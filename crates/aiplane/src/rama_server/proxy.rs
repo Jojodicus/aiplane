@@ -3181,6 +3181,7 @@ async fn drive_streaming_tool_loop_inner(
     // Set once the model ignored its final round: the next request is the one
     // closing round past the budget.
     let mut closing = false;
+    let mut repeated_calls = aiplane_runtime::repeated_calls::RepeatedCallGuard::new();
 
     loop {
         let final_round = closing || budget.is_final(rounds);
@@ -3487,7 +3488,17 @@ async fn drive_streaming_tool_loop_inner(
             return Ok(());
         }
 
-        let results = runner::execute_tool_calls(&tool_source, &tool_ctx, &gateway_owned).await;
+        let results = runner::execute_tool_calls_guarded(
+            &tool_source,
+            &tool_ctx,
+            &gateway_owned,
+            &mut repeated_calls,
+        )
+        .await
+        .map_err(|stop| {
+            tracing::warn!(tool = %stop.tool, tool_rounds = rounds, "repeated identical tool call; stopping the stream");
+            stop.message()
+        })?;
         append_tool_round(&mut request_body, &gateway_owned, &results)?;
         runner::inject_tools(&mut request_body, &tool_source, &tool_source.offered_ids())
             .map_err(|err| err.to_string())?;
