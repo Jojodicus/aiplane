@@ -728,6 +728,11 @@ grants.
   and `drive_params` turns that into `DriveParams`. `DriveParams.agent` and
   `OpenAiDriver.agent` carry the `AgentRun` into the ordinary headless loop.
   There is no second driver.
+  - *Compiled once*: a published version is immutable, so its parsed spec,
+    `StateSchema`, `RouteGates` and `OutputFilter` are built once per
+    `(agent, version)` and shared (`agents::spec_cache`, at most 256, least
+    recently used first). Which version is live is read fresh for a run and
+    held for 5 s on a visitor admission.
   - *Model*: `main.pool` names a pool and a request names a model, so the run
     uses the first model (by name) of a healthy backend of that pool that the
     principal's pool grant reaches.
@@ -745,6 +750,9 @@ grants.
   memory and no connector listing. When the agent has state or routes it is
   rebuilt before every round after the first, so a slot set in round *n* shows
   in round *n+1*.
+  Everything that reads the state during a turn (the system message, gates,
+  bound arguments, `forward_request`, `request_human`, the output filter)
+  shares one `StateSnapshot`, read again only after a `WritesState` call ran.
 - **Tools** (`RunToolSource`, the `AgentToolSource` of the sketch above;
   [`tools-rbac.md`](tools-rbac.md#tool-sources)).
   The run offers the spec's `main.tools` that are also in the principal's grant
