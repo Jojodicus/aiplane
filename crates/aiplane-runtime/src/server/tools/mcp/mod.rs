@@ -265,6 +265,12 @@ pub(crate) async fn connect_http_server(
 /// or exceed OpenAI's 64-character limit retain a readable prefix plus a
 /// digest of the original pair, so independently named MCP tools cannot
 /// silently collapse onto one registry entry.
+/// The id the gateway gives `tool` of MCP server `server`: what the model
+/// calls and what a [`manager::UserMcpLayer`] is keyed by.
+pub fn tool_id(server: &str, tool: &str) -> String {
+    sanitize_tool_id(server, tool)
+}
+
 fn sanitize_tool_id(server: &str, tool: &str) -> String {
     let raw = format!("{MCP_ID_PREFIX}{server}__{tool}");
     let mut id: String = raw

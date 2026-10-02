@@ -38,6 +38,9 @@ mod limits;
 mod suspend;
 // Human in the loop: the inbox, responders, channels (#96).
 mod hil;
+// Identity verifiers: a one-time code through the agent's connector, a
+// website's signed identity token.
+mod verifiers;
 
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive

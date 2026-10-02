@@ -84,7 +84,7 @@ pub(super) fn staff() -> ResumedBy {
 
 /// Every text value in every table of the database, FTS shadow tables
 /// included: where a value would be if anything had stored it.
-async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> String {
+pub(super) async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> String {
     let tables: Vec<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
             .fetch_all(db)

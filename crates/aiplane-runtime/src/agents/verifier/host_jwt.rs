@@ -1,0 +1,519 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! The `host_jwt` verifier: the embedding website vouches for the visitor
+//! with a signed token, and its claims fill slots written as `host`.
+//!
+//! The website signs `{iss, aud, sub, exp, iat, jti?, …}` with HS256 (a
+//! secret shared with the agent, sealed at rest) or RS256/ES256 (its public
+//! key in the spec, or a JWKS address). The widget sends the token once per
+//! conversation (`POST /api/v0/embed/identity`). Everything is checked here:
+//!
+//! - the header's `alg` must be the configured one, so a public key can
+//!   never be used as an HMAC secret;
+//! - signature, `exp`, `nbf`, `iss`, `aud` (30 s leeway);
+//! - a short life: `exp - iat` at most `max_lifetime` (10 minutes unless
+//!   the spec says otherwise), so a leaked token is soon worthless;
+//! - a `jti`, when present, is accepted once per agent.
+//!
+//! A refused token writes nothing. An accepted one writes every mapped slot
+//! or none.
+
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+use aiplane_core::server::crypto::sha256_hex;
+use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_verifiers;
+use jiff::{SignedDuration, Timestamp};
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+use serde_json::{Map, Value, json};
+
+use super::{JwtAlgorithm, LIFETIME_DEFAULT, MAX_LIFETIME_CAP, duration};
+use crate::agents::state::{StateSchema, TrustedWriter, write_trusted};
+use crate::rama_server::state::RamaState;
+
+const LEEWAY_SECS: u64 = 30;
+const JWKS_TTL: Duration = Duration::from_secs(300);
+/// The soonest a key set is fetched again for a `kid` it does not know.
+const JWKS_REFETCH: Duration = Duration::from_secs(60);
+const JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl JwtAlgorithm {
+    fn jwt(self) -> Algorithm {
+        match self {
+            Self::Hs256 => Algorithm::HS256,
+            Self::Rs256 => Algorithm::RS256,
+            Self::Es256 => Algorithm::ES256,
+        }
+    }
+}
+
+/// Where the verifying key comes from.
+#[derive(Debug, Clone)]
+pub enum KeySource {
+    /// The HS256 secret, sealed with the gateway's at-rest key.
+    Sealed(String),
+    PublicKey(String),
+    Jwks(String),
+}
+
+/// What a claim fills: a slot with one claim, or a `subject` slot with an
+/// object of field → claim.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClaimMap {
+    Claim(String),
+    Object(Vec<(String, String)>),
+}
+
+#[derive(Debug, Clone)]
+pub struct HostJwt {
+    pub id: String,
+    pub algorithm: JwtAlgorithm,
+    pub key: KeySource,
+    pub issuer: String,
+    pub audience: String,
+    pub max_lifetime: SignedDuration,
+    pub claims: Vec<(String, ClaimMap)>,
+}
+
+impl HostJwt {
+    /// The spec's `host_jwt` verifier, when it has a complete one.
+    pub fn from_spec(spec: &Value) -> Option<Self> {
+        let (id, cfg) = spec
+            .get("verifiers")?
+            .as_object()?
+            .iter()
+            .find(|(_, v)| v.get("kind").and_then(Value::as_str) == Some("host_jwt"))?;
+        let text = |k: &str| cfg.get(k).and_then(Value::as_str).map(str::to_string);
+        let algorithm = JwtAlgorithm::parse(cfg.get("algorithm")?.as_str()?)?;
+        let key = match (text("secret_sealed"), text("public_key"), text("jwks_url")) {
+            (Some(s), None, None) if algorithm == JwtAlgorithm::Hs256 => KeySource::Sealed(s),
+            (None, Some(pem), None) if algorithm != JwtAlgorithm::Hs256 => {
+                KeySource::PublicKey(pem)
+            }
+            (None, None, Some(url)) if algorithm != JwtAlgorithm::Hs256 => KeySource::Jwks(url),
+            _ => return None,
+        };
+        let claims: Option<Vec<(String, ClaimMap)>> = cfg
+            .get("claims")?
+            .as_object()?
+            .iter()
+            .map(|(slot, c)| {
+                let map = match c {
+                    Value::String(claim) => ClaimMap::Claim(claim.clone()),
+                    Value::Object(fields) => ClaimMap::Object(
+                        fields
+                            .iter()
+                            .map(|(f, c)| Some((f.clone(), c.as_str()?.to_string())))
+                            .collect::<Option<_>>()?,
+                    ),
+                    _ => return None,
+                };
+                Some((slot.clone(), map))
+            })
+            .collect();
+        Some(Self {
+            id: id.clone(),
+            algorithm,
+            key,
+            issuer: text("issuer")?,
+            audience: text("audience")?,
+            max_lifetime: duration(cfg.get("max_lifetime"), LIFETIME_DEFAULT, MAX_LIFETIME_CAP),
+            claims: claims.filter(|c| !c.is_empty())?,
+        })
+    }
+}
+
+/// Why a token was refused. `code` is the stable API error code.
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error(
+        "this agent accepts no identity token: its spec has no complete `host_jwt` verifier. \
+         The agent's owner configures one under `verifiers`"
+    )]
+    NotConfigured,
+    #[error("the identity token was refused: {0}")]
+    Invalid(Refusal),
+    #[error(
+        "this identity token was already used; the website has to sign a fresh one (with a new \
+         `jti`) for each conversation"
+    )]
+    Replayed,
+    #[error(
+        "the website's signing keys could not be fetched from `{url}` ({reason}); try again \
+         shortly — the website owner should check that address"
+    )]
+    KeysUnavailable { url: String, reason: String },
+    #[error("storing the verified identity failed: {0}")]
+    Storage(String),
+}
+
+impl IdentityError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotConfigured => "identity_not_configured",
+            Self::Invalid(_) => "identity_token_invalid",
+            Self::Replayed => "identity_token_replayed",
+            Self::KeysUnavailable { .. } => "identity_keys_unavailable",
+            Self::Storage(_) => "internal",
+        }
+    }
+}
+
+/// What was wrong with a token — for the website's developer, so each says
+/// what to fix. None repeats a claim value.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    #[error("it is not a JWT (three base64url parts separated by dots)")]
+    Malformed,
+    #[error("it is signed with `{found}`, but this agent expects `{expected}`")]
+    WrongAlgorithm { expected: String, found: String },
+    #[error("its signature does not match the configured key")]
+    BadSignature,
+    #[error("it has expired (`exp` is in the past); sign a fresh one")]
+    Expired,
+    #[error("it is not valid yet (`nbf` is in the future); check the website's clock")]
+    NotYetValid,
+    #[error("its `iss` is not the issuer this agent expects")]
+    WrongIssuer,
+    #[error("its `aud` does not name this agent's audience")]
+    WrongAudience,
+    #[error("it lacks the `{0}` claim")]
+    MissingClaim(String),
+    #[error(
+        "it lives too long: `exp` - `iat` is {secs}s, and this agent accepts at most {max}s — \
+         sign short-lived tokens"
+    )]
+    TooLong { secs: i64, max: i64 },
+    #[error("no key in the website's JWKS matches its `kid`")]
+    UnknownKey,
+    #[error("its `{claim}` claim does not fit slot `{slot}`")]
+    ClaimDoesNotFit { claim: String, slot: String },
+}
+
+impl Refusal {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Malformed => "malformed",
+            Self::WrongAlgorithm { .. } => "wrong_algorithm",
+            Self::BadSignature => "bad_signature",
+            Self::Expired => "expired",
+            Self::NotYetValid => "not_yet_valid",
+            Self::WrongIssuer => "wrong_issuer",
+            Self::WrongAudience => "wrong_audience",
+            Self::MissingClaim(_) => "missing_claim",
+            Self::TooLong { .. } => "lifetime_too_long",
+            Self::UnknownKey => "unknown_key",
+            Self::ClaimDoesNotFit { .. } => "claim_does_not_fit",
+        }
+    }
+}
+
+/// `pem` as the key `alg` verifies with, or why it is not one.
+pub fn public_key(alg: JwtAlgorithm, pem: &str) -> Result<DecodingKey, String> {
+    let parsed = match alg {
+        JwtAlgorithm::Rs256 => DecodingKey::from_rsa_pem(pem.as_bytes()),
+        JwtAlgorithm::Es256 => DecodingKey::from_ec_pem(pem.as_bytes()),
+        JwtAlgorithm::Hs256 => return Err("HS256 takes a `secret`, not a public key".into()),
+    };
+    parsed.map_err(|e| {
+        format!(
+            "is not a PEM public key for this algorithm ({e}) — paste the website's \
+             `-----BEGIN PUBLIC KEY-----` block"
+        )
+    })
+}
+
+/// `https://…`, or `http://` to localhost for development.
+pub fn is_jwks_url(s: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(s) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
+        _ => false,
+    }
+}
+
+/// Replace every plaintext `secret` of a `host_jwt` verifier with
+/// `secret_sealed`, so the spec is never stored with a usable secret — not in
+/// the draft, a version, the audit trail or a manager's GET.
+pub fn seal_secrets(
+    spec: &mut Value,
+    crypto: &aiplane_core::server::crypto::Crypto,
+) -> Result<(), String> {
+    let Some(verifiers) = spec.get_mut("verifiers").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    for v in verifiers.values_mut() {
+        let Some(cfg) = v.as_object_mut() else {
+            continue;
+        };
+        if cfg.get("kind").and_then(Value::as_str) != Some("host_jwt") {
+            continue;
+        }
+        if let Some(Value::String(secret)) = cfg.remove("secret") {
+            let sealed = crypto
+                .seal_to_string(&secret)
+                .map_err(|e| format!("sealing the host_jwt secret failed: {e}"))?;
+            cfg.insert("secret_sealed".into(), Value::String(sealed));
+        }
+    }
+    Ok(())
+}
+
+type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;
+static JWKS: LazyLock<JwksCache> = LazyLock::new(Default::default);
+
+async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityError> {
+    let unavailable = |reason: String| IdentityError::KeysUnavailable {
+        url: url.to_string(),
+        reason,
+    };
+    let resp = state
+        .http
+        .get(url)
+        .timeout(JWKS_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| unavailable(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(unavailable(format!("it answered {}", resp.status())));
+    }
+    let set: JwkSet = resp
+        .json()
+        .await
+        .map_err(|e| unavailable(format!("not a JWKS document: {e}")))?;
+    JWKS.lock()
+        .expect("jwks cache")
+        .insert(url.to_string(), (Instant::now(), set.clone()));
+    Ok(set)
+}
+
+/// The JWKS key for `kid`: from the cache while it is fresh and knows the
+/// key, refetched otherwise (a rotated key appears without a restart).
+async fn jwks_key(
+    state: &RamaState,
+    url: &str,
+    kid: Option<&str>,
+) -> Result<DecodingKey, IdentityError> {
+    let find = |set: &JwkSet| match kid {
+        Some(kid) => set.find(kid).cloned(),
+        None if set.keys.len() == 1 => set.keys.first().cloned(),
+        None => None,
+    };
+    let (cached, just_fetched) = match JWKS.lock().expect("jwks cache").get(url) {
+        Some((at, set)) if at.elapsed() < JWKS_TTL => (find(set), at.elapsed() < JWKS_REFETCH),
+        _ => (None, false),
+    };
+    let jwk = match cached {
+        Some(jwk) => jwk,
+        // A token with a made-up `kid` must not make the gateway fetch the
+        // website's keys on every request.
+        None if just_fetched => return Err(IdentityError::Invalid(Refusal::UnknownKey)),
+        None => find(&fetch_jwks(state, url).await?)
+            .ok_or(IdentityError::Invalid(Refusal::UnknownKey))?,
+    };
+    DecodingKey::from_jwk(&jwk).map_err(|_| IdentityError::Invalid(Refusal::UnknownKey))
+}
+
+async fn key_for(
+    state: &RamaState,
+    cfg: &HostJwt,
+    kid: Option<&str>,
+) -> Result<DecodingKey, IdentityError> {
+    match &cfg.key {
+        KeySource::Sealed(sealed) => state
+            .crypto
+            .open_from_string(sealed)
+            .map(|s| DecodingKey::from_secret(s.as_bytes()))
+            .ok_or_else(|| {
+                IdentityError::Storage(
+                    "the host_jwt secret cannot be opened with this gateway's key — save the \
+                     secret in the agent's spec again"
+                        .into(),
+                )
+            }),
+        KeySource::PublicKey(pem) => public_key(cfg.algorithm, pem).map_err(IdentityError::Storage),
+        KeySource::Jwks(url) => jwks_key(state, url, kid).await,
+    }
+}
+
+fn refusal(err: &jsonwebtoken::errors::Error) -> Refusal {
+    use jsonwebtoken::errors::ErrorKind as K;
+    match err.kind() {
+        K::ExpiredSignature => Refusal::Expired,
+        K::ImmatureSignature => Refusal::NotYetValid,
+        K::InvalidIssuer => Refusal::WrongIssuer,
+        K::InvalidAudience => Refusal::WrongAudience,
+        K::MissingRequiredClaim(c) => Refusal::MissingClaim(c.clone()),
+        K::InvalidSignature => Refusal::BadSignature,
+        _ => Refusal::Malformed,
+    }
+}
+
+/// Verify `token` against `cfg`; its claims when it holds.
+async fn verified_claims(
+    state: &RamaState,
+    cfg: &HostJwt,
+    token: &str,
+    now: Timestamp,
+) -> Result<Map<String, Value>, IdentityError> {
+    let invalid = IdentityError::Invalid;
+    let header = decode_header(token).map_err(|_| invalid(Refusal::Malformed))?;
+    let expected = cfg.algorithm.jwt();
+    if header.alg != expected {
+        return Err(invalid(Refusal::WrongAlgorithm {
+            expected: format!("{expected:?}"),
+            found: format!("{:?}", header.alg),
+        }));
+    }
+    let key = key_for(state, cfg, header.kid.as_deref()).await?;
+    let mut validation = Validation::new(expected);
+    validation.leeway = LEEWAY_SECS;
+    validation.validate_nbf = true;
+    validation.set_issuer(&[&cfg.issuer]);
+    validation.set_audience(&[&cfg.audience]);
+    validation.set_required_spec_claims(&["exp", "iat", "iss", "aud"]);
+    let data =
+        decode::<Map<String, Value>>(token, &key, &validation).map_err(|e| invalid(refusal(&e)))?;
+    let claims = data.claims;
+    let (Some(exp), Some(iat)) = (
+        claims.get("exp").and_then(Value::as_i64),
+        claims.get("iat").and_then(Value::as_i64),
+    ) else {
+        return Err(invalid(Refusal::MissingClaim("iat".into())));
+    };
+    let max = cfg.max_lifetime.as_secs();
+    if exp - iat > max {
+        return Err(invalid(Refusal::TooLong {
+            secs: exp - iat,
+            max,
+        }));
+    }
+    if iat > now.as_second() + LEEWAY_SECS as i64 {
+        return Err(invalid(Refusal::NotYetValid));
+    }
+    Ok(claims)
+}
+
+fn claim<'a>(claims: &'a Map<String, Value>, name: &str) -> Result<&'a Value, Refusal> {
+    claims
+        .get(name)
+        .filter(|v| !v.is_null())
+        .ok_or_else(|| Refusal::MissingClaim(name.to_string()))
+}
+
+/// Every mapped slot's value, checked against the slot, or the first that
+/// does not fit.
+fn slot_values(
+    cfg: &HostJwt,
+    schema: &StateSchema,
+    claims: &Map<String, Value>,
+) -> Result<Vec<(String, Value)>, Refusal> {
+    let mut out = Vec::new();
+    for (slot, map) in &cfg.claims {
+        let (value, named) = match map {
+            ClaimMap::Claim(c) => (claim(claims, c)?.clone(), c.clone()),
+            ClaimMap::Object(fields) => {
+                let mut obj = Map::new();
+                for (field, c) in fields {
+                    obj.insert(field.clone(), claim(claims, c)?.clone());
+                }
+                let names: Vec<&str> = fields.iter().map(|(_, c)| c.as_str()).collect();
+                (Value::Object(obj), names.join(", "))
+            }
+        };
+        let fits = schema.slot(slot).is_some_and(|d| d.check(&value).is_ok());
+        if !fits {
+            return Err(Refusal::ClaimDoesNotFit {
+                claim: named,
+                slot: slot.clone(),
+            });
+        }
+        out.push((slot.clone(), value));
+    }
+    Ok(out)
+}
+
+/// Accept `token` for conversation `session_id` of agent `agent_id`, whose
+/// version runs `spec`: verify it and write its mapped slots as `host`.
+/// Returns the slots written.
+pub async fn accept(
+    state: &RamaState,
+    agent_id: &str,
+    session_id: &str,
+    spec: &Value,
+    token: &str,
+    now: Timestamp,
+) -> Result<Vec<String>, IdentityError> {
+    let outcome = accept_inner(state, agent_id, session_id, spec, token, now).await;
+    let detail = match &outcome {
+        Ok(slots) => json!({ "session_id": session_id, "outcome": "accepted", "slots": slots }),
+        Err(IdentityError::Invalid(r)) => {
+            json!({ "session_id": session_id, "outcome": "refused", "reason": r.as_str() })
+        }
+        Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
+    };
+    if !matches!(outcome, Err(IdentityError::NotConfigured))
+        && let Err(err) = agent_audit::record_run_event(
+            &state.db,
+            AuditKind::HostIdentity,
+            agent_id,
+            None,
+            detail,
+        )
+        .await
+    {
+        tracing::warn!(error = %err, agent = %agent_id, "host identity audit write failed");
+    }
+    outcome
+}
+
+async fn accept_inner(
+    state: &RamaState,
+    agent_id: &str,
+    session_id: &str,
+    spec: &Value,
+    token: &str,
+    now: Timestamp,
+) -> Result<Vec<String>, IdentityError> {
+    let cfg = HostJwt::from_spec(spec).ok_or(IdentityError::NotConfigured)?;
+    let schema = StateSchema::from_spec(spec).map_err(|i| IdentityError::Storage(i.message))?;
+    let claims = verified_claims(state, &cfg, token.trim(), now).await?;
+    let values = slot_values(&cfg, &schema, &claims).map_err(IdentityError::Invalid)?;
+    if let Some(jti) = claims.get("jti").and_then(Value::as_str) {
+        let exp = claims
+            .get("exp")
+            .and_then(Value::as_i64)
+            .and_then(|s| Timestamp::from_second(s).ok())
+            .unwrap_or(now);
+        let first =
+            agent_verifiers::use_jti(&state.db, agent_id, &sha256_hex(jti.as_bytes()), exp, now)
+                .await
+                .map_err(|e| IdentityError::Storage(e.to_string()))?;
+        if !first {
+            return Err(IdentityError::Replayed);
+        }
+    }
+    let mut written = Vec::new();
+    for (slot, value) in values {
+        write_trusted(
+            &state.db,
+            &schema,
+            session_id,
+            &slot,
+            value,
+            TrustedWriter::Host,
+            now,
+        )
+        .await
+        .map_err(|e| IdentityError::Storage(e.to_string()))?;
+        written.push(slot);
+    }
+    Ok(written)
+}

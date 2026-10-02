@@ -34,13 +34,18 @@ function mount(script: HTMLScriptElement): void {
 	const root = host.attachShadow({ mode: 'open' });
 	applyStyles(root, forShadowRoot(appCss));
 
+	const api = new EmbedApi({
+		base: new URL(script.src, location.href).origin,
+		key,
+		lang,
+		tokens: new TokenStore(() => window.sessionStorage, `croit-aiplane-embed:${key}`)
+	});
+	// A website that knows who its visitor is vouches for them with a token it
+	// signed: up front in `data-identity-token`, or later (after its own login)
+	// through `document.querySelector('croit-aiplane-embed').setIdentityToken(t)`.
+	Object.assign(host, { setIdentityToken: (token: string | null) => api.setIdentity(token) });
 	const widget = new Widget({
-		api: new EmbedApi({
-			base: new URL(script.src, location.href).origin,
-			key,
-			lang,
-			tokens: new TokenStore(() => window.sessionStorage, `croit-aiplane-embed:${key}`)
-		}),
+		api,
 		t: translator(lang),
 		title: script.dataset.title?.trim() || null,
 		position: script.dataset.position === 'left' ? 'left' : 'right',
@@ -48,7 +53,8 @@ function mount(script: HTMLScriptElement): void {
 	});
 	root.append(widget.element);
 	document.body.append(host);
-	void widget.resume();
+	const identity = script.dataset.identityToken;
+	void (identity ? api.setIdentity(identity) : Promise.resolve()).then(() => widget.resume());
 }
 
 const script = ownScript();

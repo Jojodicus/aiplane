@@ -70,6 +70,11 @@ pub enum AuditKind {
     /// URL is never in the detail.
     ChannelCreated,
     ChannelDeleted,
+    /// A verifier step (#95): a code sent, a code checked, a lookup made, and
+    /// the outcome. Never the code, the address or a looked-up value.
+    VerifierOutcome,
+    /// A host identity token was accepted or refused (#95). Never a claim value.
+    HostIdentity,
 }
 
 impl AuditKind {
@@ -105,6 +110,8 @@ impl AuditKind {
             Self::ResponderRemoved => "responder_removed",
             Self::ChannelCreated => "channel_created",
             Self::ChannelDeleted => "channel_deleted",
+            Self::VerifierOutcome => "verifier_outcome",
+            Self::HostIdentity => "host_identity",
         }
     }
 }

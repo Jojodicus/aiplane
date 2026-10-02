@@ -517,7 +517,7 @@ registered for that run, need no grant, and do not exist anywhere else.
 | `set_<slot>(value)` | main agent | validates in code and writes `agent_state` with provenance `llm` |
 | `forward_request()` | main agent | evaluates the router over open gates (§4). On no open route it returns the failing conditions as a structured list. Otherwise it runs the sub-agent and returns its `finish` result |
 | `request_human(question)` | main agent, when a `human` route exists | hands the conversation to a person on an open human route and waits for their answer ([#96](#what-96-built)) |
-| `verify_<id>(…)` | main agent | the verifier flow (#95) |
+| `verify_<id>_request_code()`, `verify_<id>_submit_code()`, `verify_<id>()` | main agent | the verifier flows ([#95](#what-95-built)); no arguments |
 | `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
 
 `forward_request` takes **no arguments** about the route or the subject.
@@ -1469,8 +1469,9 @@ untrusted audiences.
 - **Strings** are the `embed-*` Fluent keys. `gen-locales` also writes
   `web/embed/locales.generated.ts`, checked by
   `i18n_drift::the_embed_catalog_matches_the_fluent_sources`.
-- **Not built here:** the secure-input field (#95). The waiting view for a
-  request staff answer came with [#96](#what-96-built).
+- **Not built here:** the secure-input field, which #95 added
+  ([below](#what-95-built)). The waiting view for a request staff answer came
+  with [#96](#what-96-built).
 - **`dev-ui`** now installs `LiveAgentRunner` and seeds a published agent on
   the `chat` pool with a fixed embed key for `http://localhost:8000`.
 
@@ -1567,6 +1568,134 @@ pool rule, and retention.
   - The compaction summary call is still not metered, for agents or people.
   - The admin limits page in the SPA does not offer subject `system` yet; the
     API accepts it.
+
+### What #95 built
+
+Three verifier kinds under `verifiers.<id>`, the only writers besides the
+host of a slot the model cannot write. Code in
+`aiplane-runtime::agents::verifier` (runtime) and `agents/spec/verifiers.rs`
+(validation); rows in `aiplane-core::server::db::agent_verifiers`
+(migration `0088`).
+
+```yaml
+verifiers:
+  otp:                                   # one-time code through the agent's own connector
+    kind: mcp_code
+    connector: erp                       # an `agent`-scope connector granted to this agent
+    send_tool: send_code                 # default; called with {email}
+    check_tool: check_code               # default; called with {email, code}, answers {valid: true, …}
+    email_slot: email                    # an `email` slot (the model may write it: it is the claim)
+    writes: { verified: result, verified_email: input.email }
+    max_attempts: 5                      # default 5, at most 10, per code
+    code_ttl: 10m                        # default 10m, at most 1h
+    send_limits:                         # sliding windows on sends; defaults shown
+      email:   { max: 5,  per: 1h }      # per address, across every conversation
+      ip:      { max: 20, per: 1h }      # per client IP
+      session: { max: 3,  per: 15m }     # per conversation
+    assurance: email_verified            # optional label, recorded with each outcome
+  kyc:                                   # weaker: confirms what the visitor knows
+    kind: lookup
+    tool: mcp__erp__find_customer        # a granted tool or connector tool; answers {valid: true, …}
+    inputs: { name: state.name, number: state.customer_number, region: { const: eu } }
+    writes: { verified: result }
+    max_attempts: 5                      # per conversation
+    assurance: low                       # required
+  site:                                  # the embedding website vouches; slots are written as `host`
+    kind: host_jwt
+    algorithm: HS256                     # or RS256 / ES256
+    secret: "…"                          # HS256 only; sealed on save, stored as `secret_sealed`
+    # public_key: "-----BEGIN PUBLIC KEY-----…"   or   jwks_url: https://www.example.com/jwks.json
+    issuer: https://www.example.com
+    audience: support-agent
+    max_lifetime: 10m                    # default 10m: exp - iat may be at most this
+    claims: { verified: { customer_id: sub, plan: plan } }   # slot → claim, or field → claim
+```
+
+- **Writes.** A source is `result` (the tool's whole answer without
+  `valid`), `result.<field>`, or `input.<arg>` — never the code. Every write
+  is resolved and checked against its slot first, and stored only if all fit,
+  through `write_trusted` with `TrustedWriter::Verifier(<id>)` (or `Host`).
+  A target slot must list `verifier:<id>` (or `host`) in `set_by`, which the
+  validator checks; `set_by: verifier:<host_jwt id>` is refused with "list
+  `host`".
+- **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
+  checks the three send windows (`limits::sliding_window`, the #92 rate
+  type, with new scopes `email` and `session`), records the send, calls
+  `send_code`, stores the outstanding code's address hash, send time and
+  expiry, and pauses the turn with `SuspendRequest::secure_input` (message
+  `agent-verifier-code-sent`, timeout `code_ttl`). The widget's secure field
+  answers on `/api/v0/embed/resume`; the same call runs again with
+  `Decided(Value)`, which checks expiry, that the email slot still hashes to
+  the address the code went to, and takes one attempt in a single `UPDATE …
+  WHERE attempts < max` (parallel guesses cannot share one), then calls
+  `check_code`. A miss answers `wrong_code` with `attempts_left`; the last
+  one answers `locked`. `verify_<id>_submit_code()` asks again for the same
+  code (`agent-verifier-code-again`) without sending a new one. Both tools
+  refuse every argument by name (`code`, `provenance`, …).
+- **Enumeration.** The visitor and the model get the same pause and the same
+  `wrong_code` for an unknown address: `send_code`'s answer (or error) is
+  recorded as `delivery: accepted|refused` in the owner's audit only.
+- **Where the code is not.** It reaches the connector's `check_code` and
+  nothing else. The verifier's tools declare `sensitive_args`; the layer's
+  `get_with_sensitive_args` makes an audited connector record `[redacted]`
+  for both the arguments and a failed call's error in `mcp_tool_audit`; the
+  answer is passed through `withhold_secret` before a slot is written. rmcp
+  dumps outgoing MCP requests at `trace`, so the binary's log filter
+  (`aiplane::logging`) pins `rmcp::service=debug` whatever `RUST_LOG` asks.
+  `tests/it/embed/verifiers.rs` greps every table and every log line (at
+  `trace`, through that filter) for the code.
+- **`lookup` flow.** `verify_<id>()` builds the tool's arguments from state
+  (refusing while a slot is unset), counts lookups per conversation against
+  `max_attempts`, and answers `not_confirmed` alike for no match and a
+  partial one.
+- **Host JWT.** `POST /api/v0/embed/identity {token}` (visitor token):
+  `host_jwt::accept` checks the header's `alg` equals the configured one
+  before anything else (no HMAC-with-a-public-key confusion), the signature,
+  `exp`/`nbf`/`iss`/`aud` (30 s leeway, `exp`, `iat`, `iss`, `aud`
+  required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
+  agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
+  five minutes per URL and refetched for an unknown `kid`; only `https://`
+  (or `http://` to localhost) is fetched. Answers: `200 {slots}`, `401
+  identity_token_invalid` (the message says what is wrong, never a claim
+  value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
+  identity_keys_unavailable`. A refused token writes nothing.
+- **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
+  `secret` (at least 32 characters) and then replace it with `secret_sealed`
+  (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.
+  A GET → PUT round trip keeps `secret_sealed`.
+- **Validation.** Shape on every save (keys per kind, grants, ranges,
+  algorithms, PEM keys parse, JWKS URL scheme, write sources, slot types);
+  what a verifier needs to run on publish (`connector`/`email_slot`/`writes`;
+  `tool`/`inputs`/`writes`/`assurance`; `algorithm`, a key, `issuer`,
+  `audience`, `claims`). One `host_jwt` per spec. An incomplete verifier in a
+  draft offers no tool (`Verifiers::from_spec` skips it).
+- **Audit.** `verifier_outcome` (`{verifier, kind, step, outcome,
+  assurance, session_id, turn_id, …}`; outcomes `code_sent`, `verified`,
+  `wrong_code`, `locked`, `expired`, `email_changed`, `rate_limited`,
+  `not_confirmed`, `too_many_attempts`, `write_failed`) and `host_identity`
+  (`{session_id, outcome, reason | slots}`). Never a code, an address or a
+  claim value.
+- **The system message after a resume.** The driver now rebuilds an agent's
+  system message on the first round after a resume too, so a slot the
+  resumed call just wrote (the verifier's) shows on the next request and
+  the gate reads `open`.
+- **Widget.** A `secure_input` pause renders a masked field
+  (`type=password`, `autocomplete=one-time-code`, `embed-code-*` strings)
+  under the transcript, answered with `decision: value` (or `deny` from
+  Cancel) on `/embed/resume`; `data-identity-token` and
+  `croit-aiplane-embed.setIdentityToken(token)` send the host token once per
+  conversation ([`embed.md`](embed.md#signed-in-visitors)). The builder edits
+  verifiers in the JSON tab; its Settings section lists them with their
+  issues.
+- **Deviations.**
+  - The design table put verifier tools in `aiplane-tools`; they need the
+    run (state schema, `TrustedWriter`, the principal's connector layer), so
+    they live in `aiplane-runtime` next to `set_<slot>`.
+  - The check contract is fixed: `valid: true` in the tool's answer (a JSON
+    object, structured or as text). A RAG search answers hits, not a
+    verdict, so a `lookup` names a tool that answers that contract.
+  - `assurance` is a free label; levels and their names are still open.
+  - No magic-link variant.
 
 ### What #100 built
 
@@ -1755,15 +1884,15 @@ upward.
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
-| Verifier tools (`mcp_code`, lookup) | `aiplane-tools` | tool implementations; registered like every other tool |
+| Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
 
 Nothing here needs a new Cargo dependency. Host-JWT verification uses the
-existing `jsonwebtoken`, patterns use `regex`, and hashing uses the token
-helpers.
+existing `jsonwebtoken` (now also a dependency of `aiplane-runtime`), patterns
+use `regex`, and hashing uses the token helpers.
 
 ## 7. Issue map
 
@@ -1787,7 +1916,7 @@ helpers.
 | #92 limits, budget, pools, retention | §1, §5 | limits subject `system` plus the spec's `publish.budget`; exact per-visitor and per-IP windows; runs narrowed to granted ∩ listed pools; retention sweeps agent conversations |
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
-| #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken` |
+| #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken`; verifier tools in `aiplane-runtime`, not `aiplane-tools` ([built](#what-95-built)) |
 | #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; responders instead of a share for support staff; Slack and Discord incoming webhooks; answers in the inbox only |
 | #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |

@@ -7,8 +7,9 @@
 //! `forward_request`, bound arguments, the `RunProfile` that drives one
 //! agent's live version through the ordinary headless loop, and the seam the
 //! public endpoint runs a visitor's turn through (`embed`), with its visitor
-//! limits and owner budget, and the retention sweeper (`retention`). Human in
-//! the loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
+//! limits and owner budget, the retention sweeper (`retention`), and the
+//! identity verifiers that write trusted slots (`verifier`). Human in the
+//! loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
 //! `inbox` (who answers what, and the notification).
 
 pub mod approval;
@@ -28,3 +29,4 @@ pub mod run;
 pub mod slot_tools;
 pub mod spec;
 pub mod state;
+pub mod verifier;

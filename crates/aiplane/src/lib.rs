@@ -22,6 +22,7 @@
 //! target exists so the integration tests in `tests/` can build the router and
 //! drive it with `router.serve(req)` without binding a socket.
 
+pub mod logging;
 pub mod rama_server;
 pub mod tool_families;
 pub mod tool_registry;

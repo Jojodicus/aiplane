@@ -159,3 +159,48 @@ test('the storage accessor itself may throw', () => {
 	store.save('gwv_x');
 	assert.equal(store.load(), 'gwv_x');
 });
+
+test('the secure field answers on the resume route, the code in the body only', async () => {
+	const storage = new MemoryStorage();
+	storage.setItem('slot', 'gwv_1');
+	const t = api(storage, [json(202, { turn_id: 'a1' }), json(202, { turn_id: 'a1' })]);
+	await t.api.answer('req-1', 'value', '481516');
+	assert.equal(t.seen[0].url, 'https://gw.test/api/v0/embed/resume');
+	assert.equal(header(t.seen[0], 'authorization'), 'Bearer gwv_1');
+	assert.deepEqual(JSON.parse(t.seen[0].init.body as string), { request_id: 'req-1', decision: 'value', value: '481516' });
+	await t.api.answer('req-1', 'deny');
+	assert.deepEqual(JSON.parse(t.seen[1].init.body as string), { request_id: 'req-1', decision: 'deny' });
+});
+
+test('an identity token goes out once, right after the session starts', async () => {
+	const t = api(new MemoryStorage(), [
+		json(201, { token: 'gwv_new', agent: { display: 'Ada' } }),
+		json(200, { slots: ['verified'] }),
+		json(202, {}),
+		json(202, {})
+	]);
+	await t.api.setIdentity('eyJ.signed.token');
+	assert.equal(t.seen.length, 0, 'no conversation yet, nothing to vouch for');
+	await t.api.send('hello');
+	await t.api.send('again');
+	const urls = t.seen.map((s) => s.url.replace('https://gw.test', ''));
+	assert.deepEqual(urls, ['/api/v0/embed/sessions', '/api/v0/embed/identity', '/api/v0/embed/messages', '/api/v0/embed/messages']);
+	assert.equal(header(t.seen[1], 'authorization'), 'Bearer gwv_new');
+	assert.deepEqual(JSON.parse(t.seen[1].init.body as string), { token: 'eyJ.signed.token' });
+});
+
+test('an identity set during a conversation is sent at once, and a refusal does not break it', async () => {
+	const storage = new MemoryStorage();
+	storage.setItem('slot', 'gwv_1');
+	const t = api(storage, [json(401, { error: { code: 'identity_token_invalid', message: 'it has expired' } })]);
+	const warned: string[] = [];
+	const original = console.warn;
+	console.warn = (...args: unknown[]) => void warned.push(args.join(' '));
+	try {
+		await t.api.setIdentity('eyJ.expired');
+	} finally {
+		console.warn = original;
+	}
+	assert.equal(t.seen[0].url, 'https://gw.test/api/v0/embed/identity');
+	assert.match(warned[0] ?? '', /identity_token_invalid/);
+});

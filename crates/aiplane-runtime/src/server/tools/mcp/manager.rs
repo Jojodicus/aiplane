@@ -791,6 +791,10 @@ struct AuditedTool {
     inner: Arc<dyn Tool>,
     connector_key: String,
     db: Pool,
+    /// Record `[redacted]` instead of the arguments: set for a call whose
+    /// arguments carry a secret, such as a verifier's `check_code` with the
+    /// visitor's code.
+    sensitive: bool,
 }
 
 impl Tool for AuditedTool {
@@ -806,6 +810,10 @@ impl Tool for AuditedTool {
         self.inner.max_duration()
     }
 
+    fn sensitive_args(&self) -> bool {
+        self.sensitive || self.inner.sensitive_args()
+    }
+
     fn changes_state(&self) -> bool {
         self.inner.changes_state()
     }
@@ -817,12 +825,20 @@ impl Tool for AuditedTool {
         let principal = ctx.principal.clone();
         let session = ctx.session_id.clone();
         let chain = ctx.run.clone();
-        let args_summary = serde_json::to_string(&args).ok();
+        let args_summary = if self.sensitive_args() {
+            Some(REDACTED_ARGS.to_string())
+        } else {
+            serde_json::to_string(&args).ok()
+        };
         let inner = self.inner.clone();
+        let sensitive = self.sensitive_args();
         Box::pin(async move {
             let res = inner.run(ctx, args).await;
+            // A remote error may quote the arguments back ("code 123456 is
+            // wrong"), so a sensitive call keeps only that it failed.
             let (outcome, error) = match &res {
                 Ok(_) => ("ok", None),
+                Err(_) if sensitive => ("error", Some(REDACTED_ARGS.to_string())),
                 Err(e) => ("error", Some(e.to_string())),
             };
             if let Err(e) = mcp_audit::record(
@@ -846,10 +862,45 @@ impl Tool for AuditedTool {
     }
 }
 
+/// A tool whose arguments are declared sensitive, for an unaudited connector.
+struct SensitiveArgs(Arc<dyn Tool>);
+
+impl Tool for SensitiveArgs {
+    fn id(&self) -> &str {
+        self.0.id()
+    }
+
+    fn schema(&self) -> ToolDef {
+        self.0.schema()
+    }
+
+    fn max_duration(&self) -> Option<Duration> {
+        self.0.max_duration()
+    }
+
+    fn sensitive_args(&self) -> bool {
+        true
+    }
+
+    fn changes_state(&self) -> bool {
+        self.0.changes_state()
+    }
+
+    fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
+        self.0.run(ctx, args)
+    }
+}
+
+/// What an audit row holds in place of arguments that must not be stored.
+const REDACTED_ARGS: &str = "[redacted]";
+
 /// Per-request overlay of a user's connected-connector MCP tools.
 #[derive(Default)]
 pub struct UserMcpLayer {
     tools: HashMap<String, Arc<dyn Tool>>,
+    /// The raw tool under each audited id, so a sensitive call can be
+    /// audited without its arguments.
+    audited: HashMap<String, (Arc<dyn Tool>, String, Pool)>,
     defs: Vec<ToolDef>,
     /// id → effective permission mode (`always` / `ask`; `off` tools are
     /// excluded entirely).
@@ -879,11 +930,22 @@ impl UserMcpLayer {
             // When the connector is audited, store an audit-wrapping tool in
             // place of the raw one; it delegates everything and records the call.
             let stored: Arc<dyn Tool> = match audit_db {
-                Some(db) => Arc::new(AuditedTool {
-                    inner: tool.clone() as Arc<dyn Tool>,
-                    connector_key: connector_key.to_string(),
-                    db: db.clone(),
-                }),
+                Some(db) => {
+                    self.audited.insert(
+                        id.clone(),
+                        (
+                            tool.clone() as Arc<dyn Tool>,
+                            connector_key.to_string(),
+                            db.clone(),
+                        ),
+                    );
+                    Arc::new(AuditedTool {
+                        inner: tool.clone() as Arc<dyn Tool>,
+                        connector_key: connector_key.to_string(),
+                        db: db.clone(),
+                        sensitive: false,
+                    })
+                }
                 None => tool.clone() as Arc<dyn Tool>,
             };
             self.tools.insert(id.clone(), stored);
@@ -891,6 +953,21 @@ impl UserMcpLayer {
             self.modes.insert(id.clone(), mode);
             self.connector_of.insert(id, connector_key.to_string());
         }
+    }
+
+    /// Tool `id`, declaring its arguments sensitive: an audited connector
+    /// records `[redacted]` for them, and the runner never logs them.
+    pub fn get_with_sensitive_args(&self, id: &str) -> Option<Arc<dyn Tool>> {
+        if let Some((inner, connector_key, db)) = self.audited.get(id) {
+            return Some(Arc::new(AuditedTool {
+                inner: inner.clone(),
+                connector_key: connector_key.clone(),
+                db: db.clone(),
+                sensitive: true,
+            }));
+        }
+        let raw = self.tools.get(id)?.clone();
+        Some(Arc::new(SensitiveArgs(raw)))
     }
 
     /// Effective permission mode for a tool id, if this layer owns it.
@@ -1288,6 +1365,7 @@ mod tests {
             inner: Arc::new(Echo) as Arc<dyn Tool>,
             connector_key: "discord".into(),
             db: pool.clone(),
+            sensitive: false,
         };
         // Success path (Echo returns the message).
         audited
@@ -1305,6 +1383,38 @@ mod tests {
             && e.user_id == "u"
             && e.tool_id == "company_echo"
             && e.session_id.as_deref() == Some("sess")));
+    }
+
+    #[tokio::test]
+    async fn a_sensitive_call_is_audited_without_its_arguments() {
+        let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+        let mut layer = UserMcpLayer::default();
+        layer.tools.insert("company_echo".into(), Arc::new(Echo));
+        layer.audited.insert(
+            "company_echo".into(),
+            (Arc::new(Echo) as Arc<dyn Tool>, "erp".into(), pool.clone()),
+        );
+        let tool = layer.get_with_sensitive_args("company_echo").unwrap();
+        assert!(tool.sensitive_args(), "the runner never logs them either");
+        tool.run(
+            ToolContext::for_test(pool.clone()),
+            serde_json::json!({"message": "code 481516"}),
+        )
+        .await
+        .unwrap();
+
+        let ev = mcp_audit::recent(&pool, 10).await.unwrap();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].arguments.as_deref(), Some(REDACTED_ARGS));
+        assert!(!format!("{ev:?}").contains("481516"));
+
+        let plain = layer.get("company_echo").unwrap();
+        assert!(!plain.sensitive_args());
+        assert!(
+            UserMcpLayer::default()
+                .get_with_sensitive_args("company_echo")
+                .is_none()
+        );
     }
 
     #[test]

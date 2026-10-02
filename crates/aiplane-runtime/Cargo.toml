@@ -32,6 +32,8 @@ uuid = { workspace = true }
 base64 = "0.23"
 tempfile = { workspace = true }
 regex = { workspace = true }
+# Host identity tokens of embedded agents (agents/verifier/host_jwt.rs).
+jsonwebtoken = { workspace = true }
 # Rama wire types used by the driver and tool surface.
 rama = { workspace = true }
 # MCP client: stdio + streamable-HTTP transports.

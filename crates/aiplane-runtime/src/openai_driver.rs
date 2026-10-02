@@ -1280,8 +1280,9 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         unsettled_steers.extend(fold_in_steers(&ctx, &mut messages));
 
         // A slot set last round must show in this round's system message,
-        // or the model would ask for it again.
-        if round > start_round
+        // or the model would ask for it again. So must one the resumed call
+        // just set — a verifier writes its slots exactly there.
+        if (round > start_round || d.resume.is_some())
             && let Some(agent) = d.agent.as_ref().filter(|a| a.has_conversation_state())
         {
             messages[0] = agent

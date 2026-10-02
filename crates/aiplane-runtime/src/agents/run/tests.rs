@@ -413,9 +413,11 @@ fn support_spec(billing: &str) -> Value {
         "state": {
             "issue": { "type": "enum", "values": ["billing", "technical"], "set_by": ["llm"] },
             "issue_summary": { "type": "string", "max_length": 500, "set_by": ["llm"] },
+            "email": { "type": "email", "set_by": ["llm"] },
             "verified": { "type": "subject", "set_by": ["verifier:otp"] }
         },
-        "verifiers": { "otp": { "kind": "mcp_code" } },
+        "verifiers": { "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "email",
+                                "writes": { "verified": "result" } } },
         "router": { "kind": "rules" },
         "routes": {
             "billing": {
@@ -511,7 +513,13 @@ async fn support_example_with(publish: Option<Value>, answer: &str) -> Support {
     assert_eq!(world.issues(&billing, &billing_spec(4)).await, []);
     world.publish(&billing, &billing_spec(4)).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent(
+            "support",
+            &[
+                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Connector, "erp"),
+            ],
+        )
         .await;
     assert_eq!(world.issues(&support, &spec_of(&billing)).await, []);
     world.publish(&support, &spec_of(&billing)).await;
@@ -581,7 +589,14 @@ async fn the_support_example_runs_end_to_end() {
     let opening = &s.main[0];
     assert_eq!(
         offered(opening),
-        ["forward_request", "set_issue", "set_issue_summary"]
+        [
+            "forward_request",
+            "set_email",
+            "set_issue",
+            "set_issue_summary",
+            "verify_otp_request_code",
+            "verify_otp_submit_code"
+        ]
     );
     assert_eq!(
         tool_def(opening, "forward_request")["function"]["parameters"]["properties"],
@@ -747,9 +762,11 @@ fn triage_spec(helper: &str, router: Value) -> Value {
         },
         "state": {
             "issue": { "type": "enum", "values": ["billing", "technical"], "set_by": ["llm"] },
+            "email": { "type": "email", "set_by": ["llm"] },
             "verified": { "type": "subject", "set_by": ["verifier:otp"] }
         },
-        "verifiers": { "otp": { "kind": "mcp_code" } },
+        "verifiers": { "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "email",
+                                "writes": { "verified": "result" } } },
         "router": router,
         "routes": {
             "billing": {
@@ -798,6 +815,7 @@ async fn the_model_can_never_select_a_closed_route() {
             &[
                 (GrantKind::Pool, "support-pool"),
                 (GrantKind::Pool, "router-pool"),
+                (GrantKind::Connector, "erp"),
             ],
         )
         .await;
@@ -868,7 +886,13 @@ async fn a_rules_router_dispatches_the_first_open_route_in_its_order() {
         .await;
     world.publish(&helper_id, &helper_spec(4)).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent(
+            "support",
+            &[
+                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Connector, "erp"),
+            ],
+        )
         .await;
     let spec = triage_spec(
         &helper_id,
@@ -1250,6 +1274,7 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
             &[
                 (GrantKind::Pool, "support-pool"),
                 (GrantKind::Pool, "router-pool"),
+                (GrantKind::Connector, "erp"),
             ],
         )
         .await;
@@ -1372,3 +1397,4 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
 
 mod hil;
 mod suspend;
+mod verifiers;

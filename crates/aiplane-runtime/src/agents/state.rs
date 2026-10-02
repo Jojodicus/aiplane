@@ -102,6 +102,21 @@ pub enum SlotType {
     Subject(Option<Value>),
 }
 
+impl SlotType {
+    /// The `type` it is declared with.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::String => "string",
+            Self::Email => "email",
+            Self::Enum(_) => "enum",
+            Self::Integer => "integer",
+            Self::Number => "number",
+            Self::Boolean => "boolean",
+            Self::Subject(_) => "subject",
+        }
+    }
+}
+
 /// One declared slot.
 #[derive(Debug, Clone)]
 pub struct SlotDef {

@@ -3,6 +3,12 @@
 agent-output-withheld = Je ne peux pas donner cette réponse, car elle mentionnait des informations que je n’ai pas pu vérifier pour vous. Veuillez reformuler votre question ou contacter l’assistance.
 agent-output-redacted = [supprimé]
 
+# What a website visitor reads next to the secure field when an identity
+# verifier (#95) asks for the code it sent. Worded the same whether or not
+# the address is registered, so it reveals neither.
+agent-verifier-code-sent = Si cette adresse est enregistrée chez nous, nous y avons envoyé un code. Saisissez le code ici.
+agent-verifier-code-again = Veuillez saisir le code que nous vous avons envoyé.
+
 # What a website visitor reads when the public agent endpoint refuses a
 # request (#92): the agent's budget is spent, or a rate limit was hit.
 agent-embed-unavailable = Cet assistant est temporairement indisponible. Veuillez réessayer plus tard ou utiliser les autres moyens de contact du site.
