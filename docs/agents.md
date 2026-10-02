@@ -1439,7 +1439,9 @@ untrusted audiences.
   session id (`messages` refuses unknown fields).
 - **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
   turn runs. Without one, `idle` and the stream ends. With one, the stream
-  re-reads that turn every 250 ms and, once it is terminal, sends its whole
+  re-reads that one turn (never the conversation) whenever a turn claim is
+  released (`AgentTurns::releases`), at the latest every 2 s, and — the A2A
+  task streams alike — once it is terminal, sends its whole
   answer as one `turn_delta` with `full: true` and then `turn_finalized`.
   *Deviation:* the "`status` events" above are SSE comment lines (`:
   working`) every 15 s. There is no status to report beyond "still running",
@@ -1450,7 +1452,10 @@ untrusted audiences.
   layer reflects an `Origin` only if some live key of an enabled agent lists
   it (and answers a preflight from any other origin `403`, without CORS
   headers). The handler then checks the origin against the request's own key.
-  No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
+  The set of such origins is cached in memory (`embed_keys::EmbeddableOrigins`),
+  not read per request: creating or revoking a key and disabling or deleting
+  an agent clear it at once, and a 30 s TTL catches writes from outside the
+  process. No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
   quickly. Every other `/api/v0` route still gets no CORS headers.
 - **The runner.** The endpoint opens the turn rows (the visitor's user turn
   and an `in_progress` assistant turn), then hands an `OpenedTurn {agent_id,
@@ -1982,7 +1987,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   | task (`id`) | one assistant turn of that conversation, and the user turn before it |
   | `SendMessage` without `taskId` | a new turn: in a new context, or in the caller's `contextId` |
   | `SendMessage` with `taskId` of an `INPUT_REQUIRED` task | the answer to a `secure_input` pause, through the same `agents::resume::claim` / runner `resume` as `POST /api/v0/embed/resume` (`ResumedBy::Participant`), so a verifier's code goes to the tool and nowhere else (not the transcript, the task, the model) |
-  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled) |
+  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled). Per task: the claim names the turn holding the context (`AgentTurns::holds`), so a finished task reads as finished — and `CancelTask` on it is `-32002` — while a later task of the same context runs |
   | `TASK_STATE_COMPLETED` | `completed`; the answer is the artifact `answer` and the last `history` message |
   | `TASK_STATE_FAILED` | `errored`; `status.message` is the generic `embed-error-generic` text, never the upstream's |
   | `TASK_STATE_CANCELED` | `cancelled` |
@@ -2025,8 +2030,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   started, answered or cancelled task is also an `agent_audit` row
   `a2a_task` on the agent: `{action: message | input | cancel, context_id,
   task_id, caller_id, caller_name, token_id}`, never the text.
-- **Stopping a running agent turn.** `AgentTurns` keeps a stop flag per
-  claimed conversation (`cancel`, `cancel_flag`), and `headless::drive` hands
+- **Stopping a running agent turn.** `AgentTurns` keeps, per claimed
+  conversation, the turn holding it and a stop flag (`claim(session, turn)`,
+  `cancel(session, turn)` — only the holding turn can be stopped,
+  `cancel_flag`). A message queued behind a decision runs under the resumed
+  turn's claim, which `hand_over` passes on to the new turn. And `headless::drive` hands
   an agent run its root conversation's flag, so a cancel reaches sub-agent
   runs too. Only `CancelTask` sets it today.
 - **Errors.** JSON-RPC 2.0 envelopes (§9.5): `error.data` is one

@@ -31,7 +31,7 @@ use rama::http::service::web::extract::State;
 use rama::http::{Body, HeaderMap, HeaderValue, Request, Response, StatusCode, header};
 use serde_json::{Map, Value, json};
 use session_core::chat_json::{SseTx, json_stream_response};
-use session_core::db::{self as chat, TurnRole, TurnWithTools};
+use session_core::db::{self as chat, TurnRole, TurnStatus};
 use session_core::i18n::{self, Lang, t, t_args};
 
 use super::raw_path_segment;
@@ -48,7 +48,10 @@ use aiplane_runtime::suspend::ResumeRefused;
 
 /// Longest message accepted, in characters — the embed endpoint's limit.
 const MAX_MESSAGE_CHARS: usize = 8_000;
-const POLL: Duration = Duration::from_millis(250);
+/// How often a stream re-reads its task when no claim release woke it — a
+/// backstop only; the release of the turn's claim is what ends the wait.
+const FALLBACK_POLL: Duration = Duration::from_secs(2);
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 const KEEPALIVE: Duration = Duration::from_secs(15);
 /// A stream closes after this long even if the task still runs; the client
 /// polls `GetTask` or calls `SubscribeToTask` again.
@@ -733,21 +736,26 @@ async fn task_view(
     task_id: &str,
     history: Option<usize>,
 ) -> Result<TaskView, RpcError> {
-    let turns = chat::list_turns(&state.db, session_id)
+    let db = &state.db;
+    let Some(turn) = chat::get_turn(db, session_id, task_id)
         .await
-        .map_err(internal)?;
-    let Some(at) = turns.iter().position(|t| t.turn.id == task_id) else {
+        .map_err(internal)?
+    else {
         return Err(task_not_found(task_id));
     };
-    let TurnWithTools {
-        turn, suspension, ..
-    } = &turns[at];
-    let held = state.agent_turns.is_running(session_id);
-    let state = TaskState::of(turn.status, held);
-    let asked = at
-        .checked_sub(1)
-        .map(|i| &turns[i].turn)
+    let suspension = match turn.status {
+        TurnStatus::Suspended => chat::get_suspension(db, task_id)
+            .await
+            .map_err(internal)?
+            .map(|s| s.view()),
+        _ => None,
+    };
+    let asked = chat::turn_before(db, session_id, turn.seq)
+        .await
+        .map_err(internal)?
         .filter(|t| t.role == TurnRole::User);
+    let held = state.agent_turns.holds(session_id, task_id);
+    let state = TaskState::of(turn.status, held);
 
     let answer = (state == TaskState::Completed)
         .then(|| turn.content.clone())
@@ -789,7 +797,7 @@ async fn task_view(
     }
 
     let mut messages = Vec::new();
-    if let Some(user) = asked
+    if let Some(user) = &asked
         && let Some(text) = user.user_content.as_deref()
     {
         messages.push(text_message(
@@ -924,7 +932,9 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         .map_err(internal)?,
     };
     let session_id = context.session_id.clone();
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
+    let user_turn = uuid::Uuid::new_v4().to_string();
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let Some(hold) = state.agent_turns.claim(&session_id, &task_id) else {
         return Err(task_in_progress(""));
     };
     if let Some(busy) = chat::in_flight_turn(&state.db, &session_id)
@@ -962,8 +972,6 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         })
         .unwrap_or_default();
 
-    let user_turn = uuid::Uuid::new_v4().to_string();
-    let task_id = uuid::Uuid::new_v4().to_string();
     chat::create_user_turn(&state.db, &session_id, &user_turn, &p.text)
         .await
         .map_err(internal)?;
@@ -1020,7 +1028,7 @@ async fn continue_task(
         )));
     }
     let session_id = context.session_id.clone();
-    match TaskState::of(turn.status, state.agent_turns.is_running(&session_id)) {
+    match TaskState::of(turn.status, state.agent_turns.holds(&session_id, task_id)) {
         TaskState::Working => return Err(task_in_progress(task_id)),
         s if s.is_terminal() => {
             return Err(unsupported(format!(
@@ -1035,7 +1043,7 @@ async fn continue_task(
     let Some(runner) = state.agent_turns.runner() else {
         return Err(runtime_unavailable());
     };
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
+    let Some(hold) = state.agent_turns.claim(&session_id, task_id) else {
         return Err(task_in_progress(task_id));
     };
     let decision = super::chat::json_api::decision_from(
@@ -1120,19 +1128,19 @@ async fn cancel_task(call: &Call, params: &Value) -> Result<Response, RpcError> 
     let (context, turn) = find_task(call, &id).await?;
     let session_id = &context.session_id;
     let turns = &call.state.agent_turns;
-    match TaskState::of(turn.status, turns.is_running(session_id)) {
+    match TaskState::of(turn.status, turns.holds(session_id, &id)) {
         s if s.is_terminal() => return Err(not_cancelable(&id, s)),
         TaskState::Working => {
-            if !turns.cancel(session_id) {
+            if !turns.cancel(session_id, &id) {
                 return Err(not_cancelable(&id, TaskState::Working));
             }
             let started = tokio::time::Instant::now();
-            while turns.is_running(session_id) && started.elapsed() < CANCEL_WAIT {
-                tokio::time::sleep(POLL / 5).await;
+            while turns.holds(session_id, &id) && started.elapsed() < CANCEL_WAIT {
+                tokio::time::sleep(CANCEL_POLL).await;
             }
         }
         _ => {
-            let Some(_hold) = turns.claim(session_id) else {
+            let Some(_hold) = turns.claim(session_id, &id) else {
                 return Err(task_in_progress(&id));
             };
             cancel_paused(call, &id).await?;
@@ -1170,7 +1178,7 @@ async fn subscribe(call: &Call, params: &Value) -> Result<Response, RpcError> {
     let (context, turn) = find_task(call, &id).await?;
     let state = TaskState::of(
         turn.status,
-        call.state.agent_turns.is_running(&context.session_id),
+        call.state.agent_turns.holds(&context.session_id, &id),
     );
     if state.is_terminal() {
         return Err(unsupported(format!(
@@ -1193,6 +1201,7 @@ fn sse_frame(id: &Value, result: Value) -> rama::bytes::Bytes {
 /// was cancelled or waits for input. The answer is buffered behind the
 /// output filter, so there is nothing to stream token by token.
 async fn stream(call: &Call, session_id: &str, task_id: &str) -> Result<Response, RpcError> {
+    let releases = call.state.agent_turns.releases();
     let first = task_view(&call.state, call.lang, session_id, task_id, None).await?;
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let _ = tx.unbounded_send(Ok(sse_frame(&call.id, json!({ "task": first.task }))));
@@ -1204,7 +1213,7 @@ async fn stream(call: &Call, session_id: &str, task_id: &str) -> Result<Response
         task_id: task_id.to_string(),
     };
     if first.state == TaskState::Working {
-        tokio::spawn(async move { tail.run(tx).await });
+        tokio::spawn(async move { tail.run(releases, tx).await });
     } else {
         tail.finish(&first, &tx);
     }
@@ -1231,11 +1240,11 @@ impl Tail {
         .await
     }
 
-    async fn run(self, tx: SseTx) {
+    async fn run(self, mut releases: tokio::sync::watch::Receiver<u64>, tx: SseTx) {
         let started = tokio::time::Instant::now();
         let mut last_sent = started;
         loop {
-            tokio::time::sleep(POLL).await;
+            super::embed::await_release(&mut releases, FALLBACK_POLL).await;
             if tx.is_closed() {
                 return;
             }

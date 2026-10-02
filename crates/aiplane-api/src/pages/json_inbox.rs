@@ -134,7 +134,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
             "this gateway cannot run agent conversations — answer again after it was updated",
         );
     };
-    let Some(hold) = state.agent_turns.claim(&item.session_id) else {
+    let Some(hold) = state.agent_turns.claim(&item.session_id, &item.turn_id) else {
         return json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",

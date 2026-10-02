@@ -452,6 +452,26 @@ pub async fn get_turn(
     row.as_ref().map(map_turn).transpose()
 }
 
+/// The turn right before `seq` in its session — a turn's prompt, without
+/// reading the rest of the conversation.
+pub async fn turn_before(pool: &Pool, session_id: &str, seq: i64) -> Result<Option<Turn>, DbError> {
+    let row = sqlx::query(
+        r#"SELECT id, session_id, seq, role, user_content, model, content,
+                  reasoning, reasoning_elapsed_ms, reasoning_started_at,
+                  status, error_message,
+                  created_at, completed_at
+           FROM chat_turns
+           WHERE session_id = ? AND seq < ?
+           ORDER BY seq DESC
+           LIMIT 1"#,
+    )
+    .bind(session_id)
+    .bind(seq)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(map_turn).transpose()
+}
+
 /// Fetch one turn by id together with its tool calls, scoped to its
 /// session. This is the per-tick read for the streaming SSE loop: the
 /// loop only ever mutates one assistant turn, so re-reading the whole

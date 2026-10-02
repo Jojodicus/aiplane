@@ -35,11 +35,12 @@ const CODE: &str = "481516";
 const ECHO: &str = "company_echo";
 
 /// A chat upstream answering each round with the next scripted delta,
-/// optionally after a delay.
+/// optionally after a delay from round `slow_from` on.
 struct Scripted {
     deltas: Vec<Value>,
     served: AtomicUsize,
     delay: Duration,
+    slow_from: usize,
 }
 
 impl wiremock::Respond for Scripted {
@@ -50,13 +51,18 @@ impl wiremock::Respond for Scripted {
             "data: {}\n\ndata: [DONE]\n\n",
             json!({"choices": [{"index": 0, "delta": delta}]})
         );
+        let delay = if i >= self.slow_from {
+            self.delay
+        } else {
+            Duration::ZERO
+        };
         ResponseTemplate::new(200)
             .set_body_raw(sse, "text/event-stream")
-            .set_delay(self.delay)
+            .set_delay(delay)
     }
 }
 
-async fn upstream_with(deltas: Vec<Value>, delay: Duration) -> MockServer {
+async fn upstream_slow_from(deltas: Vec<Value>, slow_from: usize, delay: Duration) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -64,10 +70,15 @@ async fn upstream_with(deltas: Vec<Value>, delay: Duration) -> MockServer {
             deltas,
             served: AtomicUsize::new(0),
             delay,
+            slow_from,
         })
         .mount(&server)
         .await;
     server
+}
+
+async fn upstream_with(deltas: Vec<Value>, delay: Duration) -> MockServer {
+    upstream_slow_from(deltas, 0, delay).await
 }
 
 async fn upstream(deltas: Vec<Value>) -> MockServer {
@@ -666,6 +677,71 @@ async fn a_running_task_can_be_cancelled_and_a_finished_one_cannot() {
     let done = b.send("quick").await.task().clone();
     let r = b.rpc("CancelTask", json!({ "id": done["id"] })).await;
     assert_eq!(r.error_code(), -32002);
+}
+
+/// A context whose first task `A` completed and whose second task `B` is
+/// still running: `(served agent, A, B)`.
+async fn a_finished_task_beside_a_running_one() -> (A2a, MockServer, String, String) {
+    let llm = upstream_slow_from(
+        vec![text("First answer."), text("Second answer.")],
+        1,
+        Duration::from_secs(2),
+    )
+    .await;
+    let a = served(&llm).await;
+    let first = a.send("first question").await.task().clone();
+    assert_eq!(state_of(&first), "TASK_STATE_COMPLETED", "{first}");
+    let mut m = message("second question");
+    m["contextId"] = first["contextId"].clone();
+    let r = a
+        .rpc(
+            "SendMessage",
+            json!({ "message": m, "configuration": { "returnImmediately": true } }),
+        )
+        .await;
+    let second = r.task();
+    assert_eq!(state_of(second), "TASK_STATE_WORKING", "{second}");
+    let ids = (
+        first["id"].as_str().unwrap().to_string(),
+        second["id"].as_str().unwrap().to_string(),
+    );
+    (a, llm, ids.0, ids.1)
+}
+
+#[tokio::test]
+async fn get_task_reports_a_finished_task_as_finished_while_its_context_runs_another() {
+    let (a, _llm, done, running) = a_finished_task_beside_a_running_one().await;
+    let r = a.get_task(&done).await;
+    assert_eq!(state_of(r.result()), "TASK_STATE_COMPLETED", "{}", r.body);
+    assert_eq!(answer_of(r.result()), "First answer.");
+    let r = a.get_task(&running).await;
+    assert_eq!(state_of(r.result()), "TASK_STATE_WORKING", "{}", r.body);
+}
+
+#[tokio::test]
+async fn cancelling_a_finished_task_leaves_the_running_task_of_its_context_alone() {
+    let (a, _llm, done, running) = a_finished_task_beside_a_running_one().await;
+    let r = a.rpc("CancelTask", json!({ "id": done })).await;
+    assert_eq!(r.error_code(), -32002, "{}", r.body);
+    let after = a.wait_settled(&running).await;
+    assert_eq!(state_of(&after), "TASK_STATE_COMPLETED", "{after}");
+    assert_eq!(answer_of(&after), "Second answer.");
+}
+
+#[tokio::test]
+async fn subscribing_to_a_finished_task_is_refused_while_its_context_runs_another() {
+    let (a, _llm, done, _running) = a_finished_task_beside_a_running_one().await;
+    let r = a.rpc("SubscribeToTask", json!({ "id": done })).await;
+    assert_eq!(r.error_code(), -32004, "{}", r.body);
+}
+
+#[tokio::test]
+async fn a_message_for_a_finished_task_is_refused_as_finished_while_its_context_runs_another() {
+    let (a, _llm, done, _running) = a_finished_task_beside_a_running_one().await;
+    let mut more = message("more");
+    more["taskId"] = json!(done);
+    let r = a.rpc("SendMessage", json!({ "message": more })).await;
+    assert_eq!(r.error_code(), -32004, "{}", r.body);
 }
 
 #[tokio::test]

@@ -57,9 +57,10 @@ macro_rules! or_return {
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
 
-/// How often the event stream re-reads the running turn. The answer is
-/// delivered whole, so this only bounds how late it lands.
-const EVENT_POLL: Duration = Duration::from_millis(250);
+/// How often the event stream re-reads the running turn when no claim
+/// release woke it. A backstop only: the answer is delivered whole, and the
+/// release of the turn's claim is what ends the wait.
+const FALLBACK_POLL: Duration = Duration::from_secs(2);
 
 /// An SSE comment at this interval keeps proxies and the widget from
 /// treating a long-running turn as a dead connection.
@@ -69,10 +70,13 @@ const KEEPALIVE: Duration = Duration::from_secs(15);
 /// running; the widget re-attaches and gets a fresh snapshot.
 const STREAM_LIMIT: Duration = Duration::from_secs(600);
 
-/// What a visitor reads when a turn errored. The real message (an upstream
-/// status, a tool failure) is for the agent's owner, not an anonymous
-/// visitor.
-const VISITOR_ERROR: &str = "the assistant could not answer this message — please try again";
+/// What a visitor reads when a turn errored, in their language — the same
+/// Fluent message an A2A caller gets for a failed task. The real message (an
+/// upstream status, a tool failure) is for the agent's owner, not an
+/// anonymous visitor.
+fn visitor_error(lang: Lang) -> String {
+    t(lang, "embed-error-generic")
+}
 
 fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
     json_error(status, code, message)
@@ -364,7 +368,7 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
 /// A turn as a visitor may see it: the text of the exchange, and nothing of
 /// how it was produced. A suspended turn keeps what it waits for, without
 /// the tool, and offers the visitor only the decisions that are theirs.
-fn visitor_turn(mut t: TurnWithTools) -> TurnWithTools {
+fn visitor_turn(mut t: TurnWithTools, lang: Lang) -> TurnWithTools {
     t.tool_calls.clear();
     t.steers.clear();
     t.suspension = t
@@ -381,7 +385,7 @@ fn visitor_turn(mut t: TurnWithTools) -> TurnWithTools {
             turn.content = None;
         }
         if turn.status == TurnStatus::Errored {
-            turn.error_message = Some(VISITOR_ERROR.to_string());
+            turn.error_message = Some(visitor_error(lang));
         }
     }
     t
@@ -397,6 +401,7 @@ fn is_terminal(status: TurnStatus) -> bool {
 async fn visitor_turns(
     state: &RamaState,
     session_id: &str,
+    lang: Lang,
 ) -> Result<Vec<TurnWithTools>, Response> {
     let mut turns = chat::list_turns(&state.db, session_id)
         .await
@@ -409,14 +414,15 @@ async fn visitor_turns(
         // the answer yet.
         last.turn.status = TurnStatus::InProgress;
     }
-    Ok(turns.into_iter().map(visitor_turn).collect())
+    Ok(turns.into_iter().map(|t| visitor_turn(t, lang)).collect())
 }
 
 /// GET /api/v0/embed/session — the conversation behind a visitor token, for
 /// a widget that reloaded and found its token in `sessionStorage`.
 pub async fn current_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
-    let turns = or_return!(visitor_turns(&state, &v.session.session_id).await);
+    let lang = Lang::from_request(req.headers());
+    let turns = or_return!(visitor_turns(&state, &v.session.session_id, lang).await);
     let live_turn_id = live_turn_id(&turns);
     json_ok(
         StatusCode::OK,
@@ -480,7 +486,9 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
              GET /api/v0/embed/events, then send this one",
         )
     };
-    let Some(claim) = state.agent_turns.claim(&session_id) else {
+    let user_turn_id = uuid::Uuid::new_v4().to_string();
+    let assistant_turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(claim) = state.agent_turns.claim(&session_id, &assistant_turn_id) else {
         return turn_in_progress();
     };
     match chat::in_flight_turn(&state.db, &session_id).await {
@@ -494,8 +502,6 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(err) => return internal(err),
     }
 
-    let user_turn_id = uuid::Uuid::new_v4().to_string();
-    let assistant_turn_id = uuid::Uuid::new_v4().to_string();
     let model = v
         .live
         .spec
@@ -655,20 +661,22 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         );
     };
     let session_id = v.session.session_id.clone();
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
-        return refuse(
+    let busy = || {
+        refuse(
             StatusCode::CONFLICT,
             "turn_in_progress",
             "the assistant is busy with this conversation right now — wait for it on \
              GET /api/v0/embed/events, then answer again",
-        );
+        )
     };
     let turn_id = match chat::suspended_turn_in_session(&state.db, &session_id).await {
         Ok(Some(turn)) => turn,
-        Ok(None) => {
-            return not_waiting(lang);
-        }
+        Ok(None) if state.agent_turns.is_running(&session_id) => return busy(),
+        Ok(None) => return not_waiting(lang),
         Err(err) => return internal(err),
+    };
+    let Some(hold) = state.agent_turns.claim(&session_id, &turn_id) else {
+        return busy();
     };
     let claimed = match claim_resume(
         &state,
@@ -785,7 +793,9 @@ pub(crate) async fn settle_unfinished(state: &RamaState, session_id: &str, turn_
 pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let session_id = v.session.session_id;
-    let turns = or_return!(visitor_turns(&state, &session_id).await);
+    let lang = Lang::from_request(req.headers());
+    let releases = state.agent_turns.releases();
+    let turns = or_return!(visitor_turns(&state, &session_id, lang).await);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
     let queued = or_return!(queued_message(&state, &session_id).await);
@@ -805,7 +815,9 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         }
         (Some(turn_id), _) => {
             let state = state.clone();
-            tokio::spawn(async move { tail_buffered(state, session_id, turn_id, tx).await });
+            tokio::spawn(async move {
+                tail_buffered(state, session_id, turn_id, lang, releases, tx).await
+            });
         }
     }
     json_stream_response(rx)
@@ -830,17 +842,34 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
     })
 }
 
-async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: String, tx: SseTx) {
+/// Until a turn claim is released, or `fallback` has passed.
+pub(crate) async fn await_release(
+    releases: &mut tokio::sync::watch::Receiver<u64>,
+    fallback: Duration,
+) {
+    if let Ok(Err(_)) = tokio::time::timeout(fallback, releases.changed()).await {
+        tokio::time::sleep(fallback).await;
+    }
+}
+
+async fn tail_buffered(
+    state: Arc<RamaState>,
+    session_id: String,
+    turn_id: String,
+    lang: Lang,
+    mut releases: tokio::sync::watch::Receiver<u64>,
+    tx: SseTx,
+) {
     let started = tokio::time::Instant::now();
     let mut last_sent = started;
     loop {
-        tokio::time::sleep(EVENT_POLL).await;
+        await_release(&mut releases, FALLBACK_POLL).await;
         if tx.is_closed() {
             return;
         }
         match chat::get_turn(&state.db, &session_id, &turn_id).await {
             Ok(Some(t)) if is_terminal(t.status) && !state.agent_turns.is_running(&session_id) => {
-                for event in final_events(&t) {
+                for event in final_events(&t, lang) {
                     let _ = tx.unbounded_send(Ok(sse_json(&event)));
                 }
                 return;
@@ -884,7 +913,7 @@ async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: Strin
 }
 
 /// The whole answer of a terminal turn, as the visitor sees it.
-fn final_events(turn: &chat::Turn) -> Vec<ChatEvent> {
+fn final_events(turn: &chat::Turn, lang: Lang) -> Vec<ChatEvent> {
     let mut events = Vec::new();
     if turn.status != TurnStatus::Errored
         && let Some(content) = turn.content.as_deref().filter(|c| !c.is_empty())
@@ -898,7 +927,7 @@ fn final_events(turn: &chat::Turn) -> Vec<ChatEvent> {
     events.push(ChatEvent::TurnFinalized {
         turn_id: turn.id.clone(),
         status: turn.status.as_str().to_string(),
-        error_message: (turn.status == TurnStatus::Errored).then(|| VISITOR_ERROR.to_string()),
+        error_message: (turn.status == TurnStatus::Errored).then(|| visitor_error(lang)),
         model: None,
         duration_ms: turn
             .completed_at
@@ -949,7 +978,7 @@ mod tests {
 
     #[test]
     fn a_visitor_sees_neither_tools_reasoning_nor_the_model() {
-        let t = visitor_turn(assistant(TurnStatus::Completed));
+        let t = visitor_turn(assistant(TurnStatus::Completed), Lang::En);
         assert!(t.tool_calls.is_empty());
         assert_eq!(t.turn.reasoning, None);
         assert_eq!(t.turn.reasoning_started_at, None);
@@ -970,7 +999,7 @@ mod tests {
         };
         let mut paused = assistant(TurnStatus::Suspended);
         paused.suspension = Some(view.clone());
-        let seen = visitor_turn(paused);
+        let seen = visitor_turn(paused, Lang::En);
         let shown = seen.suspension.expect("the visitor sees the pause");
         assert_eq!(shown.request_id, "req-1");
         assert_eq!(shown.tool, None);
@@ -980,15 +1009,23 @@ mod tests {
 
         let mut done = assistant(TurnStatus::Completed);
         done.suspension = Some(view);
-        assert_eq!(visitor_turn(done).suspension, None);
+        assert_eq!(visitor_turn(done, Lang::En).suspension, None);
     }
 
     #[test]
     fn an_unfinished_answer_is_withheld_and_an_error_is_generic() {
-        let running = visitor_turn(assistant(TurnStatus::InProgress));
+        let running = visitor_turn(assistant(TurnStatus::InProgress), Lang::En);
         assert_eq!(running.turn.content, None);
-        let errored = visitor_turn(assistant(TurnStatus::Errored));
-        assert_eq!(errored.turn.error_message.as_deref(), Some(VISITOR_ERROR));
+        let errored = visitor_turn(assistant(TurnStatus::Errored), Lang::En);
+        assert_eq!(
+            errored.turn.error_message.as_deref(),
+            Some("Something went wrong. Please try again.")
+        );
+        let in_german = visitor_turn(assistant(TurnStatus::Errored), Lang::De);
+        assert_eq!(
+            in_german.turn.error_message.as_deref(),
+            Some("Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.")
+        );
     }
 
     #[test]
@@ -996,7 +1033,7 @@ mod tests {
         let mut t = assistant(TurnStatus::Completed).turn;
         t.content = Some("Hello".into());
         t.completed_at = Some(t.created_at);
-        let events = final_events(&t);
+        let events = final_events(&t, Lang::En);
         assert_eq!(
             events[0],
             ChatEvent::TurnDelta {
@@ -1012,7 +1049,7 @@ mod tests {
         ));
 
         t.status = TurnStatus::Errored;
-        let events = final_events(&t);
+        let events = final_events(&t, Lang::En);
         assert_eq!(
             events.len(),
             1,

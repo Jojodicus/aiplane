@@ -13,6 +13,11 @@
 //! Only the SHA-256 of a key is stored. Creating and revoking one records an
 //! [`agent_audit`] row in the same transaction.
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use jiff::Timestamp;
 use serde_json::json;
 use sqlx::Row;
@@ -99,6 +104,7 @@ pub async fn create(
     )
     .await?;
     tx.commit().await?;
+    origins_changed();
     get(pool, &id)
         .await?
         .ok_or_else(|| DbError::Query(sqlx::Error::RowNotFound))
@@ -165,14 +171,15 @@ pub async fn revoke(
     )
     .await?;
     tx.commit().await?;
+    origins_changed();
     Ok(true)
 }
 
-/// Whether any live key of an enabled agent lists `origin`. This is what a
-/// CORS preflight can be answered from: it carries neither the key nor the
+/// Every origin some live key of an enabled agent lists. This is what a CORS
+/// preflight can be answered from: it carries neither the key nor the
 /// visitor token, so it cannot be scoped to one key. Each request is then
-/// checked against its own key's origins.
-pub async fn origin_is_embeddable(pool: &Pool, origin: &str) -> Result<bool, DbError> {
+/// checked against its own key's origins (and the spec's `publish.origins`).
+pub async fn embeddable_origins(pool: &Pool) -> Result<HashSet<String>, DbError> {
     let rows = sqlx::query(
         "SELECT k.origins FROM agent_embed_keys k
            JOIN system_principals p ON p.id = k.principal_id
@@ -180,17 +187,84 @@ pub async fn origin_is_embeddable(pool: &Pool, origin: &str) -> Result<bool, DbE
     )
     .fetch_all(pool)
     .await?;
+    let mut all = HashSet::new();
     for row in rows {
         let origins: String = row.try_get("origins")?;
         let origins: Vec<String> = serde_json::from_str(&origins).map_err(|e| DbError::Decode {
             column: "origins",
             source: e.into(),
         })?;
-        if origins.iter().any(|o| o == origin) {
-            return Ok(true);
+        all.extend(origins);
+    }
+    Ok(all)
+}
+
+/// Bumped after every committed write that can change
+/// [`embeddable_origins`]: a key created or revoked, an agent disabled or
+/// deleted. Process-wide rather than per pool — a bump for another pool only
+/// costs a cache a reload, never a stale answer.
+static ORIGINS_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn origins_changed() {
+    ORIGINS_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Backstop for writes this process cannot see (another process on the same
+/// database file, a hand-run SQL fix): within this long they apply anyway.
+const ORIGINS_TTL: Duration = Duration::from_secs(30);
+
+/// [`embeddable_origins`], cached for the CORS layer, which asks on every
+/// `/api/v0/embed/*` request. Reloaded when this module's writes changed
+/// the set (at once) or after [`ORIGINS_TTL`].
+#[derive(Debug)]
+pub struct EmbeddableOrigins {
+    ttl: Duration,
+    cached: Mutex<Option<Snapshot>>,
+}
+
+#[derive(Debug)]
+struct Snapshot {
+    generation: u64,
+    loaded_at: Instant,
+    origins: Arc<HashSet<String>>,
+}
+
+impl Default for EmbeddableOrigins {
+    fn default() -> Self {
+        Self::with_ttl(ORIGINS_TTL)
+    }
+}
+
+impl EmbeddableOrigins {
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            cached: Mutex::new(None),
         }
     }
-    Ok(false)
+
+    /// Whether some live key of an enabled agent lists `origin`.
+    pub async fn allows(&self, pool: &Pool, origin: &str) -> Result<bool, DbError> {
+        let generation = ORIGINS_GENERATION.load(Ordering::SeqCst);
+        if let Some(origins) = self.fresh(generation) {
+            return Ok(origins.contains(origin));
+        }
+        let origins = Arc::new(embeddable_origins(pool).await?);
+        *self.cached.lock().unwrap_or_else(|p| p.into_inner()) = Some(Snapshot {
+            generation,
+            loaded_at: Instant::now(),
+            origins: origins.clone(),
+        });
+        Ok(origins.contains(origin))
+    }
+
+    fn fresh(&self, generation: u64) -> Option<Arc<HashSet<String>>> {
+        let cached = self.cached.lock().unwrap_or_else(|p| p.into_inner());
+        cached
+            .as_ref()
+            .filter(|s| s.generation == generation && s.loaded_at.elapsed() < self.ttl)
+            .map(|s| s.origins.clone())
+    }
 }
 
 #[cfg(test)]
@@ -315,38 +389,55 @@ mod tests {
     #[tokio::test]
     async fn an_origin_is_embeddable_only_through_a_live_key_of_an_enabled_agent() {
         let pool = pool().await;
+        let origins = EmbeddableOrigins::default();
+        let allows = |o: &'static str| {
+            let (pool, origins) = (pool.clone(), &origins);
+            async move { origins.allows(&pool, o).await.unwrap() }
+        };
         let a = agent(&pool, "support").await;
         let b = agent(&pool, "sales").await;
+        let c = agent(&pool, "billing").await;
         let ka = key(&pool, &a, "ha", &["https://a.example"]).await;
+        assert!(allows("https://a.example").await);
+        assert!(!allows("https://b.example").await, "the cache is warm now");
         key(&pool, &b, "hb", &["https://b.example"]).await;
-        assert!(
-            origin_is_embeddable(&pool, "https://a.example")
-                .await
-                .unwrap()
-        );
-        assert!(
-            origin_is_embeddable(&pool, "https://b.example")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !origin_is_embeddable(&pool, "https://c.example")
-                .await
-                .unwrap()
-        );
+        assert!(allows("https://b.example").await, "a new key opens at once");
+        key(&pool, &c, "hc", &["https://c.example"]).await;
+        assert!(!allows("https://d.example").await);
 
         revoke(&pool, &a, &ka.id, "alice").await.unwrap();
-        assert!(
-            !origin_is_embeddable(&pool, "https://a.example")
-                .await
-                .unwrap()
-        );
+        assert!(!allows("https://a.example").await, "a revoked key at once");
         sp::disable(&pool, &b, "alice").await.unwrap();
         assert!(
-            !origin_is_embeddable(&pool, "https://b.example")
-                .await
-                .unwrap()
+            !allows("https://b.example").await,
+            "a disabled agent at once"
         );
+        agents::delete(&pool, &c, "alice").await.unwrap();
+        assert!(
+            !allows("https://c.example").await,
+            "a deleted agent at once"
+        );
+    }
+
+    /// The point of the cache: a CORS answer is not a table scan. A write
+    /// that bypasses this module is not seen until the backstop TTL.
+    #[tokio::test]
+    async fn a_warm_cache_answers_without_reading_the_keys_again() {
+        let pool = pool().await;
+        let origins = EmbeddableOrigins::default();
+        let a = agent(&pool, "support").await;
+        key(&pool, &a, "ha", &["https://a.example"]).await;
+        assert!(origins.allows(&pool, "https://a.example").await.unwrap());
+        sqlx::query("DELETE FROM agent_embed_keys")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            origins.allows(&pool, "https://a.example").await.unwrap(),
+            "answered from the cache"
+        );
+        let expired = EmbeddableOrigins::with_ttl(std::time::Duration::ZERO);
+        assert!(!expired.allows(&pool, "https://a.example").await.unwrap());
     }
 
     #[tokio::test]

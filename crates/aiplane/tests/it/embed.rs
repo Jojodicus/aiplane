@@ -832,6 +832,77 @@ async fn a_runner_that_leaves_its_turn_unfinished_does_not_wedge_the_conversatio
     panic!("the conversation stayed blocked");
 }
 
+/// `GET uri` as the visitor, from [`SITE`], asking for `accept_language`.
+async fn get_in(e: &Embed, uri: &str, token: &str, accept_language: &str) -> Vec<u8> {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::ORIGIN, SITE)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::ACCEPT_LANGUAGE, accept_language)
+        .body(Body::empty())
+        .unwrap();
+    let resp = common::app(e.fx.state.clone()).serve(req).await.unwrap();
+    common::read_body(resp).await.to_vec()
+}
+
+#[tokio::test]
+async fn an_errored_answer_reads_the_generic_error_in_the_visitors_language() {
+    const GERMAN: &str = "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.";
+    let gate = Arc::new(Notify::new());
+    let e = embed_with(
+        Some(ScriptedRunner {
+            hold: Some(gate.clone()),
+            finish: false,
+            ..Default::default()
+        }),
+        None,
+    )
+    .await;
+    let token = e.visitor().await;
+    let r = e.say(&token, "hi").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    let turn_id = r.body["turn_id"].as_str().unwrap().to_string();
+
+    let stream = {
+        let e_state = e.fx.state.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            let req = Request::builder()
+                .method(Method::GET)
+                .uri("/api/v0/embed/events")
+                .header(header::ORIGIN, SITE)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::ACCEPT_LANGUAGE, "de")
+                .body(Body::empty())
+                .unwrap();
+            let resp = common::app(e_state).serve(req).await.unwrap();
+            common::read_body(resp).await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    gate.notify_one();
+    let body = tokio::time::timeout(Duration::from_secs(20), stream)
+        .await
+        .expect("the stream ends with the turn")
+        .unwrap();
+    let finalized = frames(&body)
+        .into_iter()
+        .find(|(n, _)| n == "turn_finalized")
+        .expect("a turn_finalized frame")
+        .1;
+    assert_eq!(finalized["turn_id"], turn_id.as_str());
+    assert_eq!(finalized["status"], "errored");
+    assert_eq!(finalized["error_message"], GERMAN);
+
+    let session: Value =
+        serde_json::from_slice(&get_in(&e, "/api/v0/embed/session", &token, "de").await).unwrap();
+    assert_eq!(
+        session["turns"][1]["turn"]["error_message"], GERMAN,
+        "{session}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Isolation
 
@@ -1020,6 +1091,34 @@ async fn a_preflight_is_answered_only_for_an_embeddable_origin() {
         after.status(),
         StatusCode::FORBIDDEN,
         "a revoked key opens no origin"
+    );
+
+    let (_, _) = new_key(&e.fx, &e.agent, &[OTHER_SITE]).await;
+    let opened = app
+        .serve(preflight("/api/v0/embed/sessions", OTHER_SITE))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.status(),
+        StatusCode::NO_CONTENT,
+        "a new key opens its origin at once"
+    );
+    let (status, body) =
+        e.fx.post(
+            &e.fx.alice,
+            &format!("/api/v0/system-principals/{}/disable", e.agent),
+            json!({}),
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {body}");
+    let disabled = app
+        .serve(preflight("/api/v0/embed/sessions", OTHER_SITE))
+        .await
+        .unwrap();
+    assert_eq!(
+        disabled.status(),
+        StatusCode::FORBIDDEN,
+        "a disabled agent opens no origin, at once"
     );
 }
 

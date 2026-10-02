@@ -1098,6 +1098,45 @@ pub(crate) mod tests {
         assert_eq!(latest_session(&pool, "u1").await.unwrap().unwrap().id, b.id);
     }
 
+    /// A task view needs one turn and the prompt before it, not the whole
+    /// conversation: `turn_before` reads exactly the neighbour, skipping gaps a
+    /// truncation left, scoped to the session.
+    #[tokio::test]
+    async fn turn_before_reads_only_the_turn_preceding_the_given_seq() {
+        let pool = pool().await;
+        let s = create_session(&pool, "u1").await.unwrap();
+        create_user_turn(&pool, &s.id, "u1", "first").await.unwrap();
+        create_assistant_turn_in_progress(&pool, &s.id, "a1", "m")
+            .await
+            .unwrap();
+        create_user_turn(&pool, &s.id, "u2", "second")
+            .await
+            .unwrap();
+        let a2 = create_assistant_turn_in_progress(&pool, &s.id, "a2", "m")
+            .await
+            .unwrap();
+
+        let before = turn_before(&pool, &s.id, a2.seq).await.unwrap().unwrap();
+        assert_eq!(before.id, "u2");
+        assert_eq!(before.user_content.as_deref(), Some("second"));
+        let first = get_turn(&pool, &s.id, "u1").await.unwrap().unwrap();
+        assert!(
+            turn_before(&pool, &s.id, first.seq)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let other = create_session(&pool, "u1").await.unwrap();
+        assert!(
+            turn_before(&pool, &other.id, a2.seq)
+                .await
+                .unwrap()
+                .is_none(),
+            "scoped to its session"
+        );
+    }
+
     #[tokio::test]
     async fn get_turn_with_tools_scopes_to_session_and_bundles_calls() {
         let pool = pool().await;

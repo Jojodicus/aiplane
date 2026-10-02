@@ -30,11 +30,13 @@
 //! deliberately do **not** emit `Access-Control-Allow-Credentials`.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use rama::http::{Body, HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use rama::{Layer, Service};
 
-use crate::server::db::{Pool, embed_keys};
+use crate::server::db::Pool;
+use crate::server::db::embed_keys::EmbeddableOrigins;
 
 /// [`Layer`] that wraps a service with [`V1Cors`]. Apply it outside the
 /// router's error handler so `RouterError`-rendered responses (404, 405,
@@ -143,15 +145,21 @@ fn apply_cors_headers(headers: &mut HeaderMap, origin: HeaderValue) {
 /// a live embed key of an enabled agent. A preflight carries neither the key
 /// nor the visitor token, so this layer can only answer "does *some* key
 /// allow this origin"; the handlers then check the origin against the
-/// request's own key and refuse it with `origin_not_allowed`.
+/// request's own key and refuse it with `origin_not_allowed`. The answer
+/// comes from a cache ([`EmbeddableOrigins`]) that a key or agent change
+/// clears at once.
 #[derive(Clone, Debug)]
 pub struct EmbedCorsLayer {
     pool: Pool,
+    origins: Arc<EmbeddableOrigins>,
 }
 
 impl EmbedCorsLayer {
     pub fn new(pool: Pool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            origins: Arc::default(),
+        }
     }
 }
 
@@ -162,6 +170,7 @@ impl<S> Layer<S> for EmbedCorsLayer {
         EmbedCors {
             inner,
             pool: self.pool.clone(),
+            origins: self.origins.clone(),
         }
     }
 
@@ -169,6 +178,7 @@ impl<S> Layer<S> for EmbedCorsLayer {
         EmbedCors {
             inner,
             pool: self.pool,
+            origins: self.origins,
         }
     }
 }
@@ -178,6 +188,7 @@ impl<S> Layer<S> for EmbedCorsLayer {
 pub struct EmbedCors<S> {
     inner: S,
     pool: Pool,
+    origins: Arc<EmbeddableOrigins>,
 }
 
 pub const EMBED_PREFIX: &str = "/api/v0/embed/";
@@ -205,7 +216,9 @@ where
             return self.inner.serve(req).await;
         };
         let allowed = match origin.to_str() {
-            Ok(o) => embed_keys::origin_is_embeddable(&self.pool, o)
+            Ok(o) => self
+                .origins
+                .allows(&self.pool, o)
                 .await
                 .unwrap_or_else(|err| {
                     tracing::warn!(error = %err, "embed CORS: reading embed key origins");

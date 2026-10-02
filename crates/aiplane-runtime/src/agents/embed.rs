@@ -350,18 +350,35 @@ impl AgentTurnRunner for LiveAgentRunner {
 }
 
 /// The runner, if this build has one, and the conversations with a turn
-/// running right now, each with the flag that stops it.
-#[derive(Clone, Default)]
+/// running right now, each with the turn that holds it and the flag that
+/// stops it.
+#[derive(Clone)]
 pub struct AgentTurns {
     runner: Option<Arc<dyn AgentTurnRunner>>,
-    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    running: Arc<Mutex<HashMap<String, Held>>>,
+    released: Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+impl Default for AgentTurns {
+    fn default() -> Self {
+        Self {
+            runner: None,
+            running: Arc::default(),
+            released: Arc::new(tokio::sync::watch::Sender::new(0)),
+        }
+    }
+}
+
+struct Held {
+    turn_id: String,
+    stop: Arc<AtomicBool>,
 }
 
 impl AgentTurns {
     pub fn new(runner: Arc<dyn AgentTurnRunner>) -> Self {
         Self {
             runner: Some(runner),
-            running: Arc::default(),
+            ..Self::default()
         }
     }
 
@@ -369,7 +386,7 @@ impl AgentTurns {
         self.runner.clone()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Held>> {
         self.running.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -380,49 +397,89 @@ impl AgentTurns {
         self.lock().contains_key(session_id)
     }
 
-    /// Claim `session_id` for one turn. `None` when a turn already holds it;
-    /// the claim ends when the returned guard drops.
-    pub fn claim(&self, session_id: &str) -> Option<TurnClaim> {
+    /// Whether `turn_id` is the turn of `session_id` being produced — not
+    /// merely some turn of the same conversation.
+    pub fn holds(&self, session_id: &str, turn_id: &str) -> bool {
+        self.lock()
+            .get(session_id)
+            .is_some_and(|held| held.turn_id == turn_id)
+    }
+
+    /// Claim `session_id` for its turn `turn_id`. `None` when a turn already
+    /// holds it; the claim ends when the returned guard drops.
+    pub fn claim(&self, session_id: &str, turn_id: &str) -> Option<TurnClaim> {
         let mut running = self.lock();
         if running.contains_key(session_id) {
             return None;
         }
-        running.insert(session_id.to_string(), Arc::default());
+        running.insert(
+            session_id.to_string(),
+            Held {
+                turn_id: turn_id.to_string(),
+                stop: Arc::default(),
+            },
+        );
         Some(TurnClaim {
             running: self.running.clone(),
+            released: self.released.clone(),
             session_id: session_id.to_string(),
         })
+    }
+
+    /// Changes whenever a claim — of any conversation — is released: the
+    /// moment a held turn's answer becomes final or its pause visible. A
+    /// stream waiting on one turn wakes on it instead of polling the
+    /// database; it re-reads its own turn and waits again if that was not it.
+    pub fn releases(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.released.subscribe()
+    }
+
+    /// Pass the claim of `session_id` from turn `from` to `to`, the next turn
+    /// the same run produces (a message queued behind a decision). False when
+    /// `from` does not hold the conversation.
+    pub fn hand_over(&self, session_id: &str, from: &str, to: &str) -> bool {
+        match self.lock().get_mut(session_id) {
+            Some(held) if held.turn_id == from => {
+                held.turn_id = to.to_string();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The stop flag of the turn holding `session_id`, which the driver of
     /// that conversation's runs reads between rounds (`headless::drive`).
     pub fn cancel_flag(&self, session_id: &str) -> Option<Arc<AtomicBool>> {
-        self.lock().get(session_id).cloned()
+        self.lock().get(session_id).map(|held| held.stop.clone())
     }
 
-    /// Ask the turn holding `session_id` to stop at its next check; it then
-    /// ends `cancelled`. False when no turn holds the conversation.
-    pub fn cancel(&self, session_id: &str) -> bool {
+    /// Ask turn `turn_id` of `session_id` to stop at its next check; it then
+    /// ends `cancelled`. False unless that very turn holds the conversation.
+    pub fn cancel(&self, session_id: &str, turn_id: &str) -> bool {
         match self.lock().get(session_id) {
-            Some(flag) => {
-                flag.store(true, Ordering::SeqCst);
+            Some(held) if held.turn_id == turn_id => {
+                held.stop.store(true, Ordering::SeqCst);
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 }
 
 /// See [`AgentTurns::claim`].
 pub struct TurnClaim {
-    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    running: Arc<Mutex<HashMap<String, Held>>>,
+    released: Arc<tokio::sync::watch::Sender<u64>>,
     session_id: String,
 }
 
 impl Drop for TurnClaim {
     fn drop(&mut self) {
-        let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        running.remove(&self.session_id);
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.session_id);
+        self.released.send_modify(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -511,25 +568,66 @@ mod tests {
     fn a_conversation_holds_one_claim_at_a_time() {
         let turns = AgentTurns::default();
         assert!(turns.runner().is_none());
-        let first = turns.claim("s1").expect("free");
-        assert!(turns.claim("s1").is_none(), "already running");
-        assert!(turns.claim("s2").is_some(), "other conversations are free");
+        let first = turns.claim("s1", "t1").expect("free");
+        assert!(turns.claim("s1", "t2").is_none(), "already running");
+        assert!(
+            turns.claim("s2", "t3").is_some(),
+            "other conversations are free"
+        );
         drop(first);
-        assert!(turns.claim("s1").is_some(), "released on drop");
+        assert!(turns.claim("s1", "t2").is_some(), "released on drop");
     }
 
     #[test]
-    fn a_claimed_turn_can_be_asked_to_stop_and_an_unclaimed_one_cannot() {
+    fn a_claim_names_the_turn_holding_the_conversation() {
         let turns = AgentTurns::default();
-        assert!(!turns.cancel("s1"), "nothing runs");
-        let claim = turns.claim("s1").expect("free");
+        let claim = turns.claim("s1", "t2").expect("free");
+        assert!(turns.is_running("s1"));
+        assert!(turns.holds("s1", "t2"));
+        assert!(
+            !turns.holds("s1", "t1"),
+            "an earlier turn of the conversation is not the running one"
+        );
+        assert!(!turns.holds("s2", "t2"));
+        assert!(!turns.hand_over("s1", "t1", "t3"), "t1 holds nothing");
+        assert!(turns.hand_over("s1", "t2", "t3"));
+        assert!(turns.holds("s1", "t3") && !turns.holds("s1", "t2"));
+        drop(claim);
+        assert!(!turns.holds("s1", "t3"));
+    }
+
+    #[tokio::test]
+    async fn releasing_a_claim_wakes_whoever_waits_for_one() {
+        let turns = AgentTurns::default();
+        let claim = turns.claim("s1", "t1").expect("free");
+        let mut releases = turns.releases();
+        let waiter = tokio::spawn(async move { releases.changed().await.is_ok() });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "nothing was released yet");
+        drop(claim);
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("the release wakes the waiter")
+            .unwrap();
+        assert!(woke);
+    }
+
+    #[test]
+    fn only_the_claimed_turn_can_be_asked_to_stop() {
+        let turns = AgentTurns::default();
+        assert!(!turns.cancel("s1", "t1"), "nothing runs");
+        let claim = turns.claim("s1", "t1").expect("free");
         let flag = turns.cancel_flag("s1").expect("a running turn has a flag");
+        assert!(
+            !turns.cancel("s1", "t0"),
+            "another turn of the conversation"
+        );
         assert!(!flag.load(Ordering::SeqCst));
-        assert!(turns.cancel("s1"));
+        assert!(turns.cancel("s1", "t1"));
         assert!(flag.load(Ordering::SeqCst), "the driver sees the request");
         drop(claim);
         assert!(turns.cancel_flag("s1").is_none());
-        let again = turns.claim("s1").expect("free again");
+        let again = turns.claim("s1", "t2").expect("free again");
         assert!(
             !turns.cancel_flag("s1").unwrap().load(Ordering::SeqCst),
             "a new turn starts with a fresh flag"
