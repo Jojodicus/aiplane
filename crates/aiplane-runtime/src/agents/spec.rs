@@ -144,9 +144,10 @@ const ROUTE_KEYS: &[&str] = &[
     "bind",
     "human",
     "a2a",
+    "loop",
 ];
 /// The keys that name a route's target; a route has exactly one.
-const ROUTE_TARGETS: &[&str] = &["agent", "human", "a2a"];
+const ROUTE_TARGETS: &[&str] = &["agent", "human", "a2a", "loop"];
 const HUMAN_KEYS: &[&str] = &["notify", "inbox", "timeout", "transcript"];
 /// Where a handoff may be announced: Web Push to whoever may answer it, and
 /// the agent's Slack and Discord channels.
@@ -214,7 +215,15 @@ pub fn routed_agents(spec: &Value) -> Vec<&str> {
         .and_then(Value::as_object)
         .into_iter()
         .flat_map(|routes| routes.values())
-        .filter_map(|route| route.get("agent").and_then(Value::as_str))
+        .flat_map(route_agents)
+        .collect()
+}
+
+/// The agent ids one route runs: its sub-agent, or a loop's worker and critic.
+fn route_agents(route: &Value) -> Vec<&str> {
+    ["/agent", "/loop/worker", "/loop/critic"]
+        .iter()
+        .filter_map(|at| route.pointer(at).and_then(Value::as_str))
         .collect()
 }
 
@@ -1053,10 +1062,9 @@ impl<'a> Check<'a> {
                 if self.issues.len() == before {
                     let demand = BindDemand {
                         bound_slots: map.get("bind").map(bound_slots),
-                        sub_agent: map
-                            .get("agent")
-                            .and_then(Value::as_str)
-                            .filter(|id| reaches_bind(self.ctx.live_specs, id, &mut Vec::new())),
+                        sub_agent: route_agents(v)
+                            .into_iter()
+                            .find(|id| reaches_bind(self.ctx.live_specs, id, &mut Vec::new())),
                     };
                     self.gate_semantics(when, &at, demand);
                 }
@@ -1127,10 +1135,11 @@ impl<'a> Check<'a> {
                 }
             }
             ["a2a"] => self.a2a_route(map, path),
+            ["loop"] => self.loop_route(map, path),
             [] => self.issue(
                 path,
-                "a route needs a target — `agent` (a sub-agent's id), `human` or `a2a` (an \
-                 external agent)",
+                "a route needs a target — `agent` (a sub-agent's id), `human`, `a2a` (an \
+                 external agent) or `loop` (a worker and a critic)",
             ),
             several => self.issue(
                 path,

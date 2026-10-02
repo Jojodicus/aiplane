@@ -262,3 +262,6 @@ agents-test-answer = 发送给工具
 agents-test-approve = 批准一次
 agents-test-deny = 拒绝
 agents-test-expires = 过期时间 { $at }
+
+agents-debug-loop-worker = 执行者，第 { $iteration } 轮
+agents-debug-loop-critic = 评审者，第 { $iteration } 轮

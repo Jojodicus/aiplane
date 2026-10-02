@@ -18,7 +18,7 @@ use std::sync::Arc;
 use aiplane_core::server::db::{DbError, agent_audit, agents as agents_db};
 use jiff::Timestamp;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use session_core::db as chat;
 
 use super::{AgentReply, AgentTurn, OpenedTurn, drive_opened};
@@ -128,6 +128,11 @@ pub struct DraftDebug {
     pub sub_agents: Vec<Value>,
     /// Each tool call of this turn and the grant decision on it.
     pub tool_calls: Vec<Value>,
+    /// Each `loop` route iteration of this turn (`loop_iteration`: whether
+    /// the critic accepted, and its feedback) and each loop's end
+    /// (`loop_finished`: iterations, why it stopped), in order, each with its
+    /// `event`. The child runs themselves are in `sub_agents`.
+    pub loops: Vec<Value>,
 }
 
 /// The state after the turn, and the audit rows the turn wrote (`since`
@@ -206,6 +211,11 @@ pub async fn collect_debug(
                 }
             }
             "tool_call" => debug.tool_calls.push(event.detail),
+            "loop_iteration" | "loop_finished" => {
+                let mut detail = event.detail;
+                detail["event"] = json!(event.kind);
+                debug.loops.push(detail);
+            }
             _ => {}
         }
     }

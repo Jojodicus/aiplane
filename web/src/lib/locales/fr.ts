@@ -348,6 +348,8 @@ export const fr: Catalog = {
  "agents-create-submit": "Créer l'agent",
  "agents-debug-empty": "Envoyez un message pour voir l'état, les portes et les appels derrière chaque réponse.",
  "agents-debug-heading": "Derrière la réponse",
+ "agents-debug-loop-critic": "relecteur, itération {iteration}",
+ "agents-debug-loop-worker": "rédacteur, itération {iteration}",
  "agents-debug-no-routes": "Cet agent n'a aucune route.",
  "agents-debug-no-routing": "L'agent n'a pas tenté de transférer ce tour.",
  "agents-debug-no-slots": "Cet agent ne déclare aucun emplacement d'état.",

@@ -2049,7 +2049,7 @@ routes:
 ```
 
 - **Target kinds are keys.** A route's target is its one key besides `when`,
-  `description`, `task` and `bind`: `agent`, `human` and `a2a`. Everything a kind needs lives under that key, its
+  `description`, `task` and `bind`: `agent`, `human`, `a2a` and `loop` ([#103](#what-103-built)). Everything a kind needs lives under that key, its
   own `finish` and `budget` included, so a builder that does not know a kind
   (#104's canvas) still finds a route's shared keys where they always are. A
   route naming two targets is one issue at `routes.<r>`.
@@ -2158,6 +2158,98 @@ routes:
   file parts, the 0.3 protocol, card signature checks, and answering a
   free-text `input-required`.
 
+### What #103 built
+
+A route kind that drafts, critiques and revises (Google ADK's LoopAgent
+pattern): a worker sub-agent and a critic sub-agent take turns until the
+critic accepts. Code in `aiplane-runtime::agents::router::loop_route` (the
+run) and `agents/spec/route_kinds.rs` (validation). No migration.
+
+```yaml
+routes:
+  offer:
+    when: { slot: issue, set: true }
+    task: "Write an offer for: {issue}"
+    bind: { customer: state.verified.customer_id }   # passed to both, as route.<name>
+    loop:
+      worker: <agent id>                  # finishes with the result
+      critic: <agent id>                  # finishes with { accepted: boolean, feedback?: string }
+      max_iterations: 3                   # default 3, at most 10
+      budget: { seconds: 300, tokens: 60000 }   # caps the sum of every child run; optional
+```
+
+- **One iteration** is a worker child run, then a critic child run, each a
+  sub-agent run exactly as a sub-agent route starts one (`run_child`, shared
+  with it): its own principal, live version, grants, finish contract and
+  `main.budget`, a child session under the main turn, the call chain
+  extended. Neither sees the transcript:
+  - the worker's first task is the route's rendered `task`; from the second
+    iteration on, that task plus its previous result and the critic's
+    `feedback`, both marked as data;
+  - the critic's task is the original task and the worker's result, with
+    the instruction to set `accepted` and say in `feedback` what to change.
+- **Stopping.** The loop ends when the critic's result has `accepted: true`
+  (`stopped: accepted`), after `max_iterations` (`max_iterations`), when the
+  route's budget is spent before the next child run (`budget`), or when a
+  child run ends `incomplete` (`worker_incomplete`, `critic_incomplete`).
+- **The route budget caps the sum.** `seconds` counts from the start of the
+  loop; `tokens` counts every round of every child run, and of anything they
+  dispatch: `RunOptions.spend` carries a `SpendMeter` into the children's
+  runs, and the driver adds each round's tokens to the meter of the agent
+  run it drives. Each child's own budget is tightened to what is left
+  (`Budget::capped`), so a child ends on its own `seconds`/`tokens` limit
+  rather than being cut off; the loop checks the remainder before every
+  child run. Without `budget` only the children's own budgets and
+  `forward_request`'s 15-minute ceiling apply.
+- **What returns to the main agent** is the worker's last result:
+  `{forwarded: true, route, loop: {worker, critic, iterations, accepted,
+  stopped}, outcome, note}`. `outcome` is the worker's last `finished`
+  result even when the critic never accepted it (`accepted: false` says so),
+  the worker's own `incomplete` when it did not finish, or `incomplete` with
+  `tokens_exhausted`/`seconds_exhausted` when the budget ran out before any
+  result. The main agent's `Flag` policy screens it like any tool result.
+- **A child that pauses** (an approval, a secure input) is withdrawn
+  (`cancel_suspended_turn`) and counts as `incomplete`. *Chosen:* the next
+  step of the loop needs its result now, and resuming a loop mid-iteration
+  would need the loop's own state stored with the pause. Agents with
+  `always_ask` tools make poor workers and critics.
+- **Audit.** Every child run writes `sub_agent_dispatched` and
+  `sub_agent_finished` with `loop: {route, iteration, role: worker|critic}`;
+  each critic verdict writes `loop_iteration` (`{route, iteration,
+  accepted, feedback}`); the end writes `loop_finished` (`{route, worker,
+  critic, iterations, accepted, stopped, tokens}`). All on the calling
+  principal with its chain.
+- **Test-chat debug view.** `debug.sub_agents` lists every worker and
+  critic run with its outcome, and the SPA's debug panel badges each with
+  its role and iteration (`agents-debug-loop-worker`/`-critic`);
+  `debug.loops` lists the `loop_iteration` and `loop_finished` rows in order,
+  each with its `event`.
+- **Validation** (save and publish): `task` required, `bind` as for a
+  sub-agent route; `loop` keys `worker`, `critic`, `max_iterations`,
+  `budget` only. `worker` and `critic` go through the sub-agent check
+  (existing agent, not the agent itself, live to publish) and the graph
+  check: `routed_agents` now yields a loop's worker and critic, so a loop
+  that reaches the main agent again is a cycle at `routes.<r>.loop.<role>`
+  and counts toward the depth of 3, and a worker or critic that binds a
+  tool demands a trusted gate. The worker and the critic must differ.
+  Against the critic's live version, its `finish.schema` must list
+  `accepted` as a required `boolean` (`feedback`, if declared, a
+  `string`); against both, the route passes exactly the `route.<name>`
+  values either binds; on publish the worker needs a `finish.schema`.
+  `max_iterations` is 1–10, `budget.seconds` 1–900, `budget.tokens` ≥ 1.
+- **Tests.** `agents/run/tests/loop_route.rs` on wiremock models: the critic
+  rejects once with feedback and accepts the revision (tasks and feedback as
+  each child saw them, no transcript, audit rows); `max_iterations` reached
+  with the last draft unaccepted; the route's token budget spent by the
+  worker before the critic runs; a worker that never finishes; the test
+  chat's `debug` showing worker 1, critic 1, worker 2, critic 2 and the loop
+  rows; the validator refusing a critic without a boolean `accepted`, a
+  worker that is also the critic, the agent itself, a critic that routes
+  back (cycle) and out-of-range settings. `tests/it/agents.rs` saves a loop
+  route through the JSON tab's `PUT …/draft`.
+- **Not built.** A configurable acceptance field name, a separate critic
+  rubric outside its spec, parallel workers, and resuming a paused child.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2168,7 +2260,7 @@ upward.
 | Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
-| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
+| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
@@ -2209,6 +2301,7 @@ use `regex`, and hashing uses the token helpers.
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |
 | #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
+| #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred

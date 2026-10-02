@@ -348,6 +348,8 @@ export const de: Catalog = {
  "agents-create-submit": "Agent erstellen",
  "agents-debug-empty": "Sende eine Nachricht, um Zustand, Gates und Aufrufe hinter jeder Antwort zu sehen.",
  "agents-debug-heading": "Hinter der Antwort",
+ "agents-debug-loop-critic": "Prüfer, Durchlauf {iteration}",
+ "agents-debug-loop-worker": "Bearbeiter, Durchlauf {iteration}",
  "agents-debug-no-routes": "Dieser Agent hat keine Routen.",
  "agents-debug-no-routing": "Der Agent hat in dieser Runde nicht versucht weiterzuleiten.",
  "agents-debug-no-slots": "Dieser Agent deklariert keine Zustands-Slots.",

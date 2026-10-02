@@ -262,3 +262,6 @@ agents-test-answer = An das Tool senden
 agents-test-approve = Einmal freigeben
 agents-test-deny = Ablehnen
 agents-test-expires = Läuft ab { $at }
+
+agents-debug-loop-worker = Bearbeiter, Durchlauf { $iteration }
+agents-debug-loop-critic = Prüfer, Durchlauf { $iteration }

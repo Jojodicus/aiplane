@@ -348,6 +348,8 @@ export const ru: Catalog = {
  "agents-create-submit": "Создать агента",
  "agents-debug-empty": "Отправьте сообщение, чтобы увидеть состояние, условия и вызовы за каждым ответом.",
  "agents-debug-heading": "За ответом",
+ "agents-debug-loop-critic": "критик, итерация {iteration}",
+ "agents-debug-loop-worker": "исполнитель, итерация {iteration}",
  "agents-debug-no-routes": "У этого агента нет маршрутов.",
  "agents-debug-no-routing": "В этом ходе агент не пытался передать запрос.",
  "agents-debug-no-slots": "Этот агент не объявляет слотов состояния.",

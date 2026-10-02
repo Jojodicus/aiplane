@@ -861,3 +861,47 @@ async fn an_a2a_route_saves_once_granted_with_its_credential_sealed() {
         "a GET → PUT round trip keeps the sealed token: {body}"
     );
 }
+
+#[tokio::test]
+async fn a_loop_route_saves_from_the_json_tab_and_names_its_problems() {
+    let fx = fixture().await;
+    let main = fx.create(&fx.alice, "support").await;
+    let writer = fx.create(&fx.alice, "writer").await;
+    let reviewer = fx.create(&fx.alice, "reviewer").await;
+    let spec = |worker: &str, critic: &str, max: u64| {
+        json!({
+            "state": { "issue": { "type": "string", "set_by": ["llm"] } },
+            "routes": { "offer": {
+                "when": { "slot": "issue", "set": true },
+                "task": "Write an offer for: {issue}",
+                "loop": { "worker": worker, "critic": critic, "max_iterations": max }
+            } }
+        })
+    };
+    let (status, body) = fx
+        .put_draft(&fx.alice, &main, spec(&writer, &reviewer, 3))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["draft_spec"]["routes"]["offer"]["loop"]["worker"],
+        writer
+    );
+
+    let (status, body) = fx.put_draft(&fx.alice, &main, spec(&main, &main, 11)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let paths: Vec<&str> = body["error"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "routes.offer.loop.worker",
+            "routes.offer.loop.critic",
+            "routes.offer.loop.critic",
+            "routes.offer.loop.max_iterations"
+        ]
+    );
+}

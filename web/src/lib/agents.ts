@@ -147,10 +147,16 @@ export interface TestDebug {
 		route?: string;
 		sub_agent?: string;
 		sub_agent_id?: string;
+		/** An `a2a` route's external agent, by its card's name and URL. */
+		remote_agent?: string | null;
+		card_url?: string;
+		/** A `loop` route's child run: which iteration, worker or critic. */
+		loop?: { route: string; iteration: number; role: 'worker' | 'critic' };
 		version?: number;
 		outcome?: { status: string; result?: unknown; reason?: unknown; summary?: string };
 	}[];
 	tool_calls: { tool: string; decision: string; policy: string }[];
+	loops?: { event: 'loop_iteration' | 'loop_finished'; route: string; iteration?: number; iterations?: number; accepted: boolean; feedback?: string; stopped?: string }[];
 }
 
 /** What a suspended turn waits for, as a manager sees it. */

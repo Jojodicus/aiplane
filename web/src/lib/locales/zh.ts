@@ -348,6 +348,8 @@ export const zh: Catalog = {
  "agents-create-submit": "创建智能体",
  "agents-debug-empty": "发送消息即可查看每条回复背后的状态、闸门和调用。",
  "agents-debug-heading": "回复背后",
+ "agents-debug-loop-critic": "评审者，第 {iteration} 轮",
+ "agents-debug-loop-worker": "执行者，第 {iteration} 轮",
  "agents-debug-no-routes": "该智能体没有路由。",
  "agents-debug-no-routing": "本轮智能体未尝试转交。",
  "agents-debug-no-slots": "该智能体未声明状态槽。",

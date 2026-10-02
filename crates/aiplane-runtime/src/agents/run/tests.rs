@@ -1410,5 +1410,6 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
 
 mod a2a;
 mod hil;
+mod loop_route;
 mod suspend;
 mod verifiers;

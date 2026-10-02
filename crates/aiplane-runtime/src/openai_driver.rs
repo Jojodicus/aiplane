@@ -1713,10 +1713,14 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             started,
             round_tokens,
         );
-        tokens_used += round_tokens
+        let spent = round_tokens
             .2
             .or_else(|| Some(round_tokens.0.unwrap_or(0) + round_tokens.1.unwrap_or(0)))
             .map_or(0, |t| t.max(0) as u64);
+        tokens_used += spent;
+        if let Some(agent) = &d.agent {
+            agent.record_spend(spent);
+        }
 
         // Track the context size for the compaction trigger. Persisted only
         // when it grows, so a tool-using turn writes at most once per round

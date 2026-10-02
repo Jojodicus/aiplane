@@ -348,6 +348,8 @@ export const en: Catalog = {
  "agents-create-submit": "Create agent",
  "agents-debug-empty": "Send a message to see the state, gates and calls behind each reply.",
  "agents-debug-heading": "Behind the reply",
+ "agents-debug-loop-critic": "critic, iteration {iteration}",
+ "agents-debug-loop-worker": "worker, iteration {iteration}",
  "agents-debug-no-routes": "This agent has no routes.",
  "agents-debug-no-routing": "The agent did not try to forward this turn.",
  "agents-debug-no-slots": "This agent declares no state slots.",

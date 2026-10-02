@@ -8,12 +8,17 @@
 //! shared keys where they always are.
 //!
 //! - `a2a`: an external agent behind an A2A agent card.
+//! - `loop`: a worker and a critic, draft, critique, revise ("What #103
+//!   built").
+
+use std::collections::BTreeSet;
 
 use aiplane_core::server::principal::GrantKind;
 use serde_json::{Map, Value};
 
-use super::{Check, Stage, join};
+use super::{Check, Stage, join, route_values_taken};
 use crate::agents::a2a_client::{self as client, AuthKind};
+use crate::agents::router::loop_route as loops;
 use crate::finish::FinishContract;
 
 const A2A_KEYS: &[&str] = &["card_url", "auth", "finish", "budget"];
@@ -184,6 +189,137 @@ impl Check<'_> {
             if let Some(scopes) = map.get("scopes") {
                 self.string_list(scopes, &join(path, "scopes"));
             }
+        }
+    }
+}
+
+const LOOP_KEYS: &[&str] = &["worker", "critic", "max_iterations", "budget"];
+const LOOP_BUDGET_KEYS: &[&str] = &["seconds", "tokens"];
+
+impl Check<'_> {
+    pub(super) fn loop_route(&mut self, map: &Map<String, Value>, path: &str) {
+        self.task_and_bind(map, path, "a loop");
+        let at = join(path, "loop");
+        let Some(target) = self.object(&map["loop"], &at, LOOP_KEYS) else {
+            return;
+        };
+        let mut ids: Vec<&str> = Vec::new();
+        for (role, what) in [
+            ("worker", "agent that drafts the result"),
+            ("critic", "agent that reviews it"),
+        ] {
+            let p = join(&at, role);
+            match target.get(role) {
+                None => self.issue(&p, format!("a loop needs a `{role}`: the id of the {what}")),
+                Some(v) => {
+                    self.sub_agent(v, &p);
+                    if let Some(id) = v.as_str() {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        if let [worker, critic] = ids[..] {
+            if worker == critic {
+                self.issue(
+                    &join(&at, "critic"),
+                    "the critic must be another agent than the worker — an agent does not \
+                     review its own result",
+                );
+            }
+            self.loop_contract(worker, critic, map.get("bind"), path);
+        }
+        if let Some(n) = target.get("max_iterations") {
+            self.positive_int(n, &join(&at, "max_iterations"), Some(loops::MAX_ITERATIONS));
+        }
+        if let Some(budget) = target.get("budget")
+            && let Some(b) = self.object(budget, &join(&at, "budget"), LOOP_BUDGET_KEYS)
+        {
+            if let Some(s) = b.get("seconds") {
+                self.positive_int(s, &join(&at, "budget.seconds"), Some(client::MAX_SECONDS));
+            }
+            if let Some(t) = b.get("tokens") {
+                self.positive_int(t, &join(&at, "budget.tokens"), None);
+            }
+        }
+    }
+
+    /// What a loop and its live worker and critic must agree on: the route
+    /// passes exactly the `route.<name>` values either binds, both say what
+    /// they return, and the critic's result says whether it accepts.
+    fn loop_contract(&mut self, worker: &str, critic: &str, bind: Option<&Value>, path: &str) {
+        let at = join(path, "loop");
+        let live = self.ctx.live_specs;
+        let (Some(w), Some(c)) = (live.get(worker), live.get(critic)) else {
+            return;
+        };
+        let taken: BTreeSet<String> = route_values_taken(w)
+            .into_iter()
+            .chain(route_values_taken(c))
+            .collect();
+        let passed: BTreeSet<String> = bind
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|m| m.keys().cloned())
+            .collect();
+        for name in taken.difference(&passed) {
+            self.issue(
+                &join(path, "bind"),
+                format!(
+                    "the loop's worker or critic binds `route.{name}`, which this route does not \
+                     pass — add it to this route's `bind` with a `state.<slot>` source"
+                ),
+            );
+        }
+        for name in passed.difference(&taken) {
+            self.issue(
+                &join(&join(path, "bind"), name),
+                format!(
+                    "neither the worker nor the critic binds `route.{name}`, so this value would \
+                     reach no tool — remove it here"
+                ),
+            );
+        }
+        if self.stage == Stage::Publish && w.pointer("/finish/schema").is_none() {
+            self.issue(
+                &join(&at, "worker"),
+                format!(
+                    "worker `{worker}` declares no `finish` schema, and a loop returns the \
+                     worker's result — add `finish.schema` to it and publish it again"
+                ),
+            );
+        }
+        let schema = c.pointer("/finish/schema");
+        let accepts = schema.is_some_and(|s| {
+            s.pointer(&format!("/properties/{}/type", loops::ACCEPTED))
+                == Some(&Value::from("boolean"))
+                && s.get("required")
+                    .and_then(Value::as_array)
+                    .is_some_and(|r| r.iter().any(|f| f == loops::ACCEPTED))
+        });
+        if !accepts {
+            self.issue(
+                &join(&at, "critic"),
+                format!(
+                    "critic `{critic}` must say whether it accepts: its `finish.schema` needs a \
+                     required boolean `{accepted}` (and may add a string `{feedback}` for the \
+                     worker) — add {{\"{accepted}\": {{\"type\": \"boolean\"}}}} to its \
+                     `properties` and `required`, then publish it again",
+                    accepted = loops::ACCEPTED,
+                    feedback = loops::FEEDBACK,
+                ),
+            );
+        } else if let Some(t) =
+            schema.and_then(|s| s.pointer(&format!("/properties/{}/type", loops::FEEDBACK)))
+            && t != "string"
+        {
+            self.issue(
+                &join(&at, "critic"),
+                format!(
+                    "critic `{critic}`'s `{}` must be a string: the worker reads it as text",
+                    loops::FEEDBACK
+                ),
+            );
         }
     }
 }
