@@ -139,7 +139,7 @@ impl Tool for EditImage {
             }
 
             let meta = UsageMeta {
-                user_id: ctx.user_id.clone(),
+                user_id: ctx.principal.subject_id().to_string(),
                 source: UsageSource::Chat,
             };
             let edited = image_gen
@@ -202,8 +202,10 @@ mod tests {
     async fn ctx_no_image_gen() -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: aiplane_core::server::db::open(std::path::Path::new(":memory:"))
                 .await

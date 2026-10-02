@@ -19,6 +19,7 @@ pub mod feature_defaults;
 pub mod limits;
 pub mod model_defaults;
 pub mod oidc_settings;
+pub mod principal;
 pub mod rbac;
 pub mod reasoning;
 pub mod settings;

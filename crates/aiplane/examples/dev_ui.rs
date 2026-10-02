@@ -1369,9 +1369,13 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
     mcp_catalog::set_enabled(&state.db, "discord", true).await?;
     {
         use aiplane_core::server::db::mcp_audit;
+        let dev_principal = aiplane_core::server::principal::Principal::User {
+            id: "dev".into(),
+            roles: vec![],
+        };
         mcp_audit::record(
             &state.db,
-            "dev",
+            &dev_principal,
             "discord",
             "mcp__discord__send_private_message",
             Some(
@@ -1384,7 +1388,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
         .await?;
         mcp_audit::record(
             &state.db,
-            "dev",
+            &dev_principal,
             "discord",
             "mcp__discord__send_message",
             Some(r#"{"channelId":"826729434073530409","message":"Deploy v1.4.2 finished ✅"}"#),
@@ -1395,7 +1399,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
         .await?;
         mcp_audit::record(
             &state.db,
-            "dev",
+            &dev_principal,
             "discord",
             "mcp__discord__create_webhook",
             Some(r#"{"channelId":"826729434073530409","name":"ci-bot"}"#),
@@ -1699,6 +1703,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
             input_units: None,
             output_units: None,
             enforce_limits: true,
+            principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         });
     }
     // A couple of rows from other users so the admin "All users" view has more
@@ -1725,6 +1730,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
             input_units: None,
             output_units: None,
             enforce_limits: true,
+            principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         });
     }
     // Price the two demo chat models BEFORE inserting usage, so the batched

@@ -55,6 +55,7 @@ pub async fn groups_list(State(state): State<Arc<RamaState>>, req: Request) -> R
             "description": g.description,
             "is_admin": g.is_admin,
             "is_default": g.is_default,
+            "can_manage_agents": g.can_manage_agents,
             "oidc_values": oidc_values,
             "tools": tools,
             "skills": skills,
@@ -128,6 +129,10 @@ pub struct GroupSaveBody {
     pub is_admin: bool,
     #[serde(default)]
     pub is_default: bool,
+    /// `None` leaves the flag as it is, so an editor that predates it cannot
+    /// clear it by saving.
+    #[serde(default)]
+    pub can_manage_agents: Option<bool>,
     #[serde(default)]
     pub oidc_values: Vec<String>,
     #[serde(default)]
@@ -161,6 +166,11 @@ pub async fn groups_save(State(state): State<Arc<RamaState>>, req: Request) -> R
         parsed.is_default,
     )
     .await
+    {
+        return internal(err);
+    }
+    if let Some(enabled) = parsed.can_manage_agents
+        && let Err(err) = db::gateway_groups::set_can_manage_agents(&state.db, &name, enabled).await
     {
         return internal(err);
     }

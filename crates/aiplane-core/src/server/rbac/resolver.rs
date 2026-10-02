@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use super::config::{RbacConfig, RoleConfig};
 use crate::server::db::gateway_groups::GroupSnapshot;
+use crate::server::principal::{GrantKind, Principal};
 
 /// Synthetic group that `[gateway].bootstrap_admin_groups` resolve to. It is
 /// injected on every build/reload so a break-glass admin works regardless of
@@ -21,6 +22,7 @@ const BOOTSTRAP_ADMIN_GROUP: &str = "__bootstrap_admin__";
 struct GroupDef {
     is_admin: bool,
     is_default: bool,
+    can_manage_agents: bool,
     tools: Vec<String>,
     /// Only populated on the config/test build path; the DB reload path leaves
     /// this empty and sources skills entirely from the overlay.
@@ -117,6 +119,7 @@ impl Resolver {
                 GroupDef {
                     is_admin: role.admin,
                     is_default,
+                    can_manage_agents: false,
                     tools: role.tools,
                     skills: role.skills,
                 },
@@ -262,6 +265,59 @@ impl Resolver {
         allowed_groups
             .iter()
             .any(|g| role_ids.iter().any(|r| r == g))
+    }
+
+    /// True if any of the given groups may create and configure system
+    /// principals. `is_admin` implies it.
+    pub fn can_manage_agents(&self, role_ids: &[String]) -> bool {
+        let Ok(snap) = self.inner.read() else {
+            return false;
+        };
+        role_ids.iter().any(|id| {
+            snap.groups
+                .get(id)
+                .is_some_and(|g| g.is_admin || g.can_manage_agents)
+        })
+    }
+
+    /// [`Self::resource_allowed`] for any acting principal. A person goes
+    /// through their groups as always. A system principal holds exactly its
+    /// grants: an empty `allowed_groups` does **not** open the resource to it,
+    /// and there is no admin bypass.
+    pub fn principal_resource_allowed(
+        &self,
+        principal: &Principal,
+        kind: GrantKind,
+        reference: &str,
+        allowed_groups: &[String],
+    ) -> bool {
+        match principal {
+            Principal::User { roles, .. } => {
+                self.resource_allowed(&self.role_ids_for(roles), allowed_groups)
+            }
+            Principal::System(sp) => sp.grants.has(kind, reference),
+        }
+    }
+
+    /// The skills (from `registry`, the operator's global skills) any acting
+    /// principal may load: a person's group grants, or exactly a system
+    /// principal's skill grants that are still loaded.
+    pub fn principal_skills(
+        &self,
+        principal: &Principal,
+        registry: &impl GrantableSet,
+    ) -> Vec<String> {
+        match principal {
+            Principal::User { roles, .. } => {
+                self.allowed_skills(&self.role_ids_for(roles), registry)
+            }
+            Principal::System(sp) => sp
+                .grants
+                .refs(GrantKind::Skill)
+                .filter(|name| registry.has(name))
+                .map(str::to_string)
+                .collect(),
+        }
     }
 
     /// Union of tool ids granted by any of the user's groups, filtered to
@@ -427,6 +483,7 @@ fn build_snapshot(snap: &GroupSnapshot, bootstrap: &[String]) -> Snapshot {
             GroupDef {
                 is_admin: g.is_admin,
                 is_default: g.is_default,
+                can_manage_agents: g.can_manage_agents,
                 tools: Vec::new(),
                 skills: Vec::new(),
             },
@@ -492,6 +549,7 @@ fn apply_bootstrap(snapshot: &mut Snapshot, bootstrap: &[String]) {
         GroupDef {
             is_admin: true,
             is_default: false,
+            can_manage_agents: true,
             tools: vec!["*".to_string()],
             skills: vec!["*".to_string()],
         },
@@ -981,6 +1039,7 @@ mod tests {
                 description: String::new(),
                 is_admin: false,
                 is_default: false,
+                can_manage_agents: false,
             }],
             mappings: vec![("g-dev".into(), "developers".into())],
             // `company_echo` rather than a "real" tool id: this asserts that a
@@ -996,6 +1055,106 @@ mod tests {
         assert_eq!(
             r.allowed_tools(&["developers".into()], &reg),
             vec!["company_echo".to_string()]
+        );
+    }
+
+    fn snapshot_with(groups: &[(&str, bool, bool, bool)]) -> Resolver {
+        use crate::server::db::gateway_groups::{GroupRow, GroupSnapshot};
+        let r = Resolver::empty();
+        r.reload(GroupSnapshot {
+            groups: groups
+                .iter()
+                .map(
+                    |&(name, is_admin, is_default, can_manage_agents)| GroupRow {
+                        name: name.into(),
+                        description: String::new(),
+                        is_admin,
+                        is_default,
+                        can_manage_agents,
+                    },
+                )
+                .collect(),
+            mappings: groups
+                .iter()
+                .map(|(name, ..)| (format!("claim-{name}"), name.to_string()))
+                .collect(),
+            tool_grants: vec![("everyone".into(), "*".into())],
+        });
+        r
+    }
+
+    fn system_with(grants: &[(GrantKind, &str)]) -> Principal {
+        use crate::server::principal::{GrantSet, SystemPrincipal};
+        Principal::System(SystemPrincipal {
+            id: "p".into(),
+            name: "ci".into(),
+            grants: std::sync::Arc::new(GrantSet::new(
+                grants.iter().map(|(k, r)| (*k, r.to_string())),
+            )),
+        })
+    }
+
+    #[test]
+    fn agent_management_is_granted_by_its_flag_or_by_admin() {
+        let r = snapshot_with(&[
+            ("plain", false, false, false),
+            ("managers", false, false, true),
+            ("admins", true, false, false),
+        ]);
+        assert!(!r.can_manage_agents(&["plain".into()]));
+        assert!(r.can_manage_agents(&["managers".into()]));
+        assert!(r.can_manage_agents(&["admins".into()]));
+        assert!(!r.can_manage_agents(&[]));
+    }
+
+    #[test]
+    fn a_bootstrap_admin_can_manage_agents() {
+        let r = Resolver::build_with_bootstrap(
+            RbacConfig::default(),
+            Vec::new(),
+            vec!["break-glass".into()],
+        )
+        .unwrap();
+        assert!(r.can_manage_agents(&r.role_ids_for(&["break-glass".into()])));
+    }
+
+    #[test]
+    fn an_open_resource_is_open_to_people_but_not_to_an_ungranted_principal() {
+        let r = snapshot_with(&[("everyone", false, true, false)]);
+        let user = Principal::User {
+            id: "u".into(),
+            roles: vec![],
+        };
+        assert!(r.principal_resource_allowed(&user, GrantKind::Pool, "chat", &[]));
+        assert!(!r.principal_resource_allowed(&system_with(&[]), GrantKind::Pool, "chat", &[]));
+        let granted = system_with(&[(GrantKind::Pool, "chat")]);
+        assert!(r.principal_resource_allowed(&granted, GrantKind::Pool, "chat", &[]));
+        assert!(r.principal_resource_allowed(
+            &granted,
+            GrantKind::Pool,
+            "chat",
+            &["nobody".into()]
+        ));
+        assert!(!r.principal_resource_allowed(&granted, GrantKind::RagCollection, "chat", &[]));
+    }
+
+    #[test]
+    fn a_principal_gets_only_its_granted_skills_never_the_default_groups() {
+        let r = snapshot_with(&[("everyone", false, true, false)]);
+        r.set_skill_grant_overlay(vec![("*".into(), "everyone".into())]);
+        let reg = Registered::of(&["brand", "legal"]);
+        let user = Principal::User {
+            id: "u".into(),
+            roles: vec![],
+        };
+        assert_eq!(r.principal_skills(&user, &reg).len(), 2);
+        assert!(r.principal_skills(&system_with(&[]), &reg).is_empty());
+        assert_eq!(
+            r.principal_skills(
+                &system_with(&[(GrantKind::Skill, "legal"), (GrantKind::Skill, "gone")]),
+                &reg
+            ),
+            vec!["legal".to_string()]
         );
     }
 }

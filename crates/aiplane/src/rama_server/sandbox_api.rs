@@ -61,7 +61,7 @@ pub async fn download(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 
     // Key scope comes from the authenticated user — not the URL — so one
     // token can't read another user's artifacts.
-    let scope = format!("sandbox/{}/{}", user.user_id, run);
+    let scope = format!("sandbox/{}/{}", user.principal.subject_id(), run);
     let fetched = match chat_attachments::fetch(cfg, &scope, &filename).await {
         Ok(f) => f,
         Err(chat_attachments::AttachmentError::BadFilename(_)) => {

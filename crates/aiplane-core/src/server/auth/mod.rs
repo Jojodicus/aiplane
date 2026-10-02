@@ -12,21 +12,23 @@ pub mod oidc;
 pub mod pending;
 pub mod token;
 
-/// User identity resolved from a request's bearer token. Threaded into
-/// handlers that need to know who's calling — currently the proxy path
-/// (in-handler `require_bearer` in `rama_server::auth`).
+/// The caller resolved from a request's bearer token. Threaded into handlers
+/// that need to know who's calling — currently the proxy path (in-handler
+/// `require_bearer` in `rama_server::auth`).
+///
+/// A `gwk_` token resolves to a [`Principal::User`], a `gws_` token to a
+/// [`Principal::System`]; see `docs/agents.md` §1.
 #[derive(Debug, Clone)]
 pub struct UserCtx {
-    pub user_id: String,
-    /// Resolved during auth (the user row is loaded anyway). Denormalised
-    /// onto usage rows so the metrics page needs no join and survives a
-    /// user deletion. Empty when unknown.
+    pub principal: crate::server::principal::Principal,
+    /// Resolved during auth: the user's email, or a system principal's name.
+    /// Denormalised onto usage rows so the metrics page needs no join and
+    /// survives a deletion. Empty when unknown.
     pub user_email: String,
     pub token_id: String,
     /// The token's display name, resolved during auth. Denormalised onto
     /// usage rows for the per-token breakdown.
     pub token_name: String,
-    pub roles: Vec<String>,
     /// The token's model allowlist, resolved during auth: `None` when the
     /// token is unrestricted (the default), otherwise the exact set it may
     /// use.

@@ -11,6 +11,7 @@ use aiplane_core::server::automatic_routing::AutomaticRouter;
 use aiplane_core::server::config::Config;
 use aiplane_core::server::crypto::Crypto;
 use aiplane_core::server::db::Pool;
+use aiplane_core::server::principal::{GrantKind, Principal, SystemPrincipal};
 use aiplane_core::server::rbac::Resolver;
 use aiplane_core::server::upstreams::UpstreamRegistry;
 use aiplane_features::server::geoip::GeoIp;
@@ -360,6 +361,19 @@ impl AppState {
         allowed
     }
 
+    /// [`Self::allowed_skills_for`] for any acting principal. A system
+    /// principal gets exactly its skill grants that are still loaded — no
+    /// group grants, no `*`, and never a person's private skills.
+    pub fn allowed_skills_for_principal(&self, principal: &Principal) -> Vec<String> {
+        match principal {
+            Principal::User { id, roles } => self.allowed_skills_for(roles, id),
+            Principal::System(_) => self
+                .skills()
+                .map(|store| self.rbac.principal_skills(principal, &store.current()))
+                .unwrap_or_default(),
+        }
+    }
+
     /// True when per-user private skills are usable right now: the feature is
     /// configured **and** the store's directory is accessible. Drives whether
     /// the `/skills` nav entry is shown — it's hidden when skills aren't
@@ -419,6 +433,26 @@ impl AppState {
                 .unwrap_or_default();
         crate::server::tools::catalog::retain_enabled(&mut allowed, &disabled);
         allowed
+    }
+
+    /// [`Self::allowed_tools_for_user`] for any acting principal. A system
+    /// principal is offered exactly its tool grants that still resolve to a
+    /// registered tool or a loaded ComfyUI workflow: no group grants, no
+    /// default groups, no `*`.
+    pub async fn allowed_tools_for_principal(&self, principal: &Principal) -> Vec<String> {
+        match principal {
+            Principal::User { id, roles } => self.allowed_tools_for_user(roles, id).await,
+            Principal::System(sp) => self.system_granted_tools(sp),
+        }
+    }
+
+    fn system_granted_tools(&self, sp: &SystemPrincipal) -> Vec<String> {
+        let grantable = self.grantable_tool_ids();
+        sp.grants
+            .refs(GrantKind::Tool)
+            .filter(|id| grantable.iter().any(|g| g == id))
+            .map(str::to_string)
+            .collect()
     }
 
     /// Every tool id an operator can *grant*: the static registry plus the
@@ -484,7 +518,10 @@ impl AppState {
         if !ctx.tools_enabled {
             return Vec::new();
         }
-        let mut allowed = self.allowed_tools_for_user(&ctx.roles, &ctx.user_id).await;
+        let Principal::User { id, roles } = &ctx.principal else {
+            return self.allowed_tools_for_principal(&ctx.principal).await;
+        };
+        let mut allowed = self.allowed_tools_for_user(roles, id).await;
         let states =
             aiplane_core::server::db::token_tool_prefs::states_for_token(&self.db, &ctx.token_id)
                 .await
@@ -512,12 +549,14 @@ impl AppState {
     /// the upstream prefix cache stays warm.
     pub async fn allowed_tools_for_session(
         &self,
-        roles: &[String],
-        user_id: &str,
+        principal: &Principal,
         session_id: &str,
     ) -> Vec<String> {
         use crate::server::tools::catalog::{BOOTSTRAP_TOOL_ID, READ_SKILL_ID, entry_key_for};
 
+        let Principal::User { id: user_id, roles } = principal else {
+            return self.allowed_tools_for_principal(principal).await;
+        };
         let mut allowed = self.allowed_tools_for_user(roles, user_id).await;
         let enabled = aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(
             &self.db, session_id,
@@ -920,6 +959,7 @@ impl AppState {
             role_ids,
             is_admin,
             allowed_models: None,
+            granted_pools: None,
         }
     }
 
@@ -937,7 +977,60 @@ impl AppState {
     ) -> aiplane_core::server::upstreams::PoolAccess {
         aiplane_core::server::upstreams::PoolAccess {
             allowed_models: ctx.allowed_models.clone(),
-            ..self.pool_access_for(&ctx.roles)
+            ..self.pool_access_for_principal(&ctx.principal)
+        }
+    }
+
+    /// [`Self::pool_access_for`] for any acting principal: a system principal
+    /// reaches exactly its granted pools.
+    pub fn pool_access_for_principal(
+        &self,
+        principal: &Principal,
+    ) -> aiplane_core::server::upstreams::PoolAccess {
+        match principal {
+            Principal::User { roles, .. } => self.pool_access_for(roles),
+            Principal::System(sp) => aiplane_core::server::upstreams::PoolAccess::for_system(sp),
+        }
+    }
+
+    /// The group ids the rate limiter scopes role rules by. Empty for a
+    /// system principal: resolving its (absent) claims would hand it every
+    /// default group's limits as if it were a person.
+    pub fn limit_role_ids(&self, principal: &Principal) -> Vec<String> {
+        match principal {
+            Principal::User { roles, .. } => self.role_ids_for(roles),
+            Principal::System(_) => Vec::new(),
+        }
+    }
+
+    /// The acting principal's MCP overlay. A person gets their connected
+    /// connectors plus the global ones their groups reach; a system principal
+    /// gets exactly its granted connectors and never a person's connection.
+    pub async fn mcp_layer_for(
+        &self,
+        principal: &Principal,
+        ask: crate::server::tools::mcp::manager::AskContext<'_>,
+    ) -> crate::server::tools::mcp::manager::UserMcpLayer {
+        match principal {
+            Principal::User { id, roles } => {
+                let role_ids = self.role_ids_for(roles);
+                let is_admin = self.rbac.is_admin(&role_ids);
+                self.mcp.layer_for_user(id, &role_ids, is_admin, ask).await
+            }
+            Principal::System(sp) => self.mcp.layer_for_principal(sp).await,
+        }
+    }
+
+    /// [`Self::mcp_grant_for`] for any acting principal. A system
+    /// principal's overlay already holds only its granted connectors, and a
+    /// connector grant covers every tool of it.
+    pub fn mcp_grant_for_principal(
+        &self,
+        principal: &Principal,
+    ) -> aiplane_core::server::rbac::resolver::McpGrant {
+        match principal {
+            Principal::User { roles, .. } => self.mcp_grant_for(roles),
+            Principal::System(_) => aiplane_core::server::rbac::resolver::McpGrant::Unscoped,
         }
     }
 
@@ -978,9 +1071,10 @@ impl AppState {
         if !user.tools_enabled {
             return (Vec::new(), Vec::new(), Default::default());
         }
-        let mut allowed = self
-            .allowed_tools_for_user(&user.roles, &user.user_id)
-            .await;
+        let Principal::User { id: user_id, roles } = &user.principal else {
+            return self.system_tool_layer(&user.principal).await;
+        };
+        let mut allowed = self.allowed_tools_for_user(roles, user_id).await;
         let states = match aiplane_core::server::db::token_tool_prefs::states_for_token(
             &self.db,
             &user.token_id,
@@ -997,26 +1091,21 @@ impl AppState {
             key.starts_with(crate::server::tools::mcp::MCP_ID_PREFIX) && matches!(mode, 1 | 2)
         });
         let layer = if mcp_enabled {
-            let role_ids = self.role_ids_for(&user.roles);
-            let is_admin = self.rbac.is_admin(&role_ids);
-            self.mcp
-                .layer_for_user(
-                    &user.user_id,
-                    &role_ids,
-                    is_admin,
-                    crate::server::tools::mcp::manager::AskContext::Api {
-                        token_id: &user.token_id,
-                    },
-                )
-                .await
+            self.mcp_layer_for(
+                &user.principal,
+                crate::server::tools::mcp::manager::AskContext::Api {
+                    token_id: &user.token_id,
+                },
+            )
+            .await
         } else {
             crate::server::tools::mcp::manager::UserMcpLayer::default()
         };
-        self.union_mcp_tool_ids(&mut allowed, &layer, &self.mcp_grant_for(&user.roles));
+        self.union_mcp_tool_ids(&mut allowed, &layer, &self.mcp_grant_for(roles));
         allowed.retain(|id| !crate::server::tools::catalog::requires_chat_session(id));
         allowed.retain(|id| id != crate::server::tools::catalog::BOOTSTRAP_TOOL_ID);
         let skill_modes = self
-            .allowed_skills_for(&user.roles, &user.user_id)
+            .allowed_skills_for(roles, user_id)
             .into_iter()
             .map(|name| states.get(&format!("skill:{name}")).copied())
             .collect::<Vec<_>>();
@@ -1050,6 +1139,35 @@ impl AppState {
             }
         }
         (always, auto, layer)
+    }
+
+    /// [`Self::api_tool_layer`] for a system principal: its granted tools and
+    /// granted connectors' tools, all offered directly. There are no token
+    /// tool prefs to consult (the grants are the whole policy), no
+    /// `enable_tools` bootstrap and nothing that needs a chat session.
+    async fn system_tool_layer(
+        &self,
+        principal: &Principal,
+    ) -> (
+        Vec<String>,
+        Vec<String>,
+        crate::server::tools::mcp::manager::UserMcpLayer,
+    ) {
+        let mut allowed = self.allowed_tools_for_principal(principal).await;
+        let layer = self
+            .mcp_layer_for(
+                principal,
+                crate::server::tools::mcp::manager::AskContext::Chat,
+            )
+            .await;
+        self.union_mcp_tool_ids(
+            &mut allowed,
+            &layer,
+            &self.mcp_grant_for_principal(principal),
+        );
+        allowed.retain(|id| !crate::server::tools::catalog::requires_chat_session(id));
+        allowed.retain(|id| id != crate::server::tools::catalog::BOOTSTRAP_TOOL_ID);
+        (allowed, Vec::new(), layer)
     }
 
     pub fn union_mcp_tool_ids(

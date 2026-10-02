@@ -73,7 +73,13 @@ merging two distinct MCP tools.
 Carries the caller's identity plus the handles a tool may need, so adding a
 dependency doesn't change the trait signature:
 
-- **Identity / RBAC** — `user_id`, `roles`, `client_ip`.
+- **Identity / RBAC** — `principal` (a person, `Principal::User { id, roles }`,
+  or a system principal with its grants — see
+  [System principals](#system-principals)), `token_id`, `client_ip`. Scope rows
+  by `principal.subject_id()`. A tool that acts *for a person* (memory,
+  `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
+  through `ctx.person(tool_id)`, which refuses with a message naming the
+  principal when there is no person behind the call.
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -318,6 +324,37 @@ The layers compose in one direction only: RBAC (roles + groups) decides what a
 user *may* use; the per-conversation, per-token, and per-user layers can only
 subtract.
 
+### System principals
+
+A `gws_` token resolves to a **system principal** (`docs/agents.md` §1), and
+none of the above applies to it. It holds exactly the rows in
+`principal_grants`, one resource each:
+
+| Grant kind | What it unlocks | What it does *not* get |
+|---|---|---|
+| `tool` | that registry tool (or loaded `comfyui_<id>` workflow) | default groups, `*`, the `enable_tools` bootstrap, anything `requires_chat_session` |
+| `connector` | every tool of that **global** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply |
+| `skill` | that global skill | anyone's private skills |
+| `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
+| `pool` | that upstream pool | open pools; `is_admin` bypass |
+
+The principal-aware entry points on `AppState` are
+`allowed_tools_for_principal`, `allowed_skills_for_principal`,
+`pool_access_for_principal`, `mcp_layer_for` and `mcp_grant_for_principal`;
+`Resolver::principal_resource_allowed` / `principal_skills` do the same for
+tools that check a resource themselves (`rag_*`, `read_skill`). On the `/v1`
+path every granted tool is offered directly — there are no token tool prefs and
+no Auto disclosure for a principal; the grants are the whole policy.
+
+**Who may grant.** Users whose groups have `can_manage_agents` (admin implies
+it), through `/api/v0/system-principals/*`. A grant is refused unless the
+manager holds the resource *at that moment*, checked with the rule that decides
+their own access (`allowed_tools` + ComfyUI expansion, connector
+`allowed_groups` + MCP grant, `allowed_skills`, `resource_allowed`, pool
+access). After that the grant belongs to the principal: it is never re-derived
+from the manager, so it survives the manager losing rights or leaving. Every
+change is written to `agent_audit` in the same transaction.
+
 ## Tool injection
 
 On `POST /v1/chat/completions` and `/v1/messages`:
@@ -450,6 +487,34 @@ client tool in one turn.
   intact (clearing would invalidate the cached prefix). Only the replayed
   messages shrink; the stored turn keeps the full results.
 
+### Run budgets
+
+Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
+seconds, tokens }`. A chat turn derives it from the conversation's effort level
+(`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
+so interactive behaviour is unchanged. A headless run may pass one in
+`DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
+`seconds` and `tokens` are optional (`None` = unlimited). A sub-agent run is
+meant to be given a `Budget` of its own, not share its parent's.
+
+- **Tokens** are the upstream-reported usage (the `total_tokens` of each
+  round's trailing usage frame, else prompt + completion), summed over the
+  run's rounds. A run with a token limit always requests `include_usage`, even
+  when metrics and compaction are off. An upstream that reports no usage
+  counts as zero.
+- **Seconds** are wall clock from the start of the run, read through the
+  driver's `Clock` (a test seam; production is `Instant::now`).
+- Time and tokens are checked **between rounds**, before each request is
+  built, never mid-stream: aborting a reply would discard output already paid
+  for and leave a half-written message. A run can overshoot by at most one
+  round.
+- Running out of *any* limit makes the next request the final round, exactly as
+  running out of rounds does (tools withheld, or only `finish` offered under a
+  contract). A contracted run that does not finish there settles as
+  `Incomplete` with `round_budget_exhausted { rounds }`,
+  `seconds_exhausted { seconds }` or `tokens_exhausted { tokens }`, naming the
+  limit that hit. A run always gets at least one request.
+
 ### Finish contract
 
 An interactive turn ends when a round comes back without tool calls. That is
@@ -478,7 +543,8 @@ Inside the chat driver, with a contract:
   replaced, `tool_choice` dropped: `"none"` would forbid the one call that
   matters). The model is told to call it or write what is left undone.
   Anything but a valid `finish` there ends the run as
-  `Incomplete { reason: round_budget_exhausted { rounds } }`, with the model's
+  `Incomplete { reason: round_budget_exhausted { rounds } }` (or the
+  `seconds_exhausted` / `tokens_exhausted` of a [run budget](#run-budgets)), with the model's
   last text as `summary`, or a gateway-written account of the rounds and tools
   when it wrote none. No closing round follows. The turn carries a notice.
 - A contracted run still passes through the repeated-call guard. A guard stop
@@ -525,7 +591,8 @@ call only while the turn lives in memory; this pause is durable.
   claimed once. The chat path reserves the worker slot *before* claiming. The
   driver (`OpenAiDriver::resume`) rebuilds history and the system message as
   for any turn, appends `tail`, settles the waiting call and continues the
-  round loop at the stored round count:
+  round loop at the stored round count — and against the stored seconds and
+  tokens, so the run's `Budget` covers it before and after the pause:
   - **deny** answers the call with a tool error naming why (`declined` by the
     user, or the request `expired`); the tool does not run;
   - **allow once** / **value** run the same call again with

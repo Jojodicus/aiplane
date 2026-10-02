@@ -279,7 +279,7 @@ impl Tool for CreateDocument {
                 &ctx.db,
                 &id,
                 &session_id,
-                &ctx.user_id,
+                ctx.principal.subject_id(),
                 title,
                 format,
                 content,
@@ -1691,8 +1691,10 @@ mod tests {
     fn ctx(pool: aiplane_core::server::db::Pool, session_id: &str) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec!["user".into()],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec!["user".into()],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

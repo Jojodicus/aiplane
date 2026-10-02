@@ -456,11 +456,20 @@ mod tests {
     use aiplane_core::server::db;
     use aiplane_runtime::server::tools::time::CurrentTimestamp;
 
+    fn user_principal() -> aiplane_core::server::principal::Principal {
+        aiplane_core::server::principal::Principal::User {
+            id: "u1".into(),
+            roles: vec!["user".into()],
+        }
+    }
+
     async fn ctx(pool: db::Pool, session_id: Option<String>) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec!["user".into()],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec!["user".into()],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,
@@ -770,7 +779,7 @@ mod tests {
 
         // Fresh session — only the bootstrap should be allowed.
         let allowed = state
-            .allowed_tools_for_session(&["user".into()], "u1", "s1")
+            .allowed_tools_for_session(&user_principal(), "s1")
             .await;
         assert_eq!(allowed, vec!["enable_tools".to_string()]);
 
@@ -781,7 +790,7 @@ mod tests {
             .await
             .unwrap();
         let allowed = state
-            .allowed_tools_for_session(&["user".into()], "u1", "s1")
+            .allowed_tools_for_session(&user_principal(), "s1")
             .await;
         assert_eq!(
             allowed,

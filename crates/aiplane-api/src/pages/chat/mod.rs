@@ -873,6 +873,8 @@ async fn spawn_assistant_worker(
         history_limit: None,
         voice_mode: req.voice_mode,
         finish: None,
+        budget: None,
+        clock: aiplane_runtime::budget::system_clock(),
         resume,
     });
     let driver_ctx = session_core::driver::SessionContext {

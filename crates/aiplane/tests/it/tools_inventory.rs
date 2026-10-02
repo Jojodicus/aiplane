@@ -41,8 +41,9 @@ use aiplane_runtime::server::tools::catalog::{
 const UNDOCUMENTED: &[&str] = &[];
 
 /// Ids that appear in tool-source string literals but are not real registered
-/// tools. `mcp__demo__echo` is a fixture inside the MCP manager's own tests.
-const NOT_REAL_TOOLS: &[&str] = &["mcp__demo__echo"];
+/// tools. `mcp__demo__echo` is a fixture inside the MCP manager's own tests;
+/// `big_result` is one inside the tool runner's result-stubbing tests.
+const NOT_REAL_TOOLS: &[&str] = &["mcp__demo__echo", "big_result"];
 
 /// Tools whose `category_for` is legitimately `Utility` — the catch-all is a
 /// real category for genuinely miscellaneous tools, so this test pins *which*

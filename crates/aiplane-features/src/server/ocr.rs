@@ -505,6 +505,7 @@ impl OcrService {
                 .inner
                 .upstreams
                 .enforce_limits_for_model(model, PoolKind::Ocr),
+            principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         });
     }
 }

@@ -34,6 +34,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use aiplane_core::server::db::rag as rag_db;
+use aiplane_core::server::principal::{GrantKind, Principal};
 use aiplane_core::server::rbac::Resolver;
 use aiplane_features::server::rag::worker;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
@@ -84,8 +85,14 @@ impl Tool for RagListCollections {
             // don't permit. Empty `allowed_groups` = visible to all; admins see
             // everything. A hidden collection is also unsearchable by name (see
             // `RagSearch::run`), so this is a real capability filter.
-            let role_ids = self.rbac.role_ids_for(&ctx.roles);
-            cols.retain(|c| self.rbac.resource_allowed(&role_ids, &c.allowed_groups));
+            cols.retain(|c| {
+                self.rbac.principal_resource_allowed(
+                    &ctx.principal,
+                    GrantKind::RagCollection,
+                    &c.id.to_string(),
+                    &c.allowed_groups,
+                )
+            });
             let mut items: Vec<Value> = Vec::new();
             for c in &cols {
                 let refs = rag_db::list_refs(indexer.db(), c.id)
@@ -302,7 +309,8 @@ impl Tool for RagSearch {
             // collection can't be probed for existence or searched by name.
             // Shared with `rag_grep` so the two can't drift apart.
             let collection =
-                resolve_collection(&self.rbac, indexer.db(), &ctx.roles, &args.collection).await?;
+                resolve_collection(&self.rbac, indexer.db(), &ctx.principal, &args.collection)
+                    .await?;
 
             // Aggregate collections default to a larger result set (they span
             // many repos, and one search covers them all); an explicit
@@ -545,7 +553,8 @@ impl Tool for RagGrep {
             // the caller's groups don't permit) as `rag_search` — a new tool
             // must not become a way to probe for restricted collections.
             let collection =
-                resolve_collection(&self.rbac, indexer.db(), &ctx.roles, &args.collection).await?;
+                resolve_collection(&self.rbac, indexer.db(), &ctx.principal, &args.collection)
+                    .await?;
             let rref = resolve_search(indexer.db(), &collection, args.git_ref.as_deref()).await?;
             let store = indexer
                 .collection_store(rref.id, &rref.data_uuid)
@@ -723,15 +732,19 @@ async fn grep_scan(
 pub(crate) async fn resolve_collection(
     rbac: &Resolver,
     db: &aiplane_core::server::db::Pool,
-    roles: &[String],
+    principal: &Principal,
     name: &str,
 ) -> Result<rag_db::Collection, ToolError> {
     rag_db::find_collection_by_name(db, name)
         .await
         .map_err(|e| ToolError::Failed(format!("looking up collection: {e}")))?
         .filter(|c| {
-            let role_ids = rbac.role_ids_for(roles);
-            rbac.resource_allowed(&role_ids, &c.allowed_groups)
+            rbac.principal_resource_allowed(
+                principal,
+                GrantKind::RagCollection,
+                &c.id.to_string(),
+                &c.allowed_groups,
+            )
         })
         .ok_or_else(|| {
             ToolError::Failed(format!(
@@ -925,8 +938,10 @@ mod tests {
     fn ctx_with(indexer: Indexer) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: indexer.db().clone(),
             s3: None,

@@ -33,40 +33,13 @@ const ONE_DECISION_AT_A_TIME: &str = "This call needs a decision, and another ca
 const CANNOT_PAUSE: &str = "This call needs a decision from the user, and this run cannot pause \
                             to ask for it, so it did not run.";
 
-/// What the turn has spent, carried across a pause so a resumed run continues
-/// against the same budget rather than a fresh one.
-pub(super) struct RunMeter {
-    started: Instant,
-    before: BudgetUsed,
-    tokens: u64,
-}
-
-impl RunMeter {
-    pub(super) fn new(resume: Option<&ResumeFrom>) -> Self {
-        let before = resume.map(|r| r.suspension.budget_used).unwrap_or_default();
-        Self {
-            started: Instant::now(),
-            before,
-            tokens: before.tokens,
-        }
-    }
-
-    /// Charge one upstream round's `(prompt, completion, total)` tokens.
-    pub(super) fn add(
-        &mut self,
-        (prompt, completion, total): (Option<i64>, Option<i64>, Option<i64>),
-    ) {
-        let round = total.unwrap_or(prompt.unwrap_or(0) + completion.unwrap_or(0));
-        self.tokens += round.max(0) as u64;
-    }
-
-    pub(super) fn used(&self, rounds: u32) -> BudgetUsed {
-        BudgetUsed {
-            rounds,
-            seconds: self.before.seconds + self.started.elapsed().as_secs(),
-            tokens: self.tokens,
-        }
-    }
+/// When a resumed run counts as having started: `now`, moved back by the
+/// seconds spent before the pause, so the budget's `seconds` limit covers the
+/// whole run and not just the part after the decision.
+pub(super) fn started_at(now: Instant, resume: Option<&ResumeFrom>) -> Instant {
+    let before = resume.map_or(0, |r| r.suspension.budget_used.seconds);
+    now.checked_sub(std::time::Duration::from_secs(before))
+        .unwrap_or(now)
 }
 
 /// The round's pause, if one of its calls asked for a decision. Every other
@@ -173,7 +146,6 @@ pub(super) async fn resume_into(
     resume: &ResumeFrom,
     messages: &mut Vec<Value>,
     budget: &mut ToolResultBudget,
-    meter: &RunMeter,
 ) -> Result<Resumed, TurnError> {
     let suspension = &resume.suspension;
     messages.extend(suspension.tail.iter().cloned());
@@ -206,7 +178,7 @@ pub(super) async fn resume_into(
                     &call,
                     request,
                     &suspension.tail,
-                    meter.used(suspension.budget_used.rounds),
+                    suspension.budget_used,
                 )
                 .await?;
                 return Ok(Resumed::Paused);
@@ -456,6 +428,8 @@ mod tests {
             history_limit: None,
             voice_mode: false,
             finish: None,
+            budget: None,
+            clock: crate::budget::system_clock(),
             resume,
         });
         let (broadcast, _rx) = tokio::sync::broadcast::channel(64);
@@ -618,6 +592,40 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("expired")
+        );
+    }
+
+    #[test]
+    fn a_resumed_run_counts_the_seconds_spent_before_the_pause() {
+        let now = std::time::Instant::now();
+        assert_eq!(super::started_at(now, None), now);
+        let resume = ResumeFrom {
+            suspension: chat::TurnSuspension {
+                turn_id: "t".into(),
+                request_id: "r".into(),
+                kind: chat::SuspensionKind::Approval,
+                message: None,
+                tool_call: chat::PendingCall {
+                    id: "c".into(),
+                    name: "n".into(),
+                    arguments: "{}".into(),
+                },
+                tail: Vec::new(),
+                budget_used: chat::BudgetUsed {
+                    rounds: 2,
+                    seconds: 40,
+                    tokens: 900,
+                },
+                child_turn: None,
+                on_timeout: chat::TimeoutFallback::Deny,
+                expires_at: jiff::Timestamp::now(),
+                created_at: jiff::Timestamp::now(),
+            },
+            decision: Decision::AllowOnce,
+        };
+        assert_eq!(
+            now.duration_since(super::started_at(now, Some(&resume))),
+            Duration::from_secs(40)
         );
     }
 

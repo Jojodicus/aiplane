@@ -1820,7 +1820,10 @@ async fn skills_and_connectors_surfaces() {
 
     aiplane_core::server::db::mcp_audit::record(
         &state.db,
-        "boss",
+        &aiplane_core::server::principal::Principal::User {
+            id: "boss".into(),
+            roles: vec![],
+        },
         "probe",
         "probe_search",
         Some(r#"{"query":"status"}"#),

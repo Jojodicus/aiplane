@@ -305,6 +305,7 @@ mod tests {
             input_units: None,
             output_units: None,
             enforce_limits,
+            principal_kind: crate::server::principal::PrincipalKind::User,
         }
     }
 

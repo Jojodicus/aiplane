@@ -215,6 +215,33 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_get("/api/v0/comfyui/health", comfyui_api::health)
         .with_get("/api/v0/models", api::chat_models)
         .with_get("/api/v0/usage", api::usage)
+        // System principals (docs/agents.md §1), gated by can_manage_agents.
+        .with_get("/api/v0/system-principals", pages::json_principals::list)
+        .with_post("/api/v0/system-principals", pages::json_principals::create)
+        .with_get(
+            "/api/v0/system-principals/{id}",
+            pages::json_principals::detail,
+        )
+        .with_post(
+            "/api/v0/system-principals/{id}/disable",
+            pages::json_principals::disable,
+        )
+        .with_post(
+            "/api/v0/system-principals/{id}/grants",
+            pages::json_principals::grant,
+        )
+        .with_post(
+            "/api/v0/system-principals/{id}/grants/revoke",
+            pages::json_principals::revoke_grant,
+        )
+        .with_post(
+            "/api/v0/system-principals/{id}/tokens",
+            pages::json_principals::issue_token,
+        )
+        .with_post(
+            "/api/v0/system-principals/{id}/tokens/{token_id}/revoke",
+            pages::json_principals::revoke_token,
+        )
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)

@@ -118,11 +118,65 @@ The rama proxy router resolves auth inline at the top of each handler (no middle
 2. For bearer: hash + look up in `tokens`. Reject 401 on miss / revoked / expired.
 3. For session cookie: verify HMAC, look up `sessions` row, hydrate the `users` row.
 4. Bump `last_used_at` on bearer hits (debounced — at most once per minute per token).
-5. Build a `UserContext` with `user_id`, role set, and the allowed-tools set derived from `Resolver::allowed_tools`.
+5. Build a `UserCtx` whose `principal` is `Principal::User { id, roles }`; the allowed-tools set is derived from it per request (`AppState::api_tool_layer`).
+
+A bearer starting `gws_` takes a different branch before any of this: see below.
 
 The distinction between API routes (`/v1/*`, `/api/v0/*`) and page routes (`/`, `/settings/tokens`, `/chat`) only matters for the *failure* mode: API routes return 401 JSON, page routes 303 to `/login`. The lookup itself is the same.
+
+## System principals and `gws_` tokens
+
+A **system principal** is an identity that is not a person — CI, an
+integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principals).
+
+- **Own tables.** `system_principals` (a slug `name`, `display`,
+  `description`, `created_by`, `disabled_at`), `principal_grants` and
+  `system_tokens` (migration `0077`). Not a `kind` on `users`: none of the
+  person paths — default groups, the OIDC upsert, per-user MCP, memory — can
+  reach a principal by accident.
+- **Own prefix.** System tokens are `gws_<64 hex>`, stored as SHA-256 hex
+  exactly like `gwk_`. `require_bearer` routes on the prefix: `gws_` is looked
+  up only in `system_tokens` (joined to a principal that is not disabled),
+  `gwk_` only in `tokens`. A forged prefix swap never authenticates.
+- **What it resolves to.** `UserCtx.principal = Principal::System` with the
+  grants loaded once per request. `tools_enabled` is always on — the grants are
+  the policy — and there is no model allowlist; pools are its `pool` grants.
+- **Default deny.** A new principal has no rights at all, not even a pool:
+  until one is granted, `/v1/chat/completions` answers 404 for every model. See
+  [`tools-rbac.md`](tools-rbac.md#system-principals) for what each grant kind
+  unlocks.
+- **Revocation.** `POST …/tokens/{token_id}/revoke` revokes one token;
+  `POST …/disable` disables the principal and revokes every token it holds in
+  the same transaction. A disabled principal cannot be issued new tokens.
+- **Attribution.** Usage rows carry `principal_kind = 'system'` with the
+  principal id in `user_id` and its name in `user_email`; `mcp_tool_audit` does
+  the same. Rate limits apply the subject's own and global rules — never a
+  default group's.
+- **Audit.** Every management change (created, disabled, grant added/removed,
+  token issued/revoked) is a row in `agent_audit` with the acting user, written
+  in the same transaction as the change. `GET /api/v0/system-principals/{id}`
+  returns it.
+
+### Management API
+
+All routes need a session whose groups include `can_manage_agents`
+(`gateway_groups.can_manage_agents`; `is_admin` implies it). Set the flag
+through `PUT /api/v0/admin/groups` with `"can_manage_agents": true`; omitting
+the field leaves it unchanged.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET  | `/api/v0/system-principals` | List principals with their grants |
+| POST | `/api/v0/system-principals` | Create `{name, display?, description?}` — 201, 409 on a taken name |
+| GET  | `/api/v0/system-principals/{id}` | Principal, grants, tokens (never a hash or plaintext), audit trail |
+| POST | `/api/v0/system-principals/{id}/disable` | Disable and revoke every token |
+| POST | `/api/v0/system-principals/{id}/grants` | Grant `{kind, ref}` — 403 `grant_exceeds_manager` when you don't hold it |
+| POST | `/api/v0/system-principals/{id}/grants/revoke` | Remove `{kind, ref}` — any manager may narrow |
+| POST | `/api/v0/system-principals/{id}/tokens` | Issue `{name, ttl_days?}`; the plaintext is in this response only |
+| POST | `/api/v0/system-principals/{id}/tokens/{token_id}/revoke` | Revoke one token |
+
+There is no SPA screen for this yet; it is API-only.
 
 ## What's intentionally out of scope (for now)
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.
-- **Service-to-service auth** — no machine accounts yet. When we add them, they're a separate token kind with their own table and explicit RBAC config.

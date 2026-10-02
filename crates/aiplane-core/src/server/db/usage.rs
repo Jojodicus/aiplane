@@ -119,6 +119,8 @@ pub struct UsageRecord {
     /// hosted pools are exempt). Recorded on every row so the dashboards still
     /// show exempt traffic while enforcement (`server::limits`) ignores it.
     pub enforce_limits: bool,
+    /// Whether `user_id` is a `users.id` or a `system_principals.id`.
+    pub principal_kind: crate::server::principal::PrincipalKind,
 }
 
 /// Pull token counts out of an OpenAI-compatible completion body or trailing
@@ -232,8 +234,8 @@ pub async fn insert_batch(pool: &Pool, recs: &[UsageRecord]) -> Result<(), DbErr
                (id, created_at, user_id, user_email, token_id, token_name,
                 source, kind, backend, model, status, duration_ms,
                  prompt_tokens, completion_tokens, total_tokens, input_units, output_units,
-                 cost, enforce_limits)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 cost, enforce_limits, principal_kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&created)
@@ -254,6 +256,7 @@ pub async fn insert_batch(pool: &Pool, recs: &[UsageRecord]) -> Result<(), DbErr
         .bind(r.output_units.unwrap_or(0.0))
         .bind(cost)
         .bind(i64::from(r.enforce_limits))
+        .bind(r.principal_kind.as_str())
         .execute(&mut *tx)
         .await?;
 
@@ -943,6 +946,7 @@ mod tests {
             input_units: None,
             output_units: None,
             enforce_limits: true,
+            principal_kind: crate::server::principal::PrincipalKind::User,
         }
     }
 
@@ -1319,6 +1323,7 @@ mod tests {
                 input_units: Some(25.0),
                 output_units: None,
                 enforce_limits: true,
+                principal_kind: crate::server::principal::PrincipalKind::User,
             }],
         )
         .await
@@ -1364,6 +1369,7 @@ mod tests {
                 input_units: None,
                 output_units: Some(1.0),
                 enforce_limits: true,
+                principal_kind: crate::server::principal::PrincipalKind::User,
             }],
         )
         .await
