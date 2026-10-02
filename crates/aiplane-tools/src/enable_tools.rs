@@ -488,6 +488,7 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            run: None,
         }
     }
 

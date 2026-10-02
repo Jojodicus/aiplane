@@ -929,7 +929,7 @@ pub async fn execute_tool_calls(
             );
             // Most tools finish well within TOOL_TIMEOUT; a few (the sandbox
             // family) declare a longer ceiling via `max_duration`.
-            let (principal, db) = (ctx.principal.clone(), ctx.db.clone());
+            let (principal, db, chain) = (ctx.principal.clone(), ctx.db.clone(), ctx.run.clone());
             let tool_timeout = tool.max_duration().unwrap_or(TOOL_TIMEOUT);
             let outcome = tokio::time::timeout(tool_timeout, tool.run(ctx, args)).await;
             let elapsed_ms = started.elapsed().as_millis();
@@ -972,7 +972,7 @@ pub async fn execute_tool_calls(
                     ))
                 }
             };
-            let body = screen_result(scan, &principal, &db, &call, body).await;
+            let body = screen_result(scan, &principal, chain.as_deref(), &db, &call, body).await;
             ToolResultRecord {
                 call_id: call.id,
                 body,
@@ -987,6 +987,7 @@ pub async fn execute_tool_calls(
 async fn screen_result(
     scan: &InjectionScan,
     principal: &Principal,
+    chain: Option<&aiplane_core::server::run_chain::RunChain>,
     db: &Pool,
     call: &ToolCallRef,
     body: Value,
@@ -1008,6 +1009,7 @@ async fn screen_result(
             db,
             AuditKind::InjectionDetected,
             principal.subject_id(),
+            chain,
             json!({
                 "tool": call.name,
                 "call_id": call.id,

@@ -392,6 +392,9 @@ pub async fn suspended_turn_in_session(
 /// Compared after parsing rather than in SQL: RFC 3339 strings with and
 /// without fractional seconds do not sort as the instants they name. The
 /// table only holds turns that are waiting, so reading it whole is cheap.
+///
+/// Only person-owned conversations: the chat path resumes as the owner, and a
+/// principal-owned run has no person to resume as.
 pub async fn expired_suspensions(
     pool: &Pool,
     now: Timestamp,
@@ -400,7 +403,8 @@ pub async fn expired_suspensions(
         r#"SELECT s.turn_id, s.on_timeout, s.expires_at, t.session_id, cs.user_id
            FROM chat_turn_suspensions s
            JOIN chat_turns t ON t.id = s.turn_id
-           JOIN chat_sessions cs ON cs.id = t.session_id"#,
+           JOIN chat_sessions cs ON cs.id = t.session_id
+           WHERE cs.user_id IS NOT NULL"#,
     )
     .fetch_all(pool)
     .await?;
@@ -588,6 +592,42 @@ mod tests {
         assert_eq!(ids, ["early", "late"]);
         assert_eq!(expired[1].user_id, "u1");
         assert_eq!(expired[1].on_timeout, TimeoutFallback::AllowOnce);
+    }
+
+    /// A run owned by a system principal has no person to resume as; it is
+    /// settled by the agent path, never by the chat sweeper.
+    #[tokio::test]
+    async fn the_chat_sweeper_never_sees_a_principal_owned_run() {
+        let pool = pool().await;
+        let run = create_principal_session(
+            &pool,
+            &NewRunSession {
+                principal_id: "p1",
+                title: None,
+                parent_turn_id: None,
+                agent_version: None,
+            },
+        )
+        .await
+        .unwrap();
+        create_user_turn(&pool, &run.id, "agent-u", "hi")
+            .await
+            .unwrap();
+        create_assistant_turn_in_progress(&pool, &run.id, "agent-turn", "m")
+            .await
+            .unwrap();
+        insert_running_tool_call(&pool, "agent-turn", "call-1", "company_echo", "{}")
+            .await
+            .unwrap();
+        let now = Timestamp::now();
+        suspend_turn(
+            &pool,
+            &suspension("agent-turn", now - jiff::SignedDuration::from_secs(5)),
+        )
+        .await
+        .unwrap();
+
+        assert!(expired_suspensions(&pool, now).await.unwrap().is_empty());
     }
 
     #[tokio::test]

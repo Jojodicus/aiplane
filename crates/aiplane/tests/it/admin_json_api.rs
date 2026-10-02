@@ -1830,6 +1830,7 @@ async fn skills_and_connectors_surfaces() {
         "ok",
         None,
         Some("session-1"),
+        None,
     )
     .await
     .unwrap();

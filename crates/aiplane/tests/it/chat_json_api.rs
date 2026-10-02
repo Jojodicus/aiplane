@@ -2740,3 +2740,101 @@ async fn a_chat_turn_repeating_one_identical_call_is_stopped_with_a_reason() {
         "stopped long before the round budget: {upstream_calls}"
     );
 }
+
+/// An agent run reuses the chat tables but is owned by the agent's system
+/// principal, so it is nobody's chat: not its owner's, not anyone else's —
+/// not in the list, not in search, not openable, not deletable.
+#[tokio::test]
+async fn an_agent_run_is_in_no_persons_chats() {
+    use aiplane_core::server::db::system_principals as sp;
+    use aiplane_runtime::server::headless::{OpenParams, Owner, open_session};
+
+    let (state, alice) = setup("http://unused.invalid").await;
+    let bob = common::seed_session(&state, "bob", "bob@example.com").await;
+    let agent = sp::create(
+        &state.db,
+        &sp::NewPrincipal {
+            name: "support-website",
+            display: "Support",
+            description: "",
+        },
+        "alice",
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (run_id, _) = open_session(
+        &state.db,
+        OpenParams {
+            owner: Owner::Run {
+                principal_id: &agent.id,
+                parent_turn_id: None,
+                agent_version: Some(1),
+            },
+            title: "zebra invoice question",
+            prompt: "where is my zebra invoice",
+            model: "model-a",
+            existing_session: None,
+        },
+    )
+    .await
+    .unwrap();
+    let app = router(state.clone());
+
+    for cookie in [&alice, &bob] {
+        for uri in ["/api/v0/chat/sessions", "/api/v0/chat/sessions?q=zebra"] {
+            let resp = app
+                .serve(json_req(Method::GET, uri.into(), cookie, None))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+            let body = body_string(resp).await;
+            assert!(
+                !body.contains(&run_id),
+                "{uri} listed the agent run: {body}"
+            );
+        }
+        for (method, uri, body) in [
+            (Method::GET, format!("/api/v0/chat/sessions/{run_id}"), None),
+            (
+                Method::GET,
+                format!("/api/v0/chat/sessions/{run_id}/events"),
+                None,
+            ),
+            (
+                Method::POST,
+                format!("/api/v0/chat/sessions/{run_id}/messages"),
+                Some(r#"{"model":"model-a","message":"hi"}"#.to_string()),
+            ),
+            (
+                Method::DELETE,
+                format!("/api/v0/chat/sessions/{run_id}"),
+                None,
+            ),
+        ] {
+            let label = format!("{method} {uri}");
+            let resp = app
+                .serve(json_req(method, uri, cookie, body))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{label}");
+        }
+    }
+
+    let landing = app
+        .serve(json_req(
+            Method::GET,
+            "/api/v0/chat/landing".into(),
+            &alice,
+            None,
+        ))
+        .await
+        .unwrap();
+    let landing: serde_json::Value = serde_json::from_str(&body_string(landing).await).unwrap();
+    assert_ne!(landing["session"]["id"], run_id.as_str());
+    assert_eq!(
+        chat::session_owner(&state.db, &run_id).await.unwrap(),
+        Some(chat::SessionOwner::Principal(agent.id)),
+        "the run survived every attempt above"
+    );
+}
