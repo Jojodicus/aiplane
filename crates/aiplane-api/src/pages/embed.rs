@@ -625,7 +625,7 @@ pub struct ResumeBody {
 pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
-    let ip = client_ip(&req);
+    let ip = state.client_ip(&req);
     let body: ResumeBody = or_return!(super::read_json(req.into_body(), "the resume body").await);
     let decision = match super::chat::json_api::decision_from(body.decision, body.value) {
         Ok(decision) => decision,
