@@ -25,6 +25,7 @@ pub mod catalog;
 pub mod discovery;
 pub mod echo;
 pub mod feedback;
+pub mod injection;
 pub mod mcp;
 pub mod registry;
 pub mod runner;
