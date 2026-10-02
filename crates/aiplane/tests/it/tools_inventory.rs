@@ -42,8 +42,9 @@ const UNDOCUMENTED: &[&str] = &[];
 
 /// Ids that appear in tool-source string literals but are not real registered
 /// tools. `mcp__demo__echo` is a fixture inside the MCP manager's own tests;
-/// `big_result` is one inside the tool runner's result-stubbing tests.
-const NOT_REAL_TOOLS: &[&str] = &["mcp__demo__echo", "big_result"];
+/// `big_result` is one inside the tool runner's result-stubbing tests;
+/// `bound_fixture` one inside the bound-argument tests.
+const NOT_REAL_TOOLS: &[&str] = &["mcp__demo__echo", "big_result", "bound_fixture"];
 
 /// Tools whose `category_for` is legitimately `Utility` — the catch-all is a
 /// real category for genuinely miscellaneous tools, so this test pins *which*
@@ -81,7 +82,14 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
     "aiplane-runtime/src/server/tools/ask_first.rs",
     // set_<slot> — an agent run's synthetic state tools
     "aiplane-runtime/src/agents/slot_tools.rs",
+    // BoundTool — delegates to the wrapped tool
+    "aiplane-runtime/src/agents/bind.rs",
 ];
+
+/// Synthetic tools of an agent run. They are never registered nor offered to
+/// a person's chat, so `/tools` never renders them and the catalog checks do
+/// not apply; the inventory still documents them.
+const RUN_SCOPED: &[&str] = &["forward_request"];
 
 fn repo_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is <root>/crates/gateway.
@@ -302,6 +310,7 @@ fn every_tool_has_a_real_category() {
         .filter(|id| {
             catalog::category_for(id) == Category::Utility
                 && !EXPECTED_UTILITY.contains(&id.as_str())
+                && !RUN_SCOPED.contains(&id.as_str())
         })
         .collect();
     assert!(
@@ -322,6 +331,7 @@ fn every_visible_tool_has_hand_written_display_copy() {
             // shared-key groups get their copy from the group row instead.
             !catalog::is_hidden(id)
                 && !is_family(id)
+                && !RUN_SCOPED.contains(&id.as_str())
                 && catalog::entry_key_for(id) == id
                 && !has_display_copy(id)
         })

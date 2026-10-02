@@ -413,6 +413,35 @@ pub async fn version(pool: &Pool, id: &str, version: i64) -> Result<Option<Versi
     row.as_ref().map(map_version).transpose()
 }
 
+/// The live version of agent `id` and its spec; `None` when it was never
+/// published or does not exist.
+pub async fn live(pool: &Pool, id: &str) -> Result<Option<(i64, String)>, DbError> {
+    let row = sqlx::query(
+        "SELECT v.version, v.spec FROM agents a
+           JOIN agent_versions v ON v.principal_id = a.principal_id AND v.version = a.live_version
+          WHERE a.principal_id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|r| Ok((r.try_get("version")?, r.try_get("spec")?)))
+        .transpose()
+}
+
+/// Every published agent's live spec, by agent id. What the spec validator
+/// walks the sub-agent graph over.
+pub async fn live_specs(pool: &Pool) -> Result<HashMap<String, String>, DbError> {
+    let rows = sqlx::query(
+        "SELECT a.principal_id, v.spec FROM agents a
+           JOIN agent_versions v ON v.principal_id = a.principal_id AND v.version = a.live_version",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.try_get("principal_id")?, row.try_get("spec")?)))
+        .collect()
+}
+
 /// Point `live_version` at an existing version — a rollback, or a roll
 /// forward again. `Ok(false)` when the agent has no such version.
 pub async fn set_live(
@@ -714,6 +743,25 @@ mod tests {
             version(&pool, id, 1).await.unwrap().unwrap().spec,
             "{\"v\":1}"
         );
+    }
+
+    #[tokio::test]
+    async fn the_live_spec_follows_the_live_pointer_and_lists_only_published_agents() {
+        let pool = pool().await;
+        let a = agent(&pool, "support", "alice").await;
+        let draft_only = agent(&pool, "billing", "alice").await;
+        let id = &a.principal.id;
+        assert_eq!(live(&pool, id).await.unwrap(), None);
+        publish(&pool, id, "one", "alice").await.unwrap();
+        publish(&pool, id, "two", "alice").await.unwrap();
+        assert_eq!(live(&pool, id).await.unwrap(), Some((2, "two".to_string())));
+        set_live(&pool, id, 1, "alice").await.unwrap();
+        assert_eq!(live(&pool, id).await.unwrap(), Some((1, "one".to_string())));
+
+        let specs = live_specs(&pool).await.unwrap();
+        assert_eq!(specs.get(id.as_str()).map(String::as_str), Some("one"));
+        assert!(!specs.contains_key(&draft_only.principal.id));
+        assert_eq!(live(&pool, "nope").await.unwrap(), None);
     }
 
     #[tokio::test]

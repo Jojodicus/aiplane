@@ -140,6 +140,10 @@ pub struct DriveParams {
     /// How tool results are screened for prompt injection. The default is
     /// off, exactly as an interactive chat turn runs.
     pub injection: crate::server::tools::injection::InjectionScan,
+    /// The agent this run executes: its system message, synthetic tools and
+    /// bound arguments (see [`crate::agents::profile`]). `None` for every run
+    /// that is not an agent's.
+    pub agent: Option<Arc<crate::agents::profile::AgentRun>>,
 }
 
 /// Drive an already-opened turn to completion through the `OpenAiDriver`.
@@ -215,6 +219,7 @@ pub async fn drive_with_clock(
         injection: p.injection,
         clock,
         resume: None,
+        agent: p.agent,
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no
@@ -447,6 +452,7 @@ mod tests {
             finish,
             budget: None,
             injection: Default::default(),
+            agent: None,
         }
     }
 

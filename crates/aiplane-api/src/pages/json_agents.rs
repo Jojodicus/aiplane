@@ -163,12 +163,19 @@ async fn spec_issues(
     let agents = agents_db::publication_status(&state.db)
         .await
         .map_err(internal)?;
+    let live_specs = agents_db::live_specs(&state.db)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|(id, text)| (id, parse_spec(&text)))
+        .collect();
     Ok(spec::validate(
         spec,
         &SpecContext {
             agent_id,
             grants: &grants,
             agents: &agents,
+            live_specs: &live_specs,
         },
         stage,
     ))

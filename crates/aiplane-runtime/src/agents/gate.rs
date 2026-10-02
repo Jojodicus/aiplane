@@ -146,13 +146,27 @@ impl Cond {
     /// Whether the condition can only hold when some slot was written by a
     /// verifier or the host — what a route that binds a subject must require.
     pub fn requires_trusted_provenance(&self) -> bool {
+        self.requires_trusted(&|_| true)
+    }
+
+    /// [`Self::requires_trusted_provenance`] for one slot: the condition can
+    /// only hold when `slot` was written by a verifier or the host — what a
+    /// route that binds an argument from `slot` must require.
+    pub fn requires_trusted_provenance_of(&self, slot: &str) -> bool {
+        self.requires_trusted(&|leaf| leaf.slot == slot)
+    }
+
+    fn requires_trusted(&self, counts: &dyn Fn(&Leaf) -> bool) -> bool {
         match self {
-            Cond::Leaf(leaf) => leaf
-                .provenance
-                .as_ref()
-                .is_some_and(|p| *p != Provenance::Llm),
-            Cond::All(children) => children.iter().any(Cond::requires_trusted_provenance),
-            Cond::Any(children) => children.iter().all(Cond::requires_trusted_provenance),
+            Cond::Leaf(leaf) => {
+                counts(leaf)
+                    && leaf
+                        .provenance
+                        .as_ref()
+                        .is_some_and(|p| *p != Provenance::Llm)
+            }
+            Cond::All(children) => children.iter().any(|c| c.requires_trusted(counts)),
+            Cond::Any(children) => children.iter().all(|c| c.requires_trusted(counts)),
             // `not` can hold on a missing slot, so it proves nothing.
             Cond::Not(_) => false,
         }
@@ -534,6 +548,10 @@ impl RouteGates {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+
     /// Every route in name order with its status.
     pub fn statuses(&self, input: GateInput<'_>) -> Vec<(String, GateStatus)> {
         self.routes
@@ -896,6 +914,28 @@ mod tests {
         ] {
             assert_eq!(
                 Cond::parse(&cond).unwrap().requires_trusted_provenance(),
+                expected,
+                "{cond}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_requires_one_slot_trusted_only_if_every_way_to_open_it_checks_that_slot() {
+        let verified = json!({ "slot": "verified", "provenance": "verifier:otp" });
+        let score = json!({ "slot": "score", "provenance": "host" });
+        for (cond, expected) in [
+            (verified.clone(), true),
+            (score.clone(), false),
+            (json!({ "all": [score.clone(), verified.clone()] }), true),
+            (json!({ "any": [score.clone(), verified.clone()] }), false),
+            (json!({ "slot": "verified", "provenance": "llm" }), false),
+            (json!({ "not": verified.clone() }), false),
+        ] {
+            assert_eq!(
+                Cond::parse(&cond)
+                    .unwrap()
+                    .requires_trusted_provenance_of("verified"),
                 expected,
                 "{cond}"
             );

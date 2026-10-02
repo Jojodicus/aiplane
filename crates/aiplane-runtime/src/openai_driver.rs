@@ -497,6 +497,10 @@ pub struct OpenAiDriver {
     /// suspension and the decision that settles its waiting call. `None` for
     /// a turn starting fresh. See [`crate::suspend`].
     pub resume: Option<crate::suspend::ResumeFrom>,
+    /// Set on an agent run: its system message replaces the chat one, its
+    /// synthetic tools are layered over the granted ones and its bound
+    /// arguments applied. See [`crate::agents::profile`].
+    pub agent: Option<Arc<crate::agents::profile::AgentRun>>,
 }
 
 /// Build the per-turn [`ToolContext`] for a persisted chat session — the single
@@ -965,8 +969,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         .state
         .granted_tool_ids(&d.tool_ctx.principal, &user_mcp)
         .await;
-    let tool_source =
+    let granted_source =
         crate::server::tools::GrantedToolSource::new(&every_tool, granted.iter().cloned());
+    // An agent run's synthetic tools are no grant: they sit over the
+    // grant-narrowed source, never inside it.
+    let tool_source =
+        crate::agents::profile::RunToolSource::new(&granted_source, d.agent.as_deref());
+    let agent_offer = d.agent.as_ref().map(|a| a.offered(&granted));
     let tool_ctx = ToolContext {
         granted_tools: Some(Arc::new(granted.into_iter().collect())),
         ..d.tool_ctx.clone()
@@ -1008,16 +1017,20 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // turns: some backends (e.g. the Qwen3 vLLM chat template) reject a request
     // with more than one leading system message ("System message must be at the
     // beginning"). See `leading_system_message`.
-    let request_context = build_request_context(d, &user_mcp).await;
-    let voice_directive = d.voice_mode.then_some(VOICE_DIRECTIVE);
-    messages.insert(
-        0,
-        leading_system_message(
-            voice_directive,
-            request_context,
-            compaction.as_ref().map(|c| c.summary.as_str()),
-        ),
-    );
+    let summary = compaction.as_ref().map(|c| c.summary.as_str());
+    let leading = match d.agent.as_ref() {
+        Some(agent) => {
+            agent
+                .system_message(&d.state.db, &ctx.session_id, summary)
+                .await
+        }
+        None => {
+            let request_context = build_request_context(d, &user_mcp).await;
+            let voice_directive = d.voice_mode.then_some(VOICE_DIRECTIVE);
+            leading_system_message(voice_directive, request_context, summary)
+        }
+    };
+    messages.insert(0, leading);
     if let Some(run) = d.finish.as_ref() {
         runner::merge_into_leading_system_message(&mut messages, run.contract().instructions());
     }
@@ -1256,6 +1269,22 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // does not cost the user their interjection.
         unsettled_steers.extend(fold_in_steers(&ctx, &mut messages));
 
+        // A slot set last round must show in this round's system message,
+        // or the model would ask for it again.
+        if round > start_round
+            && let Some(agent) = d.agent.as_ref().filter(|a| a.has_conversation_state())
+        {
+            messages[0] = agent
+                .system_message(&d.state.db, &ctx.session_id, summary)
+                .await;
+            if let Some(run) = d.finish.as_ref() {
+                runner::merge_into_leading_system_message(
+                    &mut messages,
+                    run.contract().instructions(),
+                );
+            }
+        }
+
         // On the final allowed round, withhold tools so the model is forced
         // to answer from what it already gathered. Without this, a model that
         // keeps calling tools right up to MAX_ROUNDS exits the loop having
@@ -1325,6 +1354,9 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &enabled_keys,
             &d.state.mcp_grant_for_principal(&d.tool_ctx.principal),
         );
+        if let Some(offer) = &agent_offer {
+            allowed_tools = offer.clone();
+        }
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
         if let Some(run) = d.finish.as_ref() {

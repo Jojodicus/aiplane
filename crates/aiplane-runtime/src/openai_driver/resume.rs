@@ -436,6 +436,7 @@ mod tests {
             finish: None,
             budget: None,
             injection: Default::default(),
+            agent: None,
             clock: crate::budget::system_clock(),
             resume,
         });

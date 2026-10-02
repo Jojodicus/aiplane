@@ -878,6 +878,7 @@ async fn spawn_assistant_worker(
         finish: None,
         budget: None,
         injection: Default::default(),
+        agent: None,
         clock: aiplane_runtime::budget::system_clock(),
         resume,
     });
