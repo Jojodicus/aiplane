@@ -33,6 +33,8 @@ pub struct RunSession {
     pub principal_id: String,
     pub parent_turn_id: Option<String>,
     pub agent_version: Option<i64>,
+    /// The visitor session the conversation serves, on a public agent's.
+    pub visitor_id: Option<String>,
     pub title: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -54,6 +56,7 @@ where
         principal_id: new.principal_id.to_string(),
         parent_turn_id: new.parent_turn_id.map(str::to_string),
         agent_version: new.agent_version,
+        visitor_id: None,
         title: new.title.map(str::to_string),
         created_at: now,
         updated_at: now,
@@ -81,27 +84,47 @@ pub async fn get_principal_session(
     principal_id: &str,
     session_id: &str,
 ) -> Result<Option<RunSession>, DbError> {
-    let row = sqlx::query(
-        r#"SELECT id, principal_id, parent_turn_id, agent_version, title, created_at, updated_at
-           FROM chat_sessions
-           WHERE id = ? AND principal_id = ?"#,
-    )
+    let row = sqlx::query(&format!(
+        "SELECT {RUN_SESSION_COLUMNS} FROM chat_sessions WHERE id = ? AND principal_id = ?"
+    ))
     .bind(session_id)
     .bind(principal_id)
     .fetch_optional(pool)
     .await?;
-    row.map(|r| {
-        Ok(RunSession {
-            id: r.try_get("id")?,
-            principal_id: r.try_get("principal_id")?,
-            parent_turn_id: r.try_get("parent_turn_id")?,
-            agent_version: r.try_get("agent_version")?,
-            title: r.try_get("title")?,
-            created_at: parse_ts(r.try_get("created_at")?, "created_at")?,
-            updated_at: parse_ts(r.try_get("updated_at")?, "updated_at")?,
-        })
+    row.as_ref().map(map_run_session).transpose()
+}
+
+/// The principal-owned conversation `turn_id` belongs to; `None` when the
+/// turn does not exist or is in a person's chat.
+pub async fn run_session_of_turn(
+    pool: &Pool,
+    turn_id: &str,
+) -> Result<Option<RunSession>, DbError> {
+    let row = sqlx::query(&format!(
+        "SELECT {RUN_SESSION_COLUMNS} FROM chat_sessions \
+         WHERE principal_id IS NOT NULL \
+           AND id = (SELECT session_id FROM chat_turns WHERE id = ?)"
+    ))
+    .bind(turn_id)
+    .fetch_optional(pool)
+    .await?;
+    row.as_ref().map(map_run_session).transpose()
+}
+
+const RUN_SESSION_COLUMNS: &str =
+    "id, principal_id, parent_turn_id, agent_version, visitor_id, title, created_at, updated_at";
+
+fn map_run_session(r: &SqliteRow) -> Result<RunSession, DbError> {
+    Ok(RunSession {
+        id: r.try_get("id")?,
+        principal_id: r.try_get("principal_id")?,
+        parent_turn_id: r.try_get("parent_turn_id")?,
+        agent_version: r.try_get("agent_version")?,
+        visitor_id: r.try_get("visitor_id")?,
+        title: r.try_get("title")?,
+        created_at: parse_ts(r.try_get("created_at")?, "created_at")?,
+        updated_at: parse_ts(r.try_get("updated_at")?, "updated_at")?,
     })
-    .transpose()
 }
 
 /// Who owns `session_id`; `None` when it does not exist.
@@ -447,6 +470,24 @@ mod tests {
                 .is_none(),
             "another principal cannot open the run"
         );
+    }
+
+    #[tokio::test]
+    async fn a_run_is_found_from_any_of_its_turns_and_a_chat_never_is() {
+        let pool = pool().await;
+        let run = create_principal_session(&pool, &run_session(None))
+            .await
+            .unwrap();
+        let run_turn = completed_turn(&pool, &run.id, "route this").await;
+        let mine = create_session(&pool, "u1").await.unwrap();
+        let chat_turn = completed_turn(&pool, &mine.id, "hello").await;
+
+        assert_eq!(
+            run_session_of_turn(&pool, &run_turn).await.unwrap(),
+            Some(run)
+        );
+        assert_eq!(run_session_of_turn(&pool, &chat_turn).await.unwrap(), None);
+        assert_eq!(run_session_of_turn(&pool, "nope").await.unwrap(), None);
     }
 
     #[tokio::test]

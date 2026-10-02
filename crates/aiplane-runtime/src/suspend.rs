@@ -48,6 +48,20 @@ pub struct SuspendRequest {
     pub timeout_secs: u64,
     #[serde(default)]
     pub on_timeout: TimeoutFallback,
+    /// Set by `forward_request` when the sub-agent run it dispatched paused:
+    /// this call waits on that run's pause, which a resume settles first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<ChildPause>,
+}
+
+/// The paused sub-agent run a call is waiting on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChildPause {
+    /// The child run's assistant turn, whose session names the waiting turn
+    /// as its parent.
+    pub turn_id: String,
+    /// The child's deadline; the parent waits exactly as long.
+    pub expires_at: jiff::Timestamp,
 }
 
 impl SuspendRequest {
@@ -58,6 +72,20 @@ impl SuspendRequest {
             message: None,
             timeout_secs: timeout.as_secs(),
             on_timeout: TimeoutFallback::Deny,
+            child: None,
+        }
+    }
+
+    /// Ask the one chatting for a value the model must never see, such as a
+    /// verification code, with `message` shown next to the field. Denied if
+    /// nobody answers in time.
+    pub fn secure_input(message: impl Into<String>, timeout: Duration) -> Self {
+        Self {
+            kind: SuspensionKind::SecureInput,
+            message: Some(message.into()),
+            timeout_secs: timeout.as_secs(),
+            on_timeout: TimeoutFallback::Deny,
+            child: None,
         }
     }
 }
@@ -79,11 +107,12 @@ pub fn extract_suspend(body: &Value) -> Option<SuspendRequest> {
 /// run again after one.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Suspend {
-    /// The path cannot pause: `/v1`, headless runs, tests. A tool that needs a
-    /// decision must refuse rather than proceed.
+    /// The path cannot pause: `/v1`, scheduled and webhook runs, tests. A tool
+    /// that needs a decision must refuse rather than proceed.
     #[default]
     Unavailable,
-    /// The interactive chat path: returning [`tool_suspend`] pauses the turn.
+    /// The chat path and agent runs: returning [`tool_suspend`] pauses the
+    /// turn.
     Available,
     /// The call is running again because of this decision. Never `Deny`: a
     /// denied call is answered by the driver without running the tool.
@@ -96,6 +125,10 @@ pub enum Suspend {
 pub struct ResumeFrom {
     pub suspension: TurnSuspension,
     pub decision: Decision,
+    /// Set when the waiting call waited on a sub-agent run that was resumed
+    /// first: its result is the call's result, and the call does not run
+    /// again.
+    pub child_result: Option<Value>,
 }
 
 /// Why a resume was refused. Nothing was claimed in any of these cases.
@@ -158,6 +191,7 @@ pub async fn claim_for_resume(
     Ok(ResumeFrom {
         suspension,
         decision,
+        child_result: None,
     })
 }
 
@@ -219,6 +253,7 @@ mod tests {
                 on_timeout: TimeoutFallback::Deny,
                 expires_at: now,
                 created_at: now,
+                run_context: None,
             },
         )
         .await

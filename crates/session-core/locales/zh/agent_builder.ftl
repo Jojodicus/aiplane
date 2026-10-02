@@ -219,3 +219,12 @@ agents-debug-running = 无结果
 agents-debug-no-subagents = 本轮没有子智能体运行。
 agents-debug-tools = 工具调用
 agents-debug-no-tools = 本轮未调用任何工具。
+
+agents-test-waiting-secure-input = 智能体请访客输入一个只有访客本人可以输入的值。在测试聊天中由您代为输入：它只会发送给该工具，不会去往任何其他地方。
+agents-test-waiting-approval = 智能体正在等待工作人员批准对 { $tool } 的调用。
+agents-test-waiting-human = 智能体正在等待人工答复。
+agents-test-value-label = 值
+agents-test-answer = 发送给工具
+agents-test-approve = 批准一次
+agents-test-deny = 拒绝
+agents-test-expires = 过期时间 { $at }

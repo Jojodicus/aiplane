@@ -18,6 +18,7 @@ import {
 	slotValueFromText,
 	splitList,
 	slotInfos,
+	suspensionLabel,
 	testTurnLabel,
 	type SpecIssue
 } from './agents.ts';
@@ -170,6 +171,12 @@ test('a test turn is labelled by how it ended', () => {
 	assert.equal(testTurnLabel('errored'), 'agents-test-status-errored');
 	assert.equal(testTurnLabel('suspended'), 'agents-test-status-suspended');
 	assert.equal(testTurnLabel('whatever'), 'agents-test-status-other');
+});
+
+test('a paused test turn says what it waits for', () => {
+	assert.equal(suspensionLabel('secure_input'), 'agents-test-waiting-secure-input');
+	assert.equal(suspensionLabel('approval'), 'agents-test-waiting-approval');
+	assert.equal(suspensionLabel('human_answer'), 'agents-test-waiting-human');
 });
 
 test('renaming a key keeps its place and refuses a taken name', () => {

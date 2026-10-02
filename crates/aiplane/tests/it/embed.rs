@@ -34,6 +34,8 @@ const PARTIAL: &str = "Let me check the ord";
 
 // Visitor limits, owner budget and retention (#92).
 mod limits;
+// Suspended agent runs: secure input, approvals, resume.
+mod suspend;
 
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive

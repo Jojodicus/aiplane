@@ -1013,8 +1013,8 @@ mod tests {
             request_id: "req-1".into(),
             kind: crate::db::SuspensionKind::Approval,
             message: None,
-            tool_call_id: "call-1".into(),
-            tool: "company_echo".into(),
+            tool_call_id: Some("call-1".into()),
+            tool: Some("company_echo".into()),
             options: vec![
                 crate::db::DecisionKind::AllowOnce,
                 crate::db::DecisionKind::Deny,

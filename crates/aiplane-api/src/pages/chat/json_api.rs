@@ -666,18 +666,27 @@ pub struct ResumeBody {
 }
 
 impl ResumeBody {
-    fn decision(self) -> Result<chat::Decision, &'static str> {
-        match (self.decision, self.value) {
-            (chat::DecisionKind::AllowOnce, None) => Ok(chat::Decision::AllowOnce),
-            (chat::DecisionKind::Deny, None) => Ok(chat::Decision::Deny {
-                reason: chat::DenyReason::User,
-            }),
-            (chat::DecisionKind::Value, Some(value)) => Ok(chat::Decision::Value { value }),
-            (chat::DecisionKind::Value, None) => {
-                Err("a `value` decision needs a `value` field carrying it")
-            }
-            (_, Some(_)) => Err("only a `value` decision carries a `value` field"),
+    pub(crate) fn decision(self) -> Result<chat::Decision, &'static str> {
+        decision_from(self.decision, self.value)
+    }
+}
+
+/// The decision a resume body names: its shape, and the value only a `value`
+/// decision carries.
+pub(crate) fn decision_from(
+    kind: chat::DecisionKind,
+    value: Option<serde_json::Value>,
+) -> Result<chat::Decision, &'static str> {
+    match (kind, value) {
+        (chat::DecisionKind::AllowOnce, None) => Ok(chat::Decision::AllowOnce),
+        (chat::DecisionKind::Deny, None) => Ok(chat::Decision::Deny {
+            reason: chat::DenyReason::User,
+        }),
+        (chat::DecisionKind::Value, Some(value)) => Ok(chat::Decision::Value { value }),
+        (chat::DecisionKind::Value, None) => {
+            Err("a `value` decision needs a `value` field carrying it")
         }
+        (_, Some(_)) => Err("only a `value` decision carries a `value` field"),
     }
 }
 

@@ -22,6 +22,7 @@ use thiserror::Error;
 
 pub mod ask_first;
 pub mod catalog;
+pub mod check_code;
 pub mod discovery;
 pub mod echo;
 pub mod feedback;

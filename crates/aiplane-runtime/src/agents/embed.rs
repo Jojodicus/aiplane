@@ -22,7 +22,11 @@ use serde_json::{Value, json};
 
 use session_core::db as chat;
 
+use session_core::i18n::Lang;
+
 use super::profile::{Role, RunOptions, RunProfile};
+pub use super::resume::ClaimedResume;
+use super::resume::run_claimed;
 pub use super::run::OpenedTurn;
 use super::run::drive_opened;
 use crate::rama_server::state::RamaState;
@@ -283,12 +287,23 @@ pub async fn limits_view(
 /// - Output is buffered (`OutputPolicy::Buffered`): the endpoint shows a
 ///   visitor an assistant answer only once its turn is terminal, so a runner
 ///   may write partial content as it likes.
-/// - When `run` returns, `turn_id` is terminal. The endpoint errors a turn
-///   left `in_progress`, so a runner that crashes cannot wedge the
+/// - When `run` returns, `turn_id` is terminal or suspended (a tool paused
+///   it for a decision; see [`crate::agents::resume`]). The endpoint errors a
+///   turn left `in_progress`, so a runner that crashes cannot wedge the
 ///   conversation.
 #[async_trait::async_trait]
 pub trait AgentTurnRunner: Send + Sync {
     async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn);
+
+    /// Continue a suspended conversation whose decision won the claim. Same
+    /// contract as [`Self::run`]: when this returns, the conversation's turn
+    /// is terminal or suspended again, never `in_progress`.
+    async fn resume(&self, state: Arc<RamaState>, claimed: ClaimedResume, lang: Lang) {
+        let turn = claimed.turn_id().to_string();
+        if let Err(err) = run_claimed(&state, claimed, RunOptions::default(), lang).await {
+            tracing::warn!(error = %err, %turn, "a suspended visitor turn could not resume");
+        }
+    }
 }
 
 /// The production runner: the agent entry point of `agents::run`.

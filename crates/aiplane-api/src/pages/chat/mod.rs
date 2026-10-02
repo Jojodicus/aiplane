@@ -995,12 +995,15 @@ pub(crate) async fn resume_turn(
     Ok(())
 }
 
-/// Settle every suspension past its deadline with its timeout fallback.
+/// Settle every suspension past its deadline with its timeout fallback: a
+/// person's chat here, an agent conversation through
+/// [`aiplane_runtime::agents::resume::resume_expired`].
 ///
-/// Resumes run as the conversation's owner, with no request behind them. A
+/// A chat resumes as the conversation's owner, with no request behind it. A
 /// suspension whose conversation is busy stays put and is retried on the next
 /// sweep.
 pub async fn resume_expired_suspensions(state: &Arc<RamaState>) {
+    aiplane_runtime::agents::resume::resume_expired(state).await;
     let expired = match chat::expired_suspensions(&state.db, jiff::Timestamp::now()).await {
         Ok(expired) => expired,
         Err(err) => {

@@ -219,3 +219,12 @@ agents-debug-running = нет результата
 agents-debug-no-subagents = В этом ходе подагенты не запускались.
 agents-debug-tools = Вызовы инструментов
 agents-debug-no-tools = В этом ходе инструменты не вызывались.
+
+agents-test-waiting-secure-input = Агент просит посетителя ввести значение, которое может ввести только он. В тестовом чате его вводите вы: оно передаётся инструменту и больше никуда.
+agents-test-waiting-approval = Агент ждёт, пока сотрудник одобрит вызов { $tool }.
+agents-test-waiting-human = Агент ждёт ответа человека.
+agents-test-value-label = Значение
+agents-test-answer = Передать инструменту
+agents-test-approve = Одобрить один раз
+agents-test-deny = Отклонить
+agents-test-expires = Истекает { $at }

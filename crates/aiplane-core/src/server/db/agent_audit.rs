@@ -42,6 +42,11 @@ pub enum AuditKind {
     SubAgentFinished,
     /// The output filter (#89) redacted or withheld a main agent's answer.
     OutputBlocked,
+    /// A run paused for a decision (an approval, a secure input). Never the
+    /// value a resume brings.
+    RunSuspended,
+    /// A paused run was resumed: who answered, and the decision's shape.
+    RunResumed,
     AgentCreated,
     AgentDraftUpdated,
     AgentPublished,
@@ -72,6 +77,8 @@ impl AuditKind {
             Self::SubAgentDispatched => "sub_agent_dispatched",
             Self::SubAgentFinished => "sub_agent_finished",
             Self::OutputBlocked => "output_blocked",
+            Self::RunSuspended => "run_suspended",
+            Self::RunResumed => "run_resumed",
             Self::AgentCreated => "agent_created",
             Self::AgentDraftUpdated => "agent_draft_updated",
             Self::AgentPublished => "agent_published",
@@ -122,8 +129,21 @@ pub async fn record_run_event(
     chain: Option<&RunChain>,
     detail: Value,
 ) -> Result<(), DbError> {
+    record_run_event_by(pool, kind, principal_id, None, chain, detail).await
+}
+
+/// [`record_run_event`] for a run event a person caused, such as a staff
+/// member answering an approval: `actor_id` names them.
+pub async fn record_run_event_by(
+    pool: &Pool,
+    kind: AuditKind,
+    principal_id: &str,
+    actor_id: Option<&str>,
+    chain: Option<&RunChain>,
+    detail: Value,
+) -> Result<(), DbError> {
     let mut conn = pool.acquire().await?;
-    insert(&mut conn, kind, principal_id, None, chain, detail).await
+    insert(&mut conn, kind, principal_id, actor_id, chain, detail).await
 }
 
 async fn insert(
