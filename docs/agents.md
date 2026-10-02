@@ -287,7 +287,9 @@ publish:
   origins: ["https://www.example.com"]
   idle_ttl: 30m
   retention_days: 30
-  output_filter: { patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" } }
+  output_filter:
+    patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" }
+    action: withhold                    # withhold (default) | redact
 ```
 
 A sub-agent's spec uses the same layout. It has no `state`, `routes` or
@@ -733,8 +735,9 @@ grants.
     validator therefore checks the route ↔ sub-agent contract (`route.`
     names, finish schema). The unbound-subject rule is enforced at run time,
     against the real schema, by withholding the tool.
-  - The output policy (`Stream`/`Buffered`) is not part of the profile yet
-    (#89).
+  - The output policy (`Stream`/`Buffered`) is not part of the profile yet:
+    #89 filters the finished answer in `run_turn`; the buffering itself
+    arrives with the public endpoint (#91).
 - **Tests.** `agents/run/tests.rs` runs the support example end to end on
   wiremock upstreams, both models and the ERP as a wiremock MCP server:
   1. The closed gate's feedback.
@@ -746,6 +749,41 @@ grants.
   More tests cover: a closed route the classifier names; `order` in the rules
   router; separate budgets; a sub-agent that routes back to its caller; an
   injection in a sub-agent result; and the audit chain.
+
+### What #89 built
+
+`agents/output_filter.rs` is the whole filter; `run_turn` calls
+`guard_answer` once, on the main agent's final answer.
+
+- **Spec.** `publish.output_filter.patterns` (name → regex, validated at
+  publish) and `publish.output_filter.action` (`withhold`, the default, or
+  `redact`). No patterns, no filter: the answer is untouched.
+- **Rule.** Every match of every pattern in the answer must also occur, as
+  the same pattern's match, in the turn's *trusted text*: the conversation's
+  slots not written by `llm`, and the outputs of the turn's tool calls
+  (`forward_request` carries the sub-agent's result; the `set_<slot>` calls
+  are left out because they echo model-written values). Anything else, the
+  visitor's own message included, is untraceable.
+- **Withhold** replaces the whole answer with the `agent-output-withheld`
+  catalog message; **redact** replaces each offending identifier with
+  `agent-output-redacted`. The stored turn is overwritten the same way, so a
+  replayed conversation never shows the blocked text.
+- **Audit.** `output_blocked` on the agent's principal with the run chain and
+  `{action, session_id, turn_id, patterns}`. `patterns` holds the pattern name
+  of each offending occurrence; the matched value is never logged. If the
+  trusted text cannot be read the answer is withheld (fail closed) and the
+  row carries `error`.
+- **Language.** `RunOptions.lang` (default English) picks the catalog language
+  of the fallback text. `run_turn` does not know the visitor's language; the
+  public endpoint (#91) sets it from the request.
+- **Limits.** The filter matches text, not meaning: an identifier the model
+  rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
+  tool the agent calls that returns another customer's data makes that data
+  trusted. Grant tools bound to the verified subject (#88) for that.
+- **Tests.** `agents/run/tests.rs` runs the support example with a filter:
+  another customer's invoice is withheld and audited; identifiers from the
+  verified slot and the sub-agent result pass; redaction; no patterns leaves
+  the answer unchanged. Pure cases are in `output_filter.rs`.
 
 ### Suspend and resume (#82)
 

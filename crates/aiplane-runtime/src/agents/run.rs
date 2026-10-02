@@ -11,6 +11,7 @@ use aiplane_core::server::db::DbError;
 use aiplane_core::server::run_chain::{Frame, RunChain};
 use session_core::db as chat;
 
+use super::output_filter::{Delivery, guard_answer};
 use super::profile::{AgentRunError, Role, RunOptions, RunProfile};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
@@ -81,15 +82,41 @@ pub async fn run_turn_with(
         turn.visitor_id.map(str::to_string),
         Frame::for_principal(&profile.principal, Some(profile.version)),
     ));
-    drive(state, profile.drive_params(&session_id, &turn_id, chain)).await;
+    drive(
+        state,
+        profile.drive_params(&session_id, &turn_id, chain.clone()),
+    )
+    .await;
     let done = chat::get_turn(&state.db, &session_id, &turn_id)
         .await
         .map_err(DbError::from)?;
+    let mut answer = done.as_ref().and_then(|t| t.content.clone());
+    if let Some(filter) = &profile.output_filter
+        && let Some(text) = answer.take()
+    {
+        let at = Delivery {
+            principal_id: &profile.principal.id,
+            session_id: &session_id,
+            turn_id: &turn_id,
+            chain: &chain,
+            lang: options.lang,
+        };
+        answer = Some(
+            guard_answer(
+                state,
+                filter,
+                profile.run.state_schema().map(|s| &**s),
+                at,
+                text,
+            )
+            .await,
+        );
+    }
     Ok(AgentReply {
         status: done
             .as_ref()
             .map_or(chat::TurnStatus::Errored, |t| t.status),
-        answer: done.as_ref().and_then(|t| t.content.clone()),
+        answer,
         error: done.and_then(|t| t.error_message),
         session_id,
         turn_id,

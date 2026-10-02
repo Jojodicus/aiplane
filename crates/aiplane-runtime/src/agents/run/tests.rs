@@ -421,6 +421,23 @@ struct Support {
 }
 
 async fn support_example() -> Support {
+    support_example_with(
+        None,
+        "You were charged twice by mistake; RE-1 is being refunded.",
+    )
+    .await
+}
+
+/// The support example with `publish` merged into its spec and `answer` as
+/// the main agent's closing words.
+async fn support_example_with(publish: Option<Value>, answer: &str) -> Support {
+    let spec_of = |billing: &str| {
+        let mut spec = support_spec(billing);
+        if let Some(publish) = &publish {
+            spec["publish"] = publish.clone();
+        }
+        spec
+    };
     let (erp, erp_calls) = erp().await;
     let main = llm(vec![
         calls(&[
@@ -434,7 +451,7 @@ async fn support_example() -> Support {
         call("fwd1", "forward_request", json!({})),
         text("Please confirm it is you with the code we just sent."),
         call("fwd2", "forward_request", json!({})),
-        text("You were charged twice by mistake; RE-1 is being refunded."),
+        text(answer),
     ])
     .await;
     let sub = llm(vec![
@@ -472,8 +489,8 @@ async fn support_example() -> Support {
     let support = world
         .agent("support", &[(GrantKind::Pool, "support-pool")])
         .await;
-    assert_eq!(world.issues(&support, &support_spec(&billing)).await, []);
-    world.publish(&support, &support_spec(&billing)).await;
+    assert_eq!(world.issues(&support, &spec_of(&billing)).await, []);
+    world.publish(&support, &spec_of(&billing)).await;
 
     let first = run_turn(
         &world.state,
@@ -493,7 +510,7 @@ async fn support_example() -> Support {
 
     // The OTP verifier (#95) confirmed the visitor: it writes the subject
     // through the trusted door, which no tool call can reach.
-    let schema = StateSchema::from_spec(&support_spec(&billing)).unwrap();
+    let schema = StateSchema::from_spec(&spec_of(&billing)).unwrap();
     write_trusted(
         world.db(),
         &schema,
@@ -1098,4 +1115,83 @@ async fn a_run_on_an_unpublished_or_unknown_agent_is_refused_with_the_reason() {
     let err = run_turn(&world.state, turn("nope")).await.unwrap_err();
     assert!(matches!(err, AgentRunError::Unavailable(_)), "{err}");
     assert!(requests(&main).await.is_empty());
+}
+
+fn invoice_filter(action: Option<&str>) -> Value {
+    let mut filter = json!({ "patterns": { "invoice": "RE-\\d+", "customer": "K-\\d{5}" } });
+    if let Some(action) = action {
+        filter["action"] = json!(action);
+    }
+    json!({ "output_filter": filter })
+}
+
+const OTHER_CUSTOMERS_INVOICE: &str = "RE-1 is being refunded; RE-2 belongs to someone else.";
+
+async fn blocked_events(s: &Support) -> Vec<agent_audit::AuditEvent> {
+    s.world
+        .audit(&s.support)
+        .await
+        .into_iter()
+        .filter(|e| e.kind == "output_blocked")
+        .collect()
+}
+
+#[tokio::test]
+async fn an_answer_naming_another_customers_invoice_is_withheld_and_audited() {
+    let s = support_example_with(Some(invoice_filter(None)), OTHER_CUSTOMERS_INVOICE).await;
+
+    let fallback = session_core::i18n::t(session_core::i18n::Lang::En, "agent-output-withheld");
+    assert_eq!(s.second.answer.as_deref(), Some(fallback.as_str()));
+    let stored = chat::get_turn(s.world.db(), &s.second.session_id, &s.second.turn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.content.as_deref(),
+        Some(fallback.as_str()),
+        "the transcript must not keep what the delivery withheld"
+    );
+    let blocked = blocked_events(&s).await;
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].detail["action"], "withheld");
+    assert_eq!(blocked[0].detail["patterns"], json!(["invoice"]));
+    assert!(
+        !blocked[0].detail.to_string().contains("RE-2"),
+        "the matched value is never logged: {}",
+        blocked[0].detail
+    );
+    let chain = blocked[0]
+        .chain
+        .as_ref()
+        .expect("the run chain is recorded");
+    assert_eq!(chain["root_session"], s.second.session_id.as_str());
+}
+
+#[tokio::test]
+async fn identifiers_from_verified_state_and_sub_agent_results_pass() {
+    let answer = "Customer K-12345: RE-1 was billed twice and is being refunded.";
+    let s = support_example_with(Some(invoice_filter(None)), answer).await;
+
+    assert_eq!(s.second.answer.as_deref(), Some(answer));
+    assert_eq!(blocked_events(&s).await, []);
+}
+
+#[tokio::test]
+async fn redaction_hides_an_identifier_nothing_in_the_turn_established() {
+    let answer = "Customer K-99999 has RE-1.";
+    let s = support_example_with(Some(invoice_filter(Some("redact"))), answer).await;
+
+    let marker = session_core::i18n::t(session_core::i18n::Lang::En, "agent-output-redacted");
+    assert_eq!(
+        s.second.answer.as_deref(),
+        Some(format!("Customer {marker} has RE-1.").as_str()),
+    );
+    assert_eq!(blocked_events(&s).await[0].detail["action"], "redacted");
+}
+
+#[tokio::test]
+async fn without_patterns_the_answer_is_unchanged() {
+    let s = support_example_with(None, OTHER_CUSTOMERS_INVOICE).await;
+    assert_eq!(s.second.answer.as_deref(), Some(OTHER_CUSTOMERS_INVOICE));
+    assert_eq!(blocked_events(&s).await, []);
 }

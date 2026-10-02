@@ -236,6 +236,8 @@ export const ru: Catalog = {
  "admin-users-you-badge": "вы",
  "admin-value-default": "по умолчанию",
  "admin-value-na": "н/д",
+ "agent-output-redacted": "[удалено]",
+ "agent-output-withheld": "Я не могу дать этот ответ, так как в нём упоминались данные, которые я не смог подтвердить для вас. Переформулируйте вопрос или обратитесь в службу поддержки.",
  "auto-route-add": "Добавить автоматический маршрут",
  "auto-route-alias": "Псевдоним модели",
  "auto-route-alias-help": "Клиенты передают это значение в стандартном поле модели.",

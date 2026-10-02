@@ -25,10 +25,12 @@ use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use serde_json::{Value, json};
+use session_core::i18n::Lang;
 use shared::api::ToolDef;
 
 use super::bind::{BoundTool, ToolBinds, WithheldTool, without_bound};
 use super::gate::{GateInput, GateStatus, RouteGates};
+use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
 use super::state::{self, AgentState, StateSchema, render_view};
@@ -80,6 +82,10 @@ pub struct RunOptions {
     /// router makes on its own: a caller can swap it for a test double, or a
     /// deterministic stand-in, without faking an upstream.
     pub classifier: Option<Arc<dyn RouteClassifier>>,
+    /// The language of text the gateway itself puts in an answer (the
+    /// output filter's fallback). English until the caller knows the
+    /// visitor's.
+    pub lang: Lang,
 }
 
 impl Default for RunOptions {
@@ -87,6 +93,7 @@ impl Default for RunOptions {
         Self {
             now: state::system_clock(),
             classifier: None,
+            lang: Lang::En,
         }
     }
 }
@@ -112,6 +119,8 @@ pub struct RunProfile {
     pub finish: Option<FinishContract>,
     pub injection: InjectionScan,
     pub run: Arc<AgentRun>,
+    /// `None` when the spec configures no identifier patterns.
+    pub output_filter: Option<OutputFilter>,
 }
 
 impl RunProfile {
@@ -165,6 +174,8 @@ impl RunProfile {
             }
         };
 
+        let output_filter = OutputFilter::from_spec(&spec)
+            .map_err(|e| bad(format!("`publish.output_filter`: {e}")))?;
         let mut synthetic: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
         let slot_tools = SlotTools::with_clock(schema.clone(), options.now.clone());
         for id in slot_tools.ids() {
@@ -222,6 +233,7 @@ impl RunProfile {
             finish,
             injection: InjectionScan::new(InjectionPolicy::Flag),
             run: Arc::new(run),
+            output_filter,
         })
     }
 
@@ -311,6 +323,10 @@ pub struct AgentRun {
 impl AgentRun {
     /// The tools offered this round: the spec's tools the principal is
     /// granted (`granted`), then the synthetic ones.
+    pub fn state_schema(&self) -> Option<&Arc<StateSchema>> {
+        self.schema.as_ref()
+    }
+
     pub fn offered(&self, granted: &[String]) -> Vec<String> {
         self.tools
             .iter()

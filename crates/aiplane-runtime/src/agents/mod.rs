@@ -9,6 +9,7 @@
 
 pub mod bind;
 pub mod gate;
+pub mod output_filter;
 pub mod profile;
 pub mod router;
 pub mod run;
