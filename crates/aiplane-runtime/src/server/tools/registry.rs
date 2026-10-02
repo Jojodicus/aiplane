@@ -157,6 +157,42 @@ pub trait ToolSource: Send + Sync {
     fn contains(&self, id: &str) -> bool {
         self.get(id).is_some()
     }
+
+    /// When a call to `id` runs relative to the other calls of its round.
+    fn phase(&self, _id: &str) -> ToolPhase {
+        ToolPhase::Concurrent
+    }
+}
+
+/// The order a round's calls run in. Phases run one after the other, each
+/// finished before the next starts; every result still answers its own call,
+/// in the order the model made the calls.
+///
+/// Only an agent run's synthetic tools leave [`ToolPhase::Concurrent`]: they
+/// write the run's state or act on it, and a model batches them freely, so a
+/// forward made in the round that fills its slots must see them filled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolPhase {
+    /// Writes the run's state (`set_<slot>`, a verifier). Runs first, one call
+    /// at a time in call order, since a verifier reads what a `set_<slot>`
+    /// before it wrote.
+    WritesState,
+    /// Every other tool, concurrently, once the state is written: a bound
+    /// argument may come from state too.
+    #[default]
+    Concurrent,
+    /// Acts on the state as the round left it (`forward_request`,
+    /// `request_human`). Runs last, one call at a time in call order.
+    ActsOnState,
+}
+
+impl ToolPhase {
+    pub const ORDER: [ToolPhase; 3] = [Self::WritesState, Self::Concurrent, Self::ActsOnState];
+
+    /// Whether the calls of this phase run one at a time.
+    pub fn is_sequential(self) -> bool {
+        self != Self::Concurrent
+    }
 }
 
 impl ToolSource for ToolRegistry {

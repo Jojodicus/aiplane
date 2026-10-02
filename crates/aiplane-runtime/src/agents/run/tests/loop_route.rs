@@ -91,8 +91,7 @@ struct Loop {
     reply: AgentReply,
 }
 
-/// The main agent records the issue, then forwards it once (a round's tool
-/// calls run concurrently, so the forward needs its own round); the worker and
+/// The main agent records the issue and forwards it once; the worker and
 /// critic answer from `drafts` and `verdicts`.
 async fn run_loop(
     drafts: Vec<Value>,
@@ -101,8 +100,10 @@ async fn run_loop(
     worker_tokens: u64,
 ) -> Loop {
     let main = llm(vec![
-        calls(&[("s1", "set_issue", json!({ "value": "a website redesign" }))]),
-        calls(&[("fwd", "forward_request", json!({}))]),
+        calls(&[
+            ("s1", "set_issue", json!({ "value": "a website redesign" })),
+            ("fwd", "forward_request", json!({})),
+        ]),
         text("Here is your offer."),
     ])
     .await;
@@ -316,8 +317,10 @@ async fn a_worker_that_does_not_finish_ends_the_loop_incomplete() {
 #[tokio::test]
 async fn the_test_chat_debug_view_shows_every_iteration() {
     let main = llm(vec![
-        calls(&[("s1", "set_issue", json!({ "value": "a website redesign" }))]),
-        calls(&[("fwd", "forward_request", json!({}))]),
+        calls(&[
+            ("s1", "set_issue", json!({ "value": "a website redesign" })),
+            ("fwd", "forward_request", json!({})),
+        ]),
         text("Here is your offer."),
     ])
     .await;
