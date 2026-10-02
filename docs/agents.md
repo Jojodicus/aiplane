@@ -178,9 +178,7 @@ That compile pass is the audit of every place identity matters.
 | Limits | subject `user`/`role`/`global` | subject `system`: the owner's budget for this agent (#92) |
 | Audit | `mcp_tool_audit.user_id` | plus `principal_kind` and `chain` columns |
 
-- **New connector scope `agent`** *(not yet built — #77 shipped grants of
-  `global` connectors only; a per-user connector is refused at grant time and
-  ignored at run time).* It sits next to `per_user` and `global` in
+- **New connector scope `agent`.** It sits next to `per_user` and `global` in
   `mcp_catalog`. Such a connector is invisible to every person and usable only
   by principals that were granted it. This is how an owner wires their own ERP
   or ticket MCP, with a static bearer, without exposing it to employees.
@@ -540,6 +538,17 @@ CREATE TABLE chat_turn_suspensions (
 
 **Expiry**
 - A sweeper turns an expired suspension into `deny` with reason `timeout`.
+
+**As built (#82).** The table also carries `request_id` (so an answer to an
+earlier pause of the same turn cannot settle a later one), `message` (what the
+tool wants shown) and `on_timeout` (`deny` | `allow_once`, the configurable
+fallback; deny by default). `expires_at` is compared after parsing, not as a
+string. The resume route for the chat path is
+`POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume`, owner-only, with
+`{decision, value?, request_id?}`; the agent/public route comes with #91.
+`child_turn` exists but nothing sets it: ancestor suspension and
+innermost-first resume arrive with sub-agent dispatch (#88). Details in
+[`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
 
 ## 4. Gates and validation
 

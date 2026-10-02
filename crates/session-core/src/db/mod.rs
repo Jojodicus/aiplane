@@ -12,7 +12,8 @@
 //! - `chat_turns` — one row per message in a thread. Role `user`
 //!   carries the prompt; role `assistant` carries the streamed reply
 //!   with `status` cycling through `in_progress → completed |
-//!   cancelled | errored`.
+//!   cancelled | errored`, or `in_progress → suspended → in_progress`
+//!   while a tool call waits for a decision (see [`suspensions`]).
 //! - `chat_tool_calls` — side table because one assistant turn can
 //!   fan out into many tool invocations across rounds.
 //!
@@ -119,6 +120,11 @@ pub enum TurnStatus {
     /// Worker hit an error path (upstream non-2xx, malformed SSE,
     /// internal panic guard). `error_message` carries the human form.
     Errored,
+    /// Paused at a tool call that waits for a decision from outside the
+    /// model. A `chat_turn_suspensions` row holds what resuming needs; no
+    /// worker is running. Not terminal: a resume flips it back to
+    /// `InProgress`. See [`suspensions`].
+    Suspended,
 }
 
 impl TurnStatus {
@@ -128,6 +134,7 @@ impl TurnStatus {
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
             Self::Errored => "errored",
+            Self::Suspended => "suspended",
         }
     }
     fn parse(s: &str) -> Result<Self, DbError> {
@@ -136,6 +143,7 @@ impl TurnStatus {
             "completed" => Ok(Self::Completed),
             "cancelled" => Ok(Self::Cancelled),
             "errored" => Ok(Self::Errored),
+            "suspended" => Ok(Self::Suspended),
             _ => Err(DbError::Decode {
                 column: "status",
                 source: anyhow::anyhow!("unknown chat turn status `{s}`"),
@@ -216,6 +224,9 @@ pub struct TurnWithTools {
     pub turn: Turn,
     pub tool_calls: Vec<ToolCall>,
     pub steers: Vec<TurnSteer>,
+    /// The decision this turn waits for, when it is `Suspended`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspension: Option<SuspensionView>,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +305,7 @@ mod pending;
 mod search;
 mod sessions;
 mod steers;
+pub mod suspensions;
 mod tool_calls;
 mod turns;
 
@@ -302,6 +314,7 @@ pub use pending::*;
 pub use search::*;
 pub use sessions::*;
 pub use steers::*;
+pub use suspensions::*;
 pub use tool_calls::*;
 pub use turns::*;
 
@@ -433,6 +446,19 @@ pub(crate) mod tests {
                 FOREIGN KEY (turn_id) REFERENCES chat_turns(id) ON DELETE CASCADE,
                 UNIQUE (turn_id, seq)
             )"#,
+            r#"CREATE TABLE chat_turn_suspensions (
+                turn_id      TEXT PRIMARY KEY NOT NULL REFERENCES chat_turns(id) ON DELETE CASCADE,
+                request_id   TEXT NOT NULL UNIQUE,
+                kind         TEXT NOT NULL,
+                message      TEXT,
+                tool_call    TEXT NOT NULL,
+                tail         TEXT NOT NULL,
+                budget_used  TEXT NOT NULL,
+                child_turn   TEXT,
+                on_timeout   TEXT NOT NULL,
+                expires_at   TEXT NOT NULL,
+                created_at   TEXT NOT NULL
+            ) STRICT"#,
             // FTS5 table for search (matches migration 0031). Keyed on the
             // implicit integer `rowid` because `chat_turns.id` is a TEXT UUID
             // and FTS5's content_rowid must be an integer.

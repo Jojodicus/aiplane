@@ -127,7 +127,18 @@ pub async fn run_session_turn(pool: Pool, driver: Box<dyn SessionDriver>, ctx: S
         }
     }
 
-    let finalized = if result_is_panic {
+    // A driver that paused the turn has already written its suspension and
+    // flipped the row to `suspended`; finalizing would overwrite that with
+    // `completed`. The worker still ends, and subscribers still get
+    // `Finalized` — their feed reads the paused row and says so.
+    let suspended = status == TurnStatus::Completed
+        && matches!(
+            db::get_turn(&pool, &session_id, &assistant_turn_id).await,
+            Ok(Some(turn)) if turn.status == TurnStatus::Suspended
+        );
+    let finalized = if suspended {
+        Ok(())
+    } else if result_is_panic {
         db::error_interrupted_turn(
             &pool,
             &assistant_turn_id,
@@ -179,6 +190,75 @@ mod tests {
             .unwrap();
             panic!("tool failed unexpectedly");
         }
+    }
+
+    struct SuspendingDriver {
+        pool: Pool,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionDriver for SuspendingDriver {
+        async fn run_turn(&self, ctx: SessionContext) -> Result<TurnOutcome, TurnError> {
+            let now = jiff::Timestamp::now();
+            let suspended = db::suspend_turn(
+                &self.pool,
+                &db::TurnSuspension {
+                    turn_id: ctx.assistant_turn_id.clone(),
+                    request_id: "req-1".into(),
+                    kind: db::SuspensionKind::Approval,
+                    message: None,
+                    tool_call: db::PendingCall {
+                        id: "call-1".into(),
+                        name: "company_echo".into(),
+                        arguments: "{}".into(),
+                    },
+                    tail: Vec::new(),
+                    budget_used: db::BudgetUsed::default(),
+                    child_turn: None,
+                    on_timeout: db::TimeoutFallback::Deny,
+                    expires_at: now,
+                    created_at: now,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(suspended);
+            Ok(TurnOutcome::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_driver_that_suspends_leaves_the_turn_paused_and_ends_the_worker() {
+        let pool = db::tests::pool().await;
+        let session = db::create_session(&pool, "u1").await.unwrap();
+        db::create_assistant_turn_in_progress(&pool, &session.id, "turn-1", "model")
+            .await
+            .unwrap();
+        let (broadcast, mut updates) = tokio::sync::broadcast::channel(8);
+        let ctx = SessionContext {
+            user_id: Some("u1".into()),
+            session_id: session.id.clone(),
+            assistant_turn_id: "turn-1".into(),
+            model: "model".into(),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            broadcast,
+            steers: SteerInbox::default(),
+        };
+        run_session_turn(
+            pool.clone(),
+            Box::new(SuspendingDriver { pool: pool.clone() }),
+            ctx,
+        )
+        .await;
+
+        assert_eq!(updates.try_recv().unwrap(), TurnUpdate::Finalized);
+        let turn = db::get_turn(&pool, &session.id, "turn-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, TurnStatus::Suspended);
+        assert_eq!(turn.completed_at, None);
+        assert!(db::get_suspension(&pool, "turn-1").await.unwrap().is_some());
     }
 
     #[tokio::test]

@@ -193,9 +193,10 @@ async fn mcp_server(personal_hits: Arc<AtomicUsize>) -> MockServer {
                 "" => "shared_lookup",
                 "Bearer alice-secret" => "alice_files",
                 "Bearer bob-secret" => "bob_files",
+                "Bearer erp-secret" => "erp_lookup",
                 other => panic!("unexpected MCP credential: {other}"),
             };
-            if !bearer.is_empty() {
+            if bearer.contains("alice") || bearer.contains("bob") {
                 personal_hits.fetch_add(1, Ordering::SeqCst);
             }
             let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -246,7 +247,7 @@ fn connector(key: &str, url: &str, scope: mcp_catalog::Scope) -> mcp_catalog::Co
         category: None,
         url: url.into(),
         auth: match scope {
-            mcp_catalog::Scope::Global => mcp_catalog::AuthKind::None,
+            mcp_catalog::Scope::Global | mcp_catalog::Scope::Agent => mcp_catalog::AuthKind::None,
             mcp_catalog::Scope::PerUser => mcp_catalog::AuthKind::OAuth2,
         },
         scope,
@@ -880,4 +881,147 @@ async fn a_system_principal_lists_only_the_models_of_its_granted_pools() {
         .map(|m| m["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["model-a"]);
+}
+
+const AGENT: &str = "erp";
+
+/// An `agent` connector created the way an operator would: through the admin
+/// API, with a static bearer the gateway sends for every principal.
+async fn agent_connector(fx: &Fixture, allowed_groups: &[&str]) {
+    let body = json!({
+        "key": AGENT,
+        "title": "ERP",
+        "base_url": fx._mcp.uri(),
+        "scope": "agent",
+        "auth_type": "static_bearer",
+        "client_secret": "erp-secret",
+        "groups": allowed_groups,
+    });
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/v0/admin/connectors")
+        .header("cookie", format!("id={}", fx.admin))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, body) = fx.send(req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = fx
+        .post(
+            &fx.admin,
+            &format!("/api/v0/admin/connectors/{AGENT}/toggle"),
+            json!({"enabled": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, listed) = fx.get(&fx.admin, "/api/v0/admin/connectors").await;
+    let scope = listed["connectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["key"] == AGENT)
+        .map(|c| c["scope"].clone());
+    assert_eq!(scope, Some(json!("agent")), "{listed}");
+}
+
+fn agent_tool() -> String {
+    format!("mcp__{AGENT}__erp_lookup")
+}
+
+#[tokio::test]
+async fn an_agent_connector_cannot_use_per_user_oauth() {
+    let fx = fixture().await;
+    let body = json!({
+        "key": "erp2", "base_url": "http://erp/mcp", "scope": "agent", "auth_type": "oauth2",
+    });
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/v0/admin/connectors")
+        .header("cookie", format!("id={}", fx.admin))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, body) = fx.send(req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("agent"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn no_person_ever_sees_an_agent_connector_admin_included() {
+    let fx = fixture().await;
+    agent_connector(&fx, &[]).await;
+    gateway_groups::set_tools_for_group(&fx.state.db, "everyone", &[format!("mcp__{AGENT}")])
+        .await
+        .unwrap();
+    fx.state.reload_rbac().await;
+
+    for (who, roles) in [("alice", vec![]), ("admin", vec!["admins".to_string()])] {
+        let layer = fx
+            .state
+            .mcp_layer_for(
+                &Principal::User {
+                    id: who.into(),
+                    roles,
+                },
+                AskContext::Chat,
+            )
+            .await;
+        assert!(
+            !layer.tool_ids().iter().any(|id| id.contains(AGENT)),
+            "{who} was offered {:?}",
+            layer.tool_ids()
+        );
+    }
+    for cookie in [&fx.plain, &fx.admin] {
+        let (status, body) = fx.get(cookie, "/api/v0/integrations").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["connectors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["key"] != AGENT),
+            "{body}"
+        );
+    }
+    let (_, groups) = fx.get(&fx.admin, "/api/v0/admin/groups").await;
+    assert!(
+        groups["tool_families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["id"] != format!("mcp__{AGENT}")),
+        "{groups}"
+    );
+}
+
+#[tokio::test]
+async fn a_granted_principal_uses_an_agent_connector_an_ungranted_one_does_not() {
+    let fx = fixture().await;
+    agent_connector(&fx, &[]).await;
+    let (granted, granted_bearer) = fx.principal_with_pool("granted").await;
+    let (_, other_bearer) = fx.principal_with_pool("other").await;
+    let (status, body) = fx.grant(&fx.manager, &granted, "connector", AGENT).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    assert_eq!(fx.chat(&granted_bearer).await, StatusCode::OK);
+    assert_eq!(fx.offered_tools().await, [agent_tool()]);
+
+    assert_eq!(fx.chat(&other_bearer).await, StatusCode::OK);
+    assert!(fx.offered_tools().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_connectors_groups_decide_who_may_grant_it() {
+    let fx = fixture().await;
+    agent_connector(&fx, &["admins"]).await;
+    let id = fx.create(&fx.manager, "ci").await;
+    let (status, body) = fx.grant(&fx.manager, &id, "connector", AGENT).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "grant_exceeds_manager");
+    let (status, _) = fx.grant(&fx.admin, &id, "connector", AGENT).await;
+    assert_eq!(status, StatusCode::CREATED);
 }

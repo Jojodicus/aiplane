@@ -203,6 +203,18 @@ async fn submit_once(
     user_msg: &str,
     req: &RequestCtx,
 ) -> Result<Option<SubmitOutcome>, SubmitTurnError> {
+    // A paused turn holds its conversation the way a running worker does, and
+    // there is no worker to fold into: the message waits for the decision.
+    if chat::suspended_turn_in_session(&state.db, &active.id)
+        .await
+        .map_err(|err| SubmitTurnError::Db(err.to_string()))?
+        .is_some()
+    {
+        return queue_for_later(state, user, active, submit, user_msg, req)
+            .await
+            .map(Some);
+    }
+
     let assistant_turn_id = uuid::Uuid::new_v4().to_string();
     let outcome = state.chats.register(
         &user.id,
@@ -301,6 +313,7 @@ async fn submit_once(
         &submit.model,
         &worker,
         req.clone(),
+        None,
     )
     .await;
 
@@ -532,6 +545,7 @@ async fn start_pending_turn(state: &Arc<RamaState>, pending: &chat::PendingTurn)
             secure: pending.secure,
             voice_mode: pending.voice,
         },
+        None,
     )
     .await;
     true
@@ -804,6 +818,10 @@ pub(crate) struct RequestCtx {
 /// shared by the message-send and retry/edit (regeneration) paths — the
 /// caller owns the worker registration, the assistant-turn row, and the
 /// SSE response framing; this owns everything between.
+///
+/// `resume` continues a suspended turn instead of starting one; see
+/// [`resume_turn`].
+#[allow(clippy::too_many_arguments)]
 async fn spawn_assistant_worker(
     state: &Arc<RamaState>,
     user: &User,
@@ -812,6 +830,7 @@ async fn spawn_assistant_worker(
     model: &str,
     worker: &session_core::workers::ActiveWorker,
     req: RequestCtx,
+    resume: Option<aiplane_runtime::suspend::ResumeFrom>,
 ) {
     // Per-conversation tool overlay. The driver re-resolves the allowed-tool
     // set per round via `allowed_tools_for_session` (core ∪ this-conversation's
@@ -843,6 +862,8 @@ async fn spawn_assistant_worker(
             model: Some(model.to_string()),
             // Session path: access is exactly the user's group grant.
             pool_access: None,
+            // The owner can answer a pause later through `…/turns/{id}/resume`.
+            suspendable: true,
         },
     );
     let driver = Box::new(aiplane_runtime::openai_driver::OpenAiDriver {
@@ -853,7 +874,9 @@ async fn spawn_assistant_worker(
         voice_mode: req.voice_mode,
         finish: None,
         budget: None,
+        injection: Default::default(),
         clock: aiplane_runtime::budget::system_clock(),
+        resume,
     });
     let driver_ctx = session_core::driver::SessionContext {
         user_id: Some(user.id.clone()),
@@ -899,6 +922,142 @@ async fn spawn_assistant_worker(
         // in this conversation or in another of this user's. No timer, no
         // poll: the event that made room is what acts on it.
         start_pending_turns(&worker_state, &user_id_for_clear).await;
+    });
+}
+
+/// Why a resume did not start.
+#[derive(Debug)]
+pub(crate) enum ResumeTurnError {
+    /// Refused before anything was claimed — see [`ResumeRefused`].
+    Refused(aiplane_runtime::suspend::ResumeRefused),
+    /// Something else is running in this conversation, or every parallel
+    /// slot is in use. The suspension is untouched; try again later.
+    Busy,
+}
+
+/// Continue a suspended turn with `decision`, through the same worker
+/// machinery as a fresh message.
+///
+/// The worker slot is reserved *before* the suspension is claimed. Claiming
+/// first would leave a turn `in_progress` with no worker whenever the slot
+/// turned out to be taken — exactly the orphan the startup sweep exists for.
+pub(crate) async fn resume_turn(
+    state: &Arc<RamaState>,
+    user: &User,
+    turn: &chat::Turn,
+    request_id: Option<&str>,
+    decision: chat::Decision,
+    req: RequestCtx,
+) -> Result<(), ResumeTurnError> {
+    use aiplane_runtime::suspend::{ResumeRefused, claim_for_resume};
+    // Only an assistant turn, which always names its model, can be suspended.
+    let Some(model) = turn.model.clone() else {
+        return Err(ResumeTurnError::Refused(ResumeRefused::NotSuspended));
+    };
+    let worker = match state.chats.register(
+        &user.id,
+        &turn.id,
+        &turn.session_id,
+        state.config().chat.turns.max_parallel,
+    ) {
+        RegisterOutcome::Registered { worker } => worker,
+        RegisterOutcome::Busy { .. } | RegisterOutcome::AtCapacity { .. } => {
+            return Err(ResumeTurnError::Busy);
+        }
+    };
+    let resume = match claim_for_resume(&state.db, &turn.id, request_id, decision).await {
+        Ok(resume) => resume,
+        Err(refused) => {
+            state.chats.clear(&user.id, &worker);
+            return Err(ResumeTurnError::Refused(refused));
+        }
+    };
+    tracing::info!(
+        turn = %turn.id,
+        decision = ?resume.decision.kind(),
+        "resuming a suspended turn"
+    );
+    spawn_assistant_worker(
+        state,
+        user,
+        &turn.session_id,
+        &turn.id,
+        &model,
+        &worker,
+        req,
+        Some(resume),
+    )
+    .await;
+    Ok(())
+}
+
+/// Settle every suspension past its deadline with its timeout fallback.
+///
+/// Resumes run as the conversation's owner, with no request behind them. A
+/// suspension whose conversation is busy stays put and is retried on the next
+/// sweep.
+pub async fn resume_expired_suspensions(state: &Arc<RamaState>) {
+    let expired = match chat::expired_suspensions(&state.db, jiff::Timestamp::now()).await {
+        Ok(expired) => expired,
+        Err(err) => {
+            tracing::warn!(error = %err, "reading expired suspensions");
+            return;
+        }
+    };
+    for suspension in expired {
+        let user = match aiplane_core::server::db::users::find_by_id(&state.db, &suspension.user_id)
+            .await
+        {
+            Ok(Some(user)) => user,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(error = %err, turn = %suspension.turn_id, "reading a suspension's owner");
+                continue;
+            }
+        };
+        let turn = match chat::get_turn(&state.db, &suspension.session_id, &suspension.turn_id)
+            .await
+        {
+            Ok(Some(turn)) => turn,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(error = %err, turn = %suspension.turn_id, "reading a suspended turn");
+                continue;
+            }
+        };
+        let decision = suspension.on_timeout.decision();
+        let req = RequestCtx {
+            client_ip: None,
+            secure: false,
+            voice_mode: false,
+        };
+        match resume_turn(state, &user, &turn, None, decision, req).await {
+            Ok(()) => tracing::info!(
+                turn = %turn.id,
+                fallback = suspension.on_timeout.as_str(),
+                "suspension expired; resumed with its timeout fallback"
+            ),
+            Err(ResumeTurnError::Busy) => {}
+            Err(ResumeTurnError::Refused(refused)) => {
+                tracing::debug!(turn = %turn.id, %refused, "expired suspension already settled");
+            }
+        }
+    }
+}
+
+/// How often expired suspensions are looked for. A decision deadline is
+/// minutes to hours away, so a deadline missed by up to this much is fine.
+const SUSPENSION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run [`resume_expired_suspensions`] at boot and then periodically. Boot
+/// matters: a deadline that passed while the process was down is due now.
+pub fn spawn_suspension_sweeper(state: Arc<RamaState>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(SUSPENSION_SWEEP_INTERVAL);
+        loop {
+            tick.tick().await;
+            resume_expired_suspensions(&state).await;
+        }
     });
 }
 

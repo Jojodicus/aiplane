@@ -257,6 +257,11 @@ connected server. The drift guard matches them by prefix.
 | `comfyui_<id>` | one per manifest in the `[comfyui]` catalog, hot-reloadable | `comfyui` — **one key for the whole family**, so a newly reloaded workflow is enabled automatically |
 | `mcp__<server>__<tool>` | per-user MCP connectors, connected lazily per request | `mcp__<server>` — one key per integration |
 
+`AskFirst` (`server/tools/ask_first.rs`) is not a family: it wraps one tool
+and keeps its id, so the wrapped tool's own row above applies. It only changes
+*when* the tool runs — after the user approves the call (see
+[`tools-rbac.md`](tools-rbac.md#suspend-and-resume)).
+
 File bytes an MCP tool returns (base64, inline — the only way the protocol has) are spilled into conversation attachments before the result reaches the model, and referenced by `<turn_id>/<filename>` id like any upload. See [`connectors.md`](connectors.md) → *Files a connector returns become conversation artifacts*.
 
 `typst_<id>_pptx` additionally requires `[sandbox]` (the conversion runs

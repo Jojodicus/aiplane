@@ -91,11 +91,13 @@ connectors-add-connector-button = Ajouter un connecteur
 
 connectors-restore-defaults-confirm = Réinitialiser les entrées intégrées du catalogue ?
 connectors-badge-global = Global
+connectors-badge-agent = Agents uniquement
 connectors-badge-audited = Audité
 connectors-badge-needs-setup = Identifiant client requis
 connectors-field-scope-label = Portée
 connectors-scope-per-user = Par utilisateur (chacun connecte son propre compte)
 connectors-scope-global = Global (une identité partagée pour tous)
+connectors-scope-agent = Agents uniquement (identité partagée, jamais visible pour les personnes)
 connectors-field-scope-help = Les connecteurs globaux sont partagés par toutes les personnes autorisées par leurs groupes AIplane. Ils doivent utiliser aucune authentification ou un jeton partagé, et non OAuth par utilisateur.
 connectors-token-help-global = Ce connecteur partagé envoie un jeton Bearer chiffré pour chaque utilisateur autorisé.
 connectors-token-help-user = Chaque utilisateur fournit son propre jeton API dans Intégrations. Aucun client OAuth n'est nécessaire.

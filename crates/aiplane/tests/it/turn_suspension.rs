@@ -1,0 +1,535 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Durable suspend and resume of a chat turn (#82), end to end.
+//!
+//! A tool wrapped in `AskFirst` pauses its turn for the owner's approval. What
+//! this pins, through the real router, worker and SQLite file:
+//!   - the stream tells the client what the turn waits for, then ends without
+//!     calling the turn finished;
+//!   - the pause survives a restart — the second process is built from the
+//!     same database file and nothing else — and
+//!     `POST …/turns/{turn_id}/resume` continues the same turn to its answer;
+//!   - a denial reaches the model as a tool error, an expiry takes the
+//!     timeout fallback;
+//!   - only the turn's owner may answer, only with a decision the request
+//!     offers, and only while it is waiting;
+//!   - a paused conversation holds new messages back until it is settled, and
+//!     cancelling it gives up on the decision.
+
+use crate::common;
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use aiplane::rama_server::{RamaState, SessionStore, router::router};
+use aiplane_core::server::db;
+use aiplane_core::server::rbac::Resolver;
+use aiplane_core::server::upstreams::{
+    self,
+    config::{PickerStrategy, PoolKind, UpstreamPoolConfig},
+};
+use aiplane_runtime::server::AppState;
+use aiplane_runtime::server::tools::ToolRegistry;
+use aiplane_runtime::server::tools::ask_first::AskFirst;
+use aiplane_runtime::server::tools::echo::Echo;
+use common::Service as _;
+use rama::http::body::util::BodyExt;
+use rama::http::{Body, Method, Request, StatusCode};
+use serde_json::{Value, json};
+use session_core::db::{self as chat, TimeoutFallback, ToolCallStatus, TurnStatus};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Answers each upstream round with the next scripted delta. Lives on the
+/// mock server, so it keeps counting across the simulated restart.
+struct Scripted {
+    deltas: Vec<Value>,
+    served: AtomicUsize,
+    delay: Duration,
+}
+
+impl wiremock::Respond for Scripted {
+    fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
+        let i = self.served.fetch_add(1, Ordering::SeqCst);
+        let delta = &self.deltas[i.min(self.deltas.len() - 1)];
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"choices": [{"index": 0, "delta": delta}]})
+        );
+        ResponseTemplate::new(200)
+            .set_body_raw(sse, "text/event-stream")
+            .set_delay(self.delay)
+    }
+}
+
+fn echo_call() -> Value {
+    json!({"tool_calls": [{"index": 0, "id": "call-1", "type": "function",
+        "function": {"name": "company_echo", "arguments": "{\"message\":\"ship it\"}"}}]})
+}
+
+async fn upstream(answer: &str, delay: Duration) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(Scripted {
+            deltas: vec![echo_call(), json!({"content": answer})],
+            served: AtomicUsize::new(0),
+            delay,
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+/// One process's state over the database file at `db_path`: migrations and
+/// the startup sweep run, the registries are new.
+async fn boot(db_path: &Path, upstream_url: &str, approval_timeout: Duration) -> Arc<RamaState> {
+    let pool = db::open(db_path).await.unwrap();
+    let mut pools = HashMap::new();
+    pools.insert(
+        "pool".to_string(),
+        UpstreamPoolConfig {
+            voices: Default::default(),
+            offer_voices: Vec::new(),
+            allowed_groups: Vec::new(),
+            fallback_offline: None,
+            compliance: Default::default(),
+            enforce_limits: true,
+            kind: PoolKind::Chat,
+            strategy: PickerStrategy::RoundRobin,
+            models: Vec::new(),
+            backend: vec![common::mock_backend("mock", upstream_url)],
+        },
+    );
+    let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
+    common::seed_pool_models(&registry, "pool", 0, &["model-a"]);
+    let tools = ToolRegistry::new().with(AskFirst::new(Echo, approval_timeout));
+    let app = AppState::new(
+        common::test_config(),
+        pool.clone(),
+        registry,
+        Arc::new(tools),
+        Arc::new(Resolver::empty()),
+    );
+    let sessions = SessionStore::new(pool, common::TEST_SECRET);
+    Arc::new(RamaState::new(
+        app,
+        sessions,
+        aiplane_core::server::usage::UsageHandle::disabled(),
+    ))
+}
+
+const AN_HOUR: Duration = Duration::from_secs(3600);
+
+fn post(uri: String, cookie: &str, body: Value) -> Request {
+    common::post_json(&uri, cookie, &body.to_string())
+}
+
+fn get(uri: String, cookie: &str) -> Request {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header("cookie", format!("id={cookie}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn json_body(resp: rama::http::Response) -> Value {
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+fn sse_frames(body: &str) -> Vec<(String, Value)> {
+    body.split("\n\n")
+        .filter_map(|block| {
+            let event = block.lines().find_map(|l| l.strip_prefix("event: "))?;
+            let data = block.lines().find_map(|l| l.strip_prefix("data: "))?;
+            Some((event.to_string(), serde_json::from_str(data).unwrap()))
+        })
+        .collect()
+}
+
+/// A conversation of alice's that already has a title, so the first submit
+/// does not spend a scripted upstream round on generating one.
+async fn conversation(state: &Arc<RamaState>) -> String {
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+    chat::set_session_title(&state.db, &session.id, "approvals")
+        .await
+        .unwrap();
+    session.id
+}
+
+/// Submit "echo something" and return the assistant turn id.
+async fn submit(state: &Arc<RamaState>, cookie: &str, session_id: &str) -> String {
+    let resp = router(state.clone())
+        .serve(post(
+            format!("/api/v0/chat/sessions/{session_id}/messages"),
+            cookie,
+            json!({"model": "model-a", "message": "echo something"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    json_body(resp).await["assistant_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn wait_for_status(
+    state: &Arc<RamaState>,
+    session_id: &str,
+    turn_id: &str,
+    want: TurnStatus,
+) -> chat::TurnWithTools {
+    for _ in 0..200 {
+        let turn = chat::get_turn_with_tools(&state.db, session_id, turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        if turn.turn.status == want && state.chats.running_for_user("alice") == 0 {
+            return turn;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let last = chat::get_turn_with_tools(&state.db, session_id, turn_id).await;
+    panic!("turn {turn_id} never reached {want:?}: {last:?}");
+}
+
+async fn resume(
+    state: &Arc<RamaState>,
+    cookie: &str,
+    session_id: &str,
+    turn_id: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let resp = router(state.clone())
+        .serve(post(
+            format!("/api/v0/chat/sessions/{session_id}/turns/{turn_id}/resume"),
+            cookie,
+            body,
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, json_body(resp).await)
+}
+
+/// A paused conversation: alice's turn waits for approval of `company_echo`.
+async fn paused(
+    db_path: &Path,
+    upstream_url: &str,
+    approval_timeout: Duration,
+) -> (Arc<RamaState>, String, String, String) {
+    let state = boot(db_path, upstream_url, approval_timeout).await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    let session_id = conversation(&state).await;
+    let turn_id = submit(&state, &cookie, &session_id).await;
+    wait_for_status(&state, &session_id, &turn_id, TurnStatus::Suspended).await;
+    (state, cookie, session_id, turn_id)
+}
+
+fn tool_message(request: &Value) -> Value {
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone()
+}
+
+async fn upstream_requests(server: &MockServer) -> Vec<Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_live_stream_announces_the_pause_and_ends_without_finalizing() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Echoed.", Duration::from_millis(300)).await;
+    let state = boot(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    let session_id = conversation(&state).await;
+    let turn_id = submit(&state, &cookie, &session_id).await;
+
+    let resp = router(state.clone())
+        .serve(get(
+            format!("/api/v0/chat/sessions/{session_id}/events"),
+            &cookie,
+        ))
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let frames = sse_frames(&String::from_utf8_lossy(&bytes));
+    let names: Vec<&str> = frames.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names.first(), Some(&"snapshot"), "{names:?}");
+    let (_, suspended) = frames
+        .iter()
+        .find(|(n, _)| n == "suspended")
+        .unwrap_or_else(|| panic!("no suspended event in {names:?}"));
+    assert_eq!(suspended["turn_id"], turn_id);
+    assert_eq!(suspended["kind"], "approval");
+    assert_eq!(suspended["tool"], "company_echo");
+    assert_eq!(suspended["tool_call_id"], "call-1");
+    assert_eq!(suspended["options"], json!(["allow_once", "deny"]));
+    assert!(suspended["request_id"].is_string());
+    assert!(
+        !names.contains(&"turn_finalized"),
+        "a pause is not an ending: {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_paused_turn_survives_a_restart_and_resumes_to_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("gateway.db");
+    let server = upstream("Echoed: ship it", Duration::ZERO).await;
+    let (before, cookie, session_id, turn_id) = paused(&db_path, &server.uri(), AN_HOUR).await;
+    before.db.close().await;
+    drop(before);
+
+    let after = boot(&db_path, &server.uri(), AN_HOUR).await;
+    // The attach after the restart: the turn is still waiting, and says for
+    // what — the startup sweep did not take it for a crashed one.
+    let resp = router(after.clone())
+        .serve(get(
+            format!("/api/v0/chat/sessions/{session_id}/events"),
+            &cookie,
+        ))
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let frames = sse_frames(&String::from_utf8_lossy(&bytes));
+    let snapshot = &frames[0].1;
+    let waiting = snapshot["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["turn"]["id"] == turn_id.as_str())
+        .unwrap();
+    assert_eq!(waiting["turn"]["status"], "suspended");
+    assert_eq!(waiting["tool_calls"][0]["status"], "running");
+    let request_id = waiting["suspension"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, body) = resume(
+        &after,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once", "request_id": request_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["assistant_turn_id"], turn_id.as_str());
+
+    let done = wait_for_status(&after, &session_id, &turn_id, TurnStatus::Completed).await;
+    assert_eq!(done.turn.content.as_deref(), Some("Echoed: ship it"));
+    assert_eq!(done.suspension, None);
+    assert_eq!(done.tool_calls.len(), 1);
+    assert_eq!(done.tool_calls[0].status, ToolCallStatus::Completed);
+    let sent = upstream_requests(&server).await;
+    assert_eq!(sent.len(), 2);
+    let result = tool_message(&sent[1]);
+    assert_eq!(result["tool_call_id"], "call-1");
+    assert!(result["content"].as_str().unwrap().contains("ship it"));
+}
+
+#[tokio::test]
+async fn a_denied_call_reaches_the_model_as_a_tool_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Understood, I will not.", Duration::ZERO).await;
+    let (state, cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+
+    let (status, body) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "deny"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+    let done = wait_for_status(&state, &session_id, &turn_id, TurnStatus::Completed).await;
+    assert_eq!(
+        done.turn.content.as_deref(),
+        Some("Understood, I will not.")
+    );
+    assert_eq!(done.tool_calls[0].status, ToolCallStatus::Errored);
+    let result = tool_message(&upstream_requests(&server).await[1]);
+    let content = result["content"].as_str().unwrap();
+    assert!(content.contains("declined"), "{content}");
+    assert!(!content.contains("ship it"), "the tool must not have run");
+}
+
+#[tokio::test]
+async fn an_expired_approval_takes_the_deny_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Nobody approved it.", Duration::ZERO).await;
+    let (state, _cookie, session_id, turn_id) = paused(
+        &dir.path().join("gateway.db"),
+        &server.uri(),
+        Duration::ZERO,
+    )
+    .await;
+    let waiting = chat::get_suspension(&state.db, &turn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(waiting.on_timeout, TimeoutFallback::Deny);
+
+    aiplane_api::pages::chat::resume_expired_suspensions(&state).await;
+
+    let done = wait_for_status(&state, &session_id, &turn_id, TurnStatus::Completed).await;
+    assert_eq!(done.turn.content.as_deref(), Some("Nobody approved it."));
+    assert_eq!(done.tool_calls[0].status, ToolCallStatus::Errored);
+    let result = tool_message(&upstream_requests(&server).await[1]);
+    assert!(result["content"].as_str().unwrap().contains("expired"));
+}
+
+#[tokio::test]
+async fn a_suspension_that_has_not_expired_is_left_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("unused", Duration::ZERO).await;
+    let (state, _cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+
+    aiplane_api::pages::chat::resume_expired_suspensions(&state).await;
+
+    let turn = chat::get_turn(&state.db, &session_id, &turn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.status, TurnStatus::Suspended);
+    assert_eq!(upstream_requests(&server).await.len(), 1);
+}
+
+#[tokio::test]
+async fn only_the_owner_answers_only_with_an_offered_decision_and_only_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Echoed.", Duration::ZERO).await;
+    let (state, cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+    let bob = common::seed_session(&state, "bob", "bob@example.com").await;
+
+    let (status, _) = resume(
+        &state,
+        &bob,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "bob cannot see alice's turn");
+
+    let (status, body) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "value", "value": "yes"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "decision_not_offered", "{body}");
+
+    let (status, _) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once", "request_id": "an-older-pause"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        chat::get_suspension(&state.db, &turn_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "refused answers claim nothing"
+    );
+
+    let (status, _) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    wait_for_status(&state, &session_id, &turn_id, TurnStatus::Completed).await;
+    let (status, body) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "not_suspended", "{body}");
+}
+
+#[tokio::test]
+async fn a_paused_conversation_holds_new_messages_and_cancel_gives_up_on_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Done.", Duration::ZERO).await;
+    let (state, cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+
+    let resp = router(state.clone())
+        .serve(post(
+            format!("/api/v0/chat/sessions/{session_id}/messages"),
+            &cookie,
+            json!({"model": "model-a", "message": "anything else?"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_eq!(json_body(resp).await["placement"], "queued");
+    assert_eq!(state.chats.running_for_user("alice"), 0);
+
+    let resp = router(state.clone())
+        .serve(post(
+            format!("/api/v0/chat/sessions/{session_id}/cancel"),
+            &cookie,
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_body(resp).await["cancelled"], true);
+    let cancelled = chat::get_turn_with_tools(&state.db, &session_id, &turn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancelled.turn.status, TurnStatus::Cancelled);
+    assert_eq!(cancelled.tool_calls[0].status, ToolCallStatus::Errored);
+
+    // Giving up freed the conversation, so the held message starts.
+    for _ in 0..200 {
+        if chat::list_pending_for_session(&state.db, &session_id)
+            .await
+            .unwrap()
+            .is_empty()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the held message never started");
+}

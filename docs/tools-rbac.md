@@ -94,6 +94,10 @@ dependency doesn't change the trait signature:
   browser reply — `get_user_location` asks for a position, `ask_user` asks a
   question; one hub per reply shape, so the two endpoints can't un-park each
   other's tool), `push` (Web Push, for `notify_user`).
+- **Pausing** — `suspend`: `Available` on the interactive chat path, where a
+  tool may pause the turn for a decision; `Decided(…)` when the call runs again
+  after one; `Unavailable` everywhere else. See
+  [Suspend and resume](#suspend-and-resume).
 - **The current model** — `model`, when the path resolved one. Carried so a
   tool that creates work to be *run later* can inherit it instead of guessing a
   pool id: `schedule_action` gives the action it writes the same model the user
@@ -329,7 +333,7 @@ none of the above applies to it. It holds exactly the rows in
 | Grant kind | What it unlocks | What it does *not* get |
 |---|---|---|
 | `tool` | that registry tool (or loaded `comfyui_<id>` workflow) | default groups, `*`, the `enable_tools` bootstrap, anything `requires_chat_session` |
-| `connector` | every tool of that **global** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply |
+| `connector` | every tool of that **global** or **agent** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply (for an `agent` connector it decides who may grant it) |
 | `skill` | that global skill | anyone's private skills |
 | `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
 | `pool` | that upstream pool | open pools; `is_admin` bypass |
@@ -511,6 +515,59 @@ meant to be given a `Budget` of its own, not share its parent's.
   `seconds_exhausted { seconds }` or `tokens_exhausted { tokens }`, naming the
   limit that hit. A run always gets at least one request.
 
+### Injection scanning of tool results
+
+What an MCP server, RAG, a web fetch or a database returns may have been
+written by an outsider, so a gateway-owned result is screened before it becomes
+a `role: tool` message. The hook is `runner::screen_result`, called at the end
+of `execute_tool_calls`, so the chat driver, the headless runs, the resume path
+and both `/v1` loops share it. Client-owned calls never pass through the
+gateway and are not scanned. `server/tools/injection.rs` holds the rest.
+
+A run carries an `InjectionScan { policy, classifier }`: `OpenAiDriver::injection`
+and `DriveParams::injection` (what `RunProfile` will set for an agent run). The
+default is `Off`, which skips scanning entirely, so the result reaches the model
+byte for byte as before. The `/v1` loops pass `Off` until they have a per-run
+setting of their own.
+
+| Policy | What the model sees for a result with a hit |
+|---|---|
+| `Off` | the result, untouched (and nothing is audited) |
+| `Flag` | `{"untrusted_tool_output": {notice, tool, signals, data}}`: the original under `data`, with a notice that it is data and not instructions. A `tool_content_parts` result keeps its shape; the notice is a leading text part |
+| `Redact` | the result with each matched span replaced by `[removed: possible prompt injection]`. A hit with no span (the classifier) drops the whole result instead |
+| `Drop` | `{"error": "The result of `<tool>` was withheld ..."}` |
+
+**Layer 1, heuristics** (`scan_text`, no dependency beyond `regex` and `base64`).
+Case-insensitive, English and German, run over every string of the JSON result
+after decoding, so `\u200b` escapes are seen. The families (`Signal`):
+`ignore_instructions` ("ignore all previous instructions"), `role_override`
+("you are now a ...", "from now on you must", "du bist jetzt ein"),
+`system_prompt_probe` ("reveal your system prompt", "new instructions:"),
+`role_markup` (`<|im_start|>`, `[INST]`, `<<SYS>>`, `<system>`), `role_prefix`
+(a line starting `system:` or `assistant:`), `hidden_text` (zero-width space,
+word joiner, BOM, bidi overrides, Unicode tag characters; the joiner/non-joiner
+used by emoji and Persian are deliberately allowed), `encoded_payload` (a base64
+run of 60+ characters that decodes to text matching another family),
+`tool_request` ("you must now call the X tool"), `secret_request` ("send me the
+API key"), `exfil_url` (an instruction verb next to a URL with a query
+parameter, or a URL whose parameter is a placeholder such as `{{data}}`). Image
+parts are never scanned. The set is a tripwire for lazy attacks and will
+produce false positives in text that *discusses* injection; each pattern has a
+test, and so do clean code, JSON, prose and a German letter. Add a pattern with
+a failing fixture first, and a clean fixture if it is broad.
+
+**Layer 2, classifier.** `InjectionClassifier::classify(text) -> Verdict` is the
+seam for a model-based check. It runs only when the heuristics found nothing and
+the policy is not `Off`. Nothing implements it against a real model yet; tests
+use a canned double, because the model is an external service. An implementation
+chooses whether an unreachable model fails open or closed.
+
+**Recording.** Every hit logs a `warn` (tool, principal, policy, signals). When
+the acting principal is a system principal it also writes an `agent_audit` row of
+kind `injection_detected` (no acting user; `detail` has `tool`, `call_id`,
+`policy`, `signals`, never the matched text). A person's run is logged only.
+Suspension requests (`extract_suspend`) are never rewritten.
+
 ### Finish contract
 
 An interactive turn ends when a round comes back without tool calls. That is
@@ -560,6 +617,60 @@ list), `properties`, `required`, `enum`, `items`, and a boolean
 `$ref`, …) makes `FinishContract::new` fail, so a schema is never only partly
 enforced. See [`dependencies.md`](dependencies.md) for why no validator crate
 is used.
+
+### Suspend and resume
+
+A tool that needs a decision from outside the model returns
+`aiplane_runtime::suspend::tool_suspend(SuspendRequest { kind, message,
+timeout_secs, on_timeout })` instead of a result — an envelope with one
+sentinel key, the same mechanism as `tool_content_parts`. `FeedbackHub` parks a
+call only while the turn lives in memory; this pause is durable.
+
+- **Pausing.** After the round's tools ran, the chat driver records every other
+  call's result as usual, leaves the waiting call's row `running`, and writes a
+  `chat_turn_suspensions` row (migration 0078): the call, the turn's round
+  messages so far (`tail`), the budget spent (`{rounds, seconds, tokens}`), a
+  fresh `request_id`, and the deadline. The turn becomes `suspended` in the
+  same transaction, the worker ends without finalizing, and the stream emits
+  `suspended` (see [`ui.md`](ui.md#chat-streaming-the-json-event-protocol)).
+  One decision at a time: a second suspend request in the same round is
+  answered with an error. Where the run cannot pause (`ToolContext::suspend`
+  is `Unavailable`: `/v1`, headless runs), the envelope is answered with an
+  error too, and a well-behaved tool refuses on its own first.
+- **Resuming.** `suspend::claim_for_resume` checks the decision against the
+  kind's options (`approval`: allow once / deny; `secure_input`,
+  `human_answer`: value / deny) and the optional `request_id`, then deletes the
+  row and flips the turn back to `in_progress` atomically, so a decision is
+  claimed once. The chat path reserves the worker slot *before* claiming. The
+  driver (`OpenAiDriver::resume`) rebuilds history and the system message as
+  for any turn, appends `tail`, settles the waiting call and continues the
+  round loop at the stored round count — and against the stored seconds and
+  tokens, so the run's `Budget` covers it before and after the pause:
+  - **deny** answers the call with a tool error naming why (`declined` by the
+    user, or the request `expired`); the tool does not run;
+  - **allow once** / **value** run the same call again with
+    `ToolContext::suspend = Decided(decision)`, and its result is the call's
+    result. Asking again re-suspends the turn.
+- **Expiry.** `pages::chat::spawn_suspension_sweeper` looks every 30 s (and at
+  boot) for suspensions past `expires_at` and resumes them with their
+  `on_timeout` fallback — deny unless the tool asked for `allow_once`.
+- **Restart.** Nothing is held in memory: the startup sweep leaves suspended
+  turns and their waiting call alone, and the resume runs on whichever
+  process gets it.
+- **Holding the conversation.** A suspended turn holds its conversation as a
+  running worker does: a new message is queued behind it and starts once the
+  turn finishes; `…/cancel` gives the decision up (`cancelled`).
+
+`AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) is the first
+consumer: it keeps the wrapped tool's id and schema, pauses every call for an
+`approval`, runs the tool only on `Decided(AllowOnce)`, and refuses where
+pausing is impossible. Nothing in the shipped registry is wrapped yet — the
+`permission: always_ask` configuration that selects tools for it is #96.
+
+The row has a `child_turn` column for a pause inside a sub-agent run, which
+suspends every ancestor turn and resumes innermost first
+([`agents.md`](agents.md#suspend-and-resume-82)). Nothing sets it yet; the
+propagation comes with sub-agent dispatch (#88).
 
 ### Streaming
 

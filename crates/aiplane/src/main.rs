@@ -617,6 +617,10 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Turns paused for a decision whose deadline passed — including while the
+    // process was down — resume with their timeout fallback.
+    aiplane_api::pages::chat::spawn_suspension_sweeper(state.clone());
+
     // Before anything can fire: no run pending now can still be running, so
     // close them rather than let the history show them as running forever.
     // Scheduled runs are swept by the worker itself, ahead of its first tick.
