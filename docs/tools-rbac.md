@@ -101,6 +101,9 @@ dependency doesn't change the trait signature:
   tool may pause the turn for a decision; `Decided(…)` when the call runs again
   after one; `Unavailable` everywhere else. See
   [Suspend and resume](#suspend-and-resume).
+- **The grant** — `granted_tools`, the tool ids the principal may run, set by
+  the chat driver once per turn. `enable_tools` refuses keys outside it; `None`
+  (the `/v1` paths, tests) means nothing granted.
 - **The current model** — `model`, when the path resolved one. Carried so a
   tool that creates work to be *run later* can inherit it instead of guessing a
   pool id: `schedule_action` gives the action it writes the same model the user
@@ -194,8 +197,21 @@ Short tool lists are cheaper and models pick from them more accurately. When a
 request needs a capability the model doesn't currently have, it calls
 `enable_tools` with one or more **toggle keys**; that writes per-conversation
 rows, and the real schemas appear from the next round on and stay for the rest
-of the conversation. Calling a tool directly without enabling it first still
-works — it just costs a round.
+of the conversation. Calling a **granted** tool directly without enabling it
+first still works — it just costs a round: the driver runs the call and writes
+the enablement row itself (`source = "auto-call"`).
+
+Neither path can reach past the grant. `enable_tools` skips (and reports in
+`skipped`) any key that covers no tool the principal is granted — it reads the
+grant from `ToolContext::granted_tools`, which the driver resolves once per
+turn, and treats an unresolved grant as empty. The driver resolves and runs
+every call through a `GrantedToolSource` holding exactly
+`AppState::granted_tool_ids` (RBAC grant, ComfyUI expansion, minus the user's
+`/tools` switches, plus the granted tools of the MCP overlay), so a name outside
+it is answered with the ordinary "No tool named …" error the model can read —
+no run, no enablement row. A `chat_session_tools` row only ever narrows the
+grant, so a row left behind after a grant is revoked neither offers nor runs
+anything.
 
 Two tools bypass the gate:
 
@@ -331,6 +347,31 @@ tools = ["*"]               # everything registered
 The layers compose in one direction only: RBAC (roles + groups) decides what a
 user *may* use; the per-conversation, per-token, and per-user layers can only
 subtract.
+
+**Invariant: a tool runs only if the acting principal is granted it, however
+the model names it.** Offering is not the gate — a model can call any name it
+read in training or was prompted with. Every loop therefore resolves calls
+through a source already narrowed to the grant: the chat driver (and its resume
+path) through `GrantedToolSource`, the `/v1` loops through
+`DiscoverableToolSource` built from the token's RBAC-bounded layer. An ungranted
+name is answered as unavailable in chat and handed back to the client on `/v1`
+(where it is indistinguishable from a client-owned tool). Pinned by
+`a_chat_model_naming_an_ungranted_tool_is_refused_and_does_not_enable_it` and
+`a_v1_model_naming_an_ungranted_gateway_tool_does_not_run_it` (plus its
+streaming sibling).
+
+The chat driver's per-call decision (`openai_driver/call_policy.rs`) is taken
+against that same narrowed source: a name the full registry knows but the grant
+does not is `not_granted` for a system principal (audited as such in an agent
+run) and `unknown_tool` for a person — one check, so the audit row and what
+actually ran can never disagree.
+
+Run-scoped synthetic tools are not grants and sit outside the filter: `finish`
+is intercepted by name before dispatch, and an agent run that offers
+`set_<slot>` tools (`agents::slot_tools::SlotTools`) composes that source *over*
+the `GrantedToolSource`, never inside it. Their existence for the run is the
+permission; nothing a person or principal is granted can reach them, and they
+reach nothing outside the run.
 
 ### System principals
 

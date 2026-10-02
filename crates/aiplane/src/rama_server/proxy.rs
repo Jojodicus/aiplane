@@ -413,6 +413,7 @@ fn proxy_tool_ctx(
         model,
         // A `/v1` request is answered in one go; there is no turn to resume.
         suspend: aiplane_runtime::suspend::Suspend::Unavailable,
+        granted_tools: None,
     }
 }
 
