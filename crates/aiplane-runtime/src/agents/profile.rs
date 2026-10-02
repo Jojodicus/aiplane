@@ -51,6 +51,11 @@ pub enum AgentRunError {
     #[error("agent `{0}` has never been published, so it has no live version to run; publish it")]
     NotLive(String),
     #[error(
+        "agent `{agent}` has no version {version}, which this conversation runs on; start a new \
+         conversation to use the live version"
+    )]
+    MissingVersion { agent: String, version: i64 },
+    #[error(
         "agent `{agent}` cannot run its live version {version}: {message}. Publish a corrected \
          version"
     )]
@@ -122,12 +127,33 @@ impl RunProfile {
         role: Role,
         options: &RunOptions,
     ) -> Result<Self, AgentRunError> {
+        Self::load_version(state, agent_id, None, role, options).await
+    }
+
+    /// [`Self::load`], on version `pinned` instead of the live one when it is
+    /// `Some`: a conversation keeps the version it started on.
+    pub async fn load_version(
+        state: &Arc<RamaState>,
+        agent_id: &str,
+        pinned: Option<i64>,
+        role: Role,
+        options: &RunOptions,
+    ) -> Result<Self, AgentRunError> {
         let principal = sp::load_active(&state.db, agent_id)
             .await?
             .ok_or_else(|| AgentRunError::Unavailable(agent_id.to_string()))?;
-        let (version, text) = agents_db::live(&state.db, agent_id)
-            .await?
-            .ok_or_else(|| AgentRunError::NotLive(principal.name.clone()))?;
+        let (version, text) = match pinned {
+            None => agents_db::live(&state.db, agent_id)
+                .await?
+                .ok_or_else(|| AgentRunError::NotLive(principal.name.clone()))?,
+            Some(v) => agents_db::version(&state.db, agent_id, v)
+                .await?
+                .map(|row| (row.version, row.spec))
+                .ok_or_else(|| AgentRunError::MissingVersion {
+                    agent: principal.name.clone(),
+                    version: v,
+                })?,
+        };
         let bad = |message: String| AgentRunError::BadSpec {
             agent: principal.name.clone(),
             version,

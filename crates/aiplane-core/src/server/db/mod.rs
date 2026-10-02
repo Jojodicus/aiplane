@@ -24,6 +24,7 @@ pub mod chat_session_settings;
 pub mod chat_session_skills;
 pub mod chat_session_tools;
 pub mod documents;
+pub mod embed_keys;
 pub mod gateway_groups;
 pub mod limits;
 pub mod mcp_audit;
@@ -46,6 +47,7 @@ pub mod user_mcp;
 pub mod user_memories;
 pub mod user_tool_prefs;
 pub mod users;
+pub mod visitor_sessions;
 
 pub type Pool = sqlx::SqlitePool;
 

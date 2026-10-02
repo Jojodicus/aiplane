@@ -41,7 +41,7 @@ use crate::rama_server::setup_api;
 use crate::rama_server::{
     api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, sandbox_api, spa,
 };
-use aiplane_core::rama_server::cors::V1CorsLayer;
+use aiplane_core::rama_server::cors::{EmbedCorsLayer, V1CorsLayer};
 
 /// Builds the rama router. State is shared via `Arc` since handlers
 /// borrow it immutably.
@@ -260,6 +260,25 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/shares/revoke",
             pages::json_agents::revoke_share,
         )
+        .with_get(
+            "/api/v0/agents/{id}/embed-keys",
+            pages::json_agents::embed_keys_list,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/embed-keys",
+            pages::json_agents::embed_key_create,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/embed-keys/{key_id}/revoke",
+            pages::json_agents::embed_key_revoke,
+        )
+        // The public agent endpoint (docs/agents.md §5): anonymous visitors
+        // with an embed key, then a `gwv_` visitor token. No session cookie
+        // is read here, and the visitor token is read nowhere else.
+        .with_post("/api/v0/embed/sessions", pages::embed::start_session)
+        .with_get("/api/v0/embed/session", pages::embed::current_session)
+        .with_post("/api/v0/embed/messages", pages::embed::send_message)
+        .with_get("/api/v0/embed/events", pages::embed::events)
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)
@@ -661,6 +680,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
 /// bearer-auth 401 — with the CORS headers browser SPAs require. It is
 /// scoped to `/v1`, so the same-origin HTML UI and `/api/v0` are untouched.
 ///
+/// `EmbedCorsLayer` does the same for `/api/v0/embed/*`, but reflects only an
+/// origin some live embed key lists; every other `/api/v0` route stays
+/// same-origin.
+///
 /// `FirstRunLayer` sits outside the error handler for a related reason: on an
 /// unconfigured gateway an unmatched path should land on the setup wizard, not
 /// on a 404 that explains nothing. It is a no-op once setup has completed. See
@@ -674,9 +697,11 @@ pub fn service(
     Error = std::convert::Infallible,
 > + Clone {
     let first_run = FirstRunLayer::new(state.clone());
+    let embed_cors = EmbedCorsLayer::new(state.db.clone());
     let router = router(state);
     (
         V1CorsLayer,
+        embed_cors,
         first_run,
         ArcLayer::new(),
         ErrorHandlerLayer::default(),

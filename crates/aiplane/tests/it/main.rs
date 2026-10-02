@@ -19,6 +19,7 @@ mod common;
 mod cors;
 #[cfg(debug_assertions)]
 mod dev_seed;
+mod embed;
 mod healthz;
 mod oidc_integration;
 mod openapi_drift;
