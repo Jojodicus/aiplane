@@ -419,8 +419,8 @@ chat_sessions:
   linked through `parent_turn_id`. They are not chats of the owner, as decided.
 
 **As built (#83, migration `0081`).** The rebuild is as above without
-`visitor_id`: `visitor_sessions` does not exist yet, so #91 adds that column
-together with its table. A second CHECK, `principal_id IS NULL OR shared = 0`,
+`visitor_id`: `visitor_sessions` did not exist yet, so #91 added that column
+together with its table (migration `0083`, [§5](#what-91-built)). A second CHECK, `principal_id IS NULL OR shared = 0`,
 keeps an agent conversation out of the "anyone with the link" read path.
 `parent_turn_id` has no foreign key: the child run stays an auditable record
 when the parent turn is gone. `session_core::db` gains `SessionOwner`,
@@ -629,14 +629,17 @@ grants.
 
 - **Entry point.** `agents::run::run_turn(state, AgentTurn { agent_id,
   session_id, message, visitor_id })` runs one visitor message as the agent's
-  principal on its **live** version and returns `AgentReply { session_id,
+  principal and returns `AgentReply { session_id,
   turn_id, status, answer, error }`. A new conversation is a principal-owned
   session (`parent_turn_id` `NULL`, `agent_version` set). A `session_id` must
-  belong to that agent, or the call fails with `UnknownSession`. The chain is
+  belong to that agent, or the call fails with `UnknownSession`; a new
+  conversation runs the live version, a continued one the version it started
+  on (#91, `RunProfile::load_version`). The chain is
   `RunChain::root(session, visitor, main frame)`. `run_turn_with` takes
   `RunOptions { now, classifier }`: the clock that gates and slot writes read,
-  and a `RouteClassifier` to use instead of the pool classifier. No HTTP route
-  calls it yet: the test chat is #90, the public endpoint #91.
+  and a `RouteClassifier` to use instead of the pool classifier. The public
+  endpoint (#91) drives its turns through the same `drive_opened`; the test
+  chat is #90.
 - **`RunProfile::load(state, agent_id, Role, options)`** reads the live version
   and the principal (`load_active`, so a disabled one is refused). It returns
   `{principal, version, model, budget, finish, injection, run: Arc<AgentRun>}`,
@@ -773,9 +776,15 @@ grants.
   of each offending occurrence; the matched value is never logged. If the
   trusted text cannot be read the answer is withheld (fail closed) and the
   row carries `error`.
-- **Language.** `RunOptions.lang` (default English) picks the catalog language
-  of the fallback text. `run_turn` does not know the visitor's language; the
-  public endpoint (#91) sets it from the request.
+- **One call site, both entry points.** `drive_opened` runs the filter, so
+  `run_turn` and the public endpoint's runner are both covered.
+- **Language.** `OpenedTurn.lang` picks the catalog language of the fallback
+  text: `RunOptions.lang` (default English) for `run_turn`, the request's
+  `Accept-Language` for a visitor message.
+- **No early peek.** The turn row is terminal before the filter has ruled, so
+  the embed endpoint treats a session as unfinished while `AgentTurns` still
+  holds its claim (`is_running`): the snapshot shows the turn in progress and
+  the event stream waits.
 - **Limits.** The filter matches text, not meaning: an identifier the model
   rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
   tool the agent calls that returns another customer's data makes that data
@@ -824,7 +833,8 @@ tool wants shown) and `on_timeout` (`deny` | `allow_once`, the configurable
 fallback; deny by default). `expires_at` is compared after parsing, not as a
 string. The resume route for the chat path is
 `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume`, owner-only, with
-`{decision, value?, request_id?}`; the agent/public route comes with #91.
+`{decision, value?, request_id?}`. #91 built the public endpoint without a
+resume route; resuming a visitor's suspended turn comes with #95/#96.
 `child_turn` exists but nothing sets it: ancestor suspension and
 innermost-first resume arrive with sub-agent dispatch (#88). Details in
 [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
@@ -1006,6 +1016,119 @@ answer is held until it passes the output filter (#89), then sent as one block,
 while `status` events keep the widget alive. Token-by-token streaming and a
 filter that sees the whole answer cannot both hold, and the filter wins for
 untrusted audiences.
+
+### What #91 built
+
+- **Migration `0083_visitor_sessions.sql`** creates both tables, with three
+  changes from the sketch above:
+  - `agent_embed_keys.key` is **`key_hash`**, the SHA-256 of the `gwe_` key,
+    like every other credential. The key is public anyway, but storing it in
+    clear would make the table a list of working keys. The plaintext is in
+    the create response only. The table also records `created_by`.
+  - `visitor_sessions` gains `idle_ttl_secs` (the idle TTL the session started
+    with, so sliding needs no spec parse) and `max_expires_at` (the absolute
+    cap). `session_id` has a foreign key with `ON DELETE CASCADE`: a
+    conversation removed by retention (#92) ends its visitor session.
+  - `chat_sessions.visitor_id` is a plain `ADD COLUMN … REFERENCES
+    visitor_sessions(id) ON DELETE SET NULL`. A new column with a `NULL`
+    default may carry a foreign key, so no rebuild was needed and no row
+    moves.
+- **Rows** live in `aiplane-core::server::db::{embed_keys, visitor_sessions}`.
+  Creating and revoking a key writes `embed_key_created` /
+  `embed_key_revoked` audit rows. `visitor_sessions::start` opens the
+  principal-owned conversation (`agent_version` = the live version), the
+  visitor row and the back link in one transaction (`create_principal_session`
+  now takes any executor for that). `lookup` resolves a token without
+  touching it; `slide` counts an accepted request. Both take `now`.
+- **Lifecycle.**
+  - *Start:* `POST /api/v0/embed/sessions {key}`. The key must hash to a live
+    row, the request's `Origin` must be in that key's `origins`, and the agent
+    must be enabled and published. The answer is `201 {token, expires_at,
+    idle_ttl_secs, agent: {display}}` with a fresh `gwv_` token.
+  - *Every later request* sends `Authorization: Bearer gwv_…` and re-checks
+    the chain: session not expired, key not revoked, `Origin` allowed (see
+    below), agent enabled and published. Only then does the session slide, to
+    `min(now + idle_ttl, max_expires_at)`. So a revoked key or a disabled
+    agent ends open conversations at their next request.
+  - *Idle TTL:* the starting version's `publish.idle_ttl`, default 30 min. *Absolute
+    cap:* 24 h (`MAX_VISITOR_SESSION`); `sessionStorage` normally ends the
+    session sooner, with the tab.
+  - *Reload:* the widget finds its token in `sessionStorage` and calls `GET
+    /api/v0/embed/session` for the transcript, or `…/events`. After the TTL
+    either answers `401 visitor_session_expired`, and the widget starts a new
+    session.
+- **Routes** (`aiplane-api::pages::embed`, routed in `gateway`):
+
+  | Method | Path | Purpose |
+  |---|---|---|
+  | POST | `/api/v0/embed/sessions` | Start a visitor conversation `{key}` |
+  | GET | `/api/v0/embed/session` | The conversation: `{expires_at, idle_ttl_secs, agent, live_turn_id, turns}` |
+  | POST | `/api/v0/embed/messages` | `{text}` (≤ 8000 characters, no other field); `202 {turn_id, user_turn_id}` |
+  | GET | `/api/v0/embed/events` | `chat_json` frames for `fetch` streaming |
+  | GET | `/api/v0/agents/{id}/embed-keys` | Keys of the agent (`read` share); never the key |
+  | POST | `/api/v0/agents/{id}/embed-keys` | `{name, origins}` (`write` share); `201 {embed_key, key}` |
+  | POST | `/api/v0/agents/{id}/embed-keys/{key_id}/revoke` | `write` share; `204` |
+
+  Errors, all in the `/api/v0` envelope: `401 embed_key_invalid`, `403
+  embed_key_revoked`, `403 origin_not_allowed` (names the origin to add), `403
+  agent_disabled`, `409 agent_not_published`, `401 visitor_session_invalid`,
+  `401 visitor_session_expired`, `409 turn_in_progress`, `503
+  agent_runtime_unavailable`.
+- **What a visitor sees.** Turns are filtered before they leave: no tool
+  calls, no reasoning, no model name, no steers or suspension, no content of
+  an unfinished answer, and an errored turn carries a generic message instead
+  of the upstream's. The token names the conversation; no request carries a
+  session id (`messages` refuses unknown fields).
+- **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
+  turn runs. Without one, `idle` and the stream ends. With one, the stream
+  re-reads that turn every 250 ms and, once it is terminal, sends its whole
+  answer as one `turn_delta` with `full: true` and then `turn_finalized`.
+  *Deviation:* the "`status` events" above are SSE comment lines (`:
+  working`) every 15 s. There is no status to report beyond "still running",
+  and a comment needs no new `chat_json` event. A stream gives up after 10
+  minutes with `idle`; the widget re-attaches.
+- **CORS.** `EmbedCorsLayer` (`aiplane-core::rama_server::cors`) handles
+  `/api/v0/embed/*` only. A preflight carries neither key nor token, so the
+  layer reflects an `Origin` only if some live key of an enabled agent lists
+  it (and answers a preflight from any other origin `403`, without CORS
+  headers). The handler then checks the origin against the request's own key.
+  No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
+  quickly. Every other `/api/v0` route still gets no CORS headers.
+- **The runner.** The endpoint opens the turn rows (the visitor's user turn
+  and an `in_progress` assistant turn), then hands an `OpenedTurn {agent_id,
+  version, session_id, turn_id, visitor_id}` to
+  `aiplane_runtime::agents::embed::AgentTurnRunner::run(state, turn)` in a
+  background task. `OpenedTurn` is the same type `agents::run` uses: its
+  `run_turn` opens the rows itself and then calls the same `drive_opened` the
+  production runner `LiveAgentRunner` calls, so the two paths share one
+  driver. `main.rs` installs `LiveAgentRunner` with
+  `RamaState::with_agent_runner`; a profile that cannot load (agent disabled,
+  no healthy model) errors the turn with that reason. Without a runner (only
+  in tests) `messages` answers `503 agent_runtime_unavailable` and stores
+  nothing. A runner that leaves the turn unfinished, or panics, has its turn
+  errored by the endpoint, and `RamaState::agent_turns` holds one claim per
+  conversation so two messages cannot run at once.
+- **A conversation is pinned to its version.** It runs the version that was
+  live when it started, recorded in `chat_sessions.agent_version`; publishing
+  or rolling back changes only conversations started afterwards. Versions are
+  immutable and deleted only with the agent, so a pinned version always
+  exists. `agents::run::run_turn` applies the same rule to a continued
+  session (`RunProfile::load_version`).
+- **Origins: the key's, narrowed by the spec's.** A request's `Origin` must be
+  in the embed key's `origins` and, when the conversation's version sets
+  `publish.origins`, in those too. The refusal says which list lacks it. The
+  CORS layer only knows the keys, so an origin the spec excludes still gets a
+  preflight answer, and the handler then refuses it.
+- **Rate limits are a stub.** `pages::embed::admit` is called with the visitor
+  session and client IP on every request and always admits. The per-visitor
+  and per-IP buckets of #92 go there. Until then a visitor is bounded by the
+  agent's grants, its gates and the limits on its pool.
+- **Not built here.** Secure input (`/api/v0/embed/secure-input/{request_id}`,
+  #95) and resuming a suspended visitor turn (#96): the visitor view drops
+  `suspension`, and a suspended turn ends the event stream with `idle`. The
+  output filter itself is #89. The widget is #94. User-visible text is in
+  the error envelope's English `message` with a stable `code`; the widget is
+  expected to show its own Fluent strings per `code`.
 
 ## 6. Crate placement
 

@@ -21,6 +21,12 @@ pub const WEBHOOK_PREFIX: &str = "gwh_";
 /// user tokens so `require_bearer` can route by it: a `gws_` bearer is only
 /// ever looked up in `system_tokens`, a `gwk_` one only in `tokens`.
 pub const SYSTEM_TOKEN_PREFIX: &str = "gws_";
+/// Agent embed keys (`docs/agents.md` §5). Public by design — the key ships
+/// in the embedding site's page source — but hashed at rest like the rest.
+pub const EMBED_KEY_PREFIX: &str = "gwe_";
+/// Visitor tokens: one anonymous visitor conversation, held in the host
+/// page's `sessionStorage`. Never accepted anywhere but `/api/v0/embed/*`.
+pub const VISITOR_TOKEN_PREFIX: &str = "gwv_";
 pub const TOKEN_BYTES: usize = 32;
 pub const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 
@@ -40,6 +46,26 @@ pub fn mint_webhook() -> (String, String) {
 /// `(plaintext, sha256_hex)`.
 pub fn mint_system() -> (String, String) {
     mint_with_prefix(SYSTEM_TOKEN_PREFIX)
+}
+
+/// Mints a fresh agent embed key (`gwe_…`). Returns `(plaintext, sha256_hex)`.
+pub fn mint_embed_key() -> (String, String) {
+    mint_with_prefix(EMBED_KEY_PREFIX)
+}
+
+/// Validates an embed key (`gwe_…`) and returns its SHA-256 hex.
+pub fn hash_embed_key(key: &str) -> Option<String> {
+    hash_with_prefix(EMBED_KEY_PREFIX, key)
+}
+
+/// Mints a fresh visitor token (`gwv_…`). Returns `(plaintext, sha256_hex)`.
+pub fn mint_visitor() -> (String, String) {
+    mint_with_prefix(VISITOR_TOKEN_PREFIX)
+}
+
+/// Validates a visitor bearer (`gwv_…`) and returns its SHA-256 hex.
+pub fn hash_visitor_token(bearer: &str) -> Option<String> {
+    hash_with_prefix(VISITOR_TOKEN_PREFIX, bearer)
 }
 
 /// Validates a system-principal bearer (`gws_…`) and returns its SHA-256 hex.
@@ -99,6 +125,25 @@ mod tests {
         assert_eq!(hash_bearer(&system), None);
         let (user, _) = mint();
         assert_eq!(hash_system_bearer(&user), None);
+    }
+
+    #[test]
+    fn embed_keys_and_visitor_tokens_validate_only_under_their_own_prefix() {
+        let (key, key_hash) = mint_embed_key();
+        let (visitor, visitor_hash) = mint_visitor();
+        assert!(key.starts_with(EMBED_KEY_PREFIX));
+        assert!(visitor.starts_with(VISITOR_TOKEN_PREFIX));
+        assert_eq!(hash_embed_key(&key).unwrap(), key_hash);
+        assert_eq!(hash_visitor_token(&visitor).unwrap(), visitor_hash);
+        assert_eq!(hash_visitor_token(&key), None);
+        assert_eq!(hash_embed_key(&visitor), None);
+        for other in [&key, &visitor] {
+            assert_eq!(hash_bearer(other), None);
+            assert_eq!(hash_system_bearer(other), None);
+        }
+        let (user, _) = mint();
+        assert_eq!(hash_visitor_token(&user), None);
+        assert_eq!(hash_embed_key(&user), None);
     }
 
     #[test]
