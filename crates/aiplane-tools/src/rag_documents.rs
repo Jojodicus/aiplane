@@ -55,7 +55,8 @@ async fn open(
 > {
     // Shared with `rag_search` so the existence oracle can't answer
     // differently depending on which tool asked.
-    let collection = crate::rag::resolve_collection(rbac, indexer.db(), &ctx.roles, name).await?;
+    let collection =
+        crate::rag::resolve_collection(rbac, indexer.db(), &ctx.principal, name).await?;
 
     let profile_id = collection.profile_id.ok_or_else(|| {
         ToolError::Failed(format!(

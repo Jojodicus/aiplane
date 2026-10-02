@@ -282,7 +282,12 @@ impl Tool for TypstRenderTool {
             }
 
             if wants_identity(&template, &arg_map) {
-                match aiplane_core::server::db::users::find_by_id(&ctx.db, &ctx.user_id).await {
+                match aiplane_core::server::db::users::find_by_id(
+                    &ctx.db,
+                    ctx.principal.subject_id(),
+                )
+                .await
+                {
                     Ok(Some(u)) => apply_identity_defaults(
                         &template,
                         &mut arg_map,
@@ -733,7 +738,7 @@ async fn persist_base(
                 &ctx.db,
                 &id,
                 session_id,
-                &ctx.user_id,
+                ctx.principal.subject_id(),
                 &title,
                 DocumentFormat::Json,
                 &content,
@@ -2422,8 +2427,10 @@ mod tests {
     fn base_ctx(pool: aiplane_core::server::db::Pool) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

@@ -38,10 +38,13 @@ pub use registry::{ToolRegistry, ToolSource};
 /// preferences) through the trait signature each time we add one.
 #[derive(Clone)]
 pub struct ToolContext {
-    pub user_id: String,
+    /// Who the tool acts for. A person on the chat page and on a `gwk_`
+    /// bearer; a system principal on a `gws_` bearer. Scope rows by
+    /// [`Principal::subject_id`]; a tool that acts *for a person* must go
+    /// through [`Self::person`] and so refuses for a system principal.
+    pub principal: aiplane_core::server::principal::Principal,
     /// Bearer-token id on `/v1`; absent for browser chat and internal turns.
     pub token_id: Option<String>,
-    pub roles: Vec<String>,
     /// The caller's resolved upstream access — pool `allowed_groups` plus, on
     /// a bearer request, the calling API token's model allowlist.
     ///
@@ -57,7 +60,7 @@ pub struct ToolContext {
     pub pool_access: aiplane_core::server::upstreams::PoolAccess,
     /// Handle to the gateway's SQLite pool. Tools that need anything
     /// from `users` / `sessions` / etc. query it here keyed by
-    /// `user_id` (e.g. the time tool reads `users.timezone`).
+    /// the subject id (e.g. the time tool reads `users.timezone`).
     pub db: aiplane_core::server::db::Pool,
     /// S3 config for chat attachments. Threaded through so the
     /// `fetch_attachment` tool can resolve opaque attachment ids
@@ -168,12 +171,11 @@ impl ToolContext {
     /// geoip, indexer, image-gen, sandbox, chat turn/session). Replaces the
     /// 13-field literal that used to be copied into ~25 tool test modules.
     /// Override individual fields with struct-update syntax:
-    /// `ToolContext { roles: vec!["admin".into()], ..ToolContext::for_test(pool) }`.
+    /// `ToolContext { principal: ToolContext::test_user("u1"), ..ToolContext::for_test(pool) }`.
     pub fn for_test(db: aiplane_core::server::db::Pool) -> Self {
         Self {
-            user_id: "u".into(),
+            principal: Self::test_user("u"),
             token_id: None,
-            roles: vec![],
             // Unrestricted: a test that cares about scoping sets it.
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db,
@@ -192,6 +194,34 @@ impl ToolContext {
             crypto: None,
             push: None,
             model: None,
+        }
+    }
+
+    /// A person with no group claims, for tests.
+    pub fn test_user(id: &str) -> aiplane_core::server::principal::Principal {
+        aiplane_core::server::principal::Principal::User {
+            id: id.into(),
+            roles: vec![],
+        }
+    }
+}
+
+impl ToolContext {
+    /// The person this tool acts for, or the refusal to hand the model when
+    /// the caller is a system principal. Memory, notifications, scheduled
+    /// actions, location and browser control only make sense for a person —
+    /// there is no one to remember, notify or locate behind a CI token.
+    pub fn person(&self, tool: &str) -> Result<&str, ToolError> {
+        match &self.principal {
+            aiplane_core::server::principal::Principal::User { id, .. } => Ok(id),
+            aiplane_core::server::principal::Principal::System(sp) => {
+                Err(ToolError::Failed(format!(
+                    "`{tool}` acts on behalf of a signed-in person, and this request runs as \
+                     the system principal `{}`, which has no person behind it. Do not retry; \
+                     answer without it.",
+                    sp.name
+                )))
+            }
         }
     }
 }
@@ -285,11 +315,10 @@ impl ChatFeedback {
 
 impl std::fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Pool isn't `Debug`. Print the user/roles and elide the rest
+        // Pool isn't `Debug`. Print the principal and elide the rest
         // so test failures stay readable.
         f.debug_struct("ToolContext")
-            .field("user_id", &self.user_id)
-            .field("roles", &self.roles)
+            .field("principal", &self.principal)
             .field("db", &"<Pool>")
             .field("s3", &self.s3.as_ref().map(|_| "<S3Config>"))
             .field("assistant_turn_id", &self.assistant_turn_id)
@@ -490,5 +519,27 @@ mod tests {
         obj.insert("other_field".into(), json!("hello"));
         let body = Value::Object(obj);
         assert!(extract_content_parts(&body).is_none());
+    }
+
+    #[tokio::test]
+    async fn person_only_tools_refuse_a_system_principal_by_name() {
+        use aiplane_core::server::principal::{GrantSet, Principal, SystemPrincipal};
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let person = ToolContext::for_test(db.clone());
+        assert_eq!(person.person("remember").unwrap(), "u");
+
+        let system = ToolContext {
+            principal: Principal::System(SystemPrincipal {
+                id: "p1".into(),
+                name: "ci-bot".into(),
+                grants: std::sync::Arc::new(GrantSet::default()),
+            }),
+            ..ToolContext::for_test(db)
+        };
+        let err = system.person("remember").unwrap_err().to_string();
+        assert!(err.contains("`remember`"), "{err}");
+        assert!(err.contains("`ci-bot`"), "{err}");
     }
 }

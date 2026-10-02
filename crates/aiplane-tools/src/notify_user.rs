@@ -137,7 +137,7 @@ impl Tool for NotifyUser {
                 ));
             }
 
-            let subs = push_subscriptions::list_for_user(&ctx.db, &ctx.user_id)
+            let subs = push_subscriptions::list_for_user(&ctx.db, ctx.person(self.id())?)
                 .await
                 .map_err(|e| ToolError::Failed(format!("reading push subscriptions: {e}")))?;
             if subs.is_empty() {
@@ -158,7 +158,7 @@ impl Tool for NotifyUser {
             let tag = ctx
                 .session_id
                 .clone()
-                .unwrap_or_else(|| format!("notify:{}", ctx.user_id));
+                .unwrap_or_else(|| format!("notify:{}", ctx.principal.subject_id()));
             let message = PushMessage {
                 title: title.clone(),
                 body: body.clone(),

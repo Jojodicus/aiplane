@@ -17,6 +17,10 @@
 //! on its model-discovery request — so reading only one header would make
 //! authentication depend on which environment variable a developer happened
 //! to be told to set. Same token, same lookup, same 401.
+//!
+//! The prefix picks the table: `gwk_` is a person's token (`tokens`), `gws_` a
+//! system principal's (`system_tokens`, `docs/agents.md` §1). Neither lookup
+//! ever sees the other kind.
 
 use rama::http::header::{AUTHORIZATION, HeaderValue};
 use rama::http::service::web::response::IntoResponse;
@@ -27,6 +31,7 @@ use crate::rama_server::state::RamaState;
 use aiplane_core::server::auth::UserCtx;
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db;
+use aiplane_core::server::principal::Principal;
 
 /// The second header the same gateway token may arrive in. Lowercase because
 /// `HeaderMap` lookups by `&str` are case-insensitive only for the canonical
@@ -42,6 +47,9 @@ pub async fn require_bearer(
     headers: &HeaderMap,
 ) -> Result<UserCtx, AuthRefusal> {
     let bearer = credential(headers).ok_or_else(unauthorized)?;
+    if bearer.starts_with(token::SYSTEM_TOKEN_PREFIX) {
+        return require_system_bearer(state, bearer).await;
+    }
     let hash = token::hash_bearer(bearer).ok_or_else(unauthorized)?;
 
     let token_row = db::tokens::find_active_by_hash(&state.db, &hash)
@@ -91,13 +99,53 @@ pub async fn require_bearer(
     });
 
     Ok(UserCtx {
-        user_id: user.id,
+        principal: Principal::User {
+            id: user.id,
+            roles: user.roles,
+        },
         user_email: user.email,
         token_id: token_row.id,
         token_name: token_row.name,
-        roles: user.roles,
         tools_enabled: token_row.tools_enabled,
         allowed_models,
+    })
+}
+
+/// A `gws_` bearer: looked up in `system_tokens` only, so it can never
+/// resolve to a person. The principal's grants are loaded here, once per
+/// request — what it may use is exactly what they list.
+async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCtx, AuthRefusal> {
+    let hash = token::hash_system_bearer(bearer).ok_or_else(unauthorized)?;
+    let token_row = db::system_principals::find_active_token_by_hash(&state.db, &hash)
+        .await
+        .map_err(|err| {
+            tracing::warn!(error = %err, "system token lookup failed");
+            internal_error("system token lookup failed")
+        })?
+        .ok_or_else(unauthorized)?;
+    let principal = db::system_principals::load_active(&state.db, &token_row.principal_id)
+        .await
+        .map_err(|err| {
+            tracing::warn!(error = %err, "system principal lookup failed");
+            internal_error("system principal lookup failed")
+        })?
+        .ok_or_else(unauthorized)?;
+
+    let pool = state.db.clone();
+    let token_id = token_row.id.clone();
+    tokio::spawn(async move {
+        if let Err(err) = db::system_principals::touch_token(&pool, &token_id).await {
+            tracing::warn!(error = %err, token_id, "failed to bump system token last_used_at");
+        }
+    });
+
+    Ok(UserCtx {
+        user_email: principal.name.clone(),
+        principal: Principal::System(principal),
+        token_id: token_row.id,
+        token_name: token_row.name,
+        tools_enabled: true,
+        allowed_models: None,
     })
 }
 

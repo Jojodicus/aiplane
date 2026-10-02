@@ -521,9 +521,11 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
     // their own, already narrowed by the token's allowlist.
     let pool_access = pool_access.unwrap_or_else(|| state.pool_access_for(&roles));
     ToolContext {
-        user_id,
+        principal: aiplane_core::server::principal::Principal::User {
+            id: user_id,
+            roles,
+        },
         token_id: None,
-        roles,
         pool_access,
         db: state.db.clone(),
         s3: state
@@ -614,7 +616,11 @@ impl SessionDriver for OpenAiDriver {
             let routing_model = self
                 .state
                 .automatic_router
-                .session_target(&ctx.model, &self.tool_ctx.user_id, &ctx.session_id)
+                .session_target(
+                    &ctx.model,
+                    self.tool_ctx.principal.subject_id(),
+                    &ctx.session_id,
+                )
                 .unwrap_or_else(|| ctx.model.clone());
             let model = self
                 .state
@@ -788,15 +794,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // can advertise the connectors the model could turn on (progressive
     // disclosure — the tools themselves stay out of the request until the
     // model, or the user via the composer, enables the connector).
-    let mcp_role_ids = d.state.role_ids_for(&d.tool_ctx.roles);
-    let mcp_is_admin = d.state.rbac.is_admin(&mcp_role_ids);
     let user_mcp = d
         .state
-        .mcp
-        .layer_for_user(
-            &d.tool_ctx.user_id,
-            &mcp_role_ids,
-            mcp_is_admin,
+        .mcp_layer_for(
+            &d.tool_ctx.principal,
             crate::server::tools::mcp::manager::AskContext::Chat,
         )
         .await;
@@ -812,7 +813,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         crate::server::tools::mcp::manager::CompositeToolSource::new(tools.as_ref(), &user_mcp)
             .with_comfyui(comfyui.as_ref());
 
-    let access = d.state.pool_access_for(&d.tool_ctx.roles);
+    let access = d.state.pool_access_for_principal(&d.tool_ctx.principal);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;
@@ -861,7 +862,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
 
     let routing_has_tools = !d
         .state
-        .allowed_tools_for_session(&d.tool_ctx.roles, &d.tool_ctx.user_id, &ctx.session_id)
+        .allowed_tools_for_session(&d.tool_ctx.principal, &ctx.session_id)
         .await
         .is_empty()
         || !aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(
@@ -884,7 +885,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &access,
             Some(
                 aiplane_core::server::automatic_routing::AutomaticRouteAffinity {
-                    principal: &d.tool_ctx.user_id,
+                    principal: d.tool_ctx.principal.subject_id(),
                     session: &ctx.session_id,
                 },
             ),
@@ -965,7 +966,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // metrics are disabled — no extra DB read on the kill-switched path.
     let metrics_on = d.state.usage.is_enabled();
     let user_email = if metrics_on {
-        aiplane_core::server::db::users::find_by_id(&d.state.db, &d.tool_ctx.user_id)
+        aiplane_core::server::db::users::find_by_id(&d.state.db, d.tool_ctx.principal.subject_id())
             .await
             .ok()
             .flatten()
@@ -1094,7 +1095,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // to make the model-driven enablement loop work.
         let mut allowed_tools = d
             .state
-            .allowed_tools_for_session(&d.tool_ctx.roles, &d.tool_ctx.user_id, &ctx.session_id)
+            .allowed_tools_for_session(&d.tool_ctx.principal, &ctx.session_id)
             .await;
         // Union only the per-user MCP tools whose connector this conversation
         // has turned on (via `enable_tools` or the composer's "+" menu). Unlike
@@ -1114,7 +1115,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &mut allowed_tools,
             &user_mcp,
             &enabled_keys,
-            &d.state.mcp_grant_for(&d.tool_ctx.roles),
+            &d.state.mcp_grant_for_principal(&d.tool_ctx.principal),
         );
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
@@ -1779,10 +1780,11 @@ async fn build_request_context(
     // One user-row read serves identity + timezone (the row is loaded here
     // anyway). Identity (name/email) lets the model act AS the signed-in
     // user — e.g. fill the sender/signature of a letter — without asking.
-    let user = aiplane_core::server::db::users::find_by_id(&d.state.db, &d.tool_ctx.user_id)
-        .await
-        .ok()
-        .flatten();
+    let user =
+        aiplane_core::server::db::users::find_by_id(&d.state.db, d.tool_ctx.principal.subject_id())
+            .await
+            .ok()
+            .flatten();
     let name = user.as_ref().and_then(|u| u.name.clone());
     let email = user
         .as_ref()
@@ -1943,7 +1945,7 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     // no memories at all, and that path costs exactly one cheap query. A read
     // failure degrades to "no memories" — a missing section is a far better
     // outcome than a failed turn.
-    let counts = user_memories::counts_by_kind(&d.state.db, &d.tool_ctx.user_id)
+    let counts = user_memories::counts_by_kind(&d.state.db, d.tool_ctx.principal.subject_id())
         .await
         .unwrap_or_default();
     if counts.is_empty() {
@@ -1951,7 +1953,7 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     }
     let allowed = d
         .state
-        .allowed_tools_for_user(&d.tool_ctx.roles, &d.tool_ctx.user_id)
+        .allowed_tools_for_principal(&d.tool_ctx.principal)
         .await;
     if !allowed.iter().any(|id| id == RECALL_TOOL_ID) {
         return None;
@@ -1959,7 +1961,7 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     let preferences: Vec<String> = if counts.preference > 0 {
         user_memories::recall_recent(
             &d.state.db,
-            &d.tool_ctx.user_id,
+            d.tool_ctx.principal.subject_id(),
             Some(user_memories::MemoryKind::Preference),
             PREFERENCE_FETCH_LIMIT,
         )
@@ -2188,10 +2190,10 @@ async fn build_skills_section(d: &OpenAiDriver) -> Option<String> {
     // Combined registry (private overlaid on global, private shadows global) so
     // a name resolves to the same bundle the caller was advertised — global
     // operator skills plus this user's own private skills.
-    let registry = d.state.combined_skills_for(&d.tool_ctx.user_id)?;
-    let allowed = d
+    let registry = d
         .state
-        .allowed_skills_for(&d.tool_ctx.roles, &d.tool_ctx.user_id);
+        .combined_skills_for(d.tool_ctx.principal.subject_id())?;
+    let allowed = d.state.allowed_skills_for_principal(&d.tool_ctx.principal);
     if allowed.is_empty() {
         return None;
     }
@@ -2350,7 +2352,7 @@ async fn enrich_current_message_with_ocr(
     };
 
     let meta = aiplane_features::server::ocr::UsageMeta {
-        user_id: d.tool_ctx.user_id.clone(),
+        user_id: d.tool_ctx.principal.subject_id().to_string(),
         source: d.source,
     };
     let mut blocks = Vec::new();
@@ -2863,7 +2865,7 @@ fn emit_usage(
     let (prompt_tokens, completion_tokens, total_tokens) = tokens;
     d.state.usage.emit(UsageRecord {
         created_at: jiff::Timestamp::now(),
-        user_id: d.tool_ctx.user_id.clone(),
+        user_id: d.tool_ctx.principal.subject_id().to_string(),
         user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
         token_id: None,
         token_name: None,
@@ -2882,6 +2884,7 @@ fn emit_usage(
             .state
             .upstreams
             .enforce_limits_for_model(model, aiplane_core::server::upstreams::PoolKind::Chat),
+        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
     });
 }
 
@@ -2898,7 +2901,7 @@ fn emit_selector_usage(
     };
     d.state.usage.emit(UsageRecord {
         created_at: jiff::Timestamp::now(),
-        user_id: d.tool_ctx.user_id.clone(),
+        user_id: d.tool_ctx.principal.subject_id().to_string(),
         user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
         token_id: None,
         token_name: None,
@@ -2920,6 +2923,7 @@ fn emit_selector_usage(
             &decision.selector_model,
             aiplane_core::server::upstreams::PoolKind::SystemOne,
         ),
+        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
     });
 }
 

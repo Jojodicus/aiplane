@@ -52,6 +52,7 @@ use session_core::i18n::{Lang, t};
 #[derive(Clone)]
 struct RecordParams {
     user_id: String,
+    principal_kind: aiplane_core::server::principal::PrincipalKind,
     user_email: String,
     token_id: Option<String>,
     token_name: Option<String>,
@@ -72,7 +73,8 @@ impl RecordParams {
     /// the serving pool's flag (resolve via `upstreams.enforce_limits_for_model`).
     fn v1(user: &UserCtx, kind: UsageKind, model: String, enforce_limits: bool) -> Self {
         Self {
-            user_id: user.user_id.clone(),
+            user_id: user.principal.subject_id().to_string(),
+            principal_kind: user.principal.kind(),
             user_email: user.user_email.clone(),
             token_id: Some(user.token_id.clone()),
             token_name: Some(user.token_name.clone()),
@@ -115,6 +117,7 @@ impl RecordParams {
             input_units: self.input_units,
             output_units: self.output_units,
             enforce_limits: self.enforce_limits,
+            principal_kind: self.principal_kind,
         });
     }
 }
@@ -145,11 +148,16 @@ pub(crate) async fn limit_exceeded_for_model(
     model: &str,
     kind: PoolKind,
 ) -> Option<aiplane_core::server::limits::LimitExceeded> {
-    let role_ids = state.role_ids_for(&user.roles);
+    let role_ids = state.limit_role_ids(&user.principal);
     let enforce_limits = state.upstreams.enforce_limits_for_model(model, kind);
     if let Err(exceeded) = state
         .enforcer
-        .check_for_model(&user.user_id, &role_ids, model, enforce_limits)
+        .check_for_model(
+            user.principal.subject_id(),
+            &role_ids,
+            model,
+            enforce_limits,
+        )
         .await
     {
         return Some(exceeded);
@@ -171,8 +179,12 @@ pub(crate) async fn limit_exceeded(
     state: &RamaState,
     user: &UserCtx,
 ) -> Option<aiplane_core::server::limits::LimitExceeded> {
-    let role_ids = state.role_ids_for(&user.roles);
-    if let Err(exceeded) = state.enforcer.check(&user.user_id, &role_ids).await {
+    let role_ids = state.limit_role_ids(&user.principal);
+    if let Err(exceeded) = state
+        .enforcer
+        .check(user.principal.subject_id(), &role_ids)
+        .await
+    {
         return Some(exceeded);
     }
     // The token's own rules are an additional ceiling, not an alternative to
@@ -331,21 +343,19 @@ fn prefer_positive(primary: Option<f64>, fallback: Option<f64>) -> Option<f64> {
 /// the ~15-field literal lives in exactly one place and can't drift.
 fn proxy_tool_ctx(
     state: &Arc<RamaState>,
-    user_id: String,
+    principal: aiplane_core::server::principal::Principal,
     token_id: String,
-    roles: Vec<String>,
     // The caller's resolved access, built once per request from the bearer
     // token (`pool_access_for_token`). Passed in rather than rebuilt from
-    // `roles`, which cannot express the token's model allowlist — a tool that
-    // routed on roles alone would be a way around it.
+    // the principal, which cannot express the token's model allowlist — a
+    // tool that routed on roles alone would be a way around it.
     pool_access: aiplane_core::server::upstreams::PoolAccess,
     client_ip: Option<String>,
     model: Option<String>,
 ) -> ToolContext {
     ToolContext {
-        user_id,
+        principal,
         token_id: Some(token_id),
-        roles,
         pool_access,
         db: state.db.clone(),
         s3: state
@@ -983,7 +993,7 @@ fn record_selector_usage(state: &RamaState, user: &UserCtx, decision: &Automatic
     };
     state.usage.emit(UsageRecord {
         created_at: Timestamp::now(),
-        user_id: user.user_id.clone(),
+        user_id: user.principal.subject_id().to_string(),
         user_email: Some(user.user_email.clone()).filter(|value| !value.is_empty()),
         token_id: Some(user.token_id.clone()),
         token_name: Some(user.token_name.clone()),
@@ -1004,6 +1014,7 @@ fn record_selector_usage(state: &RamaState, user: &UserCtx, decision: &Automatic
         enforce_limits: state
             .upstreams
             .enforce_limits_for_model(&decision.selector_model, PoolKind::SystemOne),
+        principal_kind: user.principal.kind(),
     });
 }
 
@@ -1168,6 +1179,7 @@ pub async fn transcribe_session(State(state): State<Arc<RamaState>>, req: Reques
         state.pool_access_for(user_row.as_ref().map(|u| u.roles.as_slice()).unwrap_or(&[]));
     let rec = RecordParams {
         user_id: session.user_id.clone(),
+        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         user_email,
         token_id: None,
         token_name: None,
@@ -1940,6 +1952,7 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
     };
     let rec = RecordParams {
         user_id: session.user_id.clone(),
+        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         user_email,
         token_id: None,
         token_name: None,
@@ -2738,9 +2751,8 @@ pub(crate) async fn buffered_with_tools(
 ) -> Result<runner::LoopOutput, LoopError> {
     let tool_ctx = proxy_tool_ctx(
         state,
-        user.user_id.clone(),
+        user.principal.clone(),
         user.token_id.clone(),
-        user.roles.clone(),
         access.clone(),
         client_ip,
         Some(real_model.to_string()),
@@ -2905,9 +2917,8 @@ pub(crate) async fn stream_with_tools(
     let access = state.pool_access_for_token(&user);
     let tool_ctx = proxy_tool_ctx(
         &state,
-        user.user_id.clone(),
+        user.principal.clone(),
         user.token_id.clone(),
-        user.roles.clone(),
         access.clone(),
         client_ip,
         Some(model.clone()),

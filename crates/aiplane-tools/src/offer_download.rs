@@ -420,8 +420,10 @@ mod tests {
     fn ctx(pool: aiplane_core::server::db::Pool, session: Option<&str>) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

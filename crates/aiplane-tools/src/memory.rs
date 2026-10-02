@@ -118,7 +118,7 @@ impl Tool for Remember {
                     content.len()
                 )));
             }
-            let row = user_memories::insert(&ctx.db, &ctx.user_id, kind, content)
+            let row = user_memories::insert(&ctx.db, ctx.person(self.id())?, kind, content)
                 .await
                 .map_err(|e| ToolError::Failed(format!("storing memory: {e}")))?;
             Ok(json!({
@@ -164,9 +164,14 @@ impl Tool for Recall {
             // full memory set (newest first, bounded by a safety cap).
             // No filtering — the model reasons over everything rather
             // than guessing a query that has to lexically match.
-            let rows = user_memories::recall_recent(&ctx.db, &ctx.user_id, None, MAX_RECALL_LIMIT)
-                .await
-                .map_err(|e| ToolError::Failed(format!("recalling memories: {e}")))?;
+            let rows = user_memories::recall_recent(
+                &ctx.db,
+                ctx.person(self.id())?,
+                None,
+                MAX_RECALL_LIMIT,
+            )
+            .await
+            .map_err(|e| ToolError::Failed(format!("recalling memories: {e}")))?;
 
             let memories: Vec<Value> = rows
                 .into_iter()
@@ -264,7 +269,7 @@ impl Tool for UpdateMemory {
             // the current `kind` to preserve, and it turns "someone else's id"
             // into the same not-found answer as "no such id" (no existence
             // leak across users).
-            let existing = user_memories::get(&ctx.db, &ctx.user_id, &args.id)
+            let existing = user_memories::get(&ctx.db, ctx.person(self.id())?, &args.id)
                 .await
                 .map_err(|e| ToolError::Failed(format!("looking up memory: {e}")))?;
             let Some(existing) = existing else {
@@ -275,9 +280,10 @@ impl Tool for UpdateMemory {
                 None => existing.kind,
             };
 
-            let updated = user_memories::update(&ctx.db, &ctx.user_id, &args.id, kind, content)
-                .await
-                .map_err(|e| ToolError::Failed(format!("updating memory: {e}")))?;
+            let updated =
+                user_memories::update(&ctx.db, ctx.person(self.id())?, &args.id, kind, content)
+                    .await
+                    .map_err(|e| ToolError::Failed(format!("updating memory: {e}")))?;
             match updated {
                 Some(row) => Ok(json!({
                     "status": "updated",
@@ -339,13 +345,13 @@ impl Tool for Forget {
             // Fetch before deleting so the result can echo *what* was
             // forgotten — the model needs that to confirm to the user, and
             // after the delete it's gone.
-            let existing = user_memories::get(&ctx.db, &ctx.user_id, &args.id)
+            let existing = user_memories::get(&ctx.db, ctx.person(self.id())?, &args.id)
                 .await
                 .map_err(|e| ToolError::Failed(format!("looking up memory: {e}")))?;
             let Some(existing) = existing else {
                 return Ok(not_found(&args.id));
             };
-            let deleted = user_memories::delete(&ctx.db, &ctx.user_id, &args.id)
+            let deleted = user_memories::delete(&ctx.db, ctx.person(self.id())?, &args.id)
                 .await
                 .map_err(|e| ToolError::Failed(format!("deleting memory: {e}")))?;
             if !deleted {
@@ -383,13 +389,44 @@ mod tests {
 
     async fn ctx(pool: &db::Pool, user_id: &str) -> ToolContext {
         ToolContext {
-            user_id: user_id.into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: user_id.into(),
+                roles: vec![],
+            },
             ..ToolContext::for_test(pool.clone())
         }
     }
 
     async fn fresh() -> db::Pool {
         db::open(std::path::Path::new(":memory:")).await.unwrap()
+    }
+
+    /// A system principal has no person to remember things about. Its subject
+    /// id must not quietly become a memory owner either: nothing is written.
+    #[tokio::test]
+    async fn a_system_principal_can_neither_remember_nor_recall() {
+        use aiplane_core::server::principal::{GrantSet, Principal, SystemPrincipal};
+        let pool = fresh().await;
+        let system = || ToolContext {
+            principal: Principal::System(SystemPrincipal {
+                id: "p1".into(),
+                name: "ci".into(),
+                grants: std::sync::Arc::new(GrantSet::default()),
+            }),
+            ..ToolContext::for_test(pool.clone())
+        };
+        let err = Remember
+            .run(system(), json!({"content": "x"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("system principal `ci`"), "{err}");
+        assert!(Recall.run(system(), Value::Null).await.is_err());
+        assert!(
+            user_memories::recall_recent(&pool, "p1", None, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     // -----------------------------------------------------------------------

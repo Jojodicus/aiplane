@@ -17,6 +17,10 @@ pub const TOKEN_PREFIX: &str = "gwk_";
 /// prefix so the two namespaces can't be confused. The `gwh_<64 hex>` string
 /// is the credential in a webhook's trigger URL; only its hash is persisted.
 pub const WEBHOOK_PREFIX: &str = "gwh_";
+/// System-principal tokens (`docs/agents.md` §1). A separate prefix from
+/// user tokens so `require_bearer` can route by it: a `gws_` bearer is only
+/// ever looked up in `system_tokens`, a `gwk_` one only in `tokens`.
+pub const SYSTEM_TOKEN_PREFIX: &str = "gws_";
 pub const TOKEN_BYTES: usize = 32;
 pub const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 
@@ -30,6 +34,17 @@ pub fn mint() -> (String, String) {
 /// [`mint`], different prefix. Returns `(plaintext, sha256_hex)`.
 pub fn mint_webhook() -> (String, String) {
     mint_with_prefix(WEBHOOK_PREFIX)
+}
+
+/// Mints a fresh system-principal token (`gws_…`). Returns
+/// `(plaintext, sha256_hex)`.
+pub fn mint_system() -> (String, String) {
+    mint_with_prefix(SYSTEM_TOKEN_PREFIX)
+}
+
+/// Validates a system-principal bearer (`gws_…`) and returns its SHA-256 hex.
+pub fn hash_system_bearer(bearer: &str) -> Option<String> {
+    hash_with_prefix(SYSTEM_TOKEN_PREFIX, bearer)
 }
 
 /// Validates the surface shape of a bearer string and returns its SHA-256 hex
@@ -74,6 +89,16 @@ mod tests {
         assert_eq!(hash.len(), 64);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(hash_bearer(&plaintext).unwrap(), hash);
+    }
+
+    #[test]
+    fn system_tokens_and_user_tokens_never_validate_as_each_other() {
+        let (system, system_hash) = mint_system();
+        assert!(system.starts_with(SYSTEM_TOKEN_PREFIX));
+        assert_eq!(hash_system_bearer(&system).unwrap(), system_hash);
+        assert_eq!(hash_bearer(&system), None);
+        let (user, _) = mint();
+        assert_eq!(hash_system_bearer(&user), None);
     }
 
     #[test]

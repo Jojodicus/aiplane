@@ -882,7 +882,7 @@ pub async fn execute_tool_calls(
             };
             tracing::info!(
                 tool = %call.name,
-                user = %ctx.user_id,
+                user = %ctx.principal.subject_id(),
                 args = %logged_args,
                 "tool call started"
             );

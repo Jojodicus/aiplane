@@ -63,10 +63,14 @@ impl ReadSkill {
 
     /// The registry to resolve a requested skill name against: the caller's
     /// private skills overlaid on the global operator ones (private shadows
-    /// global). Read live so an upload/edit is usable without a restart.
+    /// global). Read live so an upload/edit is usable without a restart. A
+    /// system principal has no private skills.
     fn registry_for(&self, ctx: &ToolContext) -> SkillRegistry {
-        let private = self.user_store.registry_for(&ctx.user_id);
-        combined_registry(&self.store.current(), &private)
+        let global = self.store.current();
+        match ctx.principal.user_id() {
+            Some(user_id) => combined_registry(&global, &self.user_store.registry_for(user_id)),
+            None => (*global).clone(),
+        }
     }
 
     /// Skill names the caller may load: their roles' global grants, plus every
@@ -74,9 +78,13 @@ impl ReadSkill {
     /// authorization gate for this tool — a name absent here is refused with
     /// the same "unknown" answer as a non-existent one.
     fn allowed_for(&self, ctx: &ToolContext) -> Vec<String> {
-        let role_ids = self.rbac.role_ids_for(&ctx.roles);
-        let mut allowed = self.rbac.allowed_skills(&role_ids, &self.store.current());
-        for name in self.user_store.registry_for(&ctx.user_id).names() {
+        let mut allowed = self
+            .rbac
+            .principal_skills(&ctx.principal, &self.store.current());
+        let Some(user_id) = ctx.principal.user_id() else {
+            return allowed;
+        };
+        for name in self.user_store.registry_for(user_id).names() {
             if !allowed.iter().any(|n| n == name) {
                 allowed.push(name.to_string());
             }
@@ -270,8 +278,10 @@ mod tests {
     fn ctx_with(pool: aiplane_core::server::db::Pool, session_id: Option<String>) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec!["user".into()],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec!["user".into()],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

@@ -647,6 +647,11 @@ pub struct PoolAccess {
     /// chosen by whoever issued it, and an admin's token that says "only
     /// these models" means it.
     pub allowed_models: Option<Arc<HashSet<String>>>,
+    /// A system principal's pool grants. `Some` replaces the group rule
+    /// entirely: only the named pools are reachable, an empty `allowed_groups`
+    /// does not count as open, and `is_admin` does not apply. `None` for
+    /// people, who go through their groups.
+    pub granted_pools: Option<Arc<HashSet<String>>>,
 }
 
 impl PoolAccess {
@@ -657,6 +662,22 @@ impl PoolAccess {
             role_ids: Vec::new(),
             is_admin: true,
             allowed_models: None,
+            granted_pools: None,
+        }
+    }
+
+    /// The access of a system principal: its pool grants and nothing else.
+    pub fn for_system(sp: &crate::server::principal::SystemPrincipal) -> Self {
+        let pools = sp
+            .grants
+            .refs(crate::server::principal::GrantKind::Pool)
+            .map(str::to_string)
+            .collect();
+        Self {
+            role_ids: Vec::new(),
+            is_admin: false,
+            allowed_models: None,
+            granted_pools: Some(Arc::new(pools)),
         }
     }
 
@@ -680,6 +701,9 @@ impl PoolAccess {
     /// Whether the caller may see/route to `pool`: unrestricted pools are open
     /// to all; admins bypass; otherwise the caller must hold a listed group.
     pub fn allows(&self, pool: &Pool) -> bool {
+        if let Some(granted) = &self.granted_pools {
+            return granted.contains(&pool.name);
+        }
         if self.is_admin || pool.allowed_groups.is_empty() {
             return true;
         }
@@ -3467,6 +3491,55 @@ mod tests {
         assert!(
             reg.acquire_for_access("vip-model", PoolKind::Chat, &admin)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_system_principal_reaches_only_its_granted_pools_open_or_not() {
+        use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+        let mut vip = pool_config(
+            PoolKind::Chat,
+            PickerStrategy::RoundRobin,
+            vec![backend("vip-b", 16)],
+        );
+        vip.allowed_groups = vec!["dev".into()];
+        let reg = build(vec![
+            (
+                "open",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("open-b", 16)],
+                ),
+            ),
+            ("vip", vip),
+        ]);
+        seed_models(&reg, "open", 0, &["open-model"]);
+        seed_models(&reg, "vip", 0, &["vip-model"]);
+        let principal = |grants: &[&str]| SystemPrincipal {
+            id: "p".into(),
+            name: "ci".into(),
+            grants: Arc::new(GrantSet::new(
+                grants.iter().map(|g| (GrantKind::Pool, g.to_string())),
+            )),
+        };
+
+        let nothing = PoolAccess::for_system(&principal(&[]));
+        assert!(reg.all_models_for(&nothing).is_empty());
+        assert!(matches!(
+            reg.acquire_for_access("open-model", PoolKind::Chat, &nothing),
+            Err(RouteError::UnknownModel(_))
+        ));
+
+        let vip_only = PoolAccess::for_system(&principal(&["vip"]));
+        assert_eq!(reg.all_models_for(&vip_only), vec!["vip-model"]);
+        assert!(
+            reg.acquire_for_access("vip-model", PoolKind::Chat, &vip_only)
+                .is_ok()
+        );
+        assert!(
+            reg.acquire_for_access("open-model", PoolKind::Chat, &vip_only)
+                .is_err()
         );
     }
 

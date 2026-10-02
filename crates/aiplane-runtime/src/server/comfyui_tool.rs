@@ -220,7 +220,7 @@ impl Tool for ComfyuiWorkflowTool {
                 &prompt_id,
                 session_id,
                 turn_id,
-                &ctx.user_id,
+                ctx.principal.subject_id(),
                 &manifest.id,
                 &manifest.output_kind.to_string(),
                 &manifest.output_node_id,

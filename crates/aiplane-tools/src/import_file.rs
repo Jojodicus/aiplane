@@ -204,7 +204,7 @@ impl Tool for ImportFile {
                 &ctx.db,
                 &id,
                 session_id,
-                &ctx.user_id,
+                ctx.principal.subject_id(),
                 &title,
                 format,
                 &content,
@@ -323,8 +323,10 @@ mod tests {
             .unwrap();
         let ctx = ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

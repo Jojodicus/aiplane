@@ -517,6 +517,7 @@ impl ImageGenerator {
             enforce_limits: self
                 .upstreams
                 .enforce_limits_for_model(model, aiplane_core::server::upstreams::PoolKind::Image),
+            principal_kind: aiplane_core::server::principal::PrincipalKind::User,
         });
     }
 }
