@@ -2078,8 +2078,11 @@ routes:
   `apiKeySecurityScheme` in a header (a query or cookie key is refused, so a
   secret never sits in a URL); `oauth_client_credentials` →
   `oauth2SecurityScheme.flows.clientCredentials.tokenUrl`, a
-  `client_credentials` form post, the token cached per token URL and client
-  until 30 s before it expires. `token` and `client_secret` are sealed on
+  `client_credentials` form post, the token cached until 30 s before it
+  expires. The cache key is the token URL, the client id, the SHA-256 of the
+  secret, the sorted scopes and the agent's principal id, so a route with
+  another secret (a wrong one included), other scopes or of another agent
+  signs in itself and never rides on a token it did not earn. `token` and `client_secret` are sealed on
   every save (`a2a_client::seal_secrets`, next to the host-JWT secret) and
   stored as `token_sealed` / `client_secret_sealed`; a GET → PUT round trip
   keeps them. A card that requires auth when the route brings none, or offers

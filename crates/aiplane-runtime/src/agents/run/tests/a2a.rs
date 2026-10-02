@@ -596,3 +596,57 @@ async fn an_injection_in_the_remote_result_is_flagged_as_data() {
         .expect("the finding is audited");
     assert_eq!(flagged.detail["tool"], "forward_request");
 }
+
+/// An OAuth token belongs to the credential that minted it: a second route
+/// naming the same token endpoint and client id, but another secret, must
+/// sign in on its own — and fail when its secret is wrong.
+#[tokio::test]
+async fn a_cached_oauth_token_never_serves_a_route_with_another_secret() {
+    let peer = Peer::start(
+        json!({
+            "securitySchemes": { "oauth": { "oauth2SecurityScheme": { "flows": {
+                "clientCredentials": { "tokenUrl": "TOKEN_URL", "scopes": { "tasks": "t" } } } } } },
+            "securityRequirements": [{ "schemes": { "oauth": { "list": ["tasks"] } } }]
+        }),
+        vec![completed(json!({ "answer": "covered" }))],
+        Duration::ZERO,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(wiremock::matchers::body_string_contains(
+            "client_secret=junk-secret",
+        ))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(1)
+        .mount(&peer.server)
+        .await;
+    let target = |secret: &str| {
+        json!({
+            "card_url": peer.card_url(),
+            "auth": { "kind": "oauth_client_credentials", "client_id": "gateway",
+                      "client_secret": secret, "scopes": ["tasks"] },
+            "finish": { "schema": finish_schema() }
+        })
+    };
+
+    let main = llm(main_script("Covered.")).await;
+    let world_a = world(&main).await;
+    let agent = support(&world_a, &peer.card_url(), target("client-secret-abcdef")).await;
+    conversation(&world_a, &agent).await;
+    assert_eq!(forwarded(&main).await["outcome"]["status"], "finished");
+
+    let main = llm(main_script("I could not reach the partner.")).await;
+    let world_b = world(&main).await;
+    let agent = support(&world_b, &peer.card_url(), target("junk-secret")).await;
+    conversation(&world_b, &agent).await;
+    let outcome = forwarded(&main).await["outcome"].clone();
+    let message = incomplete_message(&outcome);
+    assert!(message.contains("401"), "{message}");
+    assert_eq!(peer.received("/token").await.len(), 2);
+    assert_eq!(
+        peer.received("/a2a").await.len(),
+        1,
+        "the route with the junk secret reached the agent"
+    );
+}
