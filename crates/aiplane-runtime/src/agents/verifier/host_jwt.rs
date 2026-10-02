@@ -24,7 +24,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use aiplane_core::server::crypto::sha256_hex;
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::agent_verifiers;
 use jiff::{SignedDuration, Timestamp};
 use jsonwebtoken::jwk::JwkSet;
@@ -479,17 +479,16 @@ pub async fn accept(
         }),
         Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
     };
-    if !matches!(outcome, Err(IdentityError::NotConfigured))
-        && let Err(err) = agent_audit::record_run_event(
+    if !matches!(outcome, Err(IdentityError::NotConfigured)) {
+        crate::agents::audit::record(
             &state.db,
             AuditKind::HostIdentity,
             agent_id,
             None,
+            None,
             detail,
         )
-        .await
-    {
-        tracing::warn!(error = %err, agent = %agent_id, "host identity audit write failed");
+        .await;
     }
     outcome
 }

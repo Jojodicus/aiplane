@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 use session_core::db::{self as chat, Decision, ToolCallStatus, TurnRole, TurnStatus};
 use session_core::i18n::{Lang, t};
@@ -211,24 +211,16 @@ pub async fn hand_off(
         Suspend::Available => {
             let question = session_core::text::truncate_chars(question.trim(), MAX_QUESTION_CHARS);
             let handoff = context(ctx, route, &question, spec, lang).await?;
-            if let Err(err) = agent_audit::record_run_event(
-                &ctx.db,
+            ctx.audit(
                 AuditKind::HumanHandoff,
-                ctx.principal.subject_id(),
-                ctx.run.as_deref(),
                 json!({
-                    "session_id": ctx.session_id,
-                    "turn_id": ctx.assistant_turn_id,
                     "route": route.name,
                     "via": via,
                     "timeout_secs": route.timeout.as_secs(),
                     "transcript": route.transcript,
                 }),
             )
-            .await
-            {
-                tracing::warn!(error = %err, "recording a human handoff");
-            }
+            .await;
             Ok(tool_suspend(SuspendRequest::human_answer(
                 question,
                 route.timeout,

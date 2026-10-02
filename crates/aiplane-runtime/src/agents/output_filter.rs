@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::run_chain::RunChain;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -378,17 +378,15 @@ pub async fn guard_answer(
     if let Err(e) = &trusted {
         detail["error"] = json!(format!("the trusted text could not be read: {e}"));
     }
-    if let Err(e) = agent_audit::record_run_event(
+    super::audit::record(
         &state.db,
         AuditKind::OutputBlocked,
         at.principal_id,
+        None,
         Some(at.chain),
         detail,
     )
-    .await
-    {
-        tracing::warn!(error = %e, "could not write the output-filter audit row");
-    }
+    .await;
     if let Err(e) = chat::set_content(&state.db, at.turn_id, &delivered).await {
         tracing::warn!(error = %e, "could not replace the stored answer after filtering");
     }

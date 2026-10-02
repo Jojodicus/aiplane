@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource, usage_from_value};
 use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
 use aiplane_core::server::run_chain::{CallSite, Frame, RunChain};
@@ -182,20 +182,6 @@ impl ForwardRequest {
         }
     }
 
-    async fn audit(&self, ctx: &ToolContext, kind: AuditKind, detail: Value) {
-        if let Err(err) = agent_audit::record_run_event(
-            &ctx.db,
-            kind,
-            ctx.principal.subject_id(),
-            ctx.run.as_deref(),
-            detail,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, kind = kind.as_str(), "recording a routing event");
-        }
-    }
-
     async fn forward(&self, ctx: &ToolContext) -> Result<Value, ToolError> {
         let Some(session_id) = ctx.session_id.as_deref() else {
             return Err(ToolError::Failed(
@@ -226,8 +212,7 @@ impl ForwardRequest {
             .map(|(name, status)| json!({ "route": name, "gate": status }))
             .collect();
         if open.is_empty() {
-            self.audit(
-                ctx,
+            ctx.audit(
                 AuditKind::RouteDecision,
                 json!({ "routes": gate_json, "picked": null, "reason": "no_open_route" }),
             )
@@ -246,8 +231,7 @@ impl ForwardRequest {
         let picked = match self.choose(ctx, &open, &state).await {
             Ok(picked) => picked,
             Err(message) => {
-                self.audit(
-                    ctx,
+                ctx.audit(
                     AuditKind::RouteDecision,
                     json!({ "routes": gate_json, "picked": null, "reason": message }),
                 )
@@ -264,8 +248,7 @@ impl ForwardRequest {
                 "route `{picked}` closed while it was being picked: {missing:?}"
             ))
         })?;
-        self.audit(
-            ctx,
+        ctx.audit(
             AuditKind::RouteDecision,
             json!({ "routes": gate_json, "picked": picked }),
         )
@@ -463,7 +446,7 @@ impl ForwardRequest {
         if let (Some(Value::Object(extra)), Some(map)) = (child.detail, about.as_object_mut()) {
             map.extend(extra);
         }
-        self.audit(ctx, AuditKind::SubAgentDispatched, about.clone())
+        ctx.audit(AuditKind::SubAgentDispatched, about.clone())
             .await;
         let outcome = drive(
             &self.state,
@@ -575,17 +558,15 @@ pub(crate) async fn record_finished(
 ) {
     let mut finished = about.clone();
     finished["outcome"] = json!(outcome);
-    if let Err(err) = agent_audit::record_run_event(
+    super::audit::record(
         db,
         AuditKind::SubAgentFinished,
         caller.principal_id,
+        None,
         caller.chain,
         finished,
     )
-    .await
-    {
-        tracing::warn!(error = %err, "recording a sub-agent's outcome");
-    }
+    .await;
 }
 
 impl Tool for ForwardRequest {

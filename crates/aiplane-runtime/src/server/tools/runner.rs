@@ -41,7 +41,7 @@ use serde_json::{Value, json};
 
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::Principal;
 
 use crate::server::tools::injection::InjectionScan;
@@ -1033,11 +1033,12 @@ async fn screen_result(
         ?signals,
         "tool result matched prompt-injection signals"
     );
-    if principal.system().is_some()
-        && let Err(e) = agent_audit::record_run_event(
+    if principal.system().is_some() {
+        crate::agents::audit::record(
             db,
             AuditKind::InjectionDetected,
             principal.subject_id(),
+            None,
             chain,
             json!({
                 "tool": call.name,
@@ -1046,9 +1047,7 @@ async fn screen_result(
                 "signals": signals,
             }),
         )
-        .await
-    {
-        tracing::warn!(error = %e, "could not record the injection finding in agent_audit");
+        .await;
     }
     screened.body
 }

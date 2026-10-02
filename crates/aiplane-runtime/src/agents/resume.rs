@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::{DbError, a2a_contexts, agents as agents_db};
 use aiplane_core::server::run_chain::{CallSite, Frame, MAX_DEPTH, RunChain};
 use serde_json::{Value, json};
@@ -369,7 +369,7 @@ pub async fn run_claimed(
         ResumedBy::Staff { user_id } => Some(user_id.as_str()),
         _ => None,
     };
-    if let Err(err) = agent_audit::record_run_event_by(
+    super::audit::record(
         &state.db,
         AuditKind::RunResumed,
         &profiles[0].principal.id,
@@ -385,10 +385,7 @@ pub async fn run_claimed(
             "waiting_turn": innermost.turn_id,
         }),
     )
-    .await
-    {
-        tracing::warn!(error = %err, "recording an agent resume");
-    }
+    .await;
     tracing::info!(
         turn = %opened.turn_id,
         depth = levels.len(),

@@ -296,8 +296,7 @@ impl ForwardRequest {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            self.audit(
-                ctx,
+            ctx.audit(
                 AuditKind::LoopIteration,
                 json!({
                     "route": route,
@@ -330,7 +329,7 @@ impl ForwardRequest {
         let mut finished = summary.clone();
         finished["route"] = json!(route);
         finished["tokens"] = json!(allowance.meter.tokens());
-        self.audit(ctx, AuditKind::LoopFinished, finished).await;
+        ctx.audit(AuditKind::LoopFinished, finished).await;
         Ok(json!({
             "forwarded": true,
             "route": route,

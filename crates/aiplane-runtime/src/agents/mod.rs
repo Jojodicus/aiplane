@@ -16,6 +16,7 @@
 pub mod a2a;
 pub mod a2a_client;
 pub mod approval;
+pub(crate) mod audit;
 pub mod bind;
 pub mod embed;
 pub mod eval;

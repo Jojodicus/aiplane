@@ -36,7 +36,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use aiplane_core::server::db::agent_a2a_tasks::{self, PendingTask};
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use serde_json::{Value, json};
 use session_core::i18n::{Lang, t};
@@ -725,20 +725,6 @@ pub struct Dispatch<'a> {
 }
 
 impl Dispatch<'_> {
-    async fn audit(&self, kind: AuditKind, detail: Value) {
-        if let Err(err) = agent_audit::record_run_event(
-            &self.ctx.db,
-            kind,
-            self.ctx.principal.subject_id(),
-            self.ctx.run.as_deref(),
-            detail,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, kind = kind.as_str(), "recording an A2A dispatch");
-        }
-    }
-
     /// Start a task on the route's external agent.
     pub async fn start(
         &self,
@@ -796,7 +782,8 @@ impl Dispatch<'_> {
                 ),
             }));
         }
-        self.audit(AuditKind::SubAgentDispatched, about.clone())
+        self.ctx
+            .audit(AuditKind::SubAgentDispatched, about.clone())
             .await;
         let budget = Duration::from_secs(target.seconds);
         let work = async {
@@ -856,7 +843,7 @@ impl Dispatch<'_> {
         let mut finished = about;
         finished["remote_agent"] = json!(remote_agent);
         finished["outcome"] = json!(outcome);
-        self.audit(AuditKind::SubAgentFinished, finished).await;
+        self.ctx.audit(AuditKind::SubAgentFinished, finished).await;
         Ok(json!({
             "forwarded": true,
             "route": self.route,
