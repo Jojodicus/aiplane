@@ -11,6 +11,8 @@ const branded = [
 	['/scheduled/abc/edit', 'scheduled-edit-heading'],
 	['/scheduled/abc/runs', 'scheduled-runs-page-title'],
 	['/webhooks', 'webhooks-heading'],
+	['/agents', 'agents-heading'],
+	['/agents/abc', 'agents-heading'],
 	['/webhooks/abc/edit', 'webhooks-edit-heading'],
 	['/webhooks/abc/rerun', 'webhooks-rerun-page-name'],
 	['/webhooks/abc/runs', 'webhooks-runs-page-name'],

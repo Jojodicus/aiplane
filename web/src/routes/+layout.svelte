@@ -139,6 +139,7 @@
 	const workspaceLinks: NavLink[] = [
 		['nav-scheduled', '/scheduled', 'clock'],
 		['nav-webhooks', '/webhooks', 'send'],
+		['nav-agents', '/agents', 'cpu'],
 		['nav-tools', '/tools', 'sliders']
 	];
 	const accountLinks: NavLink[] = [
@@ -159,7 +160,9 @@
 	// their nav entries with them: an entry that leads to "this is not enabled"
 	// is worse than no entry. The same map answers a URL typed by hand.
 	const features = $derived(me.value?.features);
-	const visibleWorkspaceLinks = $derived(visibleNavLinks(workspaceLinks, features));
+	const visibleWorkspaceLinks = $derived(
+		visibleNavLinks(workspaceLinks, features).filter(([, path]) => path !== '/agents' || me.value?.can_manage_agents)
+	);
 	const visibleAccountLinks = $derived(visibleNavLinks(accountLinks, features));
 	const visibleAdminLinks = $derived(visibleNavLinks(adminLinks, features));
 	const routeFeature = $derived(featureForRoute(page.url.pathname, base));
