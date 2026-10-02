@@ -220,6 +220,35 @@ what was built: [`agents.md`](agents.md#what-91-built).
 - **CORS** is answered only on `/api/v0/embed/*`, and only for an origin some
   live key of an enabled agent lists. Credentials mode stays off.
 
+## A2A callers (`gws_` + `a2a_caller`)
+
+Another agent platform calls an AIplane agent over A2A
+(`/a2a/agents/{id}`, [`agents.md`](agents.md#what-102-built)) as a **system
+principal** with its own `gws_` token. There is no new credential type:
+
+- **Scope is a grant.** The token's principal must hold `principal_grants`
+  `(kind = 'a2a_caller', ref = <agent id>)`. Default deny: a principal
+  without it — including one with every other grant — gets `403
+  PERMISSION_DENIED`, and the grant names one agent only. No `Authorization`
+  or an unknown, revoked or expired token gets `401` with
+  `WWW-Authenticate: Bearer`; a person's `gwk_` token gets `403`.
+- **Who may grant it.** `POST /api/v0/system-principals/{id}/grants
+  {"kind": "a2a_caller", "ref": "<agent id>"}` needs `can_manage_agents` and
+  a `write` share on that agent (admins hold one): #77's grant-time cap, with
+  "holding" an agent meaning being allowed to change it. Revoking the grant,
+  the token or disabling the principal ends access at the next request.
+- **The caller is not the actor.** A task runs as the agent's principal with
+  the agent's grants; the caller's own grants play no part. The caller is
+  recorded instead: on the context it opened (`a2a_contexts`: caller, token
+  id, client IP), in the run's call chain (`chain.caller`) on every audit and
+  usage row of the task, and in an `a2a_task` audit row per started,
+  answered or cancelled task.
+- **Isolation between callers.** A context and its tasks are visible only to
+  the principal that opened them; another caller of the same agent gets
+  "task not found" (A2A §13.1).
+- The agent card itself is public: it advertises the bearer scheme
+  (`securitySchemes.aiplaneSystemToken`), not a secret.
+
 ## What's intentionally out of scope (for now)
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.

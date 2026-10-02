@@ -217,7 +217,11 @@ async fn admit(
     ip: Option<&str>,
     lang: Lang,
 ) -> Result<(), Response> {
-    let who = Admission { visitor_id, ip };
+    let who = Admission {
+        visitor_id,
+        a2a_context: None,
+        ip,
+    };
     match embed_rt::admit(state, agent_id, who, Timestamp::now()).await {
         Ok(()) => Ok(()),
         Err(refusal) => Err(refused(&refusal, lang)),
@@ -515,6 +519,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         session_id: session_id.clone(),
         turn_id: assistant_turn_id.clone(),
         visitor_id: Some(v.session.id.clone()),
+        caller: None,
         lang,
     };
     let state_for_run = state.clone();

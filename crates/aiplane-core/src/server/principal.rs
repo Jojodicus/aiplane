@@ -42,15 +42,19 @@ pub enum GrantKind {
     RagCollection,
     /// An upstream pool name.
     Pool,
+    /// An agent id (`system_principals.id`) this principal may call over
+    /// A2A (`docs/agents.md` "What #102 built"). It grants nothing else.
+    A2aCaller,
 }
 
 impl GrantKind {
-    pub const ALL: [GrantKind; 5] = [
+    pub const ALL: [GrantKind; 6] = [
         Self::Tool,
         Self::Connector,
         Self::Skill,
         Self::RagCollection,
         Self::Pool,
+        Self::A2aCaller,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -60,6 +64,7 @@ impl GrantKind {
             Self::Skill => "skill",
             Self::RagCollection => "rag_collection",
             Self::Pool => "pool",
+            Self::A2aCaller => "a2a_caller",
         }
     }
 
@@ -184,6 +189,18 @@ mod tests {
         }
         assert_eq!(GrantKind::parse("model"), None);
         assert_eq!(GrantKind::parse("*"), None);
+    }
+
+    #[test]
+    fn calling_an_agent_over_a2a_is_a_grant_of_its_own_kind_naming_the_agent() {
+        assert_eq!(GrantKind::parse("a2a_caller"), Some(GrantKind::A2aCaller));
+        let grants = GrantSet::new([(GrantKind::A2aCaller, "agent-1".to_string())]);
+        assert!(grants.has(GrantKind::A2aCaller, "agent-1"));
+        assert!(!grants.has(GrantKind::A2aCaller, "agent-2"));
+        assert!(
+            !grants.has(GrantKind::Tool, "agent-1"),
+            "a caller grant unlocks nothing else"
+        );
     }
 
     #[test]

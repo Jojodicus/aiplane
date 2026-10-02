@@ -183,14 +183,14 @@ pub async fn slide(
 /// fractional seconds vary in length and so do not order as strings within
 /// one second; SQL narrows by the whole second before, the comparison here
 /// is exact.
-fn at_or_after(rows: Vec<String>, since: Timestamp) -> Vec<Timestamp> {
+pub(super) fn at_or_after(rows: Vec<String>, since: Timestamp) -> Vec<Timestamp> {
     rows.iter()
         .filter_map(|t| t.parse::<Timestamp>().ok())
         .filter(|t| *t >= since)
         .collect()
 }
 
-fn second_before(since: Timestamp) -> String {
+pub(super) fn second_before(since: Timestamp) -> String {
     since
         .checked_sub(SignedDuration::from_secs(1))
         .unwrap_or(since)

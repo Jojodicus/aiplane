@@ -82,6 +82,7 @@ pub async fn run_draft_turn(
         session_id,
         turn_id,
         visitor_id: None,
+        caller: None,
         lang: options.lang,
     };
     drive_opened(state, &profile, &opened).await

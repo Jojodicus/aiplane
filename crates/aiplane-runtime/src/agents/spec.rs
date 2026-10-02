@@ -49,10 +49,12 @@ use serde_json::{Map, Value};
 use super::gate::Cond;
 use verifiers::HOST_JWT;
 
+mod a2a;
 mod verifiers;
 use super::state::StateSchema;
 use crate::finish::FinishContract;
 use crate::server::tools::mcp::MCP_ID_PREFIX;
+pub(crate) use a2a::{MAX_SKILLS as MAX_A2A_SKILLS, is_skill_id};
 
 /// One problem with a spec: where, and what to do about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -148,6 +150,7 @@ const PUBLISH_KEYS: &[&str] = &[
     "budget",
     "output_filter",
     "require_passing_tests",
+    "a2a",
 ];
 const RATE_SCOPES: &[&str] = &["visitor", "ip"];
 const RATE_KEYS: &[&str] = &["max", "per"];
@@ -1433,6 +1436,9 @@ impl<'a> Check<'a> {
         }
         if let Some(x) = map.get("retention_days") {
             self.positive_int(x, "publish.retention_days", None);
+        }
+        if let Some(x) = map.get("a2a") {
+            self.a2a(x);
         }
         if let Some(x) = map.get("require_passing_tests")
             && !x.is_boolean()

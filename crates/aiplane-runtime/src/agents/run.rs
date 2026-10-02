@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use aiplane_core::server::db::{DbError, system_principals as sp};
-use aiplane_core::server::run_chain::{Frame, RunChain};
+use aiplane_core::server::run_chain::{Frame, RemoteCaller, RunChain};
 use session_core::db as chat;
 use session_core::i18n::Lang;
 
@@ -122,6 +122,7 @@ pub async fn run_turn_with(
         session_id,
         turn_id,
         visitor_id: turn.visitor_id.map(str::to_string),
+        caller: None,
         lang: options.lang,
     };
     drive_opened(state, &profile, &opened).await
@@ -139,17 +140,22 @@ pub struct OpenedTurn {
     pub session_id: String,
     pub turn_id: String,
     pub visitor_id: Option<String>,
+    /// The remote caller behind the conversation, on an A2A task.
+    pub caller: Option<RemoteCaller>,
     /// The language of text the gateway itself puts in the answer.
     pub lang: Lang,
 }
 
 /// The call chain of a main agent's turn: the conversation is its root.
 pub fn root_chain(profile: &RunProfile, turn: &OpenedTurn) -> Arc<RunChain> {
-    Arc::new(RunChain::root(
-        &turn.session_id,
-        turn.visitor_id.clone(),
-        Frame::for_principal(&profile.principal, Some(profile.version)),
-    ))
+    Arc::new(
+        RunChain::root(
+            &turn.session_id,
+            turn.visitor_id.clone(),
+            Frame::for_principal(&profile.principal, Some(profile.version)),
+        )
+        .called_by(turn.caller.clone()),
+    )
 }
 
 /// Drive an opened turn of `profile` until it is terminal or suspended, and

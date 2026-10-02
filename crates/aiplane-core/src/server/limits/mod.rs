@@ -33,7 +33,7 @@ use jiff::{SignedDuration, Timestamp};
 use super::db::Pool;
 use super::db::limits::{self, Dimension, SubjectType, Window};
 use super::db::usage::{self, WindowUsage};
-use super::db::visitor_sessions;
+use super::db::{a2a_contexts, visitor_sessions};
 
 /// Per-request limit gate. Cheap to clone (holds a pool handle + a flag).
 #[derive(Clone)]
@@ -313,14 +313,30 @@ impl Enforcer {
                 });
             sliding_window(RateScope::Visitor, rates.visitor, &times, now)?;
         }
-        if let Some(ip) = who.ip {
-            let since = rates.ip.since(now);
-            let times = visitor_sessions::ip_event_times(&self.db, who.principal_id, ip, since)
+        if let Some(context) = who.a2a_context {
+            let since = rates.visitor.since(now);
+            let times = a2a_contexts::message_times(&self.db, context, since)
                 .await
                 .unwrap_or_else(|err| {
-                    tracing::warn!(error = %err, "limits: per-IP event times; allowing");
+                    tracing::warn!(error = %err, "limits: A2A context message times; allowing");
                     Vec::new()
                 });
+            sliding_window(RateScope::Visitor, rates.visitor, &times, now)?;
+        }
+        if let Some(ip) = who.ip {
+            let since = rates.ip.since(now);
+            let embed =
+                visitor_sessions::ip_event_times(&self.db, who.principal_id, ip, since).await;
+            let a2a = a2a_contexts::ip_event_times(&self.db, who.principal_id, ip, since).await;
+            let times: Vec<Timestamp> = [embed, a2a]
+                .into_iter()
+                .flat_map(|times| {
+                    times.unwrap_or_else(|err| {
+                        tracing::warn!(error = %err, "limits: per-IP event times; allowing");
+                        Vec::new()
+                    })
+                })
+                .collect();
             sliding_window(RateScope::Ip, rates.ip, &times, now)?;
         }
         Ok(())
@@ -355,6 +371,9 @@ pub struct VisitorRates {
 pub struct VisitorKey<'a> {
     pub principal_id: &'a str,
     pub visitor_id: Option<&'a str>,
+    /// An A2A context (its conversation's id), which counts like a visitor
+    /// session against `rates.visitor`.
+    pub a2a_context: Option<&'a str>,
     pub ip: Option<&'a str>,
 }
 

@@ -59,6 +59,18 @@ impl Frame {
     }
 }
 
+/// Who called the main agent from another platform: a system principal
+/// authenticated with its own `gws_` token, over a protocol such as A2A. It
+/// is not a frame — it does not run and holds none of the agent's grants —
+/// but every row the run writes names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemoteCaller {
+    pub protocol: String,
+    pub principal_id: String,
+    pub name: String,
+    pub token_id: String,
+}
+
 /// The chain of one run. Never empty: [`RunChain::root`] starts it with the
 /// main agent, and [`RunChain::enter`] only ever appends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -68,6 +80,9 @@ pub struct RunChain {
     /// The visitor session behind the root conversation. A visitor is not a
     /// principal; it rides along for audit and limits.
     pub visitor_id: Option<String>,
+    /// The remote caller behind the root conversation, on an A2A task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller: Option<RemoteCaller>,
     frames: Vec<Frame>,
 }
 
@@ -93,8 +108,16 @@ impl RunChain {
         Self {
             root_session: root_session.into(),
             visitor_id,
+            caller: None,
             frames: vec![agent],
         }
+    }
+
+    /// The same chain, started on behalf of `caller`. Sub-agent chains
+    /// entered from it carry the caller along.
+    pub fn called_by(mut self, caller: Option<RemoteCaller>) -> Self {
+        self.caller = caller;
+        self
     }
 
     /// The chain of a sub-agent run started from this one. Refuses a fourth
@@ -251,6 +274,39 @@ mod tests {
             }
         );
         assert!(err.to_string().contains("already running"), "{err}");
+    }
+
+    #[test]
+    fn a_remote_caller_rides_along_into_sub_agents_and_into_the_serialized_chain() {
+        let caller = RemoteCaller {
+            protocol: "a2a".into(),
+            principal_id: "p-partner".into(),
+            name: "partner-bot".into(),
+            token_id: "tok-1".into(),
+        };
+        let chain = RunChain::root(
+            "s-a2a",
+            None,
+            Frame::for_principal(&agent("p-main", "support-website"), Some(4)),
+        )
+        .called_by(Some(caller.clone()));
+        let child = chain
+            .enter(
+                Frame::for_principal(&agent("p-bill", "billing"), Some(2)).called_from(site("t1")),
+            )
+            .unwrap();
+        assert_eq!(child.caller.as_ref(), Some(&caller));
+        assert_eq!(
+            child.to_json()["caller"],
+            serde_json::json!({
+                "protocol": "a2a", "principal_id": "p-partner",
+                "name": "partner-bot", "token_id": "tok-1"
+            })
+        );
+        assert!(
+            main_run().to_json().get("caller").is_none(),
+            "a visitor's chain serializes as before"
+        );
     }
 
     #[test]

@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use super::json_agents::guard_agent_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_core::server::auth::token;
-use aiplane_core::server::db::agents::Access;
+use aiplane_core::server::db::agents::{self as agents_db, Access};
 use aiplane_core::server::db::{
     agent_audit, mcp_catalog, rag as rag_db, system_principals as sp_db, users,
 };
@@ -257,7 +257,8 @@ pub struct GrantBody {
 fn parse_grant(body: &GrantBody) -> Result<(GrantKind, &str), Response> {
     let kind = GrantKind::parse(&body.kind).ok_or_else(|| {
         bad_request(format!(
-            "`{}` is not a grant kind — use one of tool, connector, skill, rag_collection, pool",
+            "`{}` is not a grant kind — use one of tool, connector, skill, rag_collection, pool, \
+             a2a_caller",
             body.kind
         ))
     })?;
@@ -364,6 +365,17 @@ async fn manager_holds(
             };
             state.pool_access_for(&manager.roles).allows(&pool)
         }
+        GrantKind::A2aCaller => {
+            // Letting another platform call an agent is a change to that
+            // agent, so it takes what changing it takes: a `write` share.
+            match agents_db::get(&state.db, reference).await {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(missing(format!("agent `{reference}`"))),
+                Err(err) => return Err(internal(err)),
+            }
+            guard_agent_principal(state, manager, reference, Access::Write).await?;
+            true
+        }
     };
     if held {
         return Ok(());
@@ -387,6 +399,7 @@ fn kind_label(kind: GrantKind) -> &'static str {
         GrantKind::Skill => "skill",
         GrantKind::RagCollection => "RAG collection",
         GrantKind::Pool => "pool",
+        GrantKind::A2aCaller => "A2A caller",
     }
 }
 

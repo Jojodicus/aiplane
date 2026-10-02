@@ -407,6 +407,7 @@ none of the above applies to it. It holds exactly the rows in
 | `skill` | that global skill | anyone's private skills |
 | `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
 | `pool` | that upstream pool | open pools; `is_admin` bypass |
+| `a2a_caller` | calling that agent (ref: its id) over A2A, `/a2a/agents/{id}` ([`agents.md`](agents.md#what-102-built)) | anything of the agent's own: the task runs as the agent's principal, with the agent's grants, never the caller's |
 
 The principal-aware entry points on `AppState` are
 `allowed_tools_for_principal`, `allowed_skills_for_principal`,

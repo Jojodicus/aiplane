@@ -75,6 +75,9 @@ pub enum AuditKind {
     VerifierOutcome,
     /// A host identity token was accepted or refused (#95). Never a claim value.
     HostIdentity,
+    /// An A2A caller started, answered or cancelled a task (#102): which
+    /// caller, token, context and task. Never the message text.
+    A2aTask,
 }
 
 impl AuditKind {
@@ -112,6 +115,7 @@ impl AuditKind {
             Self::ChannelDeleted => "channel_deleted",
             Self::VerifierOutcome => "verifier_outcome",
             Self::HostIdentity => "host_identity",
+            Self::A2aTask => "a2a_task",
         }
     }
 }
