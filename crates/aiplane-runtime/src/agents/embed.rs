@@ -195,8 +195,8 @@ pub async fn admit(
     who: Admission<'_>,
     now: Timestamp,
 ) -> Result<(), Refusal> {
-    let spec = match agents_db::live(&state.db, agent_id).await {
-        Ok(Some((_, text))) => serde_json::from_str(&text).unwrap_or(Value::Null),
+    let spec = match state.refusals.live_spec(&state.db, agent_id).await {
+        Ok(Some(spec)) => spec,
         Ok(None) => return Ok(()),
         Err(err) => {
             tracing::warn!(error = %err, agent = agent_id, "reading the agent's limits; admitting");
@@ -224,18 +224,126 @@ pub async fn admit(
             Ok(()) => return Ok(()),
         },
     };
-    if let Err(err) = agent_audit::record_run_event(
-        &state.db,
-        AuditKind::LimitRefused,
-        agent_id,
-        None,
-        refused.detail(who.visitor_id),
-    )
-    .await
-    {
-        tracing::warn!(error = %err, agent = agent_id, "recording a refused visitor request");
-    }
+    let subject = who.visitor_id.or(who.a2a_context).or(who.ip).unwrap_or("");
+    state
+        .refusals
+        .record(&state.db, agent_id, subject, refused.detail(who.visitor_id))
+        .await;
     Err(refused)
+}
+
+const REFUSAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+const SPEC_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Keeps a flood of refused requests from becoming a flood of database
+/// work: one `limit_refused` audit row per (agent, subject, limit) per
+/// window, whose `count` is set to the refusals it stands for when the
+/// window closes, and the live spec each admission reads held for a few
+/// seconds.
+#[derive(Clone)]
+pub struct RefusalAudit {
+    window: std::time::Duration,
+    open: Arc<Mutex<HashMap<(String, String, String), OpenRefusal>>>,
+    specs: Arc<Mutex<HashMap<String, (std::time::Instant, Option<Value>)>>>,
+}
+
+struct OpenRefusal {
+    audit_id: String,
+    count: u64,
+}
+
+impl Default for RefusalAudit {
+    fn default() -> Self {
+        Self::with_window(REFUSAL_WINDOW)
+    }
+}
+
+impl RefusalAudit {
+    pub fn with_window(window: std::time::Duration) -> Self {
+        Self {
+            window,
+            open: Arc::default(),
+            specs: Arc::default(),
+        }
+    }
+
+    async fn live_spec(
+        &self,
+        db: &aiplane_core::server::db::Pool,
+        agent_id: &str,
+    ) -> Result<Option<Value>, aiplane_core::server::db::DbError> {
+        let cached = self
+            .specs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(agent_id)
+            .filter(|(at, _)| at.elapsed() < SPEC_TTL)
+            .map(|(_, spec)| spec.clone());
+        if let Some(spec) = cached {
+            return Ok(spec);
+        }
+        let spec = agents_db::live(db, agent_id)
+            .await?
+            .map(|(_, text)| serde_json::from_str(&text).unwrap_or(Value::Null));
+        let mut specs = self.specs.lock().unwrap_or_else(|p| p.into_inner());
+        specs.retain(|_, (at, _)| at.elapsed() < SPEC_TTL);
+        specs.insert(
+            agent_id.to_string(),
+            (std::time::Instant::now(), spec.clone()),
+        );
+        Ok(spec)
+    }
+
+    async fn record(
+        &self,
+        db: &aiplane_core::server::db::Pool,
+        agent_id: &str,
+        subject: &str,
+        mut detail: Value,
+    ) {
+        let kind = detail["limit"].as_str().unwrap_or("unknown").to_string();
+        let key = (agent_id.to_string(), subject.to_string(), kind);
+        let audit_id = {
+            let mut open = self.open.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(entry) = open.get_mut(&key) {
+                entry.count += 1;
+                return;
+            }
+            let audit_id = uuid::Uuid::new_v4().to_string();
+            open.insert(
+                key.clone(),
+                OpenRefusal {
+                    audit_id: audit_id.clone(),
+                    count: 1,
+                },
+            );
+            audit_id
+        };
+        detail["count"] = json!(1);
+        if let Err(err) = agent_audit::record_run_event_with_id(
+            db,
+            &audit_id,
+            AuditKind::LimitRefused,
+            agent_id,
+            detail,
+        )
+        .await
+        {
+            tracing::warn!(error = %err, agent = agent_id, "recording a refused visitor request");
+        }
+        let (open, window, db) = (self.open.clone(), self.window, db.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(window).await;
+            let closed = open.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+            if let Some(entry) = closed.filter(|e| e.count > 1) {
+                if let Err(err) =
+                    agent_audit::set_detail_count(&db, &entry.audit_id, entry.count).await
+                {
+                    tracing::warn!(error = %err, agent = %key.0, "counting refused visitor requests");
+                }
+            }
+        });
+    }
 }
 
 /// What an agent's managers see of its limits under the live spec `live`
@@ -661,6 +769,42 @@ mod tests {
             .expect("the release wakes the waiter")
             .unwrap();
         assert!(woke);
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_refusals_writes_one_row_per_window_carrying_the_count() {
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let audit = RefusalAudit::with_window(std::time::Duration::from_millis(100));
+        let detail = json!({ "limit": "visitor_rate", "max": 2 });
+        for _ in 0..1000 {
+            audit
+                .record(&db, "agent", "visitor-1", detail.clone())
+                .await;
+        }
+        audit
+            .record(&db, "agent", "visitor-2", detail.clone())
+            .await;
+        assert_eq!(rows(&db).await.len(), 2, "one per subject, not per request");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let mut counts: Vec<i64> = rows(&db).await;
+        counts.sort();
+        assert_eq!(counts, [1, 1000]);
+
+        audit.record(&db, "agent", "visitor-1", detail).await;
+        assert_eq!(rows(&db).await.len(), 3, "the next window audits again");
+    }
+
+    async fn rows(db: &aiplane_core::server::db::Pool) -> Vec<i64> {
+        agent_audit::for_principal(db, "agent")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "limit_refused")
+            .map(|e| e.detail["count"].as_i64().unwrap())
+            .collect()
     }
 
     #[tokio::test]
