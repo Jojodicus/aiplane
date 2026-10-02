@@ -121,7 +121,8 @@
 	const gateText = (route: string) => describeCond(spec.routes[route]?.when, t('agents-canvas-gate-set'));
 </script>
 
-<div class="space-y-3">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="space-y-3" {onkeydown}>
 	<div class="flex flex-wrap items-center gap-3">
 		<p class="min-w-60 flex-1 text-sm text-base-content/70">{t('agents-canvas-intro')}</p>
 		<button class="btn btn-sm" type="button" onclick={add}>+ {t('agents-routes-add')}</button>
@@ -136,15 +137,13 @@
 		{/if}
 	</p>
 
-	<div class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
+	<div class="grid items-start gap-4 {selected ? 'xl:grid-cols-[minmax(0,1fr)_26rem]' : ''}">
 		<div class="min-w-0 overflow-x-auto rounded-box border border-base-300 bg-base-100" bind:this={canvasEl}>
-			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 			<div
 				class="relative"
 				role="group"
 				aria-label={t('agents-canvas-label')}
 				style="width:{graph.width}px;height:{graph.height}px"
-				{onkeydown}
 			>
 				<svg class="pointer-events-none absolute inset-0" width={graph.width} height={graph.height} aria-hidden="true">
 					{#each graph.edges as edge (edge.id)}
