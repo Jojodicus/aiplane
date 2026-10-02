@@ -128,7 +128,9 @@ fn writes(v: Option<&Value>) -> Option<Writes> {
 
 fn rate(v: Option<&Value>, default: Rate) -> Rate {
     let parsed = v.and_then(|r| {
-        let max = u32::try_from(r.get("max")?.as_u64()?).ok()?;
+        let max = u32::try_from(r.get("max")?.as_u64()?)
+            .ok()
+            .filter(|m| *m > 0)?;
         let per = parse_duration(r.get("per")?.as_str()?)?;
         Some(Rate { max, per })
     });

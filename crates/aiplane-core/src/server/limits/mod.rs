@@ -423,8 +423,12 @@ pub fn sliding_window(
         return Ok(());
     }
     inside.sort_unstable_by(|a, b| b.cmp(a));
-    let frees_one = inside[rate.max as usize - 1];
-    let leaves = frees_one.checked_add(rate.per).unwrap_or(now);
+    // A zero rate admits nothing, ever; no event's departure frees a slot, so
+    // the honest retry is one window from now.
+    let leaves = match (rate.max as usize).checked_sub(1) {
+        Some(nth) => inside[nth].checked_add(rate.per).unwrap_or(now),
+        None => now.checked_add(rate.per).unwrap_or(now),
+    };
     Err(RateExceeded {
         scope,
         max: rate.max,
@@ -876,6 +880,19 @@ mod tests {
             err.retry_after_secs, 120,
             "12:02 leaves the window at 12:12, two minutes from now"
         );
+    }
+
+    #[test]
+    fn a_zero_rate_refuses_without_panicking() {
+        let rate = Rate {
+            max: 0,
+            per: TEN_MIN,
+        };
+        let now = at("2026-10-01T12:10:00Z");
+        let err = sliding_window(RateScope::Visitor, rate, &[], now).unwrap_err();
+        assert_eq!(err.max, 0);
+        assert_eq!(err.retry_after_secs, 600, "nothing will ever fit; retry after a window");
+        assert!(sliding_window(RateScope::Ip, rate, &[at("2026-10-01T12:09:00Z")], now).is_err());
     }
 
     #[test]
