@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use rama::http::{Method, StatusCode};
+use rama::Service;
+use rama::http::{Body, Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -107,13 +108,17 @@ async fn staff(fx: &Fx) -> Staff {
 /// A published agent with a human route, served by the production runner on
 /// `llm`, and one embed key.
 async fn handing_off(llm: &MockServer) -> Embed {
+    handing_off_with(llm, handoff_spec()).await
+}
+
+async fn handing_off_with(llm: &MockServer, spec: Value) -> Embed {
     let mut fx = agents::fixture_on(Some(&llm.uri())).await;
     fx.state = fx
         .state
         .clone()
         .with_agent_runner(Arc::new(LiveAgentRunner));
     let agent = fx.runnable("support").await;
-    let (status, body) = fx.put_draft(&fx.alice, &agent, handoff_spec()).await;
+    let (status, body) = fx.put_draft(&fx.alice, &agent, spec).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, body) = fx.publish(&fx.alice, &agent).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -237,6 +242,52 @@ async fn a_responder_answers_a_handoff_from_the_inbox_and_the_visitor_receives_i
         .find(|ev| ev.kind == "run_resumed")
         .expect("the answer is audited");
     assert_eq!(resumed.actor_id.as_deref(), Some("sam"));
+}
+
+#[tokio::test]
+async fn a_german_responder_resumes_an_english_visitor_in_english() {
+    let llm = upstream(vec![
+        call("s1", "set_issue", json!({"value": "refund for RE-1"})),
+        call("h1", "request_human", json!({"question": QUESTION})),
+        text("RE-999 is refunded."),
+    ])
+    .await;
+    let mut spec = handoff_spec();
+    spec["publish"] = json!({ "output_filter": { "patterns": { "invoice": "RE-\\d+" } } });
+    let e = handing_off_with(&llm, spec).await;
+    let people = staff(&e.fx).await;
+    let (status, body) =
+        e.fx.post(
+            &e.fx.alice,
+            &format!("/api/v0/agents/{}/responders", e.agent),
+            json!({ "subject_kind": "group", "subject_id": "support" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let token = e.visitor().await;
+    let said = e.say_in(&token, "I was billed twice for RE-1.", "en").await;
+    assert_eq!(said.status, StatusCode::ACCEPTED);
+    assert_eq!(e.quiet(&token).await.status, chat::TurnStatus::Suspended);
+    let (_, inbox) = e.fx.get(&people.sam, "/api/v0/agents/inbox").await;
+    let id = inbox["items"][0]["id"].as_str().unwrap().to_string();
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/v0/agents/inbox/{id}/answer"))
+        .header("cookie", format!("id={}", people.sam))
+        .header(header::ACCEPT_LANGUAGE, "de")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({ "decision": "value", "value": "Yes, refund it." }).to_string(),
+        ))
+        .unwrap();
+    let resp = common::app(e.fx.state.clone()).serve(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let done = e.quiet(&token).await;
+    assert_eq!(
+        done.content.as_deref(),
+        Some(session_core::i18n::t(session_core::i18n::Lang::En, "agent-output-withheld").as_str())
+    );
 }
 
 #[tokio::test]

@@ -902,7 +902,8 @@ grants.
   `run_turn` and the public endpoint's runner are both covered.
 - **Language.** `OpenedTurn.lang` picks the catalog language of the fallback
   text: `RunOptions.lang` (default English) for `run_turn`, the request's
-  `Accept-Language` for a visitor message.
+  `Accept-Language` for a visitor message, and the conversation's recorded
+  language on a resume ([Suspend and resume](#suspend-and-resume-82)).
 - **No early peek.** The turn row is terminal before the filter has ruled, so
   the embed endpoint treats a session as unfinished while `AgentTurns` still
   holds its claim (`is_running`): the snapshot shows the turn in progress and
@@ -1031,6 +1032,18 @@ agent runs pause and resume durably, sub-agent runs included.
   resume is audited as `run_resumed` (`{session_id, turn_id, request_id, kind,
   decision, answered_by, waiting_turn}`, with `actor_id` for staff). A level
   that cannot be rebuilt (agent disabled since) errors every claimed turn.
+- **The visitor's language.** A resumed run speaks the language the
+  conversation's turn was asked in, whoever gives the decision: staff answer
+  from the inbox in their own, and the timeout sweeper has none. Every new
+  turn (`drive_opened`, so `run_turn`, the embed and A2A runners and a
+  queued message alike) records `OpenedTurn.lang` as `chat_sessions.lang`
+  (migration `0093`), and `run_claimed` reads it back for `RunOptions.lang`
+  and `OpenedTurn.lang`. That covers the output filter's fallback texts, a
+  timed-out handoff's `agent-human-no-answer`, and the `lang` of a handoff
+  the resumed run records. The language argument of `run_claimed` (and
+  `AgentTurnRunner::resume`) is only the fallback for a conversation that
+  recorded none (one whose last turn started before `0093`); the inbox and
+  the sweeper pass English.
 - **Secure values.** A `value` goes to the requesting tool through
   `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
   `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's

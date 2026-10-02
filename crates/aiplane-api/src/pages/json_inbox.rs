@@ -91,7 +91,6 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let Some(id) = raw_path_segment(&req, 1) else {
         return bad_request("the URL is missing the inbox item id");
     };
-    let lang = Lang::from_request(req.headers());
     let ctx = super::chat::json_api::request_ctx(&state, &req, false);
     let body: AnswerBody = or_return!(super::read_json(req.into_body(), "the answer").await);
     let decision = match super::chat::json_api::decision_from(body.decision, body.value) {
@@ -166,7 +165,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         let _hold = hold;
         let run = tokio::spawn({
             let state = state_for_run.clone();
-            async move { runner.resume(state, claimed, lang).await }
+            async move { runner.resume(state, claimed, Lang::En).await }
         });
         if let Err(err) = run.await {
             tracing::error!(error = %err, turn = %turn_id, "agent resume from the inbox panicked");

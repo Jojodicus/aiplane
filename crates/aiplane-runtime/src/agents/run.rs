@@ -142,7 +142,9 @@ pub struct OpenedTurn {
     pub visitor_id: Option<String>,
     /// The remote caller behind the conversation, on an A2A task.
     pub caller: Option<RemoteCaller>,
-    /// The language of text the gateway itself puts in the answer.
+    /// The language of text the gateway itself puts in the answer. A new
+    /// turn records it on the conversation; a resume reads it back from
+    /// there, whoever gives the decision.
     pub lang: Lang,
 }
 
@@ -181,7 +183,12 @@ pub async fn drive_opened_from(
     let params = profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone());
     match resume {
         Some(resume) => drive_resumed(state, params, resume).await,
-        None => drive(state, params).await,
+        None => {
+            chat::set_run_lang(&state.db, &turn.session_id, turn.lang)
+                .await
+                .map_err(DbError::from)?;
+            drive(state, params).await
+        }
     };
     let done = chat::get_turn(&state.db, &turn.session_id, &turn.turn_id)
         .await
