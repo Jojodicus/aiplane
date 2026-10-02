@@ -2114,6 +2114,12 @@ routes:
   fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
   reused: it allows private ranges on purpose (an admin curates the MCP
   catalog) and checks literal addresses only.
+- **Size caps** (`guard::read_capped`). Every body read from outside — the
+  card (256 KiB), the JSON-RPC answer (1 MiB), the OAuth token answer
+  (64 KiB) — is refused when its `Content-Length` is over the cap, before a
+  byte is read, and otherwise read chunk by chunk and dropped the moment the
+  running total passes it. A chunked body without a length therefore cannot
+  make the gateway buffer more than the cap.
 - **The result** is the first `data` object among the completed task's
   artifact parts (then its status message), else the first text part that
   parses as a JSON object (a fenced block too); a direct `message` answer is

@@ -60,6 +60,7 @@ pub const INPUT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const REQUEST_SLACK: Duration = Duration::from_secs(5);
 const POLL_EVERY: Duration = Duration::from_millis(500);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
 
 /// How the gateway signs in at the remote agent: one of the card's
 /// `securitySchemes`, with a credential the spec holds sealed.
@@ -569,9 +570,8 @@ impl<'a> Remote<'a> {
         if !status.is_success() {
             return Err(format!("the OAuth token endpoint answered {status}"));
         }
-        let body: Value = resp
-            .json()
-            .await
+        let bytes = guard::read_capped(resp, MAX_TOKEN_BYTES, "the OAuth token answer").await?;
+        let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the OAuth token answer is not JSON ({e})"))?;
         let token = body
             .get("access_token")
@@ -619,19 +619,11 @@ impl<'a> Remote<'a> {
             .await
             .map_err(|e| format!("calling the external agent failed: {e}"))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("reading the external agent's answer failed: {e}"))?;
         if !status.is_success() {
             return Err(format!("the external agent answered {status}"));
         }
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(format!(
-                "the external agent's answer is larger than {} KiB",
-                MAX_RESPONSE_BYTES / 1024
-            ));
-        }
+        let bytes =
+            guard::read_capped(resp, MAX_RESPONSE_BYTES, "the external agent's answer").await?;
         let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the external agent's answer is not JSON ({e})"))?;
         if let Some(error) = body.get("error") {
