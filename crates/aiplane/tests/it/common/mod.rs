@@ -696,6 +696,35 @@ pub async fn read_body(resp: rama::http::Response) -> rama::bytes::Bytes {
     resp.into_body().collect().await.unwrap().to_bytes()
 }
 
+/// Total size of [`endless_body`]: far above every body cap, yet bounded.
+pub const ENDLESS_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// A streamed request body with no `Content-Length`, far larger than any cap —
+/// what a client sends to make a handler drain its body without bound.
+///
+/// Deliberately finite: a truly endless stream against a handler that lacks
+/// the cap buffers until the machine runs out of memory (it took the whole
+/// dev box down three times). 8 MiB still tells a capped read (413) from an
+/// uncapped one (the handler reads it all and answers something else).
+pub fn endless_body() -> Body {
+    let chunk = rama::bytes::Bytes::from(vec![b' '; 8 * 1024]);
+    Body::from_stream(rama::futures::stream::iter(
+        std::iter::repeat_n(chunk, ENDLESS_BODY_BYTES / (8 * 1024)).map(Ok::<_, std::io::Error>),
+    ))
+}
+
+/// Serve `req`, failing the test when no answer comes within five seconds:
+/// the bound that tells a capped body read from one draining an endless body.
+pub async fn serve_promptly(state: &RamaState, req: rama::http::Request) -> rama::http::Response {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        app(state.clone()).serve(req),
+    )
+    .await
+    .expect("the request body is drained without a cap")
+    .unwrap()
+}
+
 /// Build a minimal request with the given method, URI, and an empty body.
 pub fn req(method: rama::http::Method, uri: &str) -> rama::http::Request {
     rama::http::Request::builder()

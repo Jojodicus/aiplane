@@ -34,6 +34,8 @@ const PARTIAL: &str = "Let me check the ord";
 
 // Visitor limits, owner budget and retention (#92).
 mod limits;
+// The body cap on the public embed routes.
+mod body_cap;
 // Suspended agent runs: secure input, approvals, resume.
 mod suspend;
 // Human in the loop: the inbox, responders, channels (#96).

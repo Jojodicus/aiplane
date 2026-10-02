@@ -633,6 +633,43 @@ async fn a_lookup_vouches_with_its_own_provenance_and_caps_its_attempts() {
     );
 }
 
+/// A lookup whose second write is refused stores neither: a `verified` slot
+/// without its companion would open a gate for half an identity.
+#[tokio::test]
+async fn a_lookup_whose_second_write_is_refused_stores_nothing() {
+    let main = llm(vec![
+        call("k1", "set_name", json!({ "value": "Alice Smith" })),
+        call("k2", "set_customer_number", json!({ "value": "K-1" })),
+        call("k3", "verify_kyc", json!({})),
+        text("Done."),
+    ])
+    .await;
+    let (erp, _) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let mut spec = otp_spec(json!({}));
+    spec["state"]["zz_note"] = json!({ "type": "string", "set_by": ["verifier:otp"] });
+    spec["verifiers"]["kyc"]["writes"] = json!({ "verified": "result", "zz_note": "input.name" });
+    let agent = support(&world, &spec).await;
+    let (_, options) = clock();
+
+    let done = says(&world, &agent, &options, "I am Alice Smith").await;
+    assert_eq!(done.status, chat::TurnStatus::Completed, "{done:?}");
+    let sent = requests(&main).await;
+    let answer = tool_answer(&sent, "k3");
+    assert!(
+        answer.contains("zz_note"),
+        "the refusal names the slot: {answer}"
+    );
+    let trusted: Vec<String> = slot_rows(&world, &done.session_id)
+        .await
+        .into_iter()
+        .filter(|(_, _, provenance)| provenance != "llm")
+        .map(|(slot, ..)| slot)
+        .collect();
+    assert!(trusted.is_empty(), "nothing vouched for: {trusted:?}");
+}
+
 /// The slots a lookup reads, the lookup itself and the forward it opens, all
 /// in one round: writers run first in call order, so the forward sees what
 /// the lookup vouched for every time.

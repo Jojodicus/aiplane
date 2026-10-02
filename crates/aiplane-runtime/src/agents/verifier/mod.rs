@@ -4,7 +4,7 @@
 //! Identity verifiers (#95, `docs/agents.md` "What #95 built").
 //!
 //! A verifier is the only thing besides the host that may write a slot the
-//! model cannot: it writes through [`write_trusted`] as
+//! model cannot: it writes through [`write_trusted`](super::state::write_trusted) as
 //! `TrustedWriter::Verifier(<id>)`, after it decided in code that the visitor
 //! proved something. Three kinds:
 //!
@@ -41,7 +41,7 @@ use serde_json::{Map, Value, json};
 
 use super::profile::RunOptions;
 use super::spec::parse_duration;
-use super::state::{StateSchema, StateWriteError, TrustedWriter, write_trusted};
+use super::state::{StateSchema, StateWriteError, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{Tool, ToolContext, ToolError, extract_content_parts};
 
@@ -128,7 +128,9 @@ fn writes(v: Option<&Value>) -> Option<Writes> {
 
 fn rate(v: Option<&Value>, default: Rate) -> Rate {
     let parsed = v.and_then(|r| {
-        let max = u32::try_from(r.get("max")?.as_u64()?).ok()?;
+        let max = u32::try_from(r.get("max")?.as_u64()?)
+            .ok()
+            .filter(|m| *m > 0)?;
         let per = parse_duration(r.get("per")?.as_str()?)?;
         Some(Rate { max, per })
     });
@@ -416,33 +418,28 @@ pub(crate) async fn apply_writes(
         let Some(value) = value.filter(|v| !v.is_null()) else {
             return Err(write_failed(id, slot, "the answer has no value for it"));
         };
-        let Some(def) = run.schema.slot(slot) else {
-            return Err(write_failed(id, slot, "the slot is not declared"));
-        };
-        def.check(&value)
-            .map_err(|_| write_failed(id, slot, "the value does not fit the slot's type"))?;
         resolved.push((slot.clone(), value));
     }
     let now = (run.options.now)();
-    let mut written = Vec::new();
-    for (slot, value) in resolved {
-        write_trusted(
-            &run.state.db,
-            &run.schema,
-            session_id,
-            &slot,
-            value,
-            writer.clone(),
-            now,
-        )
+    let refused = |err: StateWriteError| match err {
+        StateWriteError::Db { .. } => ToolError::Failed(err.to_string()),
+        StateWriteError::UnknownSlot { ref slot, .. }
+        | StateWriteError::NotWritable { ref slot, .. }
+        | StateWriteError::Invalid { ref slot, .. } => write_failed(id, slot, &err.to_string()),
+    };
+    let mut tx = run
+        .state
+        .db
+        .begin()
         .await
-        .map_err(|err| match err {
-            StateWriteError::Db { .. } => ToolError::Failed(err.to_string()),
-            other => write_failed(id, &slot, &other.to_string()),
-        })?;
-        written.push(slot);
-    }
-    Ok(written)
+        .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
+    write_trusted_all(&mut tx, &run.schema, session_id, &resolved, writer, now)
+        .await
+        .map_err(refused)?;
+    tx.commit()
+        .await
+        .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
+    Ok(resolved.into_iter().map(|(slot, _)| slot).collect())
 }
 
 /// One `verifier_outcome` row on the running principal, with its chain.

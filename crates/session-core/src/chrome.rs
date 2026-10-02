@@ -81,6 +81,68 @@ pub async fn read_body_to_bytes(body: Body) -> Result<rama::bytes::Bytes, String
         .map_err(|e| format!("reading body: {e}"))
 }
 
+/// Why [`read_body_capped`] gave up.
+#[derive(Debug)]
+pub enum CappedBodyError {
+    /// The body is longer than the cap (declared or counted while reading).
+    TooLarge {
+        max: usize,
+    },
+    Read(String),
+}
+
+/// The body, refused once it passes `max` bytes. A declared length over the
+/// cap is refused before anything is read; otherwise frames are counted as
+/// they arrive and reading stops the moment the total passes the cap, so a
+/// client cannot make the gateway hold more than `max` bytes of it.
+pub async fn read_body_capped(
+    body: Body,
+    max: usize,
+) -> Result<rama::bytes::Bytes, CappedBodyError> {
+    use rama::http::StreamingBody;
+    if body.size_hint().lower() > max as u64 {
+        return Err(CappedBodyError::TooLarge { max });
+    }
+    match read_prefix(body, max).await? {
+        (bytes, false) => Ok(bytes),
+        (_, true) => Err(CappedBodyError::TooLarge { max }),
+    }
+}
+
+/// The first `max` bytes of the body; the rest is never read. For payloads
+/// that are stored truncated anyway (webhook triggers).
+pub async fn read_body_prefix(body: Body, max: usize) -> Result<rama::bytes::Bytes, String> {
+    match read_prefix(body, max).await {
+        Ok((bytes, _)) => Ok(bytes),
+        Err(CappedBodyError::Read(e)) => Err(e),
+        Err(CappedBodyError::TooLarge { .. }) => unreachable!("read_prefix only reports reads"),
+    }
+}
+
+/// `(at most max bytes, whether more was there)`.
+async fn read_prefix(
+    mut body: Body,
+    max: usize,
+) -> Result<(rama::bytes::Bytes, bool), CappedBodyError> {
+    use rama::http::StreamingBody;
+    use rama::http::body::util::BodyExt;
+    let declared = body.size_hint().lower();
+    let mut buf = Vec::with_capacity((declared as usize).min(max));
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| CappedBodyError::Read(format!("reading body: {e}")))?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        let room = max - buf.len();
+        if data.len() > room {
+            buf.extend_from_slice(&data[..room]);
+            return Ok((buf.into(), true));
+        }
+        buf.extend_from_slice(&data);
+    }
+    Ok((buf.into(), false))
+}
+
 // ---------------------------------------------------------------------------
 // Plain (unauthed) HTML responses.
 

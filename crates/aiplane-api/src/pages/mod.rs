@@ -316,6 +316,42 @@ pub(crate) async fn read_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).map_err(|err| bad_request(format!("parsing {what}: {err}")))
 }
 
+/// [`read_json`] for routes anyone can reach: at most `max` bytes are read,
+/// and a longer body is a 413 before it is buffered.
+pub(crate) async fn read_json_capped<T: serde::de::DeserializeOwned>(
+    body: rama::http::Body,
+    what: &str,
+    max: usize,
+) -> Result<T, Response> {
+    use session_core::chrome::{CappedBodyError, read_body_capped};
+    let bytes = read_body_capped(body, max).await.map_err(|err| match err {
+        CappedBodyError::TooLarge { max } => payload_too_large(what, max),
+        CappedBodyError::Read(e) => bad_request(e),
+    })?;
+    serde_json::from_slice(&bytes).map_err(|err| bad_request(format!("parsing {what}: {err}")))
+}
+
+/// 413 naming the cap, so a client knows how far to shrink the body.
+pub(crate) fn payload_too_large(what: &str, max: usize) -> Response {
+    json_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "payload_too_large",
+        &format!(
+            "{what} is larger than {}; send a smaller one",
+            human_size(max)
+        ),
+    )
+}
+
+/// `65536` → `64 KiB`, `1048576` → `1 MiB`.
+pub(crate) fn human_size(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 {
+        format!("{} MiB", bytes / (1024 * 1024))
+    } else {
+        format!("{} KiB", bytes / 1024)
+    }
+}
+
 /// Bounce an unauthenticated request to `/login`, preserving the originally
 /// requested URL as `?return_to=…` so a deep link — e.g. a shared chat handed
 /// to a colleague who isn't signed in yet — survives the OIDC round-trip
