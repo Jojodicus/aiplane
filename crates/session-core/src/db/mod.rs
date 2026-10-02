@@ -356,11 +356,11 @@ pub(crate) mod tests {
     ///
     /// session-core deliberately doesn't own migrations (the bins do
     /// — see the module-level doc comment), so for tests we recreate
-    /// just enough schema here: a stub `users` table (because
-    /// `chat_sessions.user_id` foreign-keys into it) plus the three
-    /// tables this module actually manages. Kept in lock-step with
-    /// `crates/aiplane-core/migrations/0005_chat_persistence.sql`; if that
-    /// file changes shape, mirror the change here.
+    /// just enough schema here: stub `users` and `system_principals`
+    /// tables (because a `chat_sessions` row is owned by one of them) plus
+    /// the tables this module actually manages. Kept in lock-step with
+    /// `crates/aiplane-core/migrations/` (`chat_sessions` as of 0081); if
+    /// those change shape, mirror the change here.
     pub(crate) async fn pool() -> Pool {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -380,15 +380,23 @@ pub(crate) mod tests {
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             )"#,
-            r#"CREATE TABLE chat_sessions (
+            r#"CREATE TABLE system_principals (
                 id          TEXT PRIMARY KEY NOT NULL,
-                user_id     TEXT NOT NULL,
-                title       TEXT,
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL,
-                shared      INTEGER NOT NULL DEFAULT 0,
-                pinned      INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                name        TEXT NOT NULL UNIQUE
+            )"#,
+            r#"CREATE TABLE chat_sessions (
+                id             TEXT PRIMARY KEY NOT NULL,
+                user_id        TEXT REFERENCES users(id) ON DELETE CASCADE,
+                principal_id   TEXT REFERENCES system_principals(id) ON DELETE CASCADE,
+                parent_turn_id TEXT,
+                agent_version  INTEGER,
+                title          TEXT,
+                created_at     TEXT NOT NULL,
+                updated_at     TEXT NOT NULL,
+                shared         INTEGER NOT NULL DEFAULT 0,
+                pinned         INTEGER NOT NULL DEFAULT 0,
+                CHECK ((user_id IS NULL) != (principal_id IS NULL)),
+                CHECK (principal_id IS NULL OR shared = 0)
             )"#,
             r#"CREATE TABLE chat_turns (
                 id                    TEXT PRIMARY KEY NOT NULL,
@@ -506,6 +514,10 @@ pub(crate) mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO system_principals (id, name) VALUES ('p1', 'support-website')")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool
     }
 

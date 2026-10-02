@@ -219,6 +219,7 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
             json!({
                 "kind": e.kind,
                 "actor_id": e.actor_id,
+                "chain": e.chain,
                 "detail": e.detail,
                 "created_at": e.created_at,
             })

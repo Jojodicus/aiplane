@@ -3,6 +3,126 @@
 
 use super::*;
 
+/// Who a conversation belongs to: a person, or a system principal running it
+/// (an agent run). Exactly one, enforced by a CHECK on `chat_sessions`.
+///
+/// Every person-facing read in this module filters on `user_id`, which is
+/// `NULL` for a principal-owned run, so a run is never listed, searched,
+/// opened or shared as anyone's chat — by construction, not by a guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionOwner {
+    User(String),
+    Principal(String),
+}
+
+/// Inputs to [`create_principal_session`].
+#[derive(Debug, Clone, Copy)]
+pub struct NewRunSession<'a> {
+    pub principal_id: &'a str,
+    pub title: Option<&'a str>,
+    /// On a sub-agent run: the calling agent's turn.
+    pub parent_turn_id: Option<&'a str>,
+    /// The agent version the run executes, when the principal is an agent.
+    pub agent_version: Option<i64>,
+}
+
+/// A conversation owned by a system principal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSession {
+    pub id: String,
+    pub principal_id: String,
+    pub parent_turn_id: Option<String>,
+    pub agent_version: Option<i64>,
+    pub title: Option<String>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// Open a conversation owned by a system principal. Fails when the principal
+/// does not exist (foreign key).
+pub async fn create_principal_session(
+    pool: &Pool,
+    new: &NewRunSession<'_>,
+) -> Result<RunSession, DbError> {
+    let now = Timestamp::now();
+    let s = RunSession {
+        id: Uuid::new_v4().to_string(),
+        principal_id: new.principal_id.to_string(),
+        parent_turn_id: new.parent_turn_id.map(str::to_string),
+        agent_version: new.agent_version,
+        title: new.title.map(str::to_string),
+        created_at: now,
+        updated_at: now,
+    };
+    sqlx::query(
+        r#"INSERT INTO chat_sessions
+             (id, principal_id, parent_turn_id, agent_version, title, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+    )
+    .bind(&s.id)
+    .bind(&s.principal_id)
+    .bind(s.parent_turn_id.as_deref())
+    .bind(s.agent_version)
+    .bind(s.title.as_deref())
+    .bind(s.created_at.to_string())
+    .bind(s.updated_at.to_string())
+    .execute(pool)
+    .await?;
+    Ok(s)
+}
+
+/// A principal-owned conversation, only if `principal_id` owns it.
+pub async fn get_principal_session(
+    pool: &Pool,
+    principal_id: &str,
+    session_id: &str,
+) -> Result<Option<RunSession>, DbError> {
+    let row = sqlx::query(
+        r#"SELECT id, principal_id, parent_turn_id, agent_version, title, created_at, updated_at
+           FROM chat_sessions
+           WHERE id = ? AND principal_id = ?"#,
+    )
+    .bind(session_id)
+    .bind(principal_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|r| {
+        Ok(RunSession {
+            id: r.try_get("id")?,
+            principal_id: r.try_get("principal_id")?,
+            parent_turn_id: r.try_get("parent_turn_id")?,
+            agent_version: r.try_get("agent_version")?,
+            title: r.try_get("title")?,
+            created_at: parse_ts(r.try_get("created_at")?, "created_at")?,
+            updated_at: parse_ts(r.try_get("updated_at")?, "updated_at")?,
+        })
+    })
+    .transpose()
+}
+
+/// Who owns `session_id`; `None` when it does not exist.
+pub async fn session_owner(pool: &Pool, session_id: &str) -> Result<Option<SessionOwner>, DbError> {
+    let row = sqlx::query(r#"SELECT user_id, principal_id FROM chat_sessions WHERE id = ?"#)
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let user: Option<String> = row.try_get("user_id")?;
+    let principal: Option<String> = row.try_get("principal_id")?;
+    match (user, principal) {
+        (Some(user), None) => Ok(Some(SessionOwner::User(user))),
+        (None, Some(principal)) => Ok(Some(SessionOwner::Principal(principal))),
+        _ => Err(DbError::Decode {
+            column: "user_id",
+            source: anyhow::anyhow!(
+                "session `{session_id}` must have exactly one owner (a user or a principal)"
+            ),
+        }),
+    }
+}
+
 /// Create a freshly empty conversation for `user_id`. Returns the new
 /// row; the caller's next step is usually to redirect to its URL.
 pub async fn create_session(pool: &Pool, user_id: &str) -> Result<Session, DbError> {
@@ -68,7 +188,8 @@ pub async fn get_session(
 /// attachment-proxy route to authorize `GET /chat/attachment/<turn>/
 /// <file>`: the caller's session must match the returned `user_id`,
 /// otherwise user A could fetch user B's uploaded files by guessing
-/// turn ids. `None` when the turn id doesn't exist.
+/// turn ids. `None` when the turn id doesn't exist, and for a turn of a
+/// principal-owned run, which belongs to no person.
 pub async fn user_for_turn(pool: &Pool, turn_id: &str) -> Result<Option<String>, DbError> {
     let row = sqlx::query(
         r#"SELECT s.user_id AS user_id
@@ -79,7 +200,10 @@ pub async fn user_for_turn(pool: &Pool, turn_id: &str) -> Result<Option<String>,
     .bind(turn_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| r.try_get::<String, _>("user_id")).transpose()?)
+    Ok(row
+        .map(|r| r.try_get::<Option<String>, _>("user_id"))
+        .transpose()?
+        .flatten())
 }
 
 /// Look up a session readable by `viewer_id`: either they own it, or it has
@@ -227,4 +351,130 @@ pub async fn delete_session(pool: &Pool, user_id: &str, session_id: &str) -> Res
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::tests::pool;
+
+    fn run_session(parent_turn_id: Option<&str>) -> NewRunSession<'_> {
+        NewRunSession {
+            principal_id: "p1",
+            title: Some("visitor asks about invoices"),
+            parent_turn_id,
+            agent_version: Some(3),
+        }
+    }
+
+    async fn completed_turn(pool: &Pool, session_id: &str, text: &str) -> String {
+        let id = Uuid::new_v4().to_string();
+        create_user_turn(pool, session_id, &id, text).await.unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn a_principal_owned_conversation_is_in_no_persons_view() {
+        let pool = pool().await;
+        let mine = create_session(&pool, "u1").await.unwrap();
+        set_session_title(&pool, &mine.id, "invoices for march")
+            .await
+            .unwrap();
+        let run = create_principal_session(&pool, &run_session(None))
+            .await
+            .unwrap();
+        let run_turn = completed_turn(&pool, &run.id, "invoices please").await;
+
+        let listed: Vec<String> = list_sessions(&pool, "u1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(listed, vec![mine.id.clone()]);
+        assert_eq!(
+            latest_session(&pool, "u1").await.unwrap().map(|s| s.id),
+            Some(mine.id.clone())
+        );
+        assert!(get_session(&pool, "u1", &run.id).await.unwrap().is_none());
+        assert!(
+            get_session_readable(&pool, "u1", &run.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let hits = search_sessions(&pool, "u1", "invoices", 10).await.unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|h| h.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![mine.id.as_str()]
+        );
+        assert_eq!(user_for_turn(&pool, &run_turn).await.unwrap(), None);
+        assert!(!turn_session_readable(&pool, &run_turn, "u1").await.unwrap());
+        assert!(!set_shared(&pool, "u1", &run.id, true).await.unwrap());
+        assert!(!delete_session(&pool, "u1", &run.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_run_session_keeps_its_owner_and_link() {
+        let pool = pool().await;
+        let parent = create_principal_session(&pool, &run_session(None))
+            .await
+            .unwrap();
+        let parent_turn = completed_turn(&pool, &parent.id, "route this").await;
+        let child = create_principal_session(&pool, &run_session(Some(&parent_turn)))
+            .await
+            .unwrap();
+
+        let read = get_principal_session(&pool, "p1", &child.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, child);
+        assert_eq!(read.principal_id, "p1");
+        assert_eq!(read.parent_turn_id.as_deref(), Some(parent_turn.as_str()));
+        assert_eq!(read.agent_version, Some(3));
+        assert_eq!(read.title.as_deref(), Some("visitor asks about invoices"));
+        assert!(
+            get_principal_session(&pool, "p2", &child.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "another principal cannot open the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owner_of_a_session_is_a_person_or_a_principal() {
+        let pool = pool().await;
+        let mine = create_session(&pool, "u1").await.unwrap();
+        let run = create_principal_session(&pool, &run_session(None))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            session_owner(&pool, &mine.id).await.unwrap(),
+            Some(SessionOwner::User("u1".into()))
+        );
+        assert_eq!(
+            session_owner(&pool, &run.id).await.unwrap(),
+            Some(SessionOwner::Principal("p1".into()))
+        );
+        assert_eq!(session_owner(&pool, "nope").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_run_session_for_an_unknown_principal_is_refused() {
+        let pool = pool().await;
+        let refused = create_principal_session(
+            &pool,
+            &NewRunSession {
+                principal_id: "ghost",
+                ..run_session(None)
+            },
+        )
+        .await;
+        assert!(refused.is_err());
+    }
 }

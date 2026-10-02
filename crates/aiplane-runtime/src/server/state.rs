@@ -417,6 +417,19 @@ impl AppState {
         }
     }
 
+    /// The skill registry names resolve against for `principal`: a person's
+    /// [`Self::combined_skills_for`], and for a system principal the global
+    /// registry alone — nobody's private skills, its owner's included.
+    pub fn skill_registry_for_principal(
+        &self,
+        principal: &Principal,
+    ) -> Option<Arc<aiplane_features::server::skills::SkillRegistry>> {
+        match principal.user_id() {
+            Some(user_id) => self.combined_skills_for(user_id),
+            None => Some(self.skills()?.current()),
+        }
+    }
+
     /// The tool ids a user may actually use this request: the union of
     /// their roles' RBAC grants, minus the tools they turned off on the
     /// `/tools` page. A DB hiccup on the per-user prefs degrades to

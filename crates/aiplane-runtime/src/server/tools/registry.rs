@@ -181,6 +181,11 @@ impl ToolSource for ToolRegistry {
 /// driver resolves and runs every call through one, so a tool outside the
 /// grant does not exist for the turn — not to offer, not to auto-enable, not to
 /// run — whatever name the model calls.
+///
+/// It narrows the *grantable* tools only. A run-scoped synthetic tool an agent
+/// run brings along (`finish`, an `agents::slot_tools::SlotTools` `set_<slot>`)
+/// is nobody's grant: its existence is the run's permission, so it is composed
+/// over this source, never wrapped by it.
 pub struct GrantedToolSource<'a> {
     source: &'a dyn ToolSource,
     granted: std::collections::HashSet<String>,

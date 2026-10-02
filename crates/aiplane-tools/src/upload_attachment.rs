@@ -264,6 +264,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
+            run: None,
         };
         let err = UploadAttachment
             .run(
@@ -312,6 +313,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
+            run: None,
         };
         let err = UploadAttachment
             .run(

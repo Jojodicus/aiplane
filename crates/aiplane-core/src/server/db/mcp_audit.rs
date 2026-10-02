@@ -39,6 +39,8 @@ pub struct McpToolEvent {
     pub session_id: Option<String>,
     /// `user` or `system`: which table `user_id` points into.
     pub principal_kind: String,
+    /// The serialized call chain when the call ran inside an agent run.
+    pub chain: Option<String>,
     pub created_at: Timestamp,
 }
 
@@ -61,6 +63,7 @@ fn map_row(row: &SqliteRow) -> Result<McpToolEvent, DbError> {
         error: row.try_get("error")?,
         session_id: row.try_get("session_id")?,
         principal_kind: row.try_get("principal_kind")?,
+        chain: row.try_get("chain")?,
         created_at,
     })
 }
@@ -84,6 +87,7 @@ fn truncate_args(args: &str) -> String {
 /// The acting user's email is looked up and denormalised so the row survives
 /// user deletion; an unknown/deleted user records an empty email. A system
 /// principal records its name in that column, and `principal_kind = 'system'`.
+/// Inside an agent run, `chain` is the run's call chain.
 #[allow(clippy::too_many_arguments)]
 pub async fn record(
     pool: &Pool,
@@ -94,6 +98,7 @@ pub async fn record(
     outcome: &str,
     error: Option<&str>,
     session_id: Option<&str>,
+    chain: Option<&crate::server::run_chain::RunChain>,
 ) -> Result<(), DbError> {
     let user_id = principal.subject_id();
     let user_email: String = match principal.system() {
@@ -109,8 +114,8 @@ pub async fn record(
     sqlx::query(
         "INSERT INTO mcp_tool_audit
            (id, user_id, user_email, connector_key, tool_id, arguments, outcome, error, session_id,
-            principal_kind, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            principal_kind, chain, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(user_id)
@@ -122,6 +127,7 @@ pub async fn record(
     .bind(error)
     .bind(session_id)
     .bind(principal.kind().as_str())
+    .bind(chain.map(|c| c.to_json().to_string()))
     .bind(Timestamp::now().to_string())
     .execute(pool)
     .await?;
@@ -188,6 +194,7 @@ mod tests {
             "ok",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -195,6 +202,37 @@ mod tests {
         assert_eq!(ev.user_id, "p1");
         assert_eq!(ev.user_email, "ci-bot");
         assert_eq!(ev.principal_kind, "system");
+        assert_eq!(ev.chain, None, "not inside an agent run");
+    }
+
+    #[tokio::test]
+    async fn a_call_inside_an_agent_run_records_its_chain() {
+        use crate::server::principal::{GrantSet, Principal, SystemPrincipal};
+        use crate::server::run_chain::{Frame, RunChain};
+        let pool = pool().await;
+        let sp = SystemPrincipal {
+            id: "p1".into(),
+            name: "support-website".into(),
+            grants: std::sync::Arc::new(GrantSet::default()),
+        };
+        let chain = RunChain::root("s1", Some("v1".into()), Frame::for_principal(&sp, Some(1)));
+        record(
+            &pool,
+            &Principal::System(sp),
+            "erp",
+            "mcp__erp__lookup",
+            None,
+            "ok",
+            None,
+            Some("s1"),
+            Some(&chain),
+        )
+        .await
+        .unwrap();
+        let ev = &recent(&pool, 1).await.unwrap()[0];
+        let stored: serde_json::Value =
+            serde_json::from_str(ev.chain.as_deref().expect("chain recorded")).unwrap();
+        assert_eq!(stored, chain.to_json());
     }
 
     #[tokio::test]
@@ -211,6 +249,7 @@ mod tests {
             "ok",
             None,
             Some("sess1"),
+            None,
         )
         .await
         .unwrap();
@@ -222,6 +261,7 @@ mod tests {
             Some(r#"{"channelId":"2","name":"x"}"#),
             "error",
             Some("Missing permission: MANAGE_WEBHOOKS"),
+            None,
             None,
         )
         .await
@@ -254,6 +294,7 @@ mod tests {
             "ok",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -264,6 +305,7 @@ mod tests {
             "mcp__github__create_issue",
             None,
             "ok",
+            None,
             None,
             None,
         )
@@ -297,6 +339,7 @@ mod tests {
             "t",
             Some(&big),
             "ok",
+            None,
             None,
             None,
         )

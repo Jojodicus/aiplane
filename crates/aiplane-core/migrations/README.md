@@ -38,6 +38,32 @@ production DB."
    migration is fine as long as the file hasn't reached prod yet.
    The moment it lands on `main`, rule (1) kicks in.
 
+### Migrations run with foreign keys off
+
+`db::open` applies migrations on one connection with
+`PRAGMA foreign_keys = OFF`, then runs `PRAGMA foreign_key_check`
+and refuses to boot if any row points at nothing. This is SQLite's
+documented procedure for a table rebuild, and it is the only way to
+get it: sqlx wraps every migration in a transaction, and inside one
+the pragma is a no-op.
+
+Why it matters: rebuilding a table that others reference
+(`chat_sessions`, migration 0081) means `DROP TABLE` on the old one.
+With foreign keys on, that drop first deletes every row, and every
+`ON DELETE CASCADE` child goes with it — silently, inside a migration
+that otherwise succeeds. With them off, the children keep naming the
+table, and after the rename that name is the new table again.
+
+Consequences for writing a migration:
+
+- A `DELETE` inside a migration does **not** cascade. Delete child
+  rows explicitly, or the post-migration check fails the boot.
+- Rebuild a parent in place (`CREATE … _new`, copy, `DROP`, `RENAME`);
+  the children need no rebuild.
+- A rebuild that loses rows is the failure the check cannot see.
+  Write a test that migrates a populated file database from the
+  previous release (`tests/migration_0081.rs` is the template).
+
 ### What enforces this
 
 Rules (1) and (3) used to live only in this file, and prose is not

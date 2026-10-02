@@ -92,7 +92,8 @@ in the tree. No routing, no `AppState`, no tool registry:
 - `auth/oidc.rs` — hand-rolled OIDC client (discovery + JWKS-verified ID tokens, on reqwest).
 - `auth/token.rs` — gateway-token mint/hash helpers.
 - `config.rs` — typed `[upstream_pools]`, `[[models]]`, `[oidc]`, `[rbac]` schema.
-- `db/` — sqlx; users / tokens / sessions / prefs / usage / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`.
+- `db/` — sqlx; users / tokens / sessions / prefs / usage / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`. Migrations run on one connection with foreign keys **off** and a `foreign_key_check` after, so a parent table can be rebuilt without `ON DELETE CASCADE` emptying its children (see `migrations/README.md`).
+- `principal.rs`, `run_chain.rs` — who acts: a person or a system principal, and on an agent run the call chain (agent → sub-agent → tool) that audit rows serialize. See [`agents.md`](agents.md#the-call-chain).
 - `crypto.rs` — AES-256-GCM at-rest sealing for DB-stored secrets.
 - `rbac/` — role lookup and grant resolution. It filters grants against the tool and skill registries through the [`GrantableSet`] trait (two methods, used via generics) rather than depending on them, which is what lets RBAC sit at the bottom while the registries live two layers up.
 - `upstreams/` — pool registry, backend health probes, RAII `Acquired` guard for in-flight accounting.
@@ -122,7 +123,7 @@ Where the world gets tied together:
 - `openai_driver.rs` — the `session_core::SessionDriver` impl that streams a chat completion, plus `loop_guard.rs`.
 - `suspend.rs` + `openai_driver/resume.rs` — durable suspend and resume: a tool returns `tool_suspend(…)`, the driver writes the run state to `chat_turn_suspensions` and frees the worker, and a resume continues the same turn from there. `server/tools/ask_first.rs` (`AskFirst`) is the first consumer: any tool, run only after the user approves the call. See [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
 - `finish.rs` — the completion contract for non-interactive runs (`FinishContract`, `RunOutcome`): a run given one ends only through a schema-valid `finish(result)` call or a structured incomplete outcome. `headless::drive` takes one and returns the outcome. See [`tools-rbac.md`](tools-rbac.md#finish-contract).
-- `server/{scheduled,webhooks,compaction,headless}` — the background workers that need state.
+- `server/{scheduled,webhooks,compaction,headless}` — the background workers that need state. `headless::open_session`/`drive` run as a person or as a system principal: an agent run's session is owned by the principal (no person's chat), it is offered only the principal's grants, and with a `RunChain` every tool call's decision is audited (`openai_driver/call_policy.rs`).
 - `server/comfyui_tool.rs` — the ComfyUI `Tool`/`ToolSource` impls and the `ComfyuiHandle` that `AppState` holds. Split out of `aiplane-features`' `comfyui/` because it needs the tool API.
 
 `aiplane-tools` and `aiplane-api` both sit on this and neither depends on the

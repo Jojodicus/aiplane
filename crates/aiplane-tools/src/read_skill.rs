@@ -301,6 +301,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
+            run: None,
         }
     }
 

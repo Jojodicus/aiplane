@@ -79,6 +79,8 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
     "aiplane-runtime/src/server/comfyui_tool.rs",
     // AskFirst — delegates to the wrapped tool
     "aiplane-runtime/src/server/tools/ask_first.rs",
+    // set_<slot> — an agent run's synthetic state tools
+    "aiplane-runtime/src/agents/slot_tools.rs",
 ];
 
 fn repo_root() -> PathBuf {

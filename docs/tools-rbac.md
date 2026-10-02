@@ -80,6 +80,9 @@ dependency doesn't change the trait signature:
   `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
   through `ctx.person(tool_id)`, which refuses with a message naming the
   principal when there is no person behind the call.
+- **Agent run** — `run: Option<Arc<RunChain>>`, the call chain when the call
+  is part of an agent run (`ctx.agent_active()`); `None` everywhere else. See
+  [`agents.md`](agents.md#the-call-chain).
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -174,6 +177,11 @@ per-request tools on top: a user's connected MCP connectors
 (`mcp__<server>__<tool>`) and the hot-reloadable ComfyUI workflow catalog
 (`comfyui_<workflow>`). One seam means the buffered `/v1` loop, the streaming
 `/v1` loop, and the chat-UI driver all gain per-user tools identically.
+
+`SlotTools` (`aiplane-runtime::agents::slot_tools`) is a third source: the
+generated `set_<slot>` tools of one agent's state, one per slot the model may
+write. They exist only for an agent run and need no grant
+([`agents.md`](agents.md#what-85-built)).
 
 ## Lazy tool disclosure (`enable_tools`)
 
@@ -352,6 +360,19 @@ name is answered as unavailable in chat and handed back to the client on `/v1`
 `a_v1_model_naming_an_ungranted_gateway_tool_does_not_run_it` (plus its
 streaming sibling).
 
+The chat driver's per-call decision (`openai_driver/call_policy.rs`) is taken
+against that same narrowed source: a name the full registry knows but the grant
+does not is `not_granted` for a system principal (audited as such in an agent
+run) and `unknown_tool` for a person — one check, so the audit row and what
+actually ran can never disagree.
+
+Run-scoped synthetic tools are not grants and sit outside the filter: `finish`
+is intercepted by name before dispatch, and an agent run that offers
+`set_<slot>` tools (`agents::slot_tools::SlotTools`) composes that source *over*
+the `GrantedToolSource`, never inside it. Their existence for the run is the
+permission; nothing a person or principal is granted can reach them, and they
+reach nothing outside the run.
+
 ### System principals
 
 A `gws_` token resolves to a **system principal** (`docs/agents.md` §1), and
@@ -373,6 +394,13 @@ The principal-aware entry points on `AppState` are
 tools that check a resource themselves (`rag_*`, `read_skill`). On the `/v1`
 path every granted tool is offered directly — there are no token tool prefs and
 no Auto disclosure for a principal; the grants are the whole policy.
+
+The same holds for a headless run as a principal (`headless::drive` with
+`Principal::System`, the agent path): its offer is its grants, and a call to a
+registered tool outside them is answered with a `not granted` refusal instead
+of the chat path's auto-enable. Inside an agent run every call's decision is
+also written to `agent_audit` with the call chain
+([`agents.md`](agents.md#the-call-chain)).
 
 **Who may grant.** Users whose groups have `can_manage_agents` (admin implies
 it), through `/api/v0/system-principals/*`. A grant is refused unless the

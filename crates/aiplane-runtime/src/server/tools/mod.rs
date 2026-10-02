@@ -170,6 +170,10 @@ pub struct ToolContext {
     /// `None` where nothing resolved it (the `/v1` paths, tests) and reads as
     /// nothing granted.
     pub granted_tools: Option<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// The agent call chain when this call runs inside an agent run, `None`
+    /// for a person's chat, a scheduled action or a `/v1` request. Its
+    /// running frame is `principal`; see [`Self::agent_active`].
+    pub run: Option<std::sync::Arc<aiplane_core::server::run_chain::RunChain>>,
 }
 
 /// Test-support constructor. Not `#[cfg(test)]`-gated because the tool
@@ -208,6 +212,7 @@ impl ToolContext {
             model: None,
             suspend: crate::suspend::Suspend::Unavailable,
             granted_tools: None,
+            run: None,
         }
     }
 
@@ -221,6 +226,13 @@ impl ToolContext {
 }
 
 impl ToolContext {
+    /// Whether this call runs inside an agent run. An agent run acts as the
+    /// agent's system principal and nobody else: no person's memory,
+    /// connectors or skills, and every call is audited with the chain.
+    pub fn agent_active(&self) -> bool {
+        self.run.is_some()
+    }
+
     /// The person this tool acts for, or the refusal to hand the model when
     /// the caller is a system principal. Memory, notifications, scheduled
     /// actions, location and browser control only make sense for a person —

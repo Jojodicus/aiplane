@@ -514,6 +514,7 @@ mod tests {
             granted_tools: Some(std::sync::Arc::new(
                 granted.iter().map(|id| id.to_string()).collect(),
             )),
+            run: None,
         }
     }
 
