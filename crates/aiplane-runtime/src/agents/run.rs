@@ -145,8 +145,8 @@ pub struct OpenedTurn {
     /// The remote caller behind the conversation, on an A2A task.
     pub caller: Option<RemoteCaller>,
     /// The language this turn was asked in, when the caller knows it: the
-    /// public endpoint and the A2A task take it from the request, a routed
-    /// sub-agent from the conversation that dispatched it. Driving the turn
+    /// public endpoint and the A2A task take it from the request, `run_turn`
+    /// from [`AgentTurn::lang`]. Driving the turn
     /// records it on the conversation (`chat_sessions.lang`), the one place
     /// a run reads its language from ([`conversation_lang`]); `None` keeps
     /// the recorded one, as a resume does, whoever gives the decision.
