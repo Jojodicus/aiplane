@@ -20,6 +20,7 @@ use serde_json::Value;
 use shared::api::ToolDef;
 use thiserror::Error;
 
+pub mod ask_first;
 pub mod catalog;
 pub mod discovery;
 pub mod echo;
@@ -155,6 +156,10 @@ pub struct ToolContext {
     /// them. `None` on paths that don't resolve one (unit tests), where a
     /// tool needing it must ask for it explicitly or refuse.
     pub model: Option<String>,
+    /// Whether this call may pause its turn for a decision from outside the
+    /// model, or what was decided if it is running again after one. Only the
+    /// interactive chat path can pause. See [`crate::suspend`].
+    pub suspend: crate::suspend::Suspend,
 }
 
 /// Test-support constructor. Not `#[cfg(test)]`-gated because the tool
@@ -192,6 +197,7 @@ impl ToolContext {
             crypto: None,
             push: None,
             model: None,
+            suspend: crate::suspend::Suspend::Unavailable,
         }
     }
 }

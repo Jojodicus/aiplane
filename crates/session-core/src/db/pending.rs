@@ -79,7 +79,8 @@ pub async fn insert_pending_turn(pool: &Pool, pending: &PendingTurn) -> Result<(
 /// exactly one of them.
 ///
 /// `busy_sessions` are the conversations that already have a worker; their
-/// waiting turns stay put. The list is short (it is bounded by the parallel
+/// waiting turns stay put. So do those of a conversation whose turn is
+/// suspended: it holds the conversation until its decision arrives. The list is short (it is bounded by the parallel
 /// ceiling), so it goes into the statement rather than being filtered after.
 pub async fn take_next_for_user(
     pool: &Pool,
@@ -98,6 +99,10 @@ pub async fn take_next_for_user(
            WHERE turn_id = (
                SELECT turn_id FROM chat_pending_turns
                WHERE user_id = ? AND session_id NOT IN ({placeholders})
+                 AND session_id NOT IN (
+                     SELECT t.session_id FROM chat_turn_suspensions s
+                     JOIN chat_turns t ON t.id = s.turn_id
+                 )
                ORDER BY created_at ASC, rowid ASC
                LIMIT 1
            )

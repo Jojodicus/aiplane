@@ -1,0 +1,274 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Durable suspend and resume of a turn (#82).
+//!
+//! A tool that needs a decision from outside the model — an approval, a value
+//! only the user may type, a human's answer — returns [`tool_suspend`] instead
+//! of a result. The chat driver then writes the run state at that point to
+//! `chat_turn_suspensions`, flips the turn to `suspended`, and frees the
+//! worker. Nothing waits in memory, so the pause survives a restart.
+//!
+//! A resume claims the row ([`claim_for_resume`]) and drives the same turn
+//! again with an [`OpenAiDriver`](crate::openai_driver::OpenAiDriver) whose
+//! `resume` is set. The driver rebuilds the replayed history as for any turn,
+//! appends the stored tail, and settles the waiting call:
+//!
+//! - **deny** (by the user, or by a timeout whose fallback is deny) answers
+//!   the call with a tool error the model reads; the tool never runs;
+//! - **allow once** and **value** run the same call again, with
+//!   [`ToolContext::suspend`](crate::server::tools::ToolContext) set to
+//!   [`Suspend::Decided`], and its result is the call's result.
+//!
+//! Then the round loop continues where it stopped, against the rounds already
+//! spent.
+
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use session_core::db::{
+    self as chat, Decision, DecisionKind, Pool, SuspensionKind, TimeoutFallback, TurnSuspension,
+};
+
+/// Sentinel key of the suspend envelope. Same mechanism as
+/// [`TOOL_CONTENT_PARTS_KEY`](crate::server::tools::TOOL_CONTENT_PARTS_KEY):
+/// the driver recognises a body whose only key is this one.
+pub const SUSPEND_KEY: &str = "__gateway_suspend";
+
+/// What a tool asks for when it suspends its call.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuspendRequest {
+    pub kind: SuspensionKind,
+    /// Shown next to the decision. Data the tool supplies, not an app string:
+    /// an approval leaves it empty and the client words the question itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// How long the decision may take before [`Self::on_timeout`] applies.
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub on_timeout: TimeoutFallback,
+}
+
+impl SuspendRequest {
+    /// Ask whether this call may run, denying it if nobody answers in time.
+    pub fn approval(timeout: Duration) -> Self {
+        Self {
+            kind: SuspensionKind::Approval,
+            message: None,
+            timeout_secs: timeout.as_secs(),
+            on_timeout: TimeoutFallback::Deny,
+        }
+    }
+}
+
+/// The tool result that suspends the call instead of answering it.
+pub fn tool_suspend(request: SuspendRequest) -> Value {
+    serde_json::json!({ SUSPEND_KEY: request })
+}
+
+/// The suspend request inside a tool result, if the tool returned one.
+pub fn extract_suspend(body: &Value) -> Option<SuspendRequest> {
+    body.as_object()
+        .filter(|m| m.len() == 1)
+        .and_then(|m| m.get(SUSPEND_KEY))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// Whether a tool may suspend its call, and what was decided when it is being
+/// run again after one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Suspend {
+    /// The path cannot pause: `/v1`, headless runs, tests. A tool that needs a
+    /// decision must refuse rather than proceed.
+    #[default]
+    Unavailable,
+    /// The interactive chat path: returning [`tool_suspend`] pauses the turn.
+    Available,
+    /// The call is running again because of this decision. Never `Deny`: a
+    /// denied call is answered by the driver without running the tool.
+    Decided(Decision),
+}
+
+/// A claimed suspension and the decision that settles it — what an
+/// [`OpenAiDriver`](crate::openai_driver::OpenAiDriver) resumes from.
+#[derive(Clone, Debug)]
+pub struct ResumeFrom {
+    pub suspension: TurnSuspension,
+    pub decision: Decision,
+}
+
+/// Why a resume was refused. Nothing was claimed in any of these cases.
+#[derive(Debug, thiserror::Error)]
+pub enum ResumeRefused {
+    #[error("this turn is not waiting for a decision")]
+    NotSuspended,
+    #[error(
+        "this decision answers an earlier request; the turn is now waiting for request \
+         `{current}` — reload the conversation and answer that one"
+    )]
+    StaleRequest { current: String },
+    #[error(
+        "a `{kind}` request cannot be answered with `{decision:?}`; it accepts {offered:?}",
+        kind = kind.as_str()
+    )]
+    NotOffered {
+        kind: SuspensionKind,
+        decision: DecisionKind,
+        offered: &'static [DecisionKind],
+    },
+    #[error("reading or claiming the suspension: {0}")]
+    Storage(#[from] chat::DbError),
+}
+
+/// Validate `decision` against the turn's suspension and claim it. On `Ok`
+/// the row is gone and the turn is `in_progress` again: the caller must now
+/// drive it, or the turn is left with no worker.
+///
+/// `request_id`, when given, must name the current suspension, so an answer
+/// to a pause the turn has since moved past cannot settle the next one.
+pub async fn claim_for_resume(
+    db: &Pool,
+    turn_id: &str,
+    request_id: Option<&str>,
+    decision: Decision,
+) -> Result<ResumeFrom, ResumeRefused> {
+    let current = chat::get_suspension(db, turn_id)
+        .await?
+        .ok_or(ResumeRefused::NotSuspended)?;
+    if let Some(asked) = request_id
+        && asked != current.request_id
+    {
+        return Err(ResumeRefused::StaleRequest {
+            current: current.request_id,
+        });
+    }
+    let offered = current.kind.options();
+    if !offered.contains(&decision.kind()) {
+        return Err(ResumeRefused::NotOffered {
+            kind: current.kind,
+            decision: decision.kind(),
+            offered,
+        });
+    }
+    let suspension = chat::claim_suspension(db, turn_id)
+        .await?
+        .filter(|claimed| claimed.request_id == current.request_id)
+        .ok_or(ResumeRefused::NotSuspended)?;
+    Ok(ResumeFrom {
+        suspension,
+        decision,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use session_core::db::{BudgetUsed, DenyReason, PendingCall, TurnStatus};
+
+    #[test]
+    fn the_envelope_round_trips_and_only_alone() {
+        let request = SuspendRequest::approval(Duration::from_secs(600));
+        let body = tool_suspend(request.clone());
+        assert_eq!(extract_suspend(&body), Some(request));
+        assert_eq!(extract_suspend(&serde_json::json!({"message": "hi"})), None);
+        let mut crowded = body.as_object().unwrap().clone();
+        crowded.insert("other".into(), Value::Null);
+        assert_eq!(extract_suspend(&Value::Object(crowded)), None);
+    }
+
+    async fn suspended_turn() -> (Pool, String) {
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let now = jiff::Timestamp::now();
+        aiplane_core::server::db::users::upsert(
+            &db,
+            &aiplane_core::server::db::users::User {
+                id: "u1".into(),
+                email: "u1@example.com".into(),
+                name: None,
+                roles: vec![],
+                created_at: now,
+                updated_at: now,
+                timezone: None,
+                speech_voice: None,
+            },
+        )
+        .await
+        .unwrap();
+        let session = chat::create_session(&db, "u1").await.unwrap();
+        chat::create_assistant_turn_in_progress(&db, &session.id, "t1", "m")
+            .await
+            .unwrap();
+        chat::suspend_turn(
+            &db,
+            &TurnSuspension {
+                turn_id: "t1".into(),
+                request_id: "req-1".into(),
+                kind: SuspensionKind::Approval,
+                message: None,
+                tool_call: PendingCall {
+                    id: "call-1".into(),
+                    name: "company_echo".into(),
+                    arguments: "{}".into(),
+                },
+                tail: Vec::new(),
+                budget_used: BudgetUsed::default(),
+                child_turn: None,
+                on_timeout: TimeoutFallback::Deny,
+                expires_at: now,
+                created_at: now,
+            },
+        )
+        .await
+        .unwrap();
+        (db, session.id)
+    }
+
+    async fn still_suspended(db: &Pool) -> bool {
+        chat::get_suspension(db, "t1").await.unwrap().is_some()
+    }
+
+    #[tokio::test]
+    async fn a_decision_the_request_does_not_offer_is_refused_without_claiming() {
+        let (db, _) = suspended_turn().await;
+        let refused =
+            claim_for_resume(&db, "t1", None, Decision::Value { value: "x".into() }).await;
+        assert!(matches!(refused, Err(ResumeRefused::NotOffered { .. })));
+        assert!(still_suspended(&db).await);
+    }
+
+    #[tokio::test]
+    async fn an_answer_to_another_request_is_refused_without_claiming() {
+        let (db, _) = suspended_turn().await;
+        let refused = claim_for_resume(&db, "t1", Some("req-0"), Decision::AllowOnce).await;
+        assert!(
+            matches!(refused, Err(ResumeRefused::StaleRequest { ref current }) if current == "req-1")
+        );
+        assert!(still_suspended(&db).await);
+    }
+
+    #[tokio::test]
+    async fn a_suspension_resumes_once() {
+        let (db, session_id) = suspended_turn().await;
+        let decision = Decision::Deny {
+            reason: DenyReason::User,
+        };
+        let resumed = claim_for_resume(&db, "t1", Some("req-1"), decision.clone())
+            .await
+            .unwrap();
+        assert_eq!(resumed.decision, decision);
+        assert_eq!(resumed.suspension.tool_call.id, "call-1");
+        assert!(!still_suspended(&db).await);
+        let turn = chat::get_turn(&db, &session_id, "t1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, TurnStatus::InProgress);
+        assert!(matches!(
+            claim_for_resume(&db, "t1", None, Decision::AllowOnce).await,
+            Err(ResumeRefused::NotSuspended)
+        ));
+    }
+}

@@ -498,6 +498,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/chat/sessions/{id}/cancel",
             pages::chat::json_api::session_cancel,
         )
+        .with_post(
+            "/api/v0/chat/sessions/{id}/turns/{turn_id}/resume",
+            pages::chat::json_api::turn_resume,
+        )
         .with_get(
             "/api/v0/chat/sessions/{id}/events",
             pages::chat::json_api::session_events,

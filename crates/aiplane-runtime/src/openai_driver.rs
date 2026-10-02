@@ -35,6 +35,8 @@ use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::db::user_memories::KindCounts;
 use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
 
+mod resume;
+
 /// Reasoning tags some vLLM reasoning-parser configs leak into the *content*
 /// channel even though reasoning is delivered separately via
 /// `reasoning_content`. We strip them so a stray `</think>` never shows up in
@@ -479,6 +481,10 @@ pub struct OpenAiDriver {
     /// schema-valid `finish` call or an incomplete outcome, settled into this
     /// slot. `None` for every interactive turn.
     pub finish: Option<Arc<FinishRun>>,
+    /// Set when this turn was suspended and is being continued: the claimed
+    /// suspension and the decision that settles its waiting call. `None` for
+    /// a turn starting fresh. See [`crate::suspend`].
+    pub resume: Option<crate::suspend::ResumeFrom>,
 }
 
 /// Build the per-turn [`ToolContext`] for a persisted chat session — the single
@@ -511,6 +517,9 @@ pub struct TurnFacts {
     /// model allowlist. `None` on the session paths, where access is exactly
     /// what the user's groups grant and is derived from `roles` below.
     pub pool_access: Option<aiplane_core::server::upstreams::PoolAccess>,
+    /// Whether a tool may pause this turn for a decision. Only where a turn
+    /// can be resumed later: the interactive chat path.
+    pub suspendable: bool,
 }
 
 pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolContext {
@@ -523,6 +532,7 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
         chat_feedback,
         model,
         pool_access,
+        suspendable,
     } = facts;
     // Session paths: whatever the user's groups reach. Bearer paths hand in
     // their own, already narrowed by the token's allowlist.
@@ -586,6 +596,11 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
             .clone()
             .map(crate::server::tools::PushNotifier::new),
         model,
+        suspend: if suspendable {
+            crate::suspend::Suspend::Available
+        } else {
+            crate::suspend::Suspend::Unavailable
+        },
     }
 }
 
@@ -1145,7 +1160,35 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // a contracted run that stops without the model giving one.
     let mut tools_run: Vec<String> = Vec::new();
 
-    for round in 0..=max_rounds {
+    // Everything from here on is this turn's own rounds — what a suspension
+    // stores as its tail, and what a resume appends after the rebuilt history.
+    let prefix_len = messages.len();
+    let mut meter = resume::RunMeter::new(d.resume.as_ref());
+    let mut start_round = 0;
+    if let Some(from) = d.resume.as_ref() {
+        match resume::resume_into(
+            d,
+            &ctx,
+            &tool_source,
+            from,
+            &mut messages,
+            &mut tool_budget,
+            &meter,
+        )
+        .await?
+        {
+            resume::Resumed::Paused => return Ok(TurnOutcome::default()),
+            resume::Resumed::Continue { start_round: next } => start_round = next,
+        }
+        seen_tool_call_ids.extend(resume::tool_call_ids(&messages[prefix_len..]));
+        wrote_any_content = chat::get_content(&d.state.db, &ctx.assistant_turn_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|content| !content.trim().is_empty());
+    }
+
+    for round in start_round..=max_rounds {
         if round == max_rounds && !closing {
             break;
         }
@@ -1566,6 +1609,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             }
         }
         drop(acquired);
+        meter.add(round_tokens);
 
         // One usage row per upstream round (a tool-using turn emits several).
         emit_usage(
@@ -1841,7 +1885,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             return Ok(TurnOutcome::default());
         }
 
-        let results = match runner::execute_tool_calls_guarded(
+        let mut results = match runner::execute_tool_calls_guarded(
             &tool_source,
             &d.tool_ctx,
             &call_refs,
@@ -1882,6 +1926,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             }
         };
         tools_run.extend(call_refs.iter().map(|call| call.name.clone()));
+        let pause = resume::take_pause(d, &call_refs, &mut results);
         messages.push(serde_json::json!({
             "role": "assistant",
             "content": serde_json::Value::Null,
@@ -1898,6 +1943,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             }));
         }
         for (call, result) in call_refs.iter().zip(results.iter()) {
+            // The waiting call has no result yet; its row stays `running`.
+            if pause
+                .as_ref()
+                .is_some_and(|(waiting, _)| waiting.id == call.id)
+            {
+                continue;
+            }
             // For the operator UI / DB log we always store a
             // pretty-printed JSON snapshot — even when the tool returned
             // mixed content parts (the parts envelope itself is JSON,
@@ -1971,6 +2023,19 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 "tool_call_id": &call.id,
                 "content": content,
             }));
+        }
+
+        if let Some((call, request)) = pause {
+            resume::pause(
+                d,
+                &ctx,
+                &call,
+                request,
+                &messages[prefix_len..],
+                meter.used(round + 1),
+            )
+            .await?;
+            return Ok(TurnOutcome::default());
         }
 
         // Round over. Evict the older, bulky tool results the same way the
@@ -3783,6 +3848,7 @@ mod tests {
                 },
                 tool_calls: vec![],
                 steers: vec![],
+                suspension: None,
             }
         }
 

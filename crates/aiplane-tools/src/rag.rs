@@ -944,6 +944,7 @@ mod tests {
             crypto: None,
             push: None,
             model: None,
+            suspend: Default::default(),
         }
     }
 

@@ -14,6 +14,7 @@
 //! event: reasoning_delta → appended reasoning text
 //! event: tool_call_started / tool_call_done
 //! event: turn_finalized  → terminal state + timing
+//! event: suspended       → the turn paused for a decision; the stream ends
 //! event: sidebar_changed → the SPA refetches the session list
 //! event: info            → transient notice (e.g. vision fallback)
 //! event: tool_prompt     → human-in-loop prompt (ask_user / location)
@@ -112,6 +113,14 @@ pub enum ChatEvent {
         /// `None` while the driver never stamped a completion.
         duration_ms: Option<i64>,
     },
+    /// The turn paused at a tool call that waits for a decision, and its
+    /// worker is gone. Ends the stream like `turn_finalized` does, but the
+    /// turn is not over: a resume continues it, and the client re-attaches.
+    Suspended {
+        turn_id: String,
+        #[serde(flatten)]
+        suspension: crate::db::SuspensionView,
+    },
     /// A mid-turn interjection appeared, or the one already on screen
     /// reached its outcome.
     ///
@@ -156,6 +165,7 @@ impl ChatEvent {
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallDone { .. } => "tool_call_done",
             Self::TurnFinalized { .. } => "turn_finalized",
+            Self::Suspended { .. } => "suspended",
             Self::Steer { .. } => "steer",
             Self::SidebarChanged => "sidebar_changed",
             Self::Info { .. } => "info",
@@ -320,6 +330,15 @@ impl JsonTurnFeed {
             });
         }
 
+        if !self.finalized && turn.status == TurnStatus::Suspended {
+            self.finalized = true;
+            if let Some(suspension) = &current.suspension {
+                events.push(ChatEvent::Suspended {
+                    turn_id: turn.id.clone(),
+                    suspension: suspension.clone(),
+                });
+            }
+        }
         if !self.finalized && turn.status != TurnStatus::InProgress {
             self.finalized = true;
             events.push(ChatEvent::TurnFinalized {
@@ -730,6 +749,7 @@ mod tests {
             },
             tool_calls: Vec::new(),
             steers: Vec::new(),
+            suspension: None,
         }
     }
 
@@ -986,6 +1006,62 @@ mod tests {
 
         assert!(feed.diff(&row).is_empty(), "finalized feed is done");
         assert!(feed.is_finalized());
+    }
+
+    fn view() -> crate::db::SuspensionView {
+        crate::db::SuspensionView {
+            request_id: "req-1".into(),
+            kind: crate::db::SuspensionKind::Approval,
+            message: None,
+            tool_call_id: "call-1".into(),
+            tool: "company_echo".into(),
+            options: vec![
+                crate::db::DecisionKind::AllowOnce,
+                crate::db::DecisionKind::Deny,
+            ],
+            expires_at: Timestamp::now(),
+        }
+    }
+
+    /// A pause is not an ending: the feed says what the turn waits for and
+    /// stops, without a `turn_finalized` a client would take as terminal.
+    #[test]
+    fn a_suspension_is_announced_once_and_ends_the_feed_without_finalizing() {
+        let mut feed = JsonTurnFeed::new("t1");
+        let mut row = turn(TurnStatus::InProgress, "let me check", "");
+        feed.diff(&row);
+
+        let waiting = view();
+        row.turn.status = TurnStatus::Suspended;
+        row.suspension = Some(waiting.clone());
+        let events = feed.diff(&row);
+        assert_eq!(
+            events,
+            [ChatEvent::Suspended {
+                turn_id: "t1".into(),
+                suspension: waiting,
+            }]
+        );
+        assert!(feed.is_finalized(), "the stream closes on a pause");
+        assert!(feed.diff(&row).is_empty());
+    }
+
+    #[test]
+    fn the_suspended_frame_flattens_the_decision_next_to_the_turn() {
+        let frame = sse_json(&ChatEvent::Suspended {
+            turn_id: "t1".into(),
+            suspension: view(),
+        });
+        let text = std::str::from_utf8(&frame).unwrap();
+        assert!(text.starts_with("event: suspended\n"), "{text}");
+        let data: serde_json::Value =
+            serde_json::from_str(text.lines().nth(1).unwrap().trim_start_matches("data: "))
+                .unwrap();
+        assert_eq!(data["type"], "suspended");
+        assert_eq!(data["turn_id"], "t1");
+        assert_eq!(data["request_id"], "req-1");
+        assert_eq!(data["kind"], "approval");
+        assert_eq!(data["options"], serde_json::json!(["allow_once", "deny"]));
     }
 
     #[test]

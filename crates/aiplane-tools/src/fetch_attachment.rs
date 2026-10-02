@@ -1134,6 +1134,7 @@ mod tests {
             crypto: None,
             push: None,
             model: None,
+            suspend: Default::default(),
         }
     }
 
@@ -1194,6 +1195,7 @@ mod tests {
             crypto: None,
             push: None,
             model: None,
+            suspend: Default::default(),
         };
         let err = FetchAttachment::new(None)
             .run(ctx, json!({"id": "nope"}))

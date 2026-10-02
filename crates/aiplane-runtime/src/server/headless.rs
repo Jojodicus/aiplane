@@ -114,6 +114,9 @@ pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome>
             model: Some(p.model.clone()),
             // Session path: access is exactly the user's group grant.
             pool_access: None,
+            // Nothing resumes a headless run yet; a tool needing a decision
+            // refuses instead of pausing.
+            suspendable: false,
         },
     );
     let driver = Box::new(crate::openai_driver::OpenAiDriver {
@@ -123,6 +126,7 @@ pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome>
         history_limit: p.history_limit,
         voice_mode: false,
         finish: finish.clone(),
+        resume: None,
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no

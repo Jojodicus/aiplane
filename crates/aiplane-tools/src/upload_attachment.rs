@@ -260,6 +260,7 @@ mod tests {
             crypto: None,
             push: None,
             model: None,
+            suspend: Default::default(),
         };
         let err = UploadAttachment
             .run(
@@ -304,6 +305,7 @@ mod tests {
             crypto: None,
             push: None,
             model: None,
+            suspend: Default::default(),
         };
         let err = UploadAttachment
             .run(
