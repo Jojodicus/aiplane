@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Whether one tool call the model made may run, and why — decided in code,
+//! per call, before anything executes (`docs/agents.md`, trust rule 5).
+//!
+//! Inside an agent run every decision is also written to `agent_audit` with
+//! the run's call chain, so "which agent called what, through whom, for which
+//! visitor, and what let it" is answerable afterwards.
+
+use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::principal::Principal;
+
+use crate::server::tools::ToolContext;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CallPolicy {
+    /// The tool was offered this round: inside the caller's grant.
+    Granted,
+    /// A person's chat called a tool of their grant the conversation had not
+    /// turned on yet; the call runs and enables it (miss recovery).
+    AutoEnabled,
+    /// A system principal called a tool outside its grants. Never runs: a
+    /// principal holds exactly what was granted, and nothing is enabled on
+    /// the fly.
+    NotGranted,
+    /// The person switched the tool off for this conversation.
+    DisabledInConversation,
+    /// No tool of that name exists for this caller.
+    UnknownTool,
+}
+
+impl CallPolicy {
+    pub(super) fn decide(
+        principal: &Principal,
+        known: bool,
+        disabled_in_conversation: bool,
+        offered: bool,
+    ) -> Self {
+        if !known {
+            Self::UnknownTool
+        } else if disabled_in_conversation {
+            Self::DisabledInConversation
+        } else if offered {
+            Self::Granted
+        } else if principal.system().is_some() {
+            Self::NotGranted
+        } else {
+            Self::AutoEnabled
+        }
+    }
+
+    pub(super) fn allows(self) -> bool {
+        matches!(self, Self::Granted | Self::AutoEnabled)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Granted => "granted",
+            Self::AutoEnabled => "auto_enabled",
+            Self::NotGranted => "not_granted",
+            Self::DisabledInConversation => "disabled_in_conversation",
+            Self::UnknownTool => "unknown_tool",
+        }
+    }
+}
+
+/// What the model reads instead of a result when a system principal calls a
+/// tool it does not hold.
+pub(super) fn not_granted_message(tool: &str, principal: &Principal) -> String {
+    let name = principal.system().map_or("", |sp| sp.name.as_str());
+    format!(
+        "Tool `{tool}` is not granted to `{name}`, so it cannot be used in this run. Only call a \
+         tool whose schema was provided to you; if the task needs this one, say so in your answer."
+    )
+}
+
+/// Record one decision when the call is part of an agent run. Best-effort: the
+/// decision stands whether or not the row lands.
+pub(super) async fn audit(ctx: &ToolContext, call_id: &str, tool: &str, policy: CallPolicy) {
+    let Some(chain) = ctx.run.as_deref() else {
+        return;
+    };
+    let detail = serde_json::json!({
+        "tool": tool,
+        "call_id": call_id,
+        "turn_id": ctx.assistant_turn_id,
+        "session_id": ctx.session_id,
+        "decision": if policy.allows() { "allowed" } else { "denied" },
+        "policy": policy.as_str(),
+    });
+    if let Err(err) = agent_audit::record_run_event(
+        &ctx.db,
+        AuditKind::ToolCall,
+        &chain.current().principal_id,
+        Some(chain),
+        detail,
+    )
+    .await
+    {
+        tracing::warn!(error = %err, tool, "recording an agent run's tool decision");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
+
+    fn person() -> Principal {
+        ToolContext::test_user("u1")
+    }
+
+    fn agent() -> Principal {
+        Principal::System(SystemPrincipal {
+            id: "p1".into(),
+            name: "support-website".into(),
+            grants: Arc::new(GrantSet::default()),
+        })
+    }
+
+    #[test]
+    fn an_offered_tool_is_granted_for_anyone() {
+        for who in [person(), agent()] {
+            assert_eq!(
+                CallPolicy::decide(&who, true, false, true),
+                CallPolicy::Granted
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_person_gets_an_unoffered_tool_auto_enabled() {
+        assert_eq!(
+            CallPolicy::decide(&person(), true, false, false),
+            CallPolicy::AutoEnabled
+        );
+        let refused = CallPolicy::decide(&agent(), true, false, false);
+        assert_eq!(refused, CallPolicy::NotGranted);
+        assert!(!refused.allows());
+    }
+
+    #[test]
+    fn unknown_and_disabled_tools_never_run() {
+        for who in [person(), agent()] {
+            assert_eq!(
+                CallPolicy::decide(&who, false, false, true),
+                CallPolicy::UnknownTool
+            );
+            assert_eq!(
+                CallPolicy::decide(&who, true, true, true),
+                CallPolicy::DisabledInConversation
+            );
+        }
+        assert!(!CallPolicy::UnknownTool.allows());
+        assert!(!CallPolicy::DisabledInConversation.allows());
+    }
+
+    #[test]
+    fn the_refusal_names_the_tool_and_the_principal() {
+        let message = not_granted_message("run_in_sandbox", &agent());
+        assert!(message.contains("`run_in_sandbox`"), "{message}");
+        assert!(message.contains("`support-website`"), "{message}");
+    }
+}

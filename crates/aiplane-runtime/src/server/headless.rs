@@ -36,10 +36,29 @@ use crate::finish::{FinishContract, FinishRun, IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::{DbError, Pool};
+use aiplane_core::server::principal::Principal;
+use aiplane_core::server::run_chain::RunChain;
+
+/// Who a freshly-minted run session belongs to.
+#[derive(Debug, Clone, Copy)]
+pub enum Owner<'a> {
+    /// A person: the run lands as an ordinary chat they can open afterwards.
+    User(&'a str),
+    /// A system principal: an agent run, which is no person's chat. See
+    /// `session_core::db::NewRunSession` for the link fields.
+    Run {
+        principal_id: &'a str,
+        parent_turn_id: Option<&'a str>,
+        agent_version: Option<i64>,
+    },
+}
 
 /// Inputs to [`open_session`].
 pub struct OpenParams<'a> {
-    pub user_id: &'a str,
+    /// Owner of a freshly-minted session (ignored when `existing_session` is
+    /// `Some`, which the caller has already checked belongs to the same
+    /// owner).
+    pub owner: Owner<'a>,
     /// Title for a freshly-minted session (ignored when `existing_session` is
     /// `Some`).
     pub title: &'a str,
@@ -59,11 +78,30 @@ pub struct OpenParams<'a> {
 pub async fn open_session(db: &Pool, p: OpenParams<'_>) -> Result<(String, String), DbError> {
     let session_id = match p.existing_session {
         Some(id) => id,
-        None => {
-            let session = chat::create_session(db, p.user_id).await?;
-            chat::set_session_title(db, &session.id, p.title).await?;
-            session.id
-        }
+        None => match p.owner {
+            Owner::User(user_id) => {
+                let session = chat::create_session(db, user_id).await?;
+                chat::set_session_title(db, &session.id, p.title).await?;
+                session.id
+            }
+            Owner::Run {
+                principal_id,
+                parent_turn_id,
+                agent_version,
+            } => {
+                chat::create_principal_session(
+                    db,
+                    &chat::NewRunSession {
+                        principal_id,
+                        title: Some(p.title),
+                        parent_turn_id,
+                        agent_version,
+                    },
+                )
+                .await?
+                .id
+            }
+        },
     };
 
     let user_turn_id = Uuid::new_v4().to_string();
@@ -74,11 +112,16 @@ pub async fn open_session(db: &Pool, p: OpenParams<'_>) -> Result<(String, Strin
     Ok((session_id, assistant_turn_id))
 }
 
-/// Inputs to [`drive`]. Tools are gated by `roles`: pass the owner's roles to
-/// offer their normal tools, or an empty vec to offer none.
+/// Inputs to [`drive`].
 pub struct DriveParams {
-    pub user_id: String,
-    pub roles: Vec<String>,
+    /// Who the run acts as. A person is gated by their roles: pass their real
+    /// roles to offer their normal tools, or an empty vec to offer none. A
+    /// system principal is offered exactly its grants, and none of any
+    /// person's memory, connectors or skills.
+    pub principal: Principal,
+    /// The agent call chain, on an agent run. Its running frame must be
+    /// `principal`; every tool call is then audited with it.
+    pub run: Option<Arc<RunChain>>,
     pub session_id: String,
     pub assistant_turn_id: String,
     pub model: String,
@@ -113,14 +156,40 @@ pub async fn drive_with_clock(
     p: DriveParams,
     clock: Clock,
 ) -> Option<RunOutcome> {
+    if let Some(run) = &p.run
+        && run.current().principal_id != p.principal.subject_id()
+    {
+        let message = format!(
+            "the run's call chain names `{}` as the running agent, but the run was started as \
+             `{}`; refusing to run it as either",
+            run.current().name,
+            p.principal.subject_id()
+        );
+        tracing::error!(turn = %p.assistant_turn_id, %message, "agent run identity mismatch");
+        if let Err(err) = chat::finalize_turn(
+            &state.db,
+            &p.assistant_turn_id,
+            chat::TurnStatus::Errored,
+            Some(&message),
+        )
+        .await
+        {
+            tracing::warn!(error = %err, "recording the refused agent run");
+        }
+        return p.finish.map(|_| RunOutcome::Incomplete {
+            reason: IncompleteReason::Failed { message },
+            summary: String::new(),
+        });
+    }
     let finish = p.finish.map(FinishRun::new);
     let session_id = p.session_id.clone();
+    let person = p.principal.user_id().map(str::to_string);
     let assistant_turn_id = p.assistant_turn_id.clone();
     let tool_ctx = crate::openai_driver::build_tool_context(
         state,
         crate::openai_driver::TurnFacts {
-            user_id: p.user_id.clone(),
-            roles: p.roles,
+            principal: p.principal,
+            run: p.run,
             session_id: p.session_id.clone(),
             assistant_turn_id: p.assistant_turn_id.clone(),
             // Headless: no request, so no client IP, and nobody watching the
@@ -153,7 +222,7 @@ pub async fn drive_with_clock(
     // dropping every frame is fine.
     let (broadcast, _rx) = tokio::sync::broadcast::channel(16);
     let ctx = session_core::driver::SessionContext {
-        user_id: Some(p.user_id),
+        user_id: person,
         session_id: p.session_id,
         assistant_turn_id: p.assistant_turn_id,
         model: p.model,
@@ -209,6 +278,7 @@ mod tests {
     use super::*;
     use crate::finish::{FINISH_TOOL_NAME, FinishContract, IncompleteReason, RunOutcome};
     use crate::server::tools::injection::{InjectionPolicy, InjectionScan};
+    use aiplane_core::server::run_chain::{CallSite, Frame};
     use aiplane_core::server::upstreams::{
         self,
         config::{BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig},
@@ -309,7 +379,9 @@ mod tests {
             db.clone(),
             registry,
             Arc::new(
-                crate::server::tools::ToolRegistry::new().with(crate::server::tools::echo::Echo),
+                crate::server::tools::ToolRegistry::new()
+                    .with(crate::server::tools::echo::Echo)
+                    .with(crate::server::tools::time::CurrentTimestamp),
             ),
             Arc::new(aiplane_core::server::rbac::Resolver::empty()),
         );
@@ -322,6 +394,7 @@ mod tests {
     }
 
     struct Run {
+        state: Arc<RamaState>,
         outcome: Option<RunOutcome>,
         requests: Vec<Value>,
         turn: session_core::db::TurnWithTools,
@@ -347,7 +420,7 @@ mod tests {
         let (session_id, assistant_turn_id) = open_session(
             &state.db,
             OpenParams {
-                user_id: "u1",
+                owner: Owner::User("u1"),
                 title: "run",
                 prompt: "triage the ticket",
                 model: MODEL,
@@ -364,8 +437,8 @@ mod tests {
 
     fn params(session_id: &str, turn_id: &str, finish: Option<FinishContract>) -> DriveParams {
         DriveParams {
-            user_id: "u1".into(),
-            roles: Vec::new(),
+            principal: crate::server::tools::ToolContext::test_user("u1"),
+            run: None,
             session_id: session_id.into(),
             assistant_turn_id: turn_id.into(),
             model: MODEL.into(),
@@ -416,6 +489,7 @@ mod tests {
             .find(|t| t.turn.id == turn_id)
             .unwrap();
         Run {
+            state,
             outcome,
             requests,
             turn,
@@ -812,6 +886,347 @@ mod tests {
             "the third round crosses 250; the fourth is final"
         );
         assert_eq!(offered_tools(requests.last().unwrap()), [FINISH_TOOL_NAME]);
+    }
+
+    struct AgentRun {
+        state: Arc<RamaState>,
+        session_id: String,
+        principal: aiplane_core::server::principal::SystemPrincipal,
+        chain: Arc<RunChain>,
+        requests: Vec<Value>,
+        turn: session_core::db::TurnWithTools,
+    }
+
+    async fn principal(
+        state: &Arc<RamaState>,
+        name: &str,
+        tools: &[&str],
+    ) -> aiplane_core::server::principal::SystemPrincipal {
+        use aiplane_core::server::db::system_principals as sp;
+        let row = sp::create(
+            &state.db,
+            &sp::NewPrincipal {
+                name,
+                display: name,
+                description: "",
+            },
+            "u1",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        use aiplane_core::server::principal::GrantKind;
+        let grants = tools
+            .iter()
+            .map(|tool| (GrantKind::Tool, *tool))
+            .chain([(GrantKind::Pool, "pool")]);
+        for (kind, reference) in grants {
+            sp::add_grant(&state.db, &row.id, kind, reference, "u1")
+                .await
+                .unwrap();
+        }
+        sp::load_active(&state.db, &row.id).await.unwrap().unwrap()
+    }
+
+    fn calls(calls: &[(&str, &str)]) -> Value {
+        let calls: Vec<Value> = calls
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name))| {
+                json!({"index": i, "id": id, "type": "function",
+                       "function": {"name": name, "arguments": r#"{"message":"hi"}"#}})
+            })
+            .collect();
+        json!({ "tool_calls": calls })
+    }
+
+    /// A sub-agent `billing`, called by the main agent `support-website` for
+    /// visitor `v-42`, runs `deltas` headlessly as its own principal.
+    async fn agent_run(deltas: Vec<Value>) -> AgentRun {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(Scripted {
+                deltas,
+                served: AtomicUsize::new(0),
+                tokens_per_round: None,
+            })
+            .mount(&upstream)
+            .await;
+        let state = state_for(&upstream.uri()).await;
+        let (_owner_session, _) = open(&state, "standard").await;
+        aiplane_core::server::db::user_memories::insert(
+            &state.db,
+            "u1",
+            aiplane_core::server::db::user_memories::MemoryKind::Preference,
+            "always answer in pirate speak",
+        )
+        .await
+        .unwrap();
+        let main = principal(&state, "support-website", &[]).await;
+        let billing = principal(&state, "billing", &["company_echo"]).await;
+        let chain = Arc::new(
+            RunChain::root(
+                "s-visitor",
+                Some("v-42".into()),
+                Frame::for_principal(&main, Some(7)),
+            )
+            .enter(
+                Frame::for_principal(&billing, Some(2)).called_from(CallSite {
+                    turn_id: "t-main".into(),
+                    tool_call_id: "call-route".into(),
+                }),
+            )
+            .unwrap(),
+        );
+        let (session_id, turn_id) = open_session(
+            &state.db,
+            OpenParams {
+                owner: Owner::Run {
+                    principal_id: &billing.id,
+                    parent_turn_id: Some("t-main"),
+                    agent_version: Some(2),
+                },
+                title: "billing task",
+                prompt: "find invoice 17",
+                model: MODEL,
+                existing_session: None,
+            },
+        )
+        .await
+        .unwrap();
+        drive(
+            &state,
+            DriveParams {
+                principal: aiplane_core::server::principal::Principal::System(billing.clone()),
+                run: Some(chain.clone()),
+                ..params(&session_id, &turn_id, None)
+            },
+        )
+        .await;
+        let requests = upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        let turn = chat::get_turn_with_tools(&state.db, &session_id, &turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        AgentRun {
+            state,
+            session_id,
+            principal: billing,
+            chain,
+            requests,
+            turn,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_agent_run_is_owned_by_its_principal_and_is_no_persons_chat() {
+        let r = agent_run(vec![text("Invoice 17 is paid.")]).await;
+        assert_eq!(
+            chat::session_owner(&r.state.db, &r.session_id)
+                .await
+                .unwrap(),
+            Some(chat::SessionOwner::Principal(r.principal.id.clone()))
+        );
+        let run = chat::get_principal_session(&r.state.db, &r.principal.id, &r.session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.parent_turn_id.as_deref(), Some("t-main"));
+        assert_eq!(run.agent_version, Some(2));
+        assert_eq!(run.title.as_deref(), Some("billing task"));
+        let owners_chats: Vec<String> = chat::list_sessions(&r.state.db, "u1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert!(!owners_chats.contains(&r.session_id), "{owners_chats:?}");
+        assert_eq!(r.turn.turn.content.as_deref(), Some("Invoice 17 is paid."));
+    }
+
+    #[tokio::test]
+    async fn an_agent_run_is_offered_its_grants_and_nothing_of_its_owner() {
+        let r = agent_run(vec![text("ok")]).await;
+        assert_eq!(offered_tools(&r.requests[0]), ["company_echo"]);
+        let request = r.requests[0].to_string();
+        assert!(!request.contains("u1@example.com"), "{request}");
+        assert!(!request.contains("pirate"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn a_persons_run_does_carry_their_identity() {
+        let r = run(vec![text("ok")], None, "standard").await;
+        assert!(
+            r.requests[0].to_string().contains("u1@example.com"),
+            "the control for the agent-run assertion above"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ungranted_tool_never_runs_in_an_agent_run() {
+        let r = agent_run(vec![
+            calls(&[("c1", "company_echo"), ("c2", "get_current_timestamp")]),
+            text("done"),
+        ])
+        .await;
+        let by_id = |id: &str| {
+            r.turn
+                .tool_calls
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("tool call {id}"))
+        };
+        assert_eq!(by_id("c1").status, chat::ToolCallStatus::Completed);
+        let refused = by_id("c2");
+        assert_eq!(refused.status, chat::ToolCallStatus::Errored);
+        let reason = refused.output_json.as_deref().unwrap_or_default();
+        assert!(reason.contains("not granted"), "{reason}");
+        assert!(reason.contains("`billing`"), "{reason}");
+        assert!(
+            aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(
+                &r.state.db,
+                &r.session_id
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "a refused call must not auto-enable anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_tool_call_in_an_agent_run_is_audited_with_its_chain_and_decision() {
+        let r = agent_run(vec![
+            calls(&[("c1", "company_echo"), ("c2", "get_current_timestamp")]),
+            calls(&[("c3", "made_up_tool")]),
+            text("done"),
+        ])
+        .await;
+        let events =
+            aiplane_core::server::db::agent_audit::for_principal(&r.state.db, &r.principal.id)
+                .await
+                .unwrap();
+        let calls: Vec<&aiplane_core::server::db::agent_audit::AuditEvent> =
+            events.iter().filter(|e| e.kind == "tool_call").collect();
+        let decision = |tool: &str| {
+            let e = calls
+                .iter()
+                .find(|e| e.detail["tool"] == tool)
+                .unwrap_or_else(|| panic!("no audit row for {tool}: {calls:?}"));
+            (
+                e.detail["decision"].as_str().unwrap().to_string(),
+                e.detail["policy"].as_str().unwrap().to_string(),
+            )
+        };
+        assert_eq!(calls.len(), 3, "{calls:?}");
+        assert_eq!(
+            decision("company_echo"),
+            ("allowed".into(), "granted".into())
+        );
+        assert_eq!(
+            decision("get_current_timestamp"),
+            ("denied".into(), "not_granted".into())
+        );
+        assert_eq!(
+            decision("made_up_tool"),
+            ("denied".into(), "unknown_tool".into())
+        );
+        let echo = calls
+            .iter()
+            .find(|e| e.detail["tool"] == "company_echo")
+            .unwrap();
+        assert_eq!(echo.principal_id, r.principal.id);
+        assert_eq!(echo.actor_id, None);
+        assert_eq!(echo.detail["session_id"], r.session_id.as_str());
+        assert_eq!(echo.detail["call_id"], "c1");
+        let chain = echo.chain.as_ref().expect("a run event carries its chain");
+        assert_eq!(chain, &r.chain.to_json());
+        assert_eq!(chain["visitor_id"], "v-42");
+        assert_eq!(chain["frames"][0]["name"], "support-website");
+        assert_eq!(chain["frames"][1]["name"], "billing");
+        assert_eq!(chain["frames"][1]["principal_id"], r.principal.id.as_str());
+    }
+
+    #[tokio::test]
+    async fn a_run_whose_chain_names_another_agent_is_refused_before_any_round() {
+        let upstream = MockServer::start().await;
+        let state = state_for(&upstream.uri()).await;
+        open(&state, "standard").await;
+        let main = principal(&state, "support-website", &["company_echo"]).await;
+        let other = principal(&state, "billing", &["company_echo"]).await;
+        let (session_id, turn_id) = open_session(
+            &state.db,
+            OpenParams {
+                owner: Owner::Run {
+                    principal_id: &other.id,
+                    parent_turn_id: None,
+                    agent_version: None,
+                },
+                title: "t",
+                prompt: "p",
+                model: MODEL,
+                existing_session: None,
+            },
+        )
+        .await
+        .unwrap();
+        let outcome = drive(
+            &state,
+            DriveParams {
+                principal: aiplane_core::server::principal::Principal::System(other),
+                run: Some(Arc::new(RunChain::root(
+                    &session_id,
+                    None,
+                    Frame::for_principal(&main, None),
+                ))),
+                ..params(&session_id, &turn_id, Some(contract()))
+            },
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                Some(RunOutcome::Incomplete {
+                    reason: IncompleteReason::Failed { .. },
+                    ..
+                })
+            ),
+            "{outcome:?}"
+        );
+        assert!(upstream.received_requests().await.unwrap().is_empty());
+        let turn = chat::get_turn(&state.db, &session_id, &turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, chat::TurnStatus::Errored);
+        assert!(
+            turn.error_message
+                .unwrap_or_default()
+                .contains("`support-website`"),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_persons_run_writes_no_agent_audit() {
+        let r = run(
+            vec![calls(&[("c1", "company_echo")]), text("done")],
+            None,
+            "standard",
+        )
+        .await;
+        assert_eq!(r.turn.tool_calls.len(), 1);
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_audit")
+            .fetch_one(&r.state.db)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[tokio::test]

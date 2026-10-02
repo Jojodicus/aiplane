@@ -746,6 +746,157 @@ async fn every_grant_change_is_audited_with_who_what_and_when() {
     );
 }
 
+/// A headless run, as the scheduler or (later) an agent dispatch starts one.
+async fn headless_run(
+    fx: &Fixture,
+    owner: aiplane_runtime::server::headless::Owner<'_>,
+    principal: Principal,
+    run: Option<Arc<aiplane_core::server::run_chain::RunChain>>,
+) -> Value {
+    use aiplane_runtime::server::headless::{self, DriveParams, OpenParams};
+    let (session_id, turn_id) = headless::open_session(
+        &fx.state.db,
+        OpenParams {
+            owner,
+            title: "run",
+            prompt: "what do you know about me?",
+            model: "model-a",
+            existing_session: None,
+        },
+    )
+    .await
+    .unwrap();
+    headless::drive(
+        &Arc::new(fx.state.clone()),
+        DriveParams {
+            principal,
+            run,
+            session_id,
+            assistant_turn_id: turn_id,
+            model: "model-a".into(),
+            source: aiplane_core::server::db::usage::UsageSource::Scheduled,
+            history_limit: None,
+            finish: None,
+            budget: None,
+            injection: Default::default(),
+        },
+    )
+    .await;
+    fx.last_upstream_body().await
+}
+
+#[tokio::test]
+async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
+    use aiplane_core::server::run_chain::{Frame, RunChain};
+    use aiplane_runtime::server::headless::Owner;
+    let fx = fixture().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+            "text/event-stream",
+        ))
+        .with_priority(1)
+        .mount(&fx.upstream)
+        .await;
+    db::user_memories::insert(
+        &fx.state.db,
+        "alice",
+        db::user_memories::MemoryKind::Preference,
+        "always answer in pirate speak",
+    )
+    .await
+    .unwrap();
+
+    let persons = headless_run(&fx, Owner::User("alice"), person_principal("alice"), None)
+        .await
+        .to_string();
+    assert!(persons.contains("alice@example.com"), "{persons}");
+    assert!(persons.contains("brand"), "{persons}");
+    let personal_hits_before = fx.personal_mcp_hits.load(Ordering::SeqCst);
+
+    let (id, _) = fx.principal_with_pool("support-website").await;
+    let (status, body) = fx.grant(&fx.admin, &id, "tool", TIME).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let principal = db::system_principals::load_active(&fx.state.db, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let chain = Arc::new(RunChain::root(
+        "s-visitor",
+        None,
+        Frame::for_principal(&principal, Some(1)),
+    ));
+    let agents = headless_run(
+        &fx,
+        Owner::Run {
+            principal_id: &id,
+            parent_turn_id: None,
+            agent_version: Some(1),
+        },
+        Principal::System(principal),
+        Some(chain),
+    )
+    .await;
+
+    assert_eq!(fx.offered_tools().await, [TIME]);
+    let agents = agents.to_string();
+    for owners in ["alice", "pirate", "brand", PER_USER] {
+        assert!(
+            !agents.contains(owners),
+            "`{owners}` reached the agent run: {agents}"
+        );
+    }
+    assert_eq!(
+        fx.personal_mcp_hits.load(Ordering::SeqCst),
+        personal_hits_before,
+        "the owner's own MCP connection was used for the agent run"
+    );
+}
+
+#[tokio::test]
+async fn the_audit_trail_shows_a_run_events_call_chain() {
+    use aiplane_core::server::db::agent_audit::{self, AuditKind};
+    use aiplane_core::server::run_chain::{Frame, RunChain};
+    let fx = fixture().await;
+    let id = fx.create(&fx.admin, "support-website").await;
+    let principal = db::system_principals::load_active(&fx.state.db, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let chain = RunChain::root(
+        "s-visitor",
+        Some("v-1".into()),
+        Frame::for_principal(&principal, Some(3)),
+    );
+    agent_audit::record_run_event(
+        &fx.state.db,
+        AuditKind::ToolCall,
+        &id,
+        Some(&chain),
+        json!({"tool": TIME, "decision": "denied", "policy": "not_granted"}),
+    )
+    .await
+    .unwrap();
+
+    let (_, detail) = fx
+        .get(&fx.admin, &format!("/api/v0/system-principals/{id}"))
+        .await;
+    let audit = detail["principal"]["audit"].as_array().unwrap();
+    let run = audit
+        .iter()
+        .find(|e| e["kind"] == "tool_call")
+        .unwrap_or_else(|| panic!("no run event in {audit:?}"));
+    assert_eq!(run["chain"], chain.to_json());
+    assert_eq!(run["actor_id"], Value::Null);
+    assert_eq!(run["detail"]["policy"], "not_granted");
+    let created = audit
+        .iter()
+        .find(|e| e["kind"] == "principal_created")
+        .unwrap();
+    assert_eq!(created["chain"], Value::Null);
+}
+
 #[tokio::test]
 async fn revoking_a_token_or_disabling_the_principal_cuts_it_off() {
     let fx = fixture().await;

@@ -240,7 +240,7 @@ async fn open_run_session(
     crate::server::headless::open_session(
         db,
         crate::server::headless::OpenParams {
-            user_id: &action.user_id,
+            owner: crate::server::headless::Owner::User(&action.user_id),
             title: &action.name,
             prompt: &action.prompt,
             model: &action.model,
@@ -303,8 +303,11 @@ async fn try_run_action(
     crate::server::headless::drive(
         state,
         crate::server::headless::DriveParams {
-            user_id: action.user_id.clone(),
-            roles,
+            principal: aiplane_core::server::principal::Principal::User {
+                id: action.user_id.clone(),
+                roles,
+            },
+            run: None,
             session_id: session_id.clone(),
             assistant_turn_id: assistant_turn_id.clone(),
             model: action.model.clone(),

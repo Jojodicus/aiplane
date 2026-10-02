@@ -154,8 +154,10 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   default group's.
 - **Audit.** Every management change (created, disabled, grant added/removed,
   token issued/revoked) is a row in `agent_audit` with the acting user, written
-  in the same transaction as the change. `GET /api/v0/system-principals/{id}`
-  returns it.
+  in the same transaction as the change. Every tool call inside an agent run
+  is a row there too (`kind = 'tool_call'`, no acting user, the run's call
+  chain in `chain`; see [`agents.md`](agents.md#the-call-chain)).
+  `GET /api/v0/system-principals/{id}` returns the trail, `chain` included.
 
 ### Management API
 

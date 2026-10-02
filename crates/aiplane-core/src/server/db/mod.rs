@@ -61,6 +61,13 @@ pub enum DbError {
         #[source]
         source: sqlx::migrate::MigrateError,
     },
+    #[error(
+        "migrations left rows pointing at rows that no longer exist, in {}; the upgrade was \
+         applied but the data is inconsistent — restore the backup taken before the upgrade \
+         and report which release introduced it",
+        tables.join(", ")
+    )]
+    DanglingReferences { tables: Vec<String> },
     #[error("query: {0}")]
     Query(#[from] sqlx::Error),
     #[error("decoding row column `{column}`")]
@@ -104,11 +111,7 @@ pub(crate) fn parse_optional_ts(
 /// Pass `:memory:` to use an in-memory database. Used by tests.
 pub async fn open(path: &Path) -> Result<Pool, DbError> {
     let pool = connect(path, true).await?;
-
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|source| DbError::Migrate { source })?;
+    migrate(&pool).await?;
 
     // Any assistant turn still marked `in_progress` at startup is an
     // orphan from a previous crash / SIGKILL — no worker is going to
@@ -123,6 +126,63 @@ pub async fn open(path: &Path) -> Result<Pool, DbError> {
     }
 
     Ok(pool)
+}
+
+/// Apply pending migrations on one connection with foreign keys **off**, as
+/// SQLite's documented table-rebuild procedure requires.
+///
+/// sqlx runs each migration inside a transaction, where `PRAGMA foreign_keys`
+/// is a no-op, so a migration cannot switch enforcement off itself. With it
+/// on, rebuilding a parent table (`DROP TABLE` + rename) silently deletes
+/// every child row through `ON DELETE CASCADE`. Since enforcement is off,
+/// nothing a migration does is checked as it runs; `foreign_key_check`
+/// afterwards refuses to boot on a dangling reference instead.
+async fn migrate(pool: &Pool) -> Result<(), DbError> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await?;
+    let applied_before = applied_migrations(&mut conn).await;
+    let migrated = sqlx::migrate!("./migrations").run(&mut *conn).await;
+    let dangling = match migrated {
+        Ok(()) if applied_migrations(&mut conn).await != applied_before => {
+            dangling_reference_tables(&mut conn).await
+        }
+        _ => Ok(Vec::new()),
+    };
+    // Back on before the connection returns to the pool, whatever happened:
+    // every other query in the process relies on enforcement.
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await?;
+    migrated.map_err(|source| DbError::Migrate { source })?;
+    let tables = dangling?;
+    if !tables.is_empty() {
+        return Err(DbError::DanglingReferences { tables });
+    }
+    Ok(())
+}
+
+async fn applied_migrations(conn: &mut sqlx::SqliteConnection) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(conn)
+        .await
+        .unwrap_or(0)
+}
+
+async fn dangling_reference_tables(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<Vec<String>, DbError> {
+    use sqlx::Row;
+    let mut tables: Vec<String> = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(conn)
+        .await?
+        .iter()
+        .map(|row| row.try_get::<String, _>(0))
+        .collect::<Result<_, _>>()?;
+    tables.sort();
+    tables.dedup();
+    Ok(tables)
 }
 
 /// Open a database that **another process owns**, for an out-of-band CLI
@@ -398,6 +458,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn migrations_leave_foreign_keys_enforced() {
+        let pool = open(Path::new(":memory:")).await.unwrap();
+        for _ in 0..3 {
+            let mut conn = pool.acquire().await.unwrap();
+            let on: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+            assert_eq!(on, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_post_migration_check_names_every_table_with_a_dangling_reference() {
+        let pool = open(Path::new(":memory:")).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        assert!(
+            dangling_reference_tables(&mut conn)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        for sql in [
+            "INSERT INTO chat_turns (id, session_id, seq, role, status, created_at)
+             VALUES ('t1', 'gone', 0, 'user', 'completed', 'x')",
+            "INSERT INTO chat_turns (id, session_id, seq, role, status, created_at)
+             VALUES ('t2', 'gone', 1, 'user', 'completed', 'x')",
+            "INSERT INTO chat_session_settings (session_id, updated_at) VALUES ('gone', 'x')",
+        ] {
+            sqlx::query(sql).execute(&mut *conn).await.unwrap();
+        }
+        assert_eq!(
+            dangling_reference_tables(&mut conn).await.unwrap(),
+            vec![
+                "chat_session_settings".to_string(),
+                "chat_turns".to_string()
+            ]
+        );
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

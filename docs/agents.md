@@ -399,6 +399,19 @@ chat_sessions:
 - **Sub-agent runs** are child sessions owned by the sub-agent's principal and
   linked through `parent_turn_id`. They are not chats of the owner, as decided.
 
+**As built (#83, migration `0081`).** The rebuild is as above without
+`visitor_id`: `visitor_sessions` does not exist yet, so #91 adds that column
+together with its table. A second CHECK, `principal_id IS NULL OR shared = 0`,
+keeps an agent conversation out of the "anyone with the link" read path.
+`parent_turn_id` has no foreign key: the child run stays an auditable record
+when the parent turn is gone. `session_core::db` gains `SessionOwner`,
+`create_principal_session` (`NewRunSession`), `get_principal_session` and
+`session_owner`; every person-facing query is unchanged and simply never
+matches a row whose `user_id` is `NULL`. The chat sweeper for expired
+suspensions skips principal-owned runs; the agent path resumes those (#88,
+#91). Because seven tables cascade from `chat_sessions`, migrations now run
+with foreign keys off — see `crates/aiplane-core/migrations/README.md`.
+
 ### State
 
 ```sql
@@ -456,6 +469,43 @@ pub struct Frame { pub principal_id: String, pub version: i64, pub via_tool_call
 `agent_audit.kind` covers gate decisions, route picks, sub-agent dispatch and
 finish, verifier outcomes, grant changes, output-filter hits and injection
 flags. Depth is capped at 3, checked again at run time as well as at validation.
+
+**As built (#83).** `RunChain` lives in `aiplane-core` (`server/run_chain.rs`)
+next to `Principal`, because the audit rows that serialize it are written
+there. Two changes from the sketch above: a `Frame` also carries the
+principal's `name`, so an audit row reads without a join and outlives the
+principal; and `via_tool_call` is `via: Option<CallSite { turn_id,
+tool_call_id }>`, because the child session's `parent_turn_id` needs the turn,
+not only the call. `version` is `Option<i64>` until agent versions exist (#84).
+`RunChain::root` starts a chain, `enter` appends a sub-agent and refuses a
+fourth level (`ChainTooDeep`).
+
+- `ToolContext.run: Option<Arc<RunChain>>`; `ToolContext::agent_active()` is
+  `run.is_some()`. Its running frame must be `ToolContext.principal`:
+  `headless::drive` refuses a run whose chain names a different principal
+  before any round.
+- **Every tool call in an agent run is decided and audited** in
+  `openai_driver/call_policy.rs`: one `agent_audit` row of kind `tool_call`
+  per call, attributed to the running principal, `actor_id` `NULL`, `chain`
+  set, `detail` `{tool, call_id, turn_id, session_id, decision, policy}`.
+  `decision` is `allowed` or `denied`; `policy` is `granted`,
+  `not_granted`, `unknown_tool` or `disabled_in_conversation` (a person's run
+  can also be `auto_enabled`, but a person's run writes no audit rows).
+- **A system principal never auto-enables.** The chat path runs a registered
+  tool the model calls without its schema and turns it on for the
+  conversation. For a system principal that call is refused as
+  `not_granted`: it holds exactly its grants.
+- Run events share one writer, `agent_audit::record_run_event(principal,
+  chain, detail)`: tool-call decisions and #93's `injection_detected`
+  findings both carry the chain when the call is inside an agent run.
+- `mcp_tool_audit` has a `chain` column (migration `0081`), set on every MCP
+  call inside an agent run. Usage rows do not carry the chain yet; that comes
+  with the per-agent limits and budgets (#92).
+- An agent run gets none of its owner's identity, memory, private skills or
+  MCP connections: the request context reads the user row, memories and
+  private skills only through `Principal::user_id()`, which is `None` for a
+  system principal. Usage rows from such a run carry `principal_kind =
+  'system'` and the principal's name.
 
 ### Sub-agent dispatch
 

@@ -1384,6 +1384,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
             "ok",
             None,
             Some("chat-a1"),
+            None,
         )
         .await?;
         mcp_audit::record(
@@ -1395,6 +1396,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
             "ok",
             None,
             Some("chat-a1"),
+            None,
         )
         .await?;
         mcp_audit::record(
@@ -1406,6 +1408,7 @@ async fn seed_demo_data(state: &RamaState) -> anyhow::Result<()> {
             "error",
             Some("Missing permission: MANAGE_WEBHOOKS"),
             Some("chat-b2"),
+            None,
         )
         .await?;
     }

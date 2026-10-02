@@ -22,6 +22,7 @@ pub mod oidc_settings;
 pub mod principal;
 pub mod rbac;
 pub mod reasoning;
+pub mod run_chain;
 pub mod settings;
 pub mod setup;
 pub mod sse;
