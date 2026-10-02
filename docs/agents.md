@@ -1424,6 +1424,74 @@ pool rule, and retention.
   - The admin limits page in the SPA does not offer subject `system` yet; the
     API accepts it.
 
+### What #100 built
+
+Analytics for a manager: what an agent did over a period, derived from rows
+that already exist. No second event store.
+
+- **Migration `0086_agent_analytics.sql`**: one index,
+  `agent_audit (principal_id, kind, created_at)`. `0085` is left free on
+  purpose, because a concurrent branch may claim it.
+- **`GET /api/v0/agents/{id}/analytics?from=&to=&version=`** (`read` share,
+  admins always; same 403/404 rules as the other agent routes). `from` and `to`
+  are RFC 3339 instants or `YYYY-MM-DD` UTC days; a day as `to` includes that
+  whole day. Default: the last 30 days. Longer than 366 days, `from >= to`, an
+  unparseable bound or `version < 1` is a 400 that says what to change.
+  `version` narrows to one published version.
+- **Response** (counts and route, slot and reason names only; no visitor
+  content, no session or visitor ids):
+  `{from, to, version, currency, conversations, turns, sub_agents: {dispatched,
+  finished, incomplete, incomplete_by_reason: {kind: n}}, gate_refusals:
+  {total, by_route: {route: n}, by_missing_slot: [{route, slot, count}]},
+  routes_chosen: {route: n}, output_blocks: {total, by_action}, limit_refusals:
+  {total, by_kind}, human_handoffs, usage: {requests, prompt_tokens,
+  completion_tokens, tokens, cost}, daily: [{day, conversations, turns, tokens,
+  cost, refusals}]}`. `daily` has one UTC-day bucket for every day of the range,
+  quiet ones as zeros.
+- **Where each number comes from.**
+  - `conversations`: root conversations (`parent_turn_id IS NULL`) the agent's
+    principal owns, by `created_at`. `turns`: their `user` turns, by the turn's
+    `created_at`. A conversation the retention sweeper deleted is gone from
+    both.
+  - `routes_chosen`: `route_decision` rows with a `picked` route.
+    `gate_refusals`: `route_decision` rows with `reason: no_open_route` (no
+    route was open for the request); each closed route counts once in `by_route`
+    and each of its unmet slots once in `by_missing_slot`. A decision the
+    classifier declined (`picked` null, any other reason) is not a gate refusal.
+  - `sub_agents`: `sub_agent_dispatched` and `sub_agent_finished` rows;
+    `incomplete_by_reason` is `outcome.reason.kind`.
+  - `output_blocks`: `output_blocked`, by `action` (`redacted`, `withheld`).
+  - `limit_refusals`: `limit_refused`, by `limit` (`visitor_rate`, `ip_rate`,
+    `budget`).
+  - `human_handoffs`: audit rows of kind `human_handoff`
+    (`agent_analytics::HUMAN_HANDOFF_KIND`). #96 is not merged, so nothing
+    writes that kind yet and the count is 0; it starts moving the day #96
+    writes it, provided it records the agent's chain.
+  - `usage`: `usage_events` with `agent_id` = the agent, which includes the
+    sub-agents' calls and the classifier's. Tokens are `total_tokens`, or
+    prompt + completion when that is missing. Needs `[usage] enabled`.
+- **What is never counted.** Builder test conversations (`agent_version = 0`;
+  their audit and usage rows carry the draft version in the chain's main
+  frame), another agent's rows, and a run of this agent as somebody else's
+  sub-agent (the chain's main frame names the other agent).
+- **Version filter.** A row's version is the main frame of its serialized call
+  chain (`frames[0].version`); conversations use `chat_sessions.agent_version`.
+  `limit_refused` rows have no chain, because a refusal happens before any
+  version runs, so they are left out while a version is selected (the SPA says
+  so).
+- **Why Rust and not SQL aggregation.** The version sits inside a JSON string
+  and timestamps are RFC 3339 with fractional seconds of varying length, which
+  do not order as text. SQL narrows by whole days (index-friendly) and
+  `db::agent_analytics::compute` applies the exact range and the version. The
+  cost is one pass over the agent's rows for the period; a range is capped at
+  366 days.
+- **SPA.** An *Analytics* tab on `/agents/{id}`
+  ([`ui.md`](ui.md#agent-builder)).
+- **Tests.** `crates/aiplane/tests/it/agent_analytics.rs` seeds two agents,
+  two versions, a test conversation, out-of-range rows and a visitor's text and
+  id, and asserts every number exactly, the daily series, the version filter,
+  no leakage between agents, no visitor content, and the share rules.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -1469,6 +1537,7 @@ helpers.
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken` |
 | #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind |
+| #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #97 later | — | unchanged |
 
 ## Deferred

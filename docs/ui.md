@@ -418,7 +418,7 @@ are in `web/src/lib/components/agents/`.
 
 - **`/agents`**: the agents shared with the caller, and a dialog to create one.
 - **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
-  Save draft / Publish / Delete, and six tabs (`?tab=` keeps the choice in the
+  Save draft / Publish / Delete, and seven tabs (`?tab=` keeps the choice in the
   URL):
   - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
@@ -436,6 +436,17 @@ are in `web/src/lib/components/agents/`.
   - *Test chat*: see below.
   - *Versions*: draft vs live, the publish blockers (`publish_issues`), every
     snapshot with its JSON, and "make live" (rollback).
+  - *Analytics*: what the agent did over the last 7, 30 or 90 days, for all
+    versions or one (`GET /api/v0/agents/{id}/analytics`, see
+    [`agents.md`](agents.md#what-100-built)). `AnalyticsPanel` shows stat tiles
+    (conversations, messages, sub-agent runs, gate refusals, output-filter
+    blocks, limit refusals, human handoffs, model calls, tokens, cost when
+    priced), a per-day bar chart with a metric switch, and breakdown tables
+    (routes chosen, closed gates by route and missing slot, why sub-agent runs
+    did not finish, output-filter actions, limit refusals by kind). The chart
+    is a plain inline SVG (`fill-primary`, daisyUI tokens): no chart library.
+    Its pure half, `web/src/lib/agent-analytics.ts`, is unit-tested. Route,
+    slot and reason names are shown as the identifiers they are.
   - *Sharing*: shares with access change and revoke; `share_needs_agent_manager`
     and `last_writer` are shown verbatim. A `read` share sees everything
     read-only (the editor is a disabled `fieldset`).

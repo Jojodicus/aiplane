@@ -12,6 +12,7 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 
+pub mod agent_analytics;
 pub mod agent_audit;
 pub mod agent_retention;
 pub mod agent_state;
