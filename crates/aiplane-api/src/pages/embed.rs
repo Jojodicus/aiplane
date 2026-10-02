@@ -696,6 +696,55 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     json_ok(StatusCode::ACCEPTED, json!({ "turn_id": turn_id }))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityBody {
+    pub token: String,
+}
+
+/// Longest identity token accepted, in bytes. A signed claim set for one
+/// visitor is a few hundred; this only stops abuse.
+const MAX_IDENTITY_TOKEN: usize = 8 * 1024;
+
+/// POST /api/v0/embed/identity — the embedding website vouches for its
+/// visitor with a token it signed (`docs/embed.md` "Signed-in visitors").
+/// The agent's `host_jwt` verifier checks it and writes the claims it maps
+/// into slots as `host`. `200 {slots}` names what was set, never a value.
+pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    use aiplane_runtime::agents::verifier::host_jwt::{self, IdentityError};
+    let v = or_return!(visitor(&state, &req).await);
+    let body: IdentityBody =
+        or_return!(super::read_json(req.into_body(), "the identity body").await);
+    if body.token.len() > MAX_IDENTITY_TOKEN {
+        return bad_request(format!(
+            "the identity token is longer than {MAX_IDENTITY_TOKEN} bytes — sign only the claims \
+             the agent maps"
+        ));
+    }
+    let accepted = host_jwt::accept(
+        &state,
+        &v.session.principal_id,
+        &v.session.session_id,
+        &v.live.spec,
+        &body.token,
+        Timestamp::now(),
+    )
+    .await;
+    match accepted {
+        Ok(slots) => json_ok(StatusCode::OK, json!({ "slots": slots })),
+        Err(err) => {
+            let status = match &err {
+                IdentityError::NotConfigured => StatusCode::UNPROCESSABLE_ENTITY,
+                IdentityError::Invalid(_) => StatusCode::UNAUTHORIZED,
+                IdentityError::Replayed => StatusCode::CONFLICT,
+                IdentityError::KeysUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+                IdentityError::Storage(_) => return internal(err),
+            };
+            refuse(status, err.code(), &err.to_string())
+        }
+    }
+}
+
 /// The runner contract says the turn is terminal when `run` returns; a
 /// runner that broke it (or panicked) must not leave the visitor waiting
 /// forever with every later message refused as `turn_in_progress`.

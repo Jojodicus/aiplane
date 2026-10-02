@@ -19,6 +19,7 @@ pub mod agent_responders;
 pub mod agent_retention;
 pub mod agent_state;
 pub mod agent_tests;
+pub mod agent_verifiers;
 pub mod agents;
 pub mod app_settings;
 pub mod audit;

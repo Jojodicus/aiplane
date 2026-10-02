@@ -9,9 +9,10 @@
 //!   no person's memory, location or connectors. Rebuilt every round, so a
 //!   slot the model just set shows up on the next one.
 //! - **Tools**: the principal's grants that the spec lists, plus the run's
-//!   synthetic tools (`set_<slot>`, `forward_request`, `request_human`). The
-//!   synthetic ones are layered over the grant-narrowed source, never inside
-//!   it: they are no grant, and exist only for this run.
+//!   synthetic tools (`set_<slot>`, `forward_request`, `request_human`, the
+//!   verifiers' `verify_<id>…`). The synthetic ones are layered over the
+//!   grant-narrowed source, never inside it: they are no grant, and exist
+//!   only for this run.
 //! - **Bound arguments** wrap the granted tools they apply to, so the model
 //!   never sees nor sets them; a tool's `permission` puts an approval in
 //!   front of it ([`super::approval`]).
@@ -37,6 +38,7 @@ use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
 use super::state::{self, AgentState, StateSchema, render_view};
+use super::verifier::{self, VerifierRun, Verifiers};
 use crate::budget::Budget;
 use crate::finish::FinishContract;
 use crate::rama_server::state::RamaState;
@@ -240,6 +242,17 @@ impl RunProfile {
         for id in slot_tools.ids() {
             if let Some(tool) = slot_tools.get(&id) {
                 synthetic.insert(id, tool);
+            }
+        }
+        if matches!(role, Role::Main) {
+            let run = VerifierRun {
+                state: state.clone(),
+                principal: principal.clone(),
+                schema: schema.clone(),
+                options: options.clone(),
+            };
+            for tool in verifier::tools(&Verifiers::from_spec(&spec), &run) {
+                synthetic.insert(tool.id().to_string(), tool);
             }
         }
         let routes = spec.get("routes").cloned().unwrap_or_else(|| json!({}));

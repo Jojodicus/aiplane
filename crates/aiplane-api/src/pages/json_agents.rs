@@ -187,6 +187,13 @@ async fn spec_issues(
     ))
 }
 
+/// Seal every verifier secret once the spec is valid (the plaintext's length
+/// is checked), before it is stored or echoed: it never rests in a draft, a
+/// version or the audit trail in clear.
+fn seal_secrets(state: &RamaState, spec: &mut Value) -> Result<(), Response> {
+    aiplane_runtime::agents::verifier::host_jwt::seal_secrets(spec, &state.crypto).map_err(internal)
+}
+
 fn invalid_spec(what: &str, issues: &[SpecIssue]) -> Response {
     let first = &issues[0];
     let at = if first.path.is_empty() {
@@ -266,10 +273,11 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     if let Some(reason) = sp_db::invalid_name_reason(name) {
         return bad_request(reason);
     }
-    let spec = body.spec.unwrap_or_else(|| json!({}));
+    let mut spec = body.spec.unwrap_or_else(|| json!({}));
     // The principal does not exist yet, so it holds nothing: a spec naming
     // any resource fails here, and its hint says how to grant one.
     or_return!(require_valid(&state, "{id}", &spec, Stage::Draft, "create the agent").await);
+    or_return!(seal_secrets(&state, &mut spec));
     let display = body
         .display
         .as_deref()
@@ -380,8 +388,9 @@ pub async fn update_draft(State(state): State<Arc<RamaState>>, req: Request) -> 
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
     let id = agent.principal.id;
-    let body: DraftBody = or_return!(super::read_json(req.into_body(), "the draft body").await);
+    let mut body: DraftBody = or_return!(super::read_json(req.into_body(), "the draft body").await);
     or_return!(require_valid(&state, &id, &body.spec, Stage::Draft, "save the draft").await);
+    or_return!(seal_secrets(&state, &mut body.spec));
     match agents_db::update_draft(&state.db, &id, &body.spec.to_string(), &user.id).await {
         Ok(true) => json_ok(
             StatusCode::OK,

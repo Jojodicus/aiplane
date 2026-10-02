@@ -47,6 +47,9 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::gate::Cond;
+use verifiers::HOST_JWT;
+
+mod verifiers;
 use super::state::StateSchema;
 use crate::finish::FinishContract;
 use crate::server::tools::mcp::MCP_ID_PREFIX;
@@ -127,15 +130,7 @@ const SLOT_CONSTRAINTS: &[(&str, &[&str])] = &[
 const SLOT_TYPES: &[&str] = &[
     "string", "email", "enum", "integer", "number", "boolean", "subject",
 ];
-const VERIFIER_KEYS: &[&str] = &[
-    "kind",
-    "connector",
-    "send_tool",
-    "check_tool",
-    "input",
-    "max_attempts",
-    "code_ttl",
-];
+
 const ROUTER_KEYS: &[&str] = &["kind", "pool", "order"];
 const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
 const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "human"];
@@ -266,7 +261,7 @@ pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIs
         stage,
         issues: Vec::new(),
         slots: HashMap::new(),
-        verifiers: BTreeSet::new(),
+        verifiers: HashMap::new(),
         schema: None,
     };
     check.spec(spec);
@@ -279,7 +274,8 @@ struct Check<'a> {
     issues: Vec<SpecIssue>,
     /// Slot name → whether the model may write it.
     slots: HashMap<String, bool>,
-    verifiers: BTreeSet<String>,
+    /// Verifier id → its `kind`, when it is a known one (`spec/verifiers.rs`).
+    verifiers: HashMap<String, Option<String>>,
     /// The typed slots, for checking gates against them; `None` when `state`
     /// is too malformed to read, which is reported already.
     schema: Option<StateSchema>,
@@ -323,6 +319,17 @@ pub fn parse_duration(s: &str) -> Option<jiff::SignedDuration> {
     count
         .checked_mul(per_unit)
         .map(jiff::SignedDuration::from_secs)
+}
+
+/// The spec's own notation for `d`, in its largest whole unit.
+pub fn format_duration(d: jiff::SignedDuration) -> String {
+    let secs = d.as_secs();
+    for (unit, per) in [('d', 86_400), ('h', 3_600), ('m', 60)] {
+        if secs % per == 0 && secs >= per {
+            return format!("{}{unit}", secs / per);
+        }
+    }
+    format!("{secs}s")
 }
 
 fn is_duration(s: &str) -> bool {
@@ -481,6 +488,41 @@ impl<'a> Check<'a> {
         }
     }
 
+    /// `{max, per}`, both required; `per` at most `longest` when given.
+    fn rate(&mut self, v: &Value, path: &str, longest: Option<jiff::SignedDuration>) {
+        let Some(rate) = self.object(v, path, RATE_KEYS) else {
+            return;
+        };
+        for key in RATE_KEYS {
+            let at = join(path, key);
+            match (rate.get(*key), *key) {
+                (Some(x), "max") => self.positive_int(x, &at, None),
+                (Some(x), _) => self.bounded_duration(x, &at, longest),
+                (None, _) => self.issue(
+                    &at,
+                    "a rate needs both `max` (how many) and `per` (over how long, e.g. `10m`)"
+                        .to_string(),
+                ),
+            }
+        }
+    }
+
+    /// A duration no longer than `longest`, when given.
+    fn bounded_duration(&mut self, v: &Value, path: &str, longest: Option<jiff::SignedDuration>) {
+        self.duration(v, path);
+        if let (Some(longest), Some(d)) = (longest, v.as_str().and_then(parse_duration))
+            && d > longest
+        {
+            self.issue(
+                path,
+                format!(
+                    "must be at most {} — a longer window is not kept",
+                    format_duration(longest)
+                ),
+            );
+        }
+    }
+
     fn regex(&mut self, v: &Value, path: &str) {
         if let Some(s) = self.string(v, path)
             && let Err(err) = regex::Regex::new(s)
@@ -540,6 +582,9 @@ impl<'a> Check<'a> {
             self.state(v);
         }
         self.schema = StateSchema::from_spec(spec).ok();
+        if let Some(v) = top.get("verifiers") {
+            self.verifier_refs(v);
+        }
         if let Some(v) = top.get("profile") {
             self.profile(v);
         }
@@ -783,39 +828,6 @@ impl<'a> Check<'a> {
         }
     }
 
-    fn verifiers_decl(&mut self, v: &Value) {
-        for (id, verifier) in self.named_map(v, "verifiers") {
-            self.verifiers.insert(id.to_string());
-            let p = join("verifiers", id);
-            let Some(map) = self.object(verifier, &p, VERIFIER_KEYS) else {
-                continue;
-            };
-            match map.get("kind") {
-                Some(kind) => {
-                    self.string(kind, &join(&p, "kind"));
-                }
-                None => self.issue(&join(&p, "kind"), "a verifier needs a `kind`"),
-            }
-            if let Some(c) = map.get("connector") {
-                let cp = join(&p, "connector");
-                if let Some(connector) = self.string(c, &cp) {
-                    self.require_grant(&cp, GrantKind::Connector, connector, "connector");
-                }
-            }
-            for key in ["send_tool", "check_tool", "input"] {
-                if let Some(x) = map.get(key) {
-                    self.string(x, &join(&p, key));
-                }
-            }
-            if let Some(x) = map.get("max_attempts") {
-                self.positive_int(x, &join(&p, "max_attempts"), None);
-            }
-            if let Some(x) = map.get("code_ttl") {
-                self.duration(x, &join(&p, "code_ttl"));
-            }
-        }
-    }
-
     fn state(&mut self, v: &Value) {
         for (name, slot) in self.named_map(v, "state") {
             let p = join("state", name);
@@ -946,7 +958,14 @@ impl<'a> Check<'a> {
         match value {
             "llm" | "host" => {}
             other => match other.strip_prefix("verifier:") {
-                Some(id) if self.verifiers.contains(id) => {}
+                Some(id) if self.verifier_kind(id) == Some(HOST_JWT) => self.issue(
+                    path,
+                    format!(
+                        "verifier `{id}` is a `host_jwt` verifier, whose slots are written as \
+                         `host` — list `host` instead of `{other}`"
+                    ),
+                ),
+                Some(id) if self.verifiers.contains_key(id) => {}
                 Some(id) => self.issue(
                     path,
                     format!("names verifier `{id}`, which is not declared in `verifiers`"),
@@ -1428,25 +1447,8 @@ impl<'a> Check<'a> {
             && let Some(rates) = self.object(rates, "publish.rate_limits", RATE_SCOPES)
         {
             for scope in RATE_SCOPES {
-                let path = join("publish.rate_limits", scope);
-                let Some(rate) = rates.get(*scope) else {
-                    continue;
-                };
-                let Some(rate) = self.object(rate, &path, RATE_KEYS) else {
-                    continue;
-                };
-                for key in RATE_KEYS {
-                    let at = join(&path, key);
-                    match (rate.get(*key), *key) {
-                        (Some(x), "max") => self.positive_int(x, &at, None),
-                        (Some(x), _) => self.duration(x, &at),
-                        (None, _) => self.issue(
-                            &at,
-                            "a rate needs both `max` (how many) and `per` (over how long, e.g. \
-                             `10m`)"
-                                .to_string(),
-                        ),
-                    }
+                if let Some(rate) = rates.get(*scope) {
+                    self.rate(rate, &join("publish.rate_limits", scope), None);
                 }
             }
         }
@@ -1562,6 +1564,7 @@ mod tests {
             "verifiers": {
                 "otp": { "kind": "mcp_code", "connector": "erp", "send_tool": "send_code",
                          "check_tool": "check_code", "input": "secure_field",
+                         "email_slot": "email", "writes": { "verified": "result" },
                          "max_attempts": 5, "code_ttl": "10m" }
             },
             "router": { "kind": "classifier", "pool": "small" },
@@ -1855,6 +1858,231 @@ mod tests {
                 "routes.r.task",
                 "routes.r.task"
             ]
+        );
+    }
+
+    /// A spec with every kind of verifier and the slots they need.
+    fn verified(verifiers: Value) -> Value {
+        json!({
+            "state": {
+                "email": { "type": "email", "set_by": ["llm"] },
+                "name": { "type": "string", "set_by": ["llm"] },
+                "verified": { "type": "subject",
+                              "set_by": ["verifier:otp", "verifier:kyc", "host"] },
+                "plan": { "type": "string", "set_by": ["host"] }
+            },
+            "verifiers": verifiers
+        })
+    }
+
+    const PEM_GARBAGE: &str = "-----BEGIN PUBLIC KEY-----\nnot a key\n-----END PUBLIC KEY-----";
+
+    #[test]
+    fn complete_verifiers_of_every_kind_are_valid_for_publishing() {
+        let spec = verified(json!({
+            "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "email",
+                     "writes": { "verified": "result.customer" },
+                     "send_limits": { "email": { "max": 3, "per": "1h" } } },
+            "kyc": { "kind": "lookup", "tool": "mcp__erp__find", "assurance": "low",
+                     "inputs": { "name": "state.name", "region": { "const": "eu" } },
+                     "writes": { "verified": "input.name" } },
+            "site": { "kind": "host_jwt", "algorithm": "HS256",
+                      "secret": "0123456789abcdef0123456789abcdef",
+                      "issuer": "https://www.example.com", "audience": "support",
+                      "max_lifetime": "5m",
+                      "claims": { "verified": { "customer_id": "sub" }, "plan": "plan" } }
+        }));
+        assert_eq!(on_verifiers(check(spec, Stage::Publish)), []);
+    }
+
+    /// The issues under `verifiers`: publishing also needs `main`, and a
+    /// spec declaring only some verifiers leaves `set_by` entries dangling.
+    fn on_verifiers(issues: Vec<SpecIssue>) -> Vec<SpecIssue> {
+        issues
+            .into_iter()
+            .filter(|i| i.path.starts_with("verifiers."))
+            .collect()
+    }
+
+    #[test]
+    fn verifier_settings_are_checked_on_save_with_what_to_change() {
+        let issues = check(
+            verified(json!({
+                "otp": { "kind": "mcp_code", "connector": "crm", "input": "sms",
+                         "max_attempts": 50, "code_ttl": "2h",
+                         "send_limits": { "email": { "max": 3 }, "ip": { "max": 1, "per": "2d" },
+                                          "fax": {} } },
+                "kyc": { "kind": "lookup", "tool": "lookup_customer", "assurance": "Very Low" },
+                "site": { "kind": "host_jwt", "algorithm": "none" },
+                "sms": { "kind": "sms" }
+            })),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "verifiers.kyc.assurance",
+                "verifiers.kyc.tool",
+                "verifiers.otp.connector",
+                "verifiers.otp.input",
+                "verifiers.otp.max_attempts",
+                "verifiers.otp.code_ttl",
+                "verifiers.otp.send_limits.fax",
+                "verifiers.otp.send_limits.email.per",
+                "verifiers.otp.send_limits.ip.per",
+                "verifiers.site.algorithm",
+                "verifiers.sms.kind"
+            ]
+        );
+        let grant = issues
+            .iter()
+            .find(|i| i.path == "verifiers.otp.connector")
+            .unwrap();
+        assert!(
+            grant
+                .message
+                .contains("\"kind\": \"connector\", \"ref\": \"crm\""),
+            "{}",
+            grant.message
+        );
+        let ttl = issues
+            .iter()
+            .find(|i| i.path == "verifiers.otp.code_ttl")
+            .unwrap();
+        assert!(ttl.message.contains("at most 1h"), "{}", ttl.message);
+    }
+
+    #[test]
+    fn host_jwt_keys_are_checked_for_the_algorithm_they_serve() {
+        let host = |cfg: Value| {
+            let mut v = json!({ "kind": "host_jwt", "issuer": "i", "audience": "a",
+                                "claims": { "plan": "plan" } });
+            v.as_object_mut()
+                .unwrap()
+                .extend(cfg.as_object().unwrap().clone());
+            on_verifiers(check(verified(json!({ "site": v })), Stage::Publish))
+        };
+        let short = host(json!({ "algorithm": "HS256", "secret": "short" }));
+        assert_eq!(paths(&short), ["verifiers.site.secret"]);
+        assert!(
+            short[0].message.contains("at least 32"),
+            "{}",
+            short[0].message
+        );
+
+        let mixed = host(json!({ "algorithm": "HS256", "secret_sealed": "x",
+                                 "jwks_url": "https://www.example.com/jwks" }));
+        assert_eq!(paths(&mixed), ["verifiers.site.algorithm"]);
+
+        let keyless = host(json!({ "algorithm": "RS256" }));
+        assert_eq!(paths(&keyless), ["verifiers.site.public_key"]);
+
+        let bad = host(json!({ "algorithm": "ES256", "public_key": PEM_GARBAGE }));
+        assert_eq!(paths(&bad), ["verifiers.site.public_key"]);
+        assert!(
+            bad[0].message.contains("BEGIN PUBLIC KEY"),
+            "{}",
+            bad[0].message
+        );
+
+        let plain = host(json!({ "algorithm": "RS256",
+                                 "jwks_url": "http://www.example.com/jwks" }));
+        assert_eq!(paths(&plain), ["verifiers.site.jwks_url"]);
+
+        let secretful = host(json!({ "algorithm": "RS256", "secret_sealed": "x" }));
+        assert_eq!(paths(&secretful), ["verifiers.site.algorithm"]);
+    }
+
+    #[test]
+    fn verifiers_must_read_and_write_slots_that_allow_them() {
+        let issues = check(
+            json!({
+                "state": {
+                    "name": { "type": "string", "set_by": ["llm"] },
+                    "verified": { "type": "subject", "set_by": ["verifier:kyc"] },
+                    "plan": { "type": "string", "set_by": ["verifier:site"] }
+                },
+                "verifiers": {
+                    "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "name",
+                             "writes": { "verified": "input.code", "ghost": "result",
+                                         "name": "whatever" } },
+                    "kyc": { "kind": "lookup", "tool": "rag_search", "assurance": "low",
+                             "inputs": { "who": "state.nobody", "n": 3 },
+                             "writes": { "verified": "input.who" } },
+                    "site": { "kind": "host_jwt", "claims": { "name": { "id": "sub" } } },
+                    "other": { "kind": "host_jwt" }
+                }
+            }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "verifiers.site.kind",
+                "state.plan.set_by[0]",
+                "verifiers.kyc.inputs.n",
+                "verifiers.kyc.inputs.who",
+                "verifiers.otp.email_slot",
+                "verifiers.otp.writes.ghost",
+                "verifiers.otp.writes.name",
+                "verifiers.otp.writes.name",
+                "verifiers.otp.writes.verified",
+                "verifiers.otp.writes.verified",
+                "verifiers.site.claims.name",
+                "verifiers.site.claims.name"
+            ]
+        );
+        let host_writer = &issues[1];
+        assert!(
+            host_writer.message.contains("list `host`"),
+            "{}",
+            host_writer.message
+        );
+        let code = issues
+            .iter()
+            .filter(|i| i.path == "verifiers.otp.writes.verified")
+            .map(|i| i.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            code.iter().any(|m| m.contains("add `verifier:otp`")),
+            "{code:?}"
+        );
+        assert!(code.iter().any(|m| m.contains("`input.email`")), "{code:?}");
+    }
+
+    #[test]
+    fn a_published_verifier_must_say_everything_it_needs_to_run() {
+        let issues = on_verifiers(check(
+            verified(json!({
+                "otp": { "kind": "mcp_code" },
+                "kyc": { "kind": "lookup" },
+                "site": { "kind": "host_jwt" }
+            })),
+            Stage::Publish,
+        ));
+        assert_eq!(
+            paths(&issues),
+            [
+                "verifiers.kyc.tool",
+                "verifiers.kyc.inputs",
+                "verifiers.kyc.writes",
+                "verifiers.kyc.assurance",
+                "verifiers.otp.connector",
+                "verifiers.otp.email_slot",
+                "verifiers.otp.writes",
+                "verifiers.site.algorithm",
+                "verifiers.site.issuer",
+                "verifiers.site.audience",
+                "verifiers.site.claims"
+            ]
+        );
+        assert_eq!(
+            on_verifiers(check(
+                verified(json!({ "otp": { "kind": "mcp_code" } })),
+                Stage::Draft
+            )),
+            [],
+            "a draft may be incomplete"
         );
     }
 

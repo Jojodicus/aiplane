@@ -76,13 +76,24 @@ export interface TurnView {
 	role: 'user' | 'assistant';
 	user_content: string | null;
 	content: string | null;
-	status: 'in_progress' | 'completed' | 'cancelled' | 'errored';
+	status: 'in_progress' | 'suspended' | 'completed' | 'cancelled' | 'errored';
 	error_message: string | null;
+}
+
+/** What a paused conversation waits for (`SuspensionView::for_participant`): never the tool. */
+export interface Waiting {
+	request_id: string;
+	kind: 'secure_input' | 'approval' | 'human_answer';
+	message?: string | null;
+	/** The decisions the visitor may make; empty when staff answer. */
+	options: Array<'value' | 'deny' | 'allow_once'>;
+	expires_at: string;
 }
 
 /** The wire shape of a transcript entry: the turn, wrapped (tool calls and steers are always empty for visitors). */
 export interface TurnWithTools {
 	turn: TurnView;
+	suspension?: Waiting | null;
 }
 
 export interface SessionView {
@@ -102,6 +113,8 @@ export interface EmbedApiOptions {
 export class EmbedApi {
 	private readonly http: typeof fetch;
 	private readonly options: EmbedApiOptions;
+	private identity: string | null = null;
+	private identitySent = false;
 
 	constructor(options: EmbedApiOptions) {
 		this.options = options;
@@ -124,6 +137,8 @@ export class EmbedApi {
 		});
 		const body = (await response.json()) as { token: string; agent: { display: string } };
 		this.options.tokens.save(body.token);
+		this.identitySent = false;
+		await this.identify();
 		return body;
 	}
 
@@ -164,6 +179,46 @@ export class EmbedApi {
 				await this.start();
 				restarted = true;
 			}
+		}
+	}
+
+	/**
+	 * Answers what the conversation waits for: a code typed into the secure
+	 * field (`value`), or `deny` to give up. The rest arrives on the event stream.
+	 */
+	async answer(requestId: string, decision: 'value' | 'deny', value?: string): Promise<void> {
+		const body: Record<string, string> = { request_id: requestId, decision };
+		if (decision === 'value' && value !== undefined) body.value = value;
+		await this.call('/api/v0/embed/resume', {
+			method: 'POST',
+			headers: { ...this.auth(), 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+	}
+
+	/**
+	 * The host page's signed identity token for this visitor, sent once per
+	 * conversation: now if one is open, otherwise right after the next one starts.
+	 */
+	async setIdentity(token: string | null): Promise<void> {
+		this.identity = token?.trim() || null;
+		this.identitySent = false;
+		if (this.hasToken()) await this.identify();
+	}
+
+	private async identify(): Promise<void> {
+		if (!this.identity || this.identitySent) return;
+		this.identitySent = true;
+		try {
+			await this.call('/api/v0/embed/identity', {
+				method: 'POST',
+				headers: { ...this.auth(), 'content-type': 'application/json' },
+				body: JSON.stringify({ token: this.identity })
+			});
+		} catch (error) {
+			// The conversation works without it; the site's developer needs to know why.
+			const reason = error instanceof EmbedError ? `${error.code}: ${error.message}` : String(error);
+			console.warn(`croit AIplane embed: the identity token was refused (${reason}).`);
 		}
 	}
 
