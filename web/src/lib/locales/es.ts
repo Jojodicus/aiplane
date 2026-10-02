@@ -236,6 +236,8 @@ export const es: Catalog = {
  "admin-users-you-badge": "tú",
  "admin-value-default": "predeterminado",
  "admin-value-na": "n/d",
+ "agent-embed-rate-limited": "Está enviando mensajes más rápido de lo que este asistente los acepta. Espere {seconds} segundos y vuelva a intentarlo.",
+ "agent-embed-unavailable": "Este asistente no está disponible temporalmente. Inténtelo de nuevo más tarde o utilice las demás opciones de contacto del sitio web.",
  "agent-output-redacted": "[eliminado]",
  "agent-output-withheld": "No puedo dar esa respuesta porque mencionaba datos que no pude verificar para usted. Reformule su pregunta o póngase en contacto con el soporte.",
  "agents-back": "Volver a los agentes",

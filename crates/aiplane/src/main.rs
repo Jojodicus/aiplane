@@ -624,6 +624,10 @@ async fn main() -> anyhow::Result<()> {
     // process was down — resume with their timeout fallback.
     aiplane_api::pages::chat::spawn_suspension_sweeper(state.clone());
 
+    // Agent conversations idle past their agent's retention period are deleted,
+    // with their sub-agent runs, state and visitor sessions.
+    aiplane_runtime::agents::retention::spawn_retention_sweeper(state.db.clone());
+
     // Before anything can fire: no run pending now can still be running, so
     // close them rather than let the history show them as running forever.
     // Scheduled runs are swept by the worker itself, ahead of its first tick.

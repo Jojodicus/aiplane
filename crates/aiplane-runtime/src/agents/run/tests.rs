@@ -200,6 +200,19 @@ struct World {
 impl World {
     /// `pools`: `(pool, model, upstream)`.
     async fn new(pools: &[(&str, &str, &MockServer)], erp: Option<&MockServer>) -> Self {
+        Self::build(pools, erp, false).await
+    }
+
+    /// [`Self::new`] with usage metrics on, so the run's usage rows land.
+    async fn metered(pools: &[(&str, &str, &MockServer)]) -> Self {
+        Self::build(pools, None, true).await
+    }
+
+    async fn build(
+        pools: &[(&str, &str, &MockServer)],
+        erp: Option<&MockServer>,
+        metered: bool,
+    ) -> Self {
         let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
@@ -280,12 +293,13 @@ impl World {
         )
         .await
         .unwrap();
+        let usage = if metered {
+            aiplane_core::server::usage::spawn(db.clone(), 90)
+        } else {
+            aiplane_core::server::usage::UsageHandle::disabled()
+        };
         Self {
-            state: Arc::new(RamaState::new(
-                app,
-                sessions,
-                aiplane_core::server::usage::UsageHandle::disabled(),
-            )),
+            state: Arc::new(RamaState::new(app, sessions, usage)),
         }
     }
 
@@ -1194,4 +1208,154 @@ async fn without_patterns_the_answer_is_unchanged() {
     let s = support_example_with(None, OTHER_CUSTOMERS_INVOICE).await;
     assert_eq!(s.second.answer.as_deref(), Some(OTHER_CUSTOMERS_INVOICE));
     assert_eq!(blocked_events(&s).await, []);
+}
+
+/// Every model call a visitor conversation causes is a usage row charged to
+/// the main agent (`agent_id`), the main rounds, the classifier's pick and
+/// the sub-agent's rounds alike, while `user_id` still names the principal
+/// that made the call. That is what the owner's budget sums (#92).
+#[tokio::test]
+async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
+    let main = llm(vec![
+        call("c1", "set_issue", json!({"value": "technical"})),
+        call("fwd", "forward_request", json!({})),
+        text("Done."),
+    ])
+    .await;
+    let helper = llm(vec![finish("h1", json!({"answer": "solved"}))]).await;
+    let router = classifier(&["technical"]).await;
+    let world = World::metered(&[
+        ("support-pool", "support-model", &main),
+        ("helper-pool", "helper-model", &helper),
+        ("router-pool", "router-model", &router),
+    ])
+    .await;
+    let helper_id = world
+        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .await;
+    world.publish(&helper_id, &helper_spec(4)).await;
+    let support = world
+        .agent(
+            "support",
+            &[
+                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Pool, "router-pool"),
+            ],
+        )
+        .await;
+    let spec = triage_spec(
+        &helper_id,
+        json!({"kind": "classifier", "pool": "router-pool"}),
+    );
+    world.publish(&support, &spec).await;
+    run_turn(
+        &world.state,
+        AgentTurn {
+            agent_id: &support,
+            session_id: None,
+            message: "My printer is broken.",
+            visitor_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT user_id, agent_id, principal_kind, model FROM usage_events ORDER BY created_at",
+    )
+    .fetch_all(world.db())
+    .await
+    .unwrap();
+    let by_model = |model: &str| -> Vec<(&str, Option<&str>)> {
+        rows.iter()
+            .filter(|r| r.3 == model)
+            .map(|r| (r.0.as_str(), r.1.as_deref()))
+            .collect()
+    };
+    assert_eq!(
+        by_model("router-model"),
+        [(support.as_str(), Some(support.as_str()))],
+        "the classifier call is metered: {rows:?}"
+    );
+    assert!(
+        by_model("helper-model")
+            .iter()
+            .all(|r| *r == (helper_id.as_str(), Some(support.as_str()))),
+        "{rows:?}"
+    );
+    assert!(!by_model("helper-model").is_empty(), "{rows:?}");
+    assert!(
+        by_model("support-model")
+            .iter()
+            .all(|r| *r == (support.as_str(), Some(support.as_str()))),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|r| r.2 == "system"), "{rows:?}");
+    let chain: Option<String> =
+        sqlx::query_scalar("SELECT chain FROM usage_events WHERE model = 'helper-model' LIMIT 1")
+            .fetch_one(world.db())
+            .await
+            .unwrap();
+    let chain: Value = serde_json::from_str(&chain.unwrap()).unwrap();
+    assert_eq!(chain["frames"][0]["name"], "support");
+    assert_eq!(chain["frames"][1]["name"], "helper");
+}
+
+/// An owner picks the pool for PII reasons: the same model is also served by
+/// a second pool the agent is granted, but its spec names only the first. No
+/// round may reach the second, however the model name routes.
+#[tokio::test]
+async fn an_agent_run_uses_only_the_pool_its_spec_names() {
+    let local = llm(vec![
+        call("t1", "company_echo", json!({"message": "a"})),
+        call("t2", "company_echo", json!({"message": "b"})),
+        text("Done."),
+    ])
+    .await;
+    let cloud = llm(vec![text("leaked")]).await;
+    let world = World::new(
+        &[
+            ("local-pool", "shared-model", &local),
+            ("cloud-pool", "shared-model", &cloud),
+        ],
+        None,
+    )
+    .await;
+    let agent = world
+        .agent(
+            "private",
+            &[
+                (GrantKind::Pool, "local-pool"),
+                (GrantKind::Pool, "cloud-pool"),
+                (GrantKind::Tool, "company_echo"),
+            ],
+        )
+        .await;
+    let spec = json!({
+        "main": {
+            "pool": "local-pool",
+            "instructions": { "orchestration": "Echo twice, then answer." },
+            "tools": ["company_echo"],
+            "budget": { "rounds": 6 }
+        }
+    });
+    world.publish(&agent, &spec).await;
+    let reply = run_turn(
+        &world.state,
+        AgentTurn {
+            agent_id: &agent,
+            session_id: None,
+            message: "Go.",
+            visitor_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Done."), "{reply:?}");
+    assert_eq!(requests(&local).await.len(), 3);
+    assert!(
+        requests(&cloud).await.is_empty(),
+        "a granted pool the spec does not name is never used"
+    );
 }

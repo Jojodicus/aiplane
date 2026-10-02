@@ -32,6 +32,17 @@ pub enum SubjectType {
     /// token can only ever narrow what its owner may spend. See
     /// `limits::Enforcer::check_token`.
     Token,
+    /// One agent (`subject_id` = `system_principals.id`): an operator's cap
+    /// on what the agent's conversations may spend, sub-agents and router
+    /// included. Like `Token`, an additional ceiling outside the hierarchy;
+    /// the owner's own budget from the agent's spec is checked next to it.
+    /// See `limits::Enforcer::check_agent`.
+    System,
+    /// The owner's budget from the agent's own spec (`publish.budget`). Never
+    /// stored and not parsed: it labels where an agent's ceiling came from,
+    /// so the agent's managers can tell their own budget from the
+    /// operator's `System` rule.
+    AgentSpec,
 }
 
 impl SubjectType {
@@ -41,6 +52,8 @@ impl SubjectType {
             SubjectType::Role => "role",
             SubjectType::User => "user",
             SubjectType::Token => "token",
+            SubjectType::System => "system",
+            SubjectType::AgentSpec => "agent_spec",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -49,6 +62,7 @@ impl SubjectType {
             "role" => Some(SubjectType::Role),
             "user" => Some(SubjectType::User),
             "token" => Some(SubjectType::Token),
+            "system" => Some(SubjectType::System),
             _ => None,
         }
     }
@@ -479,6 +493,15 @@ pub async fn applicable_for_token(pool: &Pool, token_id: &str) -> Result<Vec<Lim
     rows.iter().map(map_row).collect()
 }
 
+/// The operator's rules on one agent. Separate from [`applicable`] for the
+/// same reason as [`applicable_for_token`]: an additional ceiling, never a
+/// tier of anyone's hierarchy.
+pub async fn applicable_for_agent(pool: &Pool, agent_id: &str) -> Result<Vec<LimitRule>, DbError> {
+    let sql = format!("SELECT {SELECT_COLS} WHERE subject_type = 'system' AND subject_id = ?");
+    let rows = sqlx::query(&sql).bind(agent_id).fetch_all(pool).await?;
+    rows.iter().map(map_row).collect()
+}
+
 /// Every rule attached to any token owned by `user_id`, paired with its token
 /// id — the admin's per-token limit column, in one query instead of N.
 pub async fn for_tokens_of_user(pool: &Pool, user_id: &str) -> Result<Vec<LimitRule>, DbError> {
@@ -519,7 +542,7 @@ pub fn effective_limits(rules: &[LimitRule]) -> Vec<EffectiveLimit> {
         // `applicable_for_token`), where the unique index already guarantees
         // one per cell. Ranking it highest is belt-and-braces: if one ever
         // reached the user hierarchy it would narrow, never widen.
-        SubjectType::Token => 3u8,
+        SubjectType::Token | SubjectType::System | SubjectType::AgentSpec => 3u8,
         SubjectType::User => 2,
         SubjectType::Role => 1,
         SubjectType::Global => 0,

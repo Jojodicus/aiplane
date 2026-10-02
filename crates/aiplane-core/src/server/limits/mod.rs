@@ -28,11 +28,12 @@
 
 use std::collections::HashMap;
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 
 use super::db::Pool;
 use super::db::limits::{self, Dimension, SubjectType, Window};
 use super::db::usage::{self, WindowUsage};
+use super::db::visitor_sessions;
 
 /// Per-request limit gate. Cheap to clone (holds a pool handle + a flag).
 #[derive(Clone)]
@@ -120,7 +121,7 @@ impl Enforcer {
             return Vec::new();
         }
         let effective = limits::effective_limits(&rules);
-        self.statuses_for(usage::Subject::User(user_id), effective)
+        self.statuses_for(usage::Subject::User(user_id), effective, Timestamp::now())
             .await
     }
 
@@ -142,7 +143,7 @@ impl Enforcer {
             return Vec::new();
         }
         let effective = limits::effective_limits(&rules);
-        self.statuses_for(usage::Subject::Token(token_id), effective)
+        self.statuses_for(usage::Subject::Token(token_id), effective, Timestamp::now())
             .await
     }
 
@@ -153,8 +154,8 @@ impl Enforcer {
         &self,
         subject: usage::Subject<'_>,
         effective: Vec<limits::EffectiveLimit>,
+        now: Timestamp,
     ) -> Vec<LimitStatus> {
-        let now = Timestamp::now();
         // One usage read per distinct (model-scope, window); the three
         // dimensions share it.
         let mut cache: HashMap<(Option<String>, Window), WindowUsage> = HashMap::new();
@@ -247,11 +248,172 @@ impl Enforcer {
                 .collect(),
         )
     }
+
+    /// What one agent's conversations have spent against each ceiling on it:
+    /// `owner_budget`, the limits from the agent's own spec, and any
+    /// operator rule with subject `system` on the agent. Every one is a
+    /// ceiling of its own, so the tightest decides; none widens another.
+    ///
+    /// The owner's budget is part of the agent's definition and applies even
+    /// when `[limits] enabled` is off, like its idle TTL; that switch governs
+    /// the operator's rules. Both read `usage_events.agent_id`, so with usage
+    /// metrics off nothing is ever spent.
+    pub async fn agent_statuses(
+        &self,
+        agent_id: &str,
+        owner_budget: &[limits::EffectiveLimit],
+        now: Timestamp,
+    ) -> Vec<LimitStatus> {
+        let mut effective = owner_budget.to_vec();
+        if self.enabled {
+            match limits::applicable_for_agent(&self.db, agent_id).await {
+                Ok(rules) => effective.extend(limits::effective_limits(&rules)),
+                Err(err) => {
+                    tracing::warn!(error = %err, "limits: applicable_for_agent() failed; ignoring")
+                }
+            }
+        }
+        if effective.is_empty() {
+            return Vec::new();
+        }
+        self.statuses_for(usage::Subject::Agent(agent_id), effective, now)
+            .await
+    }
+
+    /// Gate one visitor message to an agent on its budgets (debt model, like
+    /// every other check here: the message that crosses the line is served).
+    /// `now` is a parameter so a test can stand at a window's edge.
+    pub async fn check_agent(
+        &self,
+        agent_id: &str,
+        owner_budget: &[limits::EffectiveLimit],
+        now: Timestamp,
+    ) -> Result<(), LimitExceeded> {
+        first_breach_at(self.agent_statuses(agent_id, owner_budget, now).await, now)
+    }
+
+    /// Gate a visitor's request to agent `who.principal_id` on its per-visitor
+    /// and per-IP rates. The counted events are the rows the requests leave
+    /// behind (conversations started, messages sent), so a refused request,
+    /// which writes nothing, never counts. Read errors admit: like the other
+    /// checks, a limits read must not wedge live traffic.
+    pub async fn check_visitor(
+        &self,
+        rates: &VisitorRates,
+        who: &VisitorKey<'_>,
+        now: Timestamp,
+    ) -> Result<(), RateExceeded> {
+        if let Some(visitor) = who.visitor_id {
+            let since = rates.visitor.since(now);
+            let times = visitor_sessions::message_times(&self.db, visitor, since)
+                .await
+                .unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "limits: visitor message times; allowing");
+                    Vec::new()
+                });
+            sliding_window(RateScope::Visitor, rates.visitor, &times, now)?;
+        }
+        if let Some(ip) = who.ip {
+            let since = rates.ip.since(now);
+            let times = visitor_sessions::ip_event_times(&self.db, who.principal_id, ip, since)
+                .await
+                .unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "limits: per-IP event times; allowing");
+                    Vec::new()
+                });
+            sliding_window(RateScope::Ip, rates.ip, &times, now)?;
+        }
+        Ok(())
+    }
+}
+
+/// At most `max` events in any `per`. Unlike [`Window`], which snaps to the
+/// hour because it meters spend, a rate is exact to the second: a visitor
+/// told to wait 40 seconds may send again after 40 seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rate {
+    pub max: u32,
+    pub per: SignedDuration,
+}
+
+impl Rate {
+    fn since(self, now: Timestamp) -> Timestamp {
+        now.checked_sub(self.per).unwrap_or(now)
+    }
+}
+
+/// An agent's visitor rates: per visitor session and per client IP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisitorRates {
+    pub visitor: Rate,
+    pub ip: Rate,
+}
+
+/// Whose events a visitor rate counts. No visitor yet when a conversation
+/// is being started; no IP when the request carries none.
+#[derive(Debug, Clone, Copy)]
+pub struct VisitorKey<'a> {
+    pub principal_id: &'a str,
+    pub visitor_id: Option<&'a str>,
+    pub ip: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateScope {
+    Visitor,
+    Ip,
+}
+
+impl RateScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RateScope::Visitor => "visitor",
+            RateScope::Ip => "ip",
+        }
+    }
+}
+
+/// A refused visitor request: `scope` already reached `max` in the last
+/// `per`. `retry_after_secs` is when the oldest counted event leaves the
+/// window, served as `Retry-After`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateExceeded {
+    pub scope: RateScope,
+    pub max: u32,
+    pub per: SignedDuration,
+    pub retry_after_secs: i64,
+}
+
+/// Whether one more event fits `rate` given the `events` already in its
+/// window (any order; older ones are ignored).
+pub fn sliding_window(
+    scope: RateScope,
+    rate: Rate,
+    events: &[Timestamp],
+    now: Timestamp,
+) -> Result<(), RateExceeded> {
+    let since = rate.since(now);
+    let mut inside: Vec<Timestamp> = events.iter().copied().filter(|t| *t >= since).collect();
+    if inside.len() < rate.max as usize {
+        return Ok(());
+    }
+    inside.sort_unstable_by(|a, b| b.cmp(a));
+    let frees_one = inside[rate.max as usize - 1];
+    let leaves = frees_one.checked_add(rate.per).unwrap_or(now);
+    Err(RateExceeded {
+        scope,
+        max: rate.max,
+        per: rate.per,
+        retry_after_secs: (leaves.as_second() - now.as_second()).max(1),
+    })
 }
 
 /// The first status already at/over its ceiling, as the refusal to send.
 fn first_breach(statuses: Vec<LimitStatus>) -> Result<(), LimitExceeded> {
-    let now = Timestamp::now();
+    first_breach_at(statuses, Timestamp::now())
+}
+
+fn first_breach_at(statuses: Vec<LimitStatus>, now: Timestamp) -> Result<(), LimitExceeded> {
     for s in statuses {
         if s.exceeded() {
             let retry = (s.refreshes_at.as_second() - now.as_second()).max(1);
@@ -306,6 +468,8 @@ mod tests {
             output_units: None,
             enforce_limits,
             principal_kind: crate::server::principal::PrincipalKind::User,
+            agent_id: None,
+            chain: None,
         }
     }
 
@@ -660,6 +824,166 @@ mod tests {
             enf.check_for_model("alice", &[], "pricey", true)
                 .await
                 .is_err()
+        );
+    }
+
+    fn at(s: &str) -> Timestamp {
+        s.parse().unwrap()
+    }
+
+    const TEN_MIN: SignedDuration = SignedDuration::from_secs(600);
+
+    #[test]
+    fn a_rate_admits_until_max_events_sit_inside_the_window() {
+        let rate = Rate {
+            max: 2,
+            per: TEN_MIN,
+        };
+        let now = at("2026-10-01T12:10:00Z");
+        let old = at("2026-10-01T11:59:00Z");
+        let one = at("2026-10-01T12:02:00Z");
+        let two = at("2026-10-01T12:05:00Z");
+        assert!(sliding_window(RateScope::Visitor, rate, &[old, one], now).is_ok());
+        let err = sliding_window(RateScope::Visitor, rate, &[two, old, one], now).unwrap_err();
+        assert_eq!(err.scope, RateScope::Visitor);
+        assert_eq!(err.max, 2);
+        assert_eq!(
+            err.retry_after_secs, 120,
+            "12:02 leaves the window at 12:12, two minutes from now"
+        );
+    }
+
+    #[test]
+    fn retry_after_is_when_enough_events_have_left_the_window() {
+        let rate = Rate {
+            max: 2,
+            per: TEN_MIN,
+        };
+        let now = at("2026-10-01T12:10:00Z");
+        let events = [
+            at("2026-10-01T12:01:00Z"),
+            at("2026-10-01T12:03:00Z"),
+            at("2026-10-01T12:09:00Z"),
+        ];
+        let err = sliding_window(RateScope::Ip, rate, &events, now).unwrap_err();
+        assert_eq!(
+            err.retry_after_secs, 180,
+            "below max once 12:03 is gone too, at 12:13"
+        );
+    }
+
+    fn agent_event(principal: &str, agent: &str, tokens: i64, at: Timestamp) -> UsageRecord {
+        UsageRecord {
+            principal_kind: crate::server::principal::PrincipalKind::System,
+            agent_id: Some(agent.into()),
+            ..event(principal, "gpt", tokens, true, at)
+        }
+    }
+
+    fn monthly_tokens(value: f64) -> limits::EffectiveLimit {
+        limits::EffectiveLimit {
+            model: None,
+            dimension: Dimension::Tokens,
+            window: Window::Month,
+            value,
+            source: SubjectType::AgentSpec,
+        }
+    }
+
+    /// The budget is the conversation's, not the principal's: a sub-agent
+    /// call names the sub-agent in `user_id` and still spends the main
+    /// agent's budget, while the sub-agent's own conversations do not.
+    #[tokio::test]
+    async fn an_agents_budget_counts_its_sub_agents_but_not_their_own_conversations() {
+        let pool = pool().await;
+        let now = at("2026-10-01T12:30:00Z");
+        let earlier = at("2026-10-01T10:00:00Z");
+        usage::insert_batch(
+            &pool,
+            &[
+                agent_event("support", "support", 40, earlier),
+                agent_event("billing", "support", 50, earlier),
+                agent_event("billing", "billing", 500, earlier),
+            ],
+        )
+        .await
+        .unwrap();
+        let enf = Enforcer::new(pool, true);
+        let budget = [monthly_tokens(100.0)];
+        assert!(enf.check_agent("support", &budget, now).await.is_ok());
+        let status = enf.agent_statuses("support", &budget, now).await;
+        assert_eq!(status[0].used, 90.0);
+
+        let err = enf
+            .check_agent("support", &[monthly_tokens(90.0)], now)
+            .await
+            .unwrap_err();
+        assert_eq!(err.subject, SubjectType::AgentSpec);
+        assert_eq!(err.window, Window::Month);
+        assert!(err.retry_after_secs >= 1);
+    }
+
+    /// An operator's `system` rule narrows the owner's budget; it cannot be
+    /// lifted by a generous owner, and `[limits] enabled = false` switches
+    /// only the operator's rules off, never the owner's own budget.
+    #[tokio::test]
+    async fn an_operator_rule_on_an_agent_is_one_more_ceiling() {
+        let pool = pool().await;
+        let now = at("2026-10-01T12:30:00Z");
+        usage::insert_batch(
+            &pool,
+            &[agent_event(
+                "support",
+                "support",
+                60,
+                at("2026-10-01T11:00:00Z"),
+            )],
+        )
+        .await
+        .unwrap();
+        limits::upsert(
+            &pool,
+            SubjectType::System,
+            "support",
+            None,
+            Dimension::Tokens,
+            Window::Month,
+            50.0,
+        )
+        .await
+        .unwrap();
+        let generous = [monthly_tokens(1_000_000.0)];
+        let on = Enforcer::new(pool.clone(), true);
+        let err = on.check_agent("support", &generous, now).await.unwrap_err();
+        assert_eq!(err.limit, 50.0);
+
+        let off = Enforcer::new(pool, false);
+        assert!(off.check_agent("support", &generous, now).await.is_ok());
+        assert!(
+            off.check_agent("support", &[monthly_tokens(60.0)], now)
+                .await
+                .is_err(),
+            "the owner's budget holds with enforcement switched off"
+        );
+        assert!(
+            on.check_agent("support", &[], now).await.is_err(),
+            "an agent without a budget of its own is still capped by the operator"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_without_any_budget_is_unlimited() {
+        let pool = pool().await;
+        let enf = Enforcer::new(pool, true);
+        assert!(
+            enf.agent_statuses("support", &[], Timestamp::now())
+                .await
+                .is_empty()
+        );
+        assert!(
+            enf.check_agent("support", &[], Timestamp::now())
+                .await
+                .is_ok()
         );
     }
 }

@@ -6,13 +6,15 @@
 //! tools, the route gates, the router and sub-agent dispatch behind
 //! `forward_request`, bound arguments, the `RunProfile` that drives one
 //! agent's live version through the ordinary headless loop, and the seam the
-//! public endpoint runs a visitor's turn through (`embed`).
+//! public endpoint runs a visitor's turn through (`embed`), with its visitor
+//! limits and owner budget, and the retention sweeper (`retention`).
 
 pub mod bind;
 pub mod embed;
 pub mod gate;
 pub mod output_filter;
 pub mod profile;
+pub mod retention;
 pub mod router;
 pub mod run;
 pub mod slot_tools;

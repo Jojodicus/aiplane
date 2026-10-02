@@ -681,6 +681,28 @@ impl PoolAccess {
         }
     }
 
+    /// [`Self::for_system`], narrowed to `listed`: an agent run reaches only
+    /// the pools its spec names *and* its principal was granted. Narrowing
+    /// by pool, not by model, matters because routing goes by model: one
+    /// model name served by a self-hosted and a cloud pool would otherwise
+    /// reach both whenever both are granted.
+    pub fn for_system_pools<'a>(
+        sp: &crate::server::principal::SystemPrincipal,
+        listed: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let listed: HashSet<&str> = listed.into_iter().collect();
+        let pools = sp
+            .grants
+            .refs(crate::server::principal::GrantKind::Pool)
+            .filter(|p| listed.contains(p))
+            .map(str::to_string)
+            .collect();
+        Self {
+            granted_pools: Some(Arc::new(pools)),
+            ..Self::for_system(sp)
+        }
+    }
+
     /// Whether the calling token may use `model`. `true` for every caller
     /// without an allowlist, which is the default for every token.
     pub fn allows_model(&self, model: &str) -> bool {
@@ -3540,6 +3562,52 @@ mod tests {
         assert!(
             reg.acquire_for_access("open-model", PoolKind::Chat, &vip_only)
                 .is_err()
+        );
+    }
+
+    /// The PII case: the same model on a self-hosted and a cloud pool, both
+    /// granted, and an agent whose spec names only the self-hosted one. A
+    /// route by model must never land on the cloud pool, and a listed pool
+    /// that is not granted stays out of reach.
+    #[test]
+    fn an_agent_run_reaches_only_pools_both_granted_and_listed() {
+        use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+        let pool = |b: &str| {
+            pool_config(
+                PoolKind::Chat,
+                PickerStrategy::RoundRobin,
+                vec![backend(b, 16)],
+            )
+        };
+        let reg = build(vec![
+            ("self-hosted", pool("local-b")),
+            ("cloud", pool("cloud-b")),
+            ("spare", pool("spare-b")),
+        ]);
+        for p in ["self-hosted", "cloud", "spare"] {
+            seed_models(&reg, p, 0, &["shared-model"]);
+        }
+        let principal = SystemPrincipal {
+            id: "p".into(),
+            name: "support".into(),
+            grants: Arc::new(GrantSet::new(
+                ["self-hosted", "cloud"]
+                    .iter()
+                    .map(|g| (GrantKind::Pool, g.to_string())),
+            )),
+        };
+        let run = PoolAccess::for_system_pools(&principal, ["self-hosted", "spare"]);
+        for _ in 0..6 {
+            let acquired = reg
+                .acquire_for_access("shared-model", PoolKind::Chat, &run)
+                .unwrap();
+            assert_eq!(acquired.backend().name, "local-b");
+        }
+        let nothing = PoolAccess::for_system_pools(&principal, ["spare"]);
+        assert!(
+            reg.acquire_for_access("shared-model", PoolKind::Chat, &nothing)
+                .is_err(),
+            "listing a pool is no grant"
         );
     }
 

@@ -236,6 +236,8 @@ export const de: Catalog = {
  "admin-users-you-badge": "du",
  "admin-value-default": "Standard",
  "admin-value-na": "n/v",
+ "agent-embed-rate-limited": "Sie senden Nachrichten schneller, als dieser Assistent sie annimmt. Bitte warten Sie {seconds} Sekunden und versuchen Sie es dann erneut.",
+ "agent-embed-unavailable": "Dieser Assistent ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut oder nutzen Sie die anderen Kontaktmöglichkeiten der Website.",
  "agent-output-redacted": "[entfernt]",
  "agent-output-withheld": "Diese Antwort kann ich nicht geben, weil sie Angaben enthielt, die ich für Sie nicht bestätigen konnte. Bitte formulieren Sie Ihre Frage um oder wenden Sie sich an den Support.",
  "agents-back": "Zurück zu den Agenten",

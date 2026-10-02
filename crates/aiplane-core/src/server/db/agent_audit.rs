@@ -51,6 +51,10 @@ pub enum AuditKind {
     AgentDeleted,
     EmbedKeyCreated,
     EmbedKeyRevoked,
+    /// A visitor request refused by a rate limit or the agent's budget.
+    LimitRefused,
+    /// The retention sweeper deleted conversations; counts only.
+    ConversationsSwept,
 }
 
 impl AuditKind {
@@ -77,6 +81,8 @@ impl AuditKind {
             Self::AgentDeleted => "agent_deleted",
             Self::EmbedKeyCreated => "embed_key_created",
             Self::EmbedKeyRevoked => "embed_key_revoked",
+            Self::LimitRefused => "limit_refused",
+            Self::ConversationsSwept => "conversations_swept",
         }
     }
 }

@@ -306,7 +306,8 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 }
 
 /// GET /api/v0/agents/{id} — the agent, its draft and live spec, what
-/// blocks publishing the draft, its grants, shares and audit trail.
+/// blocks publishing the draft, its limits and what has been spent against
+/// them, its grants, shares and audit trail.
 pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, held) = or_return!(agent_at(&state, &req, &user, 0, Access::Read).await);
@@ -329,9 +330,18 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let draft = parse_spec(&agent.draft_spec);
     let publish_issues = or_return!(spec_issues(&state, id, &draft, Stage::Publish).await);
 
+    let limits = aiplane_runtime::agents::embed::limits_view(
+        &state,
+        id,
+        live_spec.as_ref(),
+        jiff::Timestamp::now(),
+    )
+    .await;
+
     let mut v = agent_json(&agent, held);
     v["draft_spec"] = draft;
     v["live_spec"] = live_spec.unwrap_or(Value::Null);
+    v["limits"] = limits;
     v["publish_issues"] = json!(publish_issues);
     v["grants"] = grants
         .iter()

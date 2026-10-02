@@ -21,11 +21,12 @@
 //! Every decision is written to `agent_audit` with the run's call chain.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aiplane_core::server::db::agent_audit::{self, AuditKind};
-use aiplane_core::server::principal::SystemPrincipal;
-use aiplane_core::server::run_chain::{CallSite, Frame};
+use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource, usage_from_value};
+use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
+use aiplane_core::server::run_chain::{CallSite, Frame, RunChain};
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use async_trait::async_trait;
 use serde::Serialize;
@@ -96,7 +97,12 @@ impl ForwardRequest {
 
     /// The route to dispatch among `open` (name order, never empty), or why
     /// none was chosen.
-    async fn choose(&self, open: &[String], state: &AgentState) -> Result<String, String> {
+    async fn choose(
+        &self,
+        ctx: &ToolContext,
+        open: &[String],
+        state: &AgentState,
+    ) -> Result<String, String> {
         if self.router_kind() == Some("rules") {
             let ranked = self
                 .spec
@@ -128,7 +134,7 @@ impl ForwardRequest {
         let view = state.view(&self.spec.schema);
         let picked = match &self.options.classifier {
             Some(classifier) => classifier.pick(&choices, &view).await,
-            None => self.pool_classifier().pick(&choices, &view).await,
+            None => self.pool_classifier(ctx).pick(&choices, &view).await,
         }
         .map_err(|e| {
             format!(
@@ -148,7 +154,7 @@ impl ForwardRequest {
         }
     }
 
-    fn pool_classifier(&self) -> PoolClassifier {
+    fn pool_classifier(&self, ctx: &ToolContext) -> PoolClassifier {
         let pool = self
             .spec
             .router
@@ -159,8 +165,10 @@ impl ForwardRequest {
             .to_string();
         PoolClassifier {
             state: self.state.clone(),
+            access: PoolAccess::for_system_pools(&self.spec.principal, [pool.as_str()]),
             pool,
-            access: PoolAccess::for_system(&self.spec.principal),
+            principal: self.spec.principal.clone(),
+            run: ctx.run.clone(),
         }
     }
 
@@ -222,7 +230,7 @@ impl ForwardRequest {
                 }).collect::<Vec<_>>(),
             }));
         }
-        let picked = match self.choose(&open, &state).await {
+        let picked = match self.choose(ctx, &open, &state).await {
             Ok(picked) => picked,
             Err(message) => {
                 self.audit(
@@ -412,11 +420,51 @@ impl Tool for ForwardRequest {
 }
 
 /// The classifier that asks a model of the agent's pool, constrained to the
-/// open route names.
+/// open route names. It reaches only that pool, and its call is a usage row
+/// of the agent's run, so it counts against the owner's budget.
 pub struct PoolClassifier {
     state: Arc<RamaState>,
     pool: String,
     access: PoolAccess,
+    principal: SystemPrincipal,
+    run: Option<Arc<RunChain>>,
+}
+
+impl PoolClassifier {
+    fn record(&self, backend: &str, model: &str, status: u16, started: Instant, body: &Value) {
+        if !self.state.usage.is_enabled() {
+            return;
+        }
+        let (prompt_tokens, completion_tokens, total_tokens) = usage_from_value(body);
+        self.state.usage.emit(
+            UsageRecord {
+                created_at: jiff::Timestamp::now(),
+                user_id: self.principal.id.clone(),
+                user_email: Some(self.principal.name.clone()),
+                token_id: None,
+                token_name: None,
+                source: UsageSource::Scheduled,
+                kind: UsageKind::Chat,
+                backend: backend.to_string(),
+                model: model.to_string(),
+                status,
+                duration_ms: started.elapsed().as_millis() as i64,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                input_units: None,
+                output_units: None,
+                enforce_limits: self
+                    .state
+                    .upstreams
+                    .enforce_limits_for_model(model, PoolKind::Chat),
+                principal_kind: PrincipalKind::System,
+                agent_id: None,
+                chain: None,
+            }
+            .in_run(self.run.as_deref()),
+        );
+    }
 }
 
 #[async_trait]
@@ -465,13 +513,23 @@ impl RouteClassifier for PoolClassifier {
         if let Some(key) = backend.api_key.as_deref() {
             req = req.bearer_auth(key);
         }
+        let started = Instant::now();
+        let backend_name = backend.name.clone();
         let resp = req.send().await.map_err(|e| e.to_string())?;
         let status = resp.status();
         if !status.is_success() {
+            self.record(
+                &backend_name,
+                &model,
+                status.as_u16(),
+                started,
+                &Value::Null,
+            );
             return Err(format!("upstream {status}"));
         }
         let parsed: Value = resp.json().await.map_err(|e| e.to_string())?;
         drop(acquired);
+        self.record(&backend_name, &model, status.as_u16(), started, &parsed);
         let content = parsed
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
