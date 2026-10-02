@@ -57,9 +57,10 @@ macro_rules! or_return {
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
 
-/// How often the event stream re-reads the running turn. The answer is
-/// delivered whole, so this only bounds how late it lands.
-const EVENT_POLL: Duration = Duration::from_millis(250);
+/// How often the event stream re-reads the running turn when no claim
+/// release woke it. A backstop only: the answer is delivered whole, and the
+/// release of the turn's claim is what ends the wait.
+const FALLBACK_POLL: Duration = Duration::from_secs(2);
 
 /// An SSE comment at this interval keeps proxies and the widget from
 /// treating a long-running turn as a dead connection.
@@ -787,6 +788,7 @@ pub(crate) async fn settle_unfinished(state: &RamaState, session_id: &str, turn_
 pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let session_id = v.session.session_id;
+    let releases = state.agent_turns.releases();
     let turns = or_return!(visitor_turns(&state, &session_id).await);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
@@ -807,7 +809,9 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         }
         (Some(turn_id), _) => {
             let state = state.clone();
-            tokio::spawn(async move { tail_buffered(state, session_id, turn_id, tx).await });
+            tokio::spawn(
+                async move { tail_buffered(state, session_id, turn_id, releases, tx).await },
+            );
         }
     }
     json_stream_response(rx)
@@ -832,11 +836,27 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
     })
 }
 
-async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: String, tx: SseTx) {
+/// Until a turn claim is released, or `fallback` has passed.
+pub(crate) async fn await_release(
+    releases: &mut tokio::sync::watch::Receiver<u64>,
+    fallback: Duration,
+) {
+    if let Ok(Err(_)) = tokio::time::timeout(fallback, releases.changed()).await {
+        tokio::time::sleep(fallback).await;
+    }
+}
+
+async fn tail_buffered(
+    state: Arc<RamaState>,
+    session_id: String,
+    turn_id: String,
+    mut releases: tokio::sync::watch::Receiver<u64>,
+    tx: SseTx,
+) {
     let started = tokio::time::Instant::now();
     let mut last_sent = started;
     loop {
-        tokio::time::sleep(EVENT_POLL).await;
+        await_release(&mut releases, FALLBACK_POLL).await;
         if tx.is_closed() {
             return;
         }

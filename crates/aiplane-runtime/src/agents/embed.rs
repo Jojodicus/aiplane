@@ -352,10 +352,21 @@ impl AgentTurnRunner for LiveAgentRunner {
 /// The runner, if this build has one, and the conversations with a turn
 /// running right now, each with the turn that holds it and the flag that
 /// stops it.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AgentTurns {
     runner: Option<Arc<dyn AgentTurnRunner>>,
     running: Arc<Mutex<HashMap<String, Held>>>,
+    released: Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+impl Default for AgentTurns {
+    fn default() -> Self {
+        Self {
+            runner: None,
+            running: Arc::default(),
+            released: Arc::new(tokio::sync::watch::Sender::new(0)),
+        }
+    }
 }
 
 struct Held {
@@ -367,7 +378,7 @@ impl AgentTurns {
     pub fn new(runner: Arc<dyn AgentTurnRunner>) -> Self {
         Self {
             runner: Some(runner),
-            running: Arc::default(),
+            ..Self::default()
         }
     }
 
@@ -410,8 +421,17 @@ impl AgentTurns {
         );
         Some(TurnClaim {
             running: self.running.clone(),
+            released: self.released.clone(),
             session_id: session_id.to_string(),
         })
+    }
+
+    /// Changes whenever a claim — of any conversation — is released: the
+    /// moment a held turn's answer becomes final or its pause visible. A
+    /// stream waiting on one turn wakes on it instead of polling the
+    /// database; it re-reads its own turn and waits again if that was not it.
+    pub fn releases(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.released.subscribe()
     }
 
     /// Pass the claim of `session_id` from turn `from` to `to`, the next turn
@@ -449,13 +469,17 @@ impl AgentTurns {
 /// See [`AgentTurns::claim`].
 pub struct TurnClaim {
     running: Arc<Mutex<HashMap<String, Held>>>,
+    released: Arc<tokio::sync::watch::Sender<u64>>,
     session_id: String,
 }
 
 impl Drop for TurnClaim {
     fn drop(&mut self) {
-        let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        running.remove(&self.session_id);
+        self.running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.session_id);
+        self.released.send_modify(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -567,6 +591,22 @@ mod tests {
         assert!(turns.holds("s1", "t3") && !turns.holds("s1", "t2"));
         drop(claim);
         assert!(!turns.holds("s1", "t3"));
+    }
+
+    #[tokio::test]
+    async fn releasing_a_claim_wakes_whoever_waits_for_one() {
+        let turns = AgentTurns::default();
+        let claim = turns.claim("s1", "t1").expect("free");
+        let mut releases = turns.releases();
+        let waiter = tokio::spawn(async move { releases.changed().await.is_ok() });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "nothing was released yet");
+        drop(claim);
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("the release wakes the waiter")
+            .unwrap();
+        assert!(woke);
     }
 
     #[test]

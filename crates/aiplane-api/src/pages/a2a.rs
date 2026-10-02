@@ -31,7 +31,7 @@ use rama::http::service::web::extract::State;
 use rama::http::{Body, HeaderMap, HeaderValue, Request, Response, StatusCode, header};
 use serde_json::{Map, Value, json};
 use session_core::chat_json::{SseTx, json_stream_response};
-use session_core::db::{self as chat, TurnRole, TurnWithTools};
+use session_core::db::{self as chat, TurnRole, TurnStatus};
 use session_core::i18n::{self, Lang, t, t_args};
 
 use super::raw_path_segment;
@@ -48,7 +48,10 @@ use aiplane_runtime::suspend::ResumeRefused;
 
 /// Longest message accepted, in characters — the embed endpoint's limit.
 const MAX_MESSAGE_CHARS: usize = 8_000;
-const POLL: Duration = Duration::from_millis(250);
+/// How often a stream re-reads its task when no claim release woke it — a
+/// backstop only; the release of the turn's claim is what ends the wait.
+const FALLBACK_POLL: Duration = Duration::from_secs(2);
+const CANCEL_POLL: Duration = Duration::from_millis(50);
 const KEEPALIVE: Duration = Duration::from_secs(15);
 /// A stream closes after this long even if the task still runs; the client
 /// polls `GetTask` or calls `SubscribeToTask` again.
@@ -733,21 +736,26 @@ async fn task_view(
     task_id: &str,
     history: Option<usize>,
 ) -> Result<TaskView, RpcError> {
-    let turns = chat::list_turns(&state.db, session_id)
+    let db = &state.db;
+    let Some(turn) = chat::get_turn(db, session_id, task_id)
         .await
-        .map_err(internal)?;
-    let Some(at) = turns.iter().position(|t| t.turn.id == task_id) else {
+        .map_err(internal)?
+    else {
         return Err(task_not_found(task_id));
     };
-    let TurnWithTools {
-        turn, suspension, ..
-    } = &turns[at];
+    let suspension = match turn.status {
+        TurnStatus::Suspended => chat::get_suspension(db, task_id)
+            .await
+            .map_err(internal)?
+            .map(|s| s.view()),
+        _ => None,
+    };
+    let asked = chat::turn_before(db, session_id, turn.seq)
+        .await
+        .map_err(internal)?
+        .filter(|t| t.role == TurnRole::User);
     let held = state.agent_turns.holds(session_id, task_id);
     let state = TaskState::of(turn.status, held);
-    let asked = at
-        .checked_sub(1)
-        .map(|i| &turns[i].turn)
-        .filter(|t| t.role == TurnRole::User);
 
     let answer = (state == TaskState::Completed)
         .then(|| turn.content.clone())
@@ -789,7 +797,7 @@ async fn task_view(
     }
 
     let mut messages = Vec::new();
-    if let Some(user) = asked
+    if let Some(user) = &asked
         && let Some(text) = user.user_content.as_deref()
     {
         messages.push(text_message(
@@ -1128,7 +1136,7 @@ async fn cancel_task(call: &Call, params: &Value) -> Result<Response, RpcError> 
             }
             let started = tokio::time::Instant::now();
             while turns.holds(session_id, &id) && started.elapsed() < CANCEL_WAIT {
-                tokio::time::sleep(POLL / 5).await;
+                tokio::time::sleep(CANCEL_POLL).await;
             }
         }
         _ => {
@@ -1193,6 +1201,7 @@ fn sse_frame(id: &Value, result: Value) -> rama::bytes::Bytes {
 /// was cancelled or waits for input. The answer is buffered behind the
 /// output filter, so there is nothing to stream token by token.
 async fn stream(call: &Call, session_id: &str, task_id: &str) -> Result<Response, RpcError> {
+    let releases = call.state.agent_turns.releases();
     let first = task_view(&call.state, call.lang, session_id, task_id, None).await?;
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let _ = tx.unbounded_send(Ok(sse_frame(&call.id, json!({ "task": first.task }))));
@@ -1204,7 +1213,7 @@ async fn stream(call: &Call, session_id: &str, task_id: &str) -> Result<Response
         task_id: task_id.to_string(),
     };
     if first.state == TaskState::Working {
-        tokio::spawn(async move { tail.run(tx).await });
+        tokio::spawn(async move { tail.run(releases, tx).await });
     } else {
         tail.finish(&first, &tx);
     }
@@ -1231,11 +1240,11 @@ impl Tail {
         .await
     }
 
-    async fn run(self, tx: SseTx) {
+    async fn run(self, mut releases: tokio::sync::watch::Receiver<u64>, tx: SseTx) {
         let started = tokio::time::Instant::now();
         let mut last_sent = started;
         loop {
-            tokio::time::sleep(POLL).await;
+            super::embed::await_release(&mut releases, FALLBACK_POLL).await;
             if tx.is_closed() {
                 return;
             }
