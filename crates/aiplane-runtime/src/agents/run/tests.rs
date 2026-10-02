@@ -368,6 +368,7 @@ fn billing_spec(rounds: u32) -> Value {
             "pool": "billing-pool",
             "instructions": { "orchestration": "Look up the customer's invoices and explain them." },
             "tools": [INVOICES],
+            "tool_resources": { INVOICES: { "bind": { "customer_id": "route.customer" } } },
             "budget": { "rounds": rounds }
         },
         "finish": { "schema": { "type": "object", "required": ["answer"],
@@ -401,7 +402,7 @@ fn support_spec(billing: &str) -> Value {
                 ] },
                 "agent": billing,
                 "task": "Invoice question from customer {verified.customer_id}: {issue_summary}",
-                "bind": { "customer_id": "verified.customer_id" }
+                "bind": { "customer": "state.verified.customer_id" }
             }
         }
     })
@@ -688,7 +689,9 @@ fn helper_spec(rounds: u32) -> Value {
             "pool": "helper-pool",
             "instructions": { "orchestration": "Solve the technical question." },
             "budget": { "rounds": rounds }
-        }
+        },
+        "finish": { "schema": { "type": "object", "required": ["answer"],
+                                "properties": { "answer": { "type": "string" } } } }
     })
 }
 
@@ -988,7 +991,9 @@ async fn a_sub_agent_that_routes_back_to_its_caller_is_refused() {
     let support = world
         .agent("support", &[(GrantKind::Pool, "support-pool")])
         .await;
-    let support_spec = triage_spec(&helper_id, json!({"kind": "rules"}));
+    let mut support_spec = triage_spec(&helper_id, json!({"kind": "rules"}));
+    // Routable itself, so the only thing refusing the loop is the chain.
+    support_spec["finish"] = json!({ "schema": { "type": "object" } });
     world.publish(&support, &support_spec).await;
     let mut looping = helper_spec(4);
     looping["state"] = json!({ "note": { "type": "string", "set_by": ["llm"] } });

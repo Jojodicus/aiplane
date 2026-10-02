@@ -27,18 +27,33 @@ use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 #[derive(Debug, Clone, PartialEq)]
 pub enum BindSource {
     Const(Value),
-    /// A slot path, `verified` or `verified.customer_id`.
-    Slot(String),
+    /// `state.<path>`: a slot path, `verified` or `verified.customer_id`.
+    State(String),
+    /// `route.<name>`: a value the dispatching route passes.
+    Route(String),
 }
 
 impl BindSource {
-    /// Read a spec's bind source: a slot path string or `{"const": v}`.
+    /// Read a spec's bind source: `"state.<path>"`, `"route.<name>"` or
+    /// `{"const": v}`.
     pub fn parse(v: &Value) -> Option<Self> {
         match v {
-            Value::String(path) => Some(Self::Slot(path.clone())),
+            Value::String(src) => src
+                .strip_prefix("state.")
+                .map(|p| Self::State(p.to_string()))
+                .or_else(|| {
+                    src.strip_prefix("route.")
+                        .map(|n| Self::Route(n.to_string()))
+                }),
             Value::Object(m) if m.len() == 1 => m.get("const").cloned().map(Self::Const),
             _ => None,
         }
+    }
+
+    /// Whether the value says whose data a tool touches: anything read from
+    /// state or passed down a route, as opposed to a fixed setting.
+    fn carries_subject(&self) -> bool {
+        !matches!(self, Self::Const(_))
     }
 
     /// `{arg: source}` of one `bind` object; entries that are not a source
@@ -55,7 +70,11 @@ impl BindSource {
     pub fn resolve(&self, state: &AgentState) -> Result<Value, String> {
         match self {
             Self::Const(v) => Ok(v.clone()),
-            Self::Slot(path) => resolve_path(state, path),
+            Self::State(path) => resolve_path(state, path),
+            Self::Route(name) => Err(format!(
+                "`route.{name}` was not passed by a route; this agent runs that tool only when a \
+                 route that binds `{name}` dispatches it"
+            )),
         }
     }
 }
@@ -106,12 +125,18 @@ pub fn render_task(template: &str, state: &AgentState) -> Result<String, Vec<Str
     }
 }
 
-/// Every bound argument of one run: per tool from `tool_resources`, and the
-/// route's values for any tool that declares the argument.
+/// Every bound argument of one run, mapped explicitly per tool by
+/// `tool_resources.<tool>.bind`, with `route.<name>` sources filled from the
+/// dispatching route's values.
+///
+/// A **subject parameter** is a parameter name some tool of the run binds
+/// from state or from a route. Any other tool that declares a parameter of
+/// that name must bind it as well, or it does not run: the name already says
+/// whose data it selects, and the model must not choose it there either.
 #[derive(Debug, Clone, Default)]
 pub struct ToolBinds {
     per_tool: BTreeMap<String, BTreeMap<String, BindSource>>,
-    from_route: BTreeMap<String, Value>,
+    route_values: BTreeMap<String, Value>,
 }
 
 impl ToolBinds {
@@ -127,34 +152,96 @@ impl ToolBinds {
             .collect();
         Self {
             per_tool,
-            from_route: BTreeMap::new(),
+            route_values: BTreeMap::new(),
         }
     }
 
     /// Add the values the dispatching route resolved.
     pub fn with_route(mut self, values: BTreeMap<String, Value>) -> Self {
-        self.from_route = values;
+        self.route_values = values;
         self
     }
 
-    /// The binds that apply to `tool`, whose model-facing schema is `def`. A
-    /// tool's own `tool_resources` entry wins over a route value of the same
-    /// name: it is the more specific statement of the two.
-    pub fn for_tool(&self, tool: &str, def: &ToolDef) -> BTreeMap<String, BindSource> {
-        let mut binds = self.per_tool.get(tool).cloned().unwrap_or_default();
-        let declared = def.function.parameters.get("properties");
-        for (arg, value) in &self.from_route {
-            if declared.and_then(|p| p.get(arg)).is_some() {
-                binds
-                    .entry(arg.clone())
-                    .or_insert_with(|| BindSource::Const(value.clone()));
-            }
-        }
-        binds
+    fn subject_params(&self) -> impl Iterator<Item = &str> {
+        self.per_tool
+            .values()
+            .flatten()
+            .filter(|(_, src)| src.carries_subject())
+            .map(|(param, _)| param.as_str())
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.per_tool.is_empty() && self.from_route.is_empty()
+    /// The binds of `tool`, whose model-facing schema is `def`: exactly what
+    /// its `tool_resources` maps, with route values filled in. `Err` names
+    /// the subject parameters `def` declares and leaves unbound.
+    pub fn for_tool(
+        &self,
+        tool: &str,
+        def: &ToolDef,
+    ) -> Result<BTreeMap<String, BindSource>, Vec<String>> {
+        let binds: BTreeMap<String, BindSource> = self
+            .per_tool
+            .get(tool)
+            .into_iter()
+            .flatten()
+            .map(|(param, src)| {
+                let src = match src {
+                    BindSource::Route(name) => self
+                        .route_values
+                        .get(name)
+                        .map_or_else(|| src.clone(), |v| BindSource::Const(v.clone())),
+                    other => other.clone(),
+                };
+                (param.clone(), src)
+            })
+            .collect();
+        let declared = def.function.parameters.get("properties");
+        let mut unbound: Vec<String> = self
+            .subject_params()
+            .filter(|p| !binds.contains_key(*p))
+            .filter(|p| declared.and_then(|d| d.get(*p)).is_some())
+            .map(str::to_string)
+            .collect();
+        unbound.sort();
+        unbound.dedup();
+        if unbound.is_empty() {
+            Ok(binds)
+        } else {
+            Err(unbound)
+        }
+    }
+}
+
+/// A tool that may not run in this agent run, with the reason.
+pub struct WithheldTool {
+    inner: Arc<dyn Tool>,
+    unbound: Vec<String>,
+}
+
+impl WithheldTool {
+    pub fn new(inner: Arc<dyn Tool>, unbound: Vec<String>) -> Self {
+        Self { inner, unbound }
+    }
+}
+
+impl Tool for WithheldTool {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn schema(&self) -> ToolDef {
+        self.inner.schema()
+    }
+
+    fn run<'a>(&'a self, _ctx: ToolContext, _args: Value) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let params: Vec<String> = self.unbound.iter().map(|p| format!("`{p}`")).collect();
+            Err(ToolError::Failed(format!(
+                "`{}` is not available in this agent: {} selects whose data it touches, and the \
+                 agent's spec does not bind it for this tool. Do not retry.",
+                self.inner.id(),
+                params.join(", "),
+            )))
+        })
     }
 }
 
@@ -183,7 +270,7 @@ impl BoundTool {
         let needs_state = self
             .binds
             .values()
-            .any(|s| matches!(s, BindSource::Slot(_)));
+            .any(|s| matches!(s, BindSource::State(_)));
         let state = match (&self.schema, ctx.session_id.as_deref()) {
             (Some(schema), Some(session)) if needs_state => {
                 AgentState::load(&ctx.db, schema, session)
@@ -321,24 +408,72 @@ mod tests {
         }
     }
 
+    fn def(name: &str, params: &[&str]) -> ToolDef {
+        let props: Map<String, Value> = params
+            .iter()
+            .map(|p| (p.to_string(), json!({"type": "string"})))
+            .collect();
+        ToolDef::function(name, "t", json!({"type": "object", "properties": props}))
+    }
+
     #[test]
-    fn a_route_value_binds_only_tools_that_declare_the_argument_and_tool_binds_win() {
+    fn a_tool_binds_exactly_the_parameters_its_tool_resources_map() {
         let spec = json!({"main": {"tool_resources": {
-            "bound_fixture": {"bind": {"year": {"const": 2026}}}
+            "bound_fixture": {"bind": {
+                "customer_id": "route.customer",
+                "year": {"const": 2026}
+            }}
         }}});
-        let binds = ToolBinds::from_spec(&spec).with_route(BTreeMap::from([
-            ("customer_id".into(), json!("K-1")),
-            ("year".into(), json!(1999)),
-            ("tenant".into(), json!("t")),
-        ]));
-        let lookup = Lookup(Mutex::default());
+        let binds = ToolBinds::from_spec(&spec)
+            .with_route(BTreeMap::from([("customer".into(), json!("K-1"))]));
         assert_eq!(
-            binds.for_tool("bound_fixture", &lookup.schema()),
-            BTreeMap::from([
+            binds.for_tool(
+                "bound_fixture",
+                &def("bound_fixture", &["customer_id", "year"])
+            ),
+            Ok(BTreeMap::from([
                 ("customer_id".into(), BindSource::Const(json!("K-1"))),
                 ("year".into(), BindSource::Const(json!(2026))),
-            ])
+            ]))
         );
+        assert_eq!(
+            binds.for_tool("other", &def("other", &["customer"])),
+            Ok(BTreeMap::new()),
+            "a route value reaches no tool by name, only by an explicit mapping"
+        );
+    }
+
+    #[test]
+    fn a_tool_declaring_a_subject_parameter_another_tool_binds_must_bind_it_too() {
+        let spec = json!({"main": {"tool_resources": {
+            "invoices": {"bind": {"customer_id": "route.customer"}},
+            "pinned": {"bind": {"tenant": {"const": "t1"}}}
+        }}});
+        let binds = ToolBinds::from_spec(&spec)
+            .with_route(BTreeMap::from([("customer".into(), json!("K-1"))]));
+        assert_eq!(
+            binds.for_tool("tickets", &def("tickets", &["customer_id", "text"])),
+            Err(vec!["customer_id".to_string()])
+        );
+        assert_eq!(
+            binds.for_tool("docs", &def("docs", &["query", "tenant"])),
+            Ok(BTreeMap::new()),
+            "a const bind fixes a value; it does not make the name a subject"
+        );
+    }
+
+    #[test]
+    fn a_route_value_the_route_did_not_pass_refuses_the_call() {
+        assert!(
+            BindSource::Route("customer".into())
+                .resolve(&AgentState::default())
+                .is_err()
+        );
+        assert_eq!(
+            BindSource::parse(&json!("state.verified.customer_id")),
+            Some(BindSource::State("verified.customer_id".into()))
+        );
+        assert_eq!(BindSource::parse(&json!("verified.customer_id")), None);
     }
 
     #[tokio::test]
@@ -379,7 +514,7 @@ mod tests {
             inner.clone(),
             BTreeMap::from([(
                 "customer_id".into(),
-                BindSource::Slot("verified.customer_id".into()),
+                BindSource::State("verified.customer_id".into()),
             )]),
             Some(schema.clone()),
         );

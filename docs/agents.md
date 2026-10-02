@@ -271,7 +271,7 @@ routes:
                    { slot: verified, provenance: "verifier:otp", max_age: 15m } ] }
     agent: 5b1c…                        # the agent id (system_principals.id) of another agent
     task: "Invoice question from customer {verified.customer_id}: {issue_summary}"
-    bind: { customer_id: verified.customer_id }
+    bind: { customer: state.verified.customer_id }   # passed to the sub-agent as route.customer
   technical:
     when: { slot: issue, eq: technical }
     agent: 9e04…
@@ -294,20 +294,36 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
 `publish`. Its input is the rendered `task`, and it must end in `finish`.
 
 `tool_resources.<tool>` holds:
-- **`bind`**: arguments the gateway fills in. They are removed from the schema
-  the model sees, and the model's value for them is ignored. A source is either
-  a slot path as a string (`"verified"`, `"verified.customer_id"`) or a fixed
-  value written `{const: …}`. The explicit `const` keeps a literal that happens
-  to match a slot name from being read as one. A route's `bind` uses the same
-  form; a sub-agent has no `state`, so its own binds can only be `const`, and
-  subject values reach it through the route's `bind`.
+- **`bind`**: the tool's parameters the gateway fills in, mapped explicitly
+  `{<tool parameter>: <source>}`. They are removed from the schema the model
+  sees, and the model's value for them is overwritten. A source is one of:
+  - `"state.<slot>[.<field>]"`, a slot of this agent's state the model cannot
+    write (`"state.verified.customer_id"`);
+  - `"route.<name>"`, a value the route that dispatched this agent passes;
+  - `{const: …}`, a fixed value.
+
+  A route's own `bind` is `{<name>: "state.…" | {const: …}}`: the values it
+  resolves from its caller's state and passes down as `route.<name>`. A
+  sub-agent has no `state`, so its tools bind `route.<name>` or `const`, as
+  in `tool_resources: { mcp__erp__invoices: { bind: { customer_id:
+  "route.customer" } } }`.
+
+  A **subject parameter** is a parameter name that some tool of the agent
+  binds from `state.` or `route.`. Any other tool of the agent that declares
+  a parameter of that name must bind it too. Otherwise it is not offered,
+  and a call to it is refused. A `const` bind fixes a setting and makes no
+  name a subject.
 - **`permission`**: `always_allow`, the default, or `always_ask`, which suspends
   the call for human approval (phase 4).
 
 **Checks when a spec is validated** (on save, again on publish):
 - Every reference must exist and be granted to this agent's principal.
 - Every `{slot}` in a template must exist in `state`.
-- Every `bind` source must be a slot whose provenance cannot be `llm`.
+- Every `state.` bind source must be a slot whose provenance cannot be
+  `llm`; a route's `bind` cannot use `route.`.
+- A route passes exactly the `route.<name>` values its live sub-agent binds,
+  no more and no fewer. On publish, the routed sub-agent must declare a
+  `finish.schema`.
 - Every gate must type-check against the slots (§4).
 - The sub-agent graph must be acyclic and at most 3 levels deep.
 
@@ -631,8 +647,9 @@ grants.
   - *Budget*: `main.budget`, with rounds defaulting to the `standard` effort
     cap.
   - *Finish*: none for the main agent, which ends its turn with text. A
-    sub-agent's comes from its `finish.schema`, and without one it is
-    `{answer: string}`.
+    sub-agent's comes from its `finish.schema`. There is no default: the
+    validator requires the schema when publishing a route to the agent, and a
+    dispatch to one without it fails with `BadSpec`.
   - *Injection*: `Flag` for both.
 - **System message** (`AgentRun::system_message`). It holds a line naming the
   agent, `orchestration` and `response`, `render_view()`, one line per route
@@ -683,12 +700,14 @@ grants.
 
   The sub-agent sees its system message and the task, never the transcript.
   The call waits at most 15 minutes.
-- **Bound arguments** (`bind::BoundTool`). On a sub-agent, the route's values
-  bind every tool that **declares** the argument. A tool's own
-  `tool_resources.<tool>.bind` wins over a route value of the same name. Bound
-  parameters are dropped from `properties` and `required`, and the gateway's
-  value overwrites the model's. A main agent's slot-sourced bind is read at
-  call time and refuses the call while the slot is unset.
+- **Bound arguments** (`bind::BoundTool`). A tool binds exactly the
+  parameters its `tool_resources.<tool>.bind` maps; nothing binds by name.
+  `route.<name>` sources are filled from the dispatching route's values.
+  Mapped parameters are dropped from `properties` and `required`, and the
+  gateway's value overwrites the model's. A `state.` bind is read at call
+  time and refuses the call while the slot is unset. A tool that declares a
+  subject parameter it does not bind is withheld (`bind::WithheldTool`): it is
+  not offered, and a call to it is refused.
 - **Cycles and depth.** `RunChain::enter` returns `EnterError::{TooDeep,
   Cycle}` at run time. The validator walks the live specs of every agent
   reached (`SpecContext.live_specs`, from `agents::live_specs`). A route whose
@@ -709,9 +728,11 @@ grants.
   - `main.skills` is not listed in the system message, and `read_skill` is
     offered only if granted and listed in `main.tools`.
   - Usage rows of the classifier call are not written (#92).
-  - A route's values bind by argument name. An ERP tool whose subject
-    parameter is named differently is not bound. Name the route's `bind` key
-    after the tool's parameter.
+  - Whether a tool *declares* a subject parameter is known only from its
+    schema, and MCP schemas exist only once the connector is connected. The
+    validator therefore checks the route ↔ sub-agent contract (`route.`
+    names, finish schema). The unbound-subject rule is enforced at run time,
+    against the real schema, by withholding the tool.
   - The output policy (`Stream`/`Buffered`) is not part of the profile yet
     (#89).
 - **Tests.** `agents/run/tests.rs` runs the support example end to end on
