@@ -11,6 +11,8 @@ connector has a **scope**:
   No per-user sign-in: the connector is enabled by the admin and its tools are
   live for everyone the connector's role allows. See [Scope](#scope-per-user-vs-global)
   and [Discord](#discord-a-global-connector) below.
+- **agent** — one shared identity like `global`, but **invisible to every
+  person** (admins included): only system principals granted it can use it.
 
 ![The /admin/connectors page: the connector catalog — Atlassian, Discord, GitHub, GitLab, Google Workspace — each row showing its key, endpoint, and badges (Enabled, Global, Audited, Default, DCR). Discord (a global, audited connector) carries an "Audit log" button next to Disable / Delete.](img/connectors.png)
 
@@ -69,8 +71,19 @@ Every connector has a **scope** (the `scope` column, set on the admin form):
   the MCP server itself (reached over a private URL, e.g. Discord), or
   `static_bearer` to store one shared token (encrypted) on the connector.
 
+- **Agent** — a shared identity reserved for system principals
+  ([`agents.md`](agents.md#1-principals)). No person is ever offered it: it is
+  absent from `/tools/integrations`, from every tool offer, and from the group
+  editor's grant families. A principal uses it only after an agent manager
+  grants it (`kind = connector`). Same auth rule as global — `none` or
+  `static_bearer`. Here `allowed_groups` means **who may grant it**; empty lets
+  any agent manager grant it, admins always can. This is how an owner wires
+  their own ERP or ticket system into an agent without exposing it to
+  employees.
+
 Pick global when authenticating as a single shared identity for the whole
-gateway; pick per-user when each person connects their own account.
+gateway; pick per-user when each person connects their own account; pick agent
+when only system principals should ever reach it.
 
 ---
 

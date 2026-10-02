@@ -1258,6 +1258,8 @@ impl AppState {
         for connector in aiplane_core::server::db::mcp_catalog::list_enabled(&self.db)
             .await
             .unwrap_or_default()
+            .into_iter()
+            .filter(|c| !c.is_agent())
         {
             out.push((
                 format!(

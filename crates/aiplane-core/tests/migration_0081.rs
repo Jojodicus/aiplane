@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-const LAST_VERSION_BEFORE: i64 = 78;
+const LAST_VERSION_BEFORE: i64 = 80;
 
 struct TempDb(PathBuf);
 

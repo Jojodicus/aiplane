@@ -315,6 +315,7 @@ async fn try_run_action(
             history_limit,
             finish: None,
             budget: None,
+            injection: Default::default(),
         },
     )
     .await;

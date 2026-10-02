@@ -1046,6 +1046,7 @@ pub async fn webhooks_rerun(
             history_limit: None,
             finish: None,
             budget: None,
+            injection: Default::default(),
         },
     )
     .await;

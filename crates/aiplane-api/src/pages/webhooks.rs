@@ -167,6 +167,7 @@ pub async fn webhook_trigger(
         history_limit,
         finish: None,
         budget: None,
+        injection: Default::default(),
     };
 
     if hook.synchronous {

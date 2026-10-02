@@ -33,6 +33,14 @@ pub enum AuditKind {
     TokenRevoked,
     /// A tool call inside an agent run, allowed or denied.
     ToolCall,
+    InjectionDetected,
+    AgentCreated,
+    AgentDraftUpdated,
+    AgentPublished,
+    AgentLiveVersionSet,
+    AgentShareSet,
+    AgentShareRemoved,
+    AgentDeleted,
 }
 
 impl AuditKind {
@@ -45,6 +53,14 @@ impl AuditKind {
             Self::TokenIssued => "token_issued",
             Self::TokenRevoked => "token_revoked",
             Self::ToolCall => "tool_call",
+            Self::InjectionDetected => "injection_detected",
+            Self::AgentCreated => "agent_created",
+            Self::AgentDraftUpdated => "agent_draft_updated",
+            Self::AgentPublished => "agent_published",
+            Self::AgentLiveVersionSet => "agent_live_version_set",
+            Self::AgentShareSet => "agent_share_set",
+            Self::AgentShareRemoved => "agent_share_removed",
+            Self::AgentDeleted => "agent_deleted",
         }
     }
 }
@@ -70,40 +86,44 @@ pub async fn record(
     actor_id: &str,
     detail: Value,
 ) -> Result<(), DbError> {
+    insert(conn, kind, principal_id, Some(actor_id), None, detail).await
+}
+
+/// Write one row for something the principal itself ran into, with no acting
+/// user: a run event, not a management change, so there is no transaction to
+/// join. Inside an agent run, `chain` is its call chain and `principal_id`
+/// its running frame's principal.
+pub async fn record_run_event(
+    pool: &Pool,
+    kind: AuditKind,
+    principal_id: &str,
+    chain: Option<&RunChain>,
+    detail: Value,
+) -> Result<(), DbError> {
+    let mut conn = pool.acquire().await?;
+    insert(&mut conn, kind, principal_id, None, chain, detail).await
+}
+
+async fn insert(
+    conn: &mut sqlx::SqliteConnection,
+    kind: AuditKind,
+    principal_id: &str,
+    actor_id: Option<&str>,
+    chain: Option<&RunChain>,
+    detail: Value,
+) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at)
-         VALUES (?, ?, ?, ?, NULL, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(kind.as_str())
     .bind(principal_id)
     .bind(actor_id)
+    .bind(chain.map(|c| c.to_json().to_string()))
     .bind(detail.to_string())
     .bind(Timestamp::now().to_string())
     .execute(conn)
-    .await?;
-    Ok(())
-}
-
-/// Write one run event, attributed to the chain's running principal. There
-/// is no acting user: the principal acted.
-pub async fn record_run(
-    pool: &Pool,
-    kind: AuditKind,
-    chain: &RunChain,
-    detail: Value,
-) -> Result<(), DbError> {
-    sqlx::query(
-        "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at)
-         VALUES (?, ?, ?, NULL, ?, ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(kind.as_str())
-    .bind(&chain.current().principal_id)
-    .bind(chain.to_json().to_string())
-    .bind(detail.to_string())
-    .bind(Timestamp::now().to_string())
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -171,10 +191,11 @@ mod tests {
         )
         .unwrap();
 
-        record_run(
+        record_run_event(
             &pool,
             AuditKind::ToolCall,
-            &chain,
+            &chain.current().principal_id,
+            Some(&chain),
             json!({"tool": "lookup_invoice", "decision": "allowed", "policy": "grant"}),
         )
         .await

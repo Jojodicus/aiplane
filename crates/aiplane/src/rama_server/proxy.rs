@@ -41,6 +41,7 @@ use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::tools::ToolContext;
 use aiplane_runtime::server::tools::ToolSource;
+use aiplane_runtime::server::tools::injection::InjectionScan;
 use aiplane_runtime::server::tools::runner::ToolCallAcc;
 use aiplane_runtime::server::tools::runner::{self, LoopError};
 use session_core::i18n::{Lang, t};
@@ -3509,6 +3510,7 @@ async fn drive_streaming_tool_loop_inner(
             &tool_ctx,
             &gateway_owned,
             &mut repeated_calls,
+            &InjectionScan::default(),
         )
         .await
         .map_err(|stop| {

@@ -166,11 +166,16 @@ pub(super) async fn resume_into(
                 suspend: Suspend::Decided(decided.clone()),
                 ..d.tool_ctx.clone()
             };
-            let body = runner::execute_tool_calls(tools, &tool_ctx, std::slice::from_ref(&call))
-                .await
-                .pop()
-                .map(|record| record.body)
-                .unwrap_or_else(|| json!({ "error": "the tool produced no result" }));
+            let body = runner::execute_tool_calls(
+                tools,
+                &tool_ctx,
+                std::slice::from_ref(&call),
+                &d.injection,
+            )
+            .await
+            .pop()
+            .map(|record| record.body)
+            .unwrap_or_else(|| json!({ "error": "the tool produced no result" }));
             if let Some(request) = extract_suspend(&body) {
                 pause(
                     d,
@@ -429,6 +434,7 @@ mod tests {
             voice_mode: false,
             finish: None,
             budget: None,
+            injection: Default::default(),
             clock: crate::budget::system_clock(),
             resume,
         });

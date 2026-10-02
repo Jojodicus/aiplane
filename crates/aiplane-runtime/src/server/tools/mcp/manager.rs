@@ -221,7 +221,7 @@ impl McpConnectionManager {
         // one slow/unreachable server can't serialise the whole turn behind it.
         let futs = keys.into_iter().map(|key| async move {
             let connector = match mcp_catalog::get(&self.db, &key).await {
-                Ok(Some(c)) if c.enabled && !c.is_global() => c,
+                Ok(Some(c)) if c.enabled && c.is_per_user() => c,
                 // Connector gone, disabled by the admin, or flipped to global
                 // (no per-user connection applies) → hide its tools.
                 _ => return None,
@@ -284,7 +284,8 @@ impl McpConnectionManager {
     }
 
     /// The overlay for a system principal: exactly the connectors it was
-    /// granted, and only those with one shared gateway identity (`global`).
+    /// granted, and only those with one shared gateway identity (`global` or
+    /// `agent`).
     /// `user_mcp` — every person's own connections and tool preferences — is
     /// never read, so a principal cannot reach anyone's OAuth tokens even when
     /// granted a per-user connector's key. Connector `allowed_groups` does not
@@ -303,7 +304,7 @@ impl McpConnectionManager {
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|c| c.is_global() && granted.contains(&c.key.as_str()))
+            .filter(|c| c.has_shared_identity() && granted.contains(&c.key.as_str()))
             .collect();
         let futs = connectors.into_iter().map(|connector| async move {
             match self.ensure_global(&connector).await {
@@ -713,7 +714,7 @@ impl McpConnectionManager {
         user_id: &str,
         connector: &Connector,
     ) -> Result<Vec<ToolInfo>, String> {
-        let tools = if connector.is_global() {
+        let tools = if connector.has_shared_identity() {
             self.ensure_global(connector).await?
         } else {
             self.ensure(user_id, connector).await?

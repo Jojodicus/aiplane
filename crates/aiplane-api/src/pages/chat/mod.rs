@@ -877,6 +877,7 @@ async fn spawn_assistant_worker(
         voice_mode: req.voice_mode,
         finish: None,
         budget: None,
+        injection: Default::default(),
         clock: aiplane_runtime::budget::system_clock(),
         resume,
     });

@@ -89,7 +89,15 @@ pub(super) async fn audit(ctx: &ToolContext, call_id: &str, tool: &str, policy: 
         "decision": if policy.allows() { "allowed" } else { "denied" },
         "policy": policy.as_str(),
     });
-    if let Err(err) = agent_audit::record_run(&ctx.db, AuditKind::ToolCall, chain, detail).await {
+    if let Err(err) = agent_audit::record_run_event(
+        &ctx.db,
+        AuditKind::ToolCall,
+        &chain.current().principal_id,
+        Some(chain),
+        detail,
+    )
+    .await
+    {
         tracing::warn!(error = %err, tool, "recording an agent run's tool decision");
     }
 }

@@ -56,6 +56,12 @@ pub enum Scope {
     /// One shared connection for everyone RBAC allows; no per-user row. Any
     /// secret lives on the connector row (`client_secret_ct`).
     Global,
+    /// One shared connection like `Global`, but invisible to every person:
+    /// only system principals granted it can use it (`docs/agents.md` §1).
+    /// This is how an owner wires their own ERP or ticket system into an
+    /// agent without exposing it to employees. `allowed_groups` here decides
+    /// who may *grant* it, never who may use it.
+    Agent,
 }
 
 impl Scope {
@@ -63,11 +69,13 @@ impl Scope {
         match self {
             Scope::PerUser => "per_user",
             Scope::Global => "global",
+            Scope::Agent => "agent",
         }
     }
     pub fn parse(s: &str) -> Scope {
         match s {
             "global" => Scope::Global,
+            "agent" => Scope::Agent,
             _ => Scope::PerUser,
         }
     }
@@ -120,16 +128,49 @@ impl Connector {
             || (self.auth == AuthKind::OAuth2 && !self.use_dcr && self.client_id.is_none())
     }
 
-    /// A shared, connect-once connector (vs. one each user connects themselves).
+    /// A shared, connect-once connector every allowed person sees (vs. one
+    /// each user connects themselves, or one reserved for agents).
     pub fn is_global(&self) -> bool {
         self.scope == Scope::Global
     }
 
-    /// Whether a caller holding `role_ids` (with `is_admin`) may see + connect
-    /// this connector. Mirrors `PoolAccess::allows` / `Resolver::resource_allowed`
-    /// so all three resource types gate identically: empty `allowed_groups` =
-    /// everyone, admins bypass, otherwise the caller must hold a listed group.
+    /// Each person connects their own account.
+    pub fn is_per_user(&self) -> bool {
+        self.scope == Scope::PerUser
+    }
+
+    /// Reserved for system principals; no person ever sees it.
+    pub fn is_agent(&self) -> bool {
+        self.scope == Scope::Agent
+    }
+
+    /// One gateway identity rather than a person's — the only connectors a
+    /// system principal can use.
+    pub fn has_shared_identity(&self) -> bool {
+        matches!(self.scope, Scope::Global | Scope::Agent)
+    }
+
+    /// Whether a *person* holding `role_ids` (with `is_admin`) may see +
+    /// connect this connector. Mirrors `PoolAccess::allows` /
+    /// `Resolver::resource_allowed` so all three resource types gate
+    /// identically: empty `allowed_groups` = everyone, admins bypass,
+    /// otherwise the caller must hold a listed group. An `agent` connector is
+    /// never allowed to a person, admin or not.
     pub fn allows(&self, role_ids: &[String], is_admin: bool) -> bool {
+        if self.is_agent() {
+            return false;
+        }
+        self.group_rule(role_ids, is_admin)
+    }
+
+    /// Whether an agent manager holding `role_ids` may grant this connector to
+    /// a system principal: the same group rule [`Self::allows`] applies to
+    /// people, which for an `agent` connector reads as "who may hand it out".
+    pub fn grantable_by(&self, role_ids: &[String], is_admin: bool) -> bool {
+        self.group_rule(role_ids, is_admin)
+    }
+
+    fn group_rule(&self, role_ids: &[String], is_admin: bool) -> bool {
         if is_admin || self.allowed_groups.is_empty() {
             return true;
         }
@@ -864,6 +905,8 @@ mod tests {
         assert_eq!(Scope::parse("global"), Scope::Global);
         assert_eq!(Scope::parse("per_user"), Scope::PerUser);
         assert_eq!(Scope::parse("nonsense"), Scope::PerUser);
+        assert_eq!(Scope::parse("agent"), Scope::Agent);
+        assert_eq!(Scope::Agent.as_str(), "agent");
         assert_eq!(Scope::Global.as_str(), "global");
         assert_eq!(Scope::PerUser.as_str(), "per_user");
     }
@@ -927,6 +970,29 @@ mod tests {
             get(&pool, "g").await.unwrap().unwrap().scope,
             Scope::PerUser
         );
+        update(&pool, "g", input(Scope::Agent)).await.unwrap();
+        let agent = get(&pool, "g").await.unwrap().unwrap();
+        assert_eq!(agent.scope, Scope::Agent);
+        assert!(agent.is_agent() && agent.has_shared_identity());
+        assert!(!agent.is_global() && !agent.is_per_user());
+    }
+
+    /// An `agent` connector is closed to every person — open groups and
+    /// admin included — while its groups still decide who may grant it.
+    #[tokio::test]
+    async fn an_agent_connector_is_never_allowed_to_a_person() {
+        let pool = pool().await;
+        seed_connector(&pool, "erp").await;
+        let mut c = get(&pool, "erp").await.unwrap().unwrap();
+        c.scope = Scope::Agent;
+        assert!(!c.allows(&[], false));
+        assert!(!c.allows(&[], true));
+        assert!(c.grantable_by(&[], false));
+        c.allowed_groups = vec!["owners".into()];
+        assert!(!c.allows(&["owners".into()], false));
+        assert!(c.grantable_by(&["owners".into()], false));
+        assert!(!c.grantable_by(&["others".into()], false));
+        assert!(c.grantable_by(&["others".into()], true));
     }
 
     async fn seed_connector(pool: &Pool, key: &str) {

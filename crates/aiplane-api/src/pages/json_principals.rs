@@ -10,6 +10,10 @@
 //! the manager's own access to that resource, and is never re-derived from the
 //! manager afterwards. Every change is written to `agent_audit` by the db
 //! layer, in the same transaction as the change.
+//!
+//! An agent's principal (`docs/agents.md` §2) is also reachable here, so for
+//! one of those the caller additionally needs a share on the agent — `read`
+//! to see it, `write` to change it — exactly as on `/api/v0/agents`.
 
 use std::sync::Arc;
 
@@ -19,8 +23,10 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::json_agents::guard_agent_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_core::server::auth::token;
+use aiplane_core::server::db::agents::Access;
 use aiplane_core::server::db::{
     agent_audit, mcp_catalog, rag as rag_db, system_principals as sp_db, users,
 };
@@ -30,7 +36,10 @@ use aiplane_runtime::rama_server::state::RamaState;
 const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
 
 /// Session + agent-management permission, or the 401/403 to return.
-async fn require_agent_manager(state: &RamaState, req: &Request) -> Result<users::User, Response> {
+pub(crate) async fn require_agent_manager(
+    state: &RamaState,
+    req: &Request,
+) -> Result<users::User, Response> {
     let (_, user) = super::require_session_json(state, req).await?;
     let role_ids = state.rbac.role_ids_for(&user.roles);
     if !state.rbac.can_manage_agents(&role_ids) {
@@ -86,31 +95,43 @@ fn token_json(t: &sp_db::SystemToken) -> Value {
     })
 }
 
-/// The principal named by the path segment `from_end` back, or the 404.
+/// The principal named by the path segment `from_end` back, or the 404 —
+/// and, when it is an agent's, the 404/403 unless `manager` holds `need` on
+/// that agent.
 async fn principal_at(
     state: &RamaState,
     req: &Request,
+    manager: &users::User,
     from_end: usize,
+    need: Access,
 ) -> Result<sp_db::PrincipalRow, Response> {
     let Some(id) = raw_path_segment(req, from_end) else {
         return Err(bad_request("the URL is missing the principal id"));
     };
-    match sp_db::get(&state.db, &id).await {
-        Ok(Some(p)) => Ok(p),
-        Ok(None) => Err(not_found(format!("there is no system principal `{id}`"))),
-        Err(err) => Err(internal(err)),
-    }
+    let p = match sp_db::get(&state.db, &id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return Err(not_found(format!("there is no system principal `{id}`"))),
+        Err(err) => return Err(internal(err)),
+    };
+    guard_agent_principal(state, manager, &p.id, need).await?;
+    Ok(p)
 }
 
 /// GET /api/v0/system-principals
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let _ = require_agent_manager!(state, req);
+    let manager = require_agent_manager!(state, req);
     let rows = match sp_db::list(&state.db).await {
         Ok(rows) => rows,
         Err(err) => return internal(err),
     };
     let mut out = Vec::with_capacity(rows.len());
     for p in &rows {
+        if guard_agent_principal(&state, &manager, &p.id, Access::Read)
+            .await
+            .is_err()
+        {
+            continue;
+        }
         let grants = match sp_db::grants(&state.db, &p.id).await {
             Ok(g) => g,
             Err(err) => return internal(err),
@@ -176,8 +197,8 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 /// GET /api/v0/system-principals/{id} — the principal, its grants, tokens
 /// and audit trail.
 pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let _ = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 0).await {
+    let manager = require_agent_manager!(state, req);
+    let p = match principal_at(&state, &req, &manager, 0, Access::Read).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -212,7 +233,7 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 /// reconfiguration, not a rebuild.
 pub async fn disable(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 1).await {
+    let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -283,15 +304,23 @@ async fn manager_holds(
                 Ok(_) => return Err(missing(format!("enabled connector `{reference}`"))),
                 Err(err) => return Err(internal(err)),
             };
-            if !connector.is_global() {
+            if !connector.has_shared_identity() {
                 return Err(bad_request(format!(
                     "connector `{reference}` signs in as each person, so a system principal \
-                     cannot use it — only connectors with the `global` scope can be granted"
+                     cannot use it — only connectors with the `global` or `agent` scope can be \
+                     granted"
                 )));
             }
-            let key = format!("{MCP_TOOL_PREFIX}{reference}");
-            connector.allows(&role_ids, state.rbac.is_admin(&role_ids))
-                && state.mcp_grant_for(&manager.roles).allows(&key, &key)
+            let is_admin = state.rbac.is_admin(&role_ids);
+            if connector.is_agent() {
+                // No person uses an agent connector, so there is no personal
+                // access to cap by; its groups say who may hand it out.
+                connector.grantable_by(&role_ids, is_admin)
+            } else {
+                let key = format!("{MCP_TOOL_PREFIX}{reference}");
+                connector.allows(&role_ids, is_admin)
+                    && state.mcp_grant_for(&manager.roles).allows(&key, &key)
+            }
         }
         GrantKind::Skill => {
             let Some(store) = state.skills() else {
@@ -365,7 +394,7 @@ fn kind_label(kind: GrantKind) -> &'static str {
 /// what the caller holds right now.
 pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 1).await {
+    let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -398,7 +427,7 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
 /// manager may narrow a principal; no holding check.
 pub async fn revoke_grant(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 2).await {
+    let p = match principal_at(&state, &req, &manager, 2, Access::Write).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -432,7 +461,7 @@ pub struct TokenBody {
 /// plaintext is in this response and nowhere else, ever.
 pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 1).await {
+    let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -472,7 +501,7 @@ pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> R
 /// POST /api/v0/system-principals/{id}/tokens/{token_id}/revoke
 pub async fn revoke_token(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
-    let p = match principal_at(&state, &req, 3).await {
+    let p = match principal_at(&state, &req, &manager, 3, Access::Write).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
