@@ -1,0 +1,595 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! `/api/v0/agents` — agent definitions: drafts, immutable versions with a
+//! live pointer, and shares (`docs/agents.md` §2).
+//!
+//! Every route needs the agent-management permission, and every route on one
+//! agent also needs a share on it: `read` to see it, `write` to change it.
+//! A share takes effect only for a holder of the permission, so a share is
+//! refused for anyone who lacks it, and a holder who loses it loses access
+//! with it. An agent nobody shares is invisible: it answers 404, not 403.
+//!
+//! The agent's grants are its principal's, managed through
+//! `/api/v0/system-principals/{id}/grants` with the grant-time cap from #77;
+//! those routes check the share here too ([`guard_agent_principal`]).
+
+use std::sync::Arc;
+
+use rama::http::service::web::extract::State;
+use rama::http::{Request, Response, StatusCode};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use super::json_principals::require_agent_manager;
+use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
+use aiplane_core::server::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
+use aiplane_core::server::db::{agent_audit, gateway_groups, system_principals as sp_db, users};
+use aiplane_core::server::principal::GrantSet;
+use aiplane_runtime::agents::spec::{self, SpecContext, SpecIssue, Stage};
+use aiplane_runtime::rama_server::state::RamaState;
+
+macro_rules! or_return {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        }
+    };
+}
+
+fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
+    state.rbac.role_ids_for(&user.roles)
+}
+
+/// The caller's access to agent `id`: `Ok(None)` when it is not an agent at
+/// all, a 404 when it is one they hold no share on, a 403 when their share is
+/// weaker than `need`.
+async fn access(
+    state: &RamaState,
+    user: &users::User,
+    id: &str,
+    need: Access,
+) -> Result<Option<Access>, Response> {
+    let held = agents_db::access_for(&state.db, id, &user.id, &group_ids(state, user))
+        .await
+        .map_err(internal)?;
+    match held {
+        Some(a) if a >= need => Ok(Some(a)),
+        Some(_) => Err(json_error(
+            StatusCode::FORBIDDEN,
+            "agent_write_required",
+            "you can read this agent but not change it — ask someone with a `write` share to \
+             upgrade yours",
+        )),
+        None => Err(not_found(format!(
+            "there is no agent `{id}` shared with you — ask its owner for a share"
+        ))),
+    }
+}
+
+/// The agent named by the path segment `from_end` back, if the caller holds
+/// `need` on it.
+async fn agent_at(
+    state: &RamaState,
+    req: &Request,
+    user: &users::User,
+    from_end: usize,
+    need: Access,
+) -> Result<(agents_db::AgentRow, Access), Response> {
+    let Some(id) = raw_path_segment(req, from_end) else {
+        return Err(bad_request("the URL is missing the agent id"));
+    };
+    let Some(agent) = agents_db::get(&state.db, &id).await.map_err(internal)? else {
+        return Err(not_found(format!(
+            "there is no agent `{id}` shared with you — ask its owner for a share"
+        )));
+    };
+    let held = access(state, user, &id, need).await?;
+    Ok((agent, held.unwrap_or(need)))
+}
+
+/// For the `/api/v0/system-principals` routes: when the principal is an
+/// agent, the caller needs a share on it as well as the permission. A
+/// principal that is not an agent passes.
+pub(crate) async fn guard_agent_principal(
+    state: &RamaState,
+    user: &users::User,
+    principal_id: &str,
+    need: Access,
+) -> Result<(), Response> {
+    if agents_db::get(&state.db, principal_id)
+        .await
+        .map_err(internal)?
+        .is_none()
+    {
+        return Ok(());
+    }
+    access(state, user, principal_id, need).await.map(|_| ())
+}
+
+fn parse_spec(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or(Value::Null)
+}
+
+fn agent_json(a: &agents_db::AgentRow, access: Access) -> Value {
+    let p = &a.principal;
+    json!({
+        "id": p.id,
+        "name": p.name,
+        "display": p.display,
+        "description": p.description,
+        "created_by": p.created_by,
+        "created_at": a.created_at,
+        "updated_at": a.updated_at,
+        "disabled_at": p.disabled_at,
+        "live_version": a.live_version,
+        "access": access.as_str(),
+    })
+}
+
+fn share_json(s: &agents_db::ShareRow) -> Value {
+    json!({
+        "subject_kind": s.subject_kind.as_str(),
+        "subject_id": s.subject_id,
+        "access": s.access.as_str(),
+    })
+}
+
+fn version_json(v: &agents_db::VersionRow) -> Value {
+    json!({
+        "version": v.version,
+        "spec": parse_spec(&v.spec),
+        "published_by": v.published_by,
+        "published_at": v.published_at,
+    })
+}
+
+/// Validate `spec` for agent `agent_id` against its grants as stored now.
+async fn spec_issues(
+    state: &RamaState,
+    agent_id: &str,
+    spec: &Value,
+    stage: Stage,
+) -> Result<Vec<SpecIssue>, Response> {
+    let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
+    let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
+    let agents = agents_db::publication_status(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(spec::validate(
+        spec,
+        &SpecContext {
+            agent_id,
+            grants: &grants,
+            agents: &agents,
+        },
+        stage,
+    ))
+}
+
+fn invalid_spec(what: &str, issues: &[SpecIssue]) -> Response {
+    let first = &issues[0];
+    let at = if first.path.is_empty() {
+        "the spec".to_string()
+    } else {
+        format!("`{}`", first.path)
+    };
+    let more = match issues.len() {
+        1 => String::new(),
+        n => format!(" (and {} more — see `issues`)", n - 1),
+    };
+    json_ok(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({
+            "error": {
+                "message": format!("cannot {what}: at {at}, {}{more}", first.message),
+                "type": "invalid_agent_spec",
+                "code": "invalid_agent_spec",
+                "issues": issues,
+            }
+        }),
+    )
+}
+
+async fn require_valid(
+    state: &RamaState,
+    agent_id: &str,
+    spec: &Value,
+    stage: Stage,
+    what: &str,
+) -> Result<(), Response> {
+    let issues = spec_issues(state, agent_id, spec, stage).await?;
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid_spec(what, &issues))
+    }
+}
+
+/// GET /api/v0/agents — the agents shared with the caller.
+pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let rows =
+        match agents_db::list_shared_with(&state.db, &user.id, &group_ids(&state, &user)).await {
+            Ok(rows) => rows,
+            Err(err) => return internal(err),
+        };
+    let agents: Vec<Value> = rows.iter().map(|(a, acc)| agent_json(a, *acc)).collect();
+    json_ok(StatusCode::OK, json!({ "agents": agents }))
+}
+
+#[derive(Deserialize)]
+pub struct CreateBody {
+    pub name: String,
+    #[serde(default)]
+    pub display: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub spec: Option<Value>,
+}
+
+/// POST /api/v0/agents — an agent with a fresh principal (no grants) and a
+/// `write` share for its creator.
+pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let body: CreateBody = or_return!(super::read_json(req.into_body(), "the agent body").await);
+    let name = body.name.trim();
+    if let Some(reason) = sp_db::invalid_name_reason(name) {
+        return bad_request(reason);
+    }
+    let spec = body.spec.unwrap_or_else(|| json!({}));
+    // The principal does not exist yet, so it holds nothing: a spec naming
+    // any resource fails here, and its hint says how to grant one.
+    or_return!(require_valid(&state, "{id}", &spec, Stage::Draft, "create the agent").await);
+    let display = body
+        .display
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or(name);
+    let created = agents_db::create(
+        &state.db,
+        &sp_db::NewPrincipal {
+            name,
+            display,
+            description: body.description.trim(),
+        },
+        &spec.to_string(),
+        &user.id,
+    )
+    .await;
+    match created {
+        Ok(Some(a)) => {
+            let mut v = agent_json(&a, Access::Write);
+            v["draft_spec"] = spec;
+            json_ok(StatusCode::CREATED, json!({ "agent": v }))
+        }
+        Ok(None) => json_error(
+            StatusCode::CONFLICT,
+            "conflict",
+            &format!(
+                "a system principal named `{name}` already exists, and an agent's name is its \
+                 principal's — pick another name"
+            ),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+/// GET /api/v0/agents/{id} — the agent, its draft and live spec, what
+/// blocks publishing the draft, its grants, shares and audit trail.
+pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, held) = or_return!(agent_at(&state, &req, &user, 0, Access::Read).await);
+    let id = &agent.principal.id;
+    let (grants, shares, audit) = match tokio::try_join!(
+        sp_db::grants(&state.db, id),
+        agents_db::shares(&state.db, id),
+        agent_audit::for_principal(&state.db, id),
+    ) {
+        Ok(v) => v,
+        Err(err) => return internal(err),
+    };
+    let live_spec = match agent.live_version {
+        Some(n) => match agents_db::version(&state.db, id, n).await {
+            Ok(v) => v.map(|v| parse_spec(&v.spec)),
+            Err(err) => return internal(err),
+        },
+        None => None,
+    };
+    let draft = parse_spec(&agent.draft_spec);
+    let publish_issues = or_return!(spec_issues(&state, id, &draft, Stage::Publish).await);
+
+    let mut v = agent_json(&agent, held);
+    v["draft_spec"] = draft;
+    v["live_spec"] = live_spec.unwrap_or(Value::Null);
+    v["publish_issues"] = json!(publish_issues);
+    v["grants"] = grants
+        .iter()
+        .map(|g| {
+            json!({
+                "kind": g.kind.as_str(),
+                "ref": g.reference,
+                "granted_by": g.granted_by,
+                "granted_at": g.granted_at,
+            })
+        })
+        .collect();
+    v["shares"] = shares.iter().map(share_json).collect();
+    v["audit"] = audit
+        .iter()
+        .map(|e| {
+            json!({
+                "kind": e.kind,
+                "actor_id": e.actor_id,
+                "detail": e.detail,
+                "created_at": e.created_at,
+            })
+        })
+        .collect();
+    json_ok(StatusCode::OK, json!({ "agent": v }))
+}
+
+#[derive(Deserialize)]
+pub struct DraftBody {
+    pub spec: Value,
+}
+
+/// PUT /api/v0/agents/{id}/draft — replace the draft. What the live version
+/// serves does not change.
+pub async fn update_draft(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let id = agent.principal.id;
+    let body: DraftBody = or_return!(super::read_json(req.into_body(), "the draft body").await);
+    or_return!(require_valid(&state, &id, &body.spec, Stage::Draft, "save the draft").await);
+    match agents_db::update_draft(&state.db, &id, &body.spec.to_string(), &user.id).await {
+        Ok(true) => json_ok(
+            StatusCode::OK,
+            json!({ "draft_spec": body.spec, "live_version": agent.live_version }),
+        ),
+        Ok(false) => not_found("the agent was deleted while its draft was being saved"),
+        Err(err) => internal(err),
+    }
+}
+
+/// POST /api/v0/agents/{id}/publish — validate the draft for running and
+/// snapshot it as the next version, which becomes live.
+pub async fn publish(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let id = &agent.principal.id;
+    let draft = parse_spec(&agent.draft_spec);
+    or_return!(require_valid(&state, id, &draft, Stage::Publish, "publish the agent").await);
+    match agents_db::publish(&state.db, id, &agent.draft_spec, &user.id).await {
+        Ok(Some(version)) => json_ok(
+            StatusCode::CREATED,
+            json!({ "version": version, "live_version": version }),
+        ),
+        Ok(None) => not_found("the agent was deleted while it was being published"),
+        Err(err) => internal(err),
+    }
+}
+
+/// GET /api/v0/agents/{id}/versions — every published version, newest
+/// first.
+pub async fn versions(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
+    match agents_db::versions(&state.db, &agent.principal.id).await {
+        Ok(rows) => json_ok(
+            StatusCode::OK,
+            json!({
+                "live_version": agent.live_version,
+                "versions": rows.iter().map(version_json).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LiveBody {
+    pub version: i64,
+}
+
+/// POST /api/v0/agents/{id}/live — make an existing version live: a
+/// rollback, or forward again. Not re-validated: grants are not versioned,
+/// and a reference whose grant was revoked meets default-deny at run time.
+pub async fn set_live(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let id = agent.principal.id;
+    let body: LiveBody =
+        or_return!(super::read_json(req.into_body(), "the live-version body").await);
+    match agents_db::set_live(&state.db, &id, body.version, &user.id).await {
+        Ok(true) => json_ok(StatusCode::OK, json!({ "live_version": body.version })),
+        Ok(false) => not_found(format!(
+            "`{}` has no version {} — list them with GET /api/v0/agents/{id}/versions",
+            agent.principal.name, body.version
+        )),
+        Err(err) => internal(err),
+    }
+}
+
+/// GET /api/v0/agents/{id}/shares
+pub async fn shares(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
+    match agents_db::shares(&state.db, &agent.principal.id).await {
+        Ok(rows) => json_ok(
+            StatusCode::OK,
+            json!({ "shares": rows.iter().map(share_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ShareBody {
+    pub subject_kind: String,
+    pub subject_id: String,
+    #[serde(default)]
+    pub access: Option<String>,
+}
+
+fn parse_subject(body: &ShareBody) -> Result<(SubjectKind, &str), Response> {
+    let kind = SubjectKind::parse(&body.subject_kind).ok_or_else(|| {
+        bad_request(format!(
+            "`{}` is not a share subject — use `user` or `group`",
+            body.subject_kind
+        ))
+    })?;
+    let subject = body.subject_id.trim();
+    if subject.is_empty() {
+        return Err(bad_request("a share needs a `subject_id`"));
+    }
+    Ok((kind, subject))
+}
+
+/// A share only takes effect for a holder of the agent-management
+/// permission, so one for anybody else is refused rather than stored inert.
+async fn require_manager_subject(
+    state: &RamaState,
+    kind: SubjectKind,
+    subject: &str,
+) -> Result<(), Response> {
+    let holds = match kind {
+        SubjectKind::User => {
+            let Some(u) = users::find_by_id(&state.db, subject)
+                .await
+                .map_err(internal)?
+            else {
+                return Err(not_found(format!("there is no user `{subject}`")));
+            };
+            state.rbac.can_manage_agents(&group_ids(state, &u))
+        }
+        SubjectKind::Group => {
+            let groups = gateway_groups::list_groups(&state.db)
+                .await
+                .map_err(internal)?;
+            let Some(g) = groups.into_iter().find(|g| g.name == subject) else {
+                return Err(not_found(format!("there is no group `{subject}`")));
+            };
+            g.is_admin || g.can_manage_agents
+        }
+    };
+    if holds {
+        return Ok(());
+    }
+    Err(json_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "share_needs_agent_manager",
+        &format!(
+            "cannot share with {} `{subject}`: a share only works for holders of the \
+             agent-management permission, because it shows the spec and the agent's \
+             conversations. Ask an admin to enable `can_manage_agents` on {}, then share again.",
+            kind.as_str(),
+            match kind {
+                SubjectKind::User => "one of their groups",
+                SubjectKind::Group => "that group",
+            }
+        ),
+    ))
+}
+
+fn last_writer() -> Response {
+    json_error(
+        StatusCode::CONFLICT,
+        "last_writer",
+        "this is the agent's last `write` share — give someone else `write` first, or the agent \
+         could never be edited or shared again",
+    )
+}
+
+/// POST /api/v0/agents/{id}/shares — add a share or change its access.
+pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let body: ShareBody = or_return!(super::read_json(req.into_body(), "the share body").await);
+    let (kind, subject) = or_return!(parse_subject(&body));
+    let access = match body.access.as_deref().map(Access::parse) {
+        Some(Some(a)) => a,
+        _ => return bad_request("a share needs `access`: `read` or `write`"),
+    };
+    or_return!(require_manager_subject(&state, kind, subject).await);
+    match agents_db::set_share(
+        &state.db,
+        &agent.principal.id,
+        kind,
+        subject,
+        access,
+        &user.id,
+    )
+    .await
+    {
+        Ok(ShareChange::LastWriter) => last_writer(),
+        Ok(change) => json_ok(
+            if change == ShareChange::Changed {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            json!({ "subject_kind": kind.as_str(), "subject_id": subject, "access": access.as_str() }),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+/// POST /api/v0/agents/{id}/shares/revoke — remove one share.
+pub async fn revoke_share(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
+    let body: ShareBody = or_return!(super::read_json(req.into_body(), "the share body").await);
+    let (kind, subject) = or_return!(parse_subject(&body));
+    match agents_db::remove_share(&state.db, &agent.principal.id, kind, subject, &user.id).await {
+        Ok(ShareChange::LastWriter) => last_writer(),
+        Ok(ShareChange::NotFound) => not_found(format!(
+            "`{}` is not shared with {} `{subject}`",
+            agent.principal.name,
+            kind.as_str()
+        )),
+        Ok(_) => no_content(),
+        Err(err) => internal(err),
+    }
+}
+
+/// DELETE /api/v0/agents/{id} — the agent and its principal, with every
+/// grant, token, version and share. The audit trail stays.
+pub async fn delete(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 0, Access::Write).await);
+    match agents_db::delete(&state.db, &agent.principal.id, &user.id).await {
+        Ok(_) => no_content(),
+        Err(err) => internal(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(kind: &str, id: &str) -> ShareBody {
+        ShareBody {
+            subject_kind: kind.into(),
+            subject_id: id.into(),
+            access: None,
+        }
+    }
+
+    #[test]
+    fn a_share_subject_is_a_user_or_a_group_with_an_id() {
+        assert_eq!(
+            parse_subject(&body("user", " bob ")).unwrap(),
+            (SubjectKind::User, "bob")
+        );
+        assert_eq!(
+            parse_subject(&body("group", "support")).unwrap(),
+            (SubjectKind::Group, "support")
+        );
+        assert!(parse_subject(&body("role", "x")).is_err());
+        assert!(parse_subject(&body("user", "  ")).is_err());
+    }
+}

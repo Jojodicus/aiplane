@@ -8,6 +8,7 @@
 //! process-global state (env vars) stay isolated.
 
 mod admin_json_api;
+mod agents;
 mod anthropic_messages;
 mod ask_feedback;
 mod automatic_routing;

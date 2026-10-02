@@ -252,9 +252,10 @@ main:
   instructions:
     orchestration: "Collect name, email and issue before forwarding …"
     response:      "Friendly, short, in the visitor's language …"
-  tools: [rag_search]                   # must be in grants[tool]
+  tools: [rag_search]                   # must be in grants[tool]; mcp__<key>__<tool> needs grants[connector]
+  skills: [brand-voice]                 # must be in grants[skill]
   tool_resources:
-    rag_search: { bind: { collection: "produktdoku" } }
+    rag_search: { bind: { collection: { const: "produktdoku" } } }
   budget: { rounds: 12, seconds: 60, tokens: 40000 }
 state:                                  # slot name -> definition
   name:     { type: string, max_length: 120, set_by: [llm] }
@@ -270,12 +271,12 @@ routes:
   billing:
     when: { all: [ { slot: issue, eq: billing },
                    { slot: verified, provenance: "verifier:otp", max_age: 15m } ] }
-    agent: billing-subagent             # system_principals.name of another agent
+    agent: 5b1c…                        # the agent id (system_principals.id) of another agent
     task: "Invoice question from customer {verified.customer_id}: {issue_summary}"
     bind: { customer_id: verified.customer_id }
   technical:
     when: { slot: issue, eq: technical }
-    agent: tech-subagent
+    agent: 9e04…
     task: "{issue_summary}"
   human:
     when: { slot: issue, set: true }
@@ -296,7 +297,12 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
 
 `tool_resources.<tool>` holds:
 - **`bind`**: arguments the gateway fills in. They are removed from the schema
-  the model sees, and the model's value for them is ignored.
+  the model sees, and the model's value for them is ignored. A source is either
+  a slot path as a string (`"verified"`, `"verified.customer_id"`) or a fixed
+  value written `{const: …}`. The explicit `const` keeps a literal that happens
+  to match a slot name from being read as one. A route's `bind` uses the same
+  form; a sub-agent has no `state`, so its own binds can only be `const`, and
+  subject values reach it through the route's `bind`.
 - **`permission`**: `always_allow`, the default, or `always_ask`, which suspends
   the call for human approval (phase 4).
 
@@ -306,6 +312,66 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
 - Every `bind` source must be a slot whose provenance cannot be `llm`.
 - Every gate must type-check against the slots (§4).
 - The sub-agent graph must be acyclic and at most 3 levels deep.
+
+### What #84 built
+
+- **Migration `0080_agents.sql`** creates the three tables above as written
+  (`0078`/`0079` were left to concurrent branches). Rows live in
+  `aiplane-core::server::db::agents`; every mutation writes an `agent_audit` row
+  in the same transaction (`agent_created`, `agent_draft_updated`,
+  `agent_published`, `agent_live_version_set`, `agent_share_set`,
+  `agent_share_removed`, `agent_deleted`).
+- **Keyed by the principal.** Creating an agent creates its system principal,
+  with no grants, in the same transaction. Deleting an agent deletes the
+  principal, which cascades to its grants, tokens, versions and shares; the
+  audit trail stays. Grants are made through
+  `/api/v0/system-principals/{id}/grants` (#77's grant-time cap). For a
+  principal that is an agent, those routes also require a share on the agent:
+  `read` to see it, `write` to change grants, tokens or disable it. The list
+  there hides agents the caller holds no share on.
+- **Validator** (`aiplane-runtime::agents::spec`). It walks the JSON and
+  returns every problem as `{path, message}` rather than stopping at the first
+  one. Two stages:
+  - *Draft* (on save and on create): shape and references. Unknown keys at any
+    level, types, enums, durations (`30s`/`15m`/`2h`/`30d`), exact origins,
+    regexes, the `finish` schema (through `FinishContract::new`). Pools, tools,
+    MCP tools (via their connector), skills and verifier connectors must be
+    granted. Sub-agents must be existing agent ids, and not the agent itself.
+    Gate leaves, templates and `set_by: verifier:<id>` must name declared slots
+    and verifiers. Bind sources must be non-`llm` slots or `const`. Gates are
+    checked for shape only.
+  - *Publish*: everything above against the grants as they are now, plus
+    `main.pool`, instructions, and every routed sub-agent having a live version.
+  - Still open: gate type checks (#86), cycle and depth checks of the sub-agent
+    graph (#88), slot run-time semantics (#85).
+- **Shares.** The holder must have `can_manage_agents` when the share is
+  written. For a user that means through their groups; a group needs the flag
+  or `is_admin`. The caller must also hold the permission on every request.
+  Without a share, an agent answers 404, not 403. Removing or downgrading the
+  last `write` share is refused (`409 last_writer`). Admins get no bypass: an
+  admin sees an agent only through a share.
+
+**API** (`aiplane-api::pages::json_agents`). Every route needs a session with
+`can_manage_agents`. `read`/`write` is the share needed.
+
+| Method | Path | Share | Purpose |
+|---|---|---|---|
+| GET | `/api/v0/agents` | any | Agents shared with you, with your `access` |
+| POST | `/api/v0/agents` | — | Create `{name, display?, description?, spec?}`; 201, 409 on a taken principal name |
+| GET | `/api/v0/agents/{id}` | read | Agent, `draft_spec`, `live_spec`, `publish_issues`, grants, shares, audit |
+| PUT | `/api/v0/agents/{id}/draft` | write | Replace the draft `{spec}`; the live version is untouched |
+| POST | `/api/v0/agents/{id}/publish` | write | Validate the draft for publishing, snapshot it as version n+1, make it live |
+| GET | `/api/v0/agents/{id}/versions` | read | Every version, newest first, with its spec |
+| POST | `/api/v0/agents/{id}/live` | write | `{version}`: rollback (or forward); not re-validated, since grants are not versioned |
+| GET | `/api/v0/agents/{id}/shares` | read | The shares |
+| POST | `/api/v0/agents/{id}/shares` | write | `{subject_kind: user\|group, subject_id, access: read\|write}`; 422 `share_needs_agent_manager` if the holder lacks the permission |
+| POST | `/api/v0/agents/{id}/shares/revoke` | write | `{subject_kind, subject_id}` |
+| DELETE | `/api/v0/agents/{id}` | write | Delete the agent and its principal |
+
+An invalid spec is `422` with `error.code = "invalid_agent_spec"`. The
+`message` names the first problem; `error.issues` lists all of them. Each
+ungranted reference says which grant to make, for example `POST
+/api/v0/system-principals/{id}/grants {"kind": "tool", "ref": "rag_search"}`.
 
 ## 3. Run model
 

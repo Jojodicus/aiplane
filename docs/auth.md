@@ -175,6 +175,11 @@ the field leaves it unchanged.
 | POST | `/api/v0/system-principals/{id}/tokens` | Issue `{name, ttl_days?}`; the plaintext is in this response only |
 | POST | `/api/v0/system-principals/{id}/tokens/{token_id}/revoke` | Revoke one token |
 
+An agent's principal (created by `POST /api/v0/agents`, see
+[`agents.md`](agents.md#what-84-built)) is reachable here too. For one of
+those, the caller also needs a share on the agent: `read` for `GET`, `write`
+for every change. Without one it answers 404 and is left out of the list.
+
 There is no SPA screen for this yet; it is API-only.
 
 ## What's intentionally out of scope (for now)

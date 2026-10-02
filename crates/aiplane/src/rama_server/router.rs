@@ -242,6 +242,24 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/system-principals/{id}/tokens/{token_id}/revoke",
             pages::json_principals::revoke_token,
         )
+        // Agent definitions (docs/agents.md §2): can_manage_agents plus a share.
+        .with_get("/api/v0/agents", pages::json_agents::list)
+        .with_post("/api/v0/agents", pages::json_agents::create)
+        .with_get("/api/v0/agents/{id}", pages::json_agents::detail)
+        .with_delete("/api/v0/agents/{id}", pages::json_agents::delete)
+        .with_put(
+            "/api/v0/agents/{id}/draft",
+            pages::json_agents::update_draft,
+        )
+        .with_post("/api/v0/agents/{id}/publish", pages::json_agents::publish)
+        .with_get("/api/v0/agents/{id}/versions", pages::json_agents::versions)
+        .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
+        .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)
+        .with_post("/api/v0/agents/{id}/shares", pages::json_agents::share)
+        .with_post(
+            "/api/v0/agents/{id}/shares/revoke",
+            pages::json_agents::revoke_share,
+        )
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)
