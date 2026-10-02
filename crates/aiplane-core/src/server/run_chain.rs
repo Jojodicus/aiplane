@@ -71,15 +71,21 @@ pub struct RunChain {
     frames: Vec<Frame>,
 }
 
+/// Why a sub-agent run could not be started from a chain.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error(
-    "starting sub-agent `{sub_agent}` would nest {depth} agents deep, and at most {MAX_DEPTH} \
-     are allowed; change the agent's routes so this sub-agent is not reached through that many \
-     others"
-)]
-pub struct ChainTooDeep {
-    pub sub_agent: String,
-    pub depth: usize,
+pub enum EnterError {
+    #[error(
+        "starting sub-agent `{sub_agent}` would nest {depth} agents deep, and at most \
+         {MAX_DEPTH} are allowed; change the agent's routes so this sub-agent is not reached \
+         through that many others"
+    )]
+    TooDeep { sub_agent: String, depth: usize },
+    #[error(
+        "sub-agent `{sub_agent}` is already running in this call chain ({path}); an agent \
+         cannot call itself, directly or through others — change the routes so they do not \
+         loop back"
+    )]
+    Cycle { sub_agent: String, path: String },
 }
 
 impl RunChain {
@@ -91,11 +97,28 @@ impl RunChain {
         }
     }
 
-    /// The chain of a sub-agent run started from this one.
-    pub fn enter(&self, sub_agent: Frame) -> Result<Self, ChainTooDeep> {
+    /// The chain of a sub-agent run started from this one. Refuses a fourth
+    /// level and an agent that is already in the chain.
+    pub fn enter(&self, sub_agent: Frame) -> Result<Self, EnterError> {
+        if self
+            .frames
+            .iter()
+            .any(|f| f.principal_id == sub_agent.principal_id)
+        {
+            let path: Vec<&str> = self
+                .frames
+                .iter()
+                .map(|f| f.name.as_str())
+                .chain([sub_agent.name.as_str()])
+                .collect();
+            return Err(EnterError::Cycle {
+                path: path.join(" → "),
+                sub_agent: sub_agent.name,
+            });
+        }
         let depth = self.frames.len() + 1;
         if depth > MAX_DEPTH {
-            return Err(ChainTooDeep {
+            return Err(EnterError::TooDeep {
                 sub_agent: sub_agent.name,
                 depth,
             });
@@ -201,12 +224,33 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ChainTooDeep {
+            EnterError::TooDeep {
                 sub_agent: "ledger".into(),
                 depth: 4
             }
         );
         assert!(err.to_string().contains("at most 3"), "{err}");
+    }
+
+    #[test]
+    fn an_agent_already_in_the_chain_cannot_be_entered_again() {
+        let two = main_run()
+            .enter(Frame::for_principal(&agent("p-bill", "billing"), None))
+            .unwrap();
+        let err = two
+            .enter(Frame::for_principal(
+                &agent("p-main", "support-website"),
+                None,
+            ))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            EnterError::Cycle {
+                sub_agent: "support-website".into(),
+                path: "support-website → billing → support-website".into(),
+            }
+        );
+        assert!(err.to_string().contains("already running"), "{err}");
     }
 
     #[test]

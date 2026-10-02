@@ -355,6 +355,10 @@ impl StateSchema {
     pub fn slots(&self) -> impl Iterator<Item = &SlotDef> {
         self.slots.values()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
 }
 
 /// A slot's stored value and where it came from.

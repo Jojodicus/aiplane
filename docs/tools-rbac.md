@@ -183,6 +183,20 @@ generated `set_<slot>` tools of one agent's state, one per slot the model may
 write. They exist only for an agent run and need no grant
 ([`agents.md`](agents.md#what-85-built)).
 
+`RunToolSource` (`aiplane-runtime::agents::profile`) is how an agent run sees
+all of them. It wraps the turn's grant-narrowed source and adds the run's
+synthetic tools (`set_<slot>`, `forward_request`) on top. It also wraps every
+granted tool that has **bound arguments** in a `BoundTool`
+(`agents::bind`): the bound parameters are removed from the schema the model
+sees, and on every call the gateway's values overwrite whatever the model sent.
+A `const` bind is fixed in the spec. A slot bind is read from the conversation
+state when the call runs, and the call is refused while the slot is unset. For
+a sub-agent, the route's resolved `bind` values apply to every one of its tools
+that declares the argument. Without an agent run the source passes `inner`
+through unchanged. The run offers only the spec's `main.tools` that the
+principal is also granted, plus the synthetic ones
+([`agents.md`](agents.md#what-8788-built)).
+
 ## Lazy tool disclosure (`enable_tools`)
 
 The defining behaviour of the current design, and the thing most likely to
@@ -367,11 +381,15 @@ run) and `unknown_tool` for a person — one check, so the audit row and what
 actually ran can never disagree.
 
 Run-scoped synthetic tools are not grants and sit outside the filter: `finish`
-is intercepted by name before dispatch, and an agent run that offers
-`set_<slot>` tools (`agents::slot_tools::SlotTools`) composes that source *over*
-the `GrantedToolSource`, never inside it. Their existence for the run is the
-permission; nothing a person or principal is granted can reach them, and they
-reach nothing outside the run.
+is intercepted by name before dispatch, and an agent run's `set_<slot>` and
+`forward_request` tools come from `RunToolSource`, which the driver layers
+*over* the `GrantedToolSource`, never inside it. Their existence for the run is
+the permission; nothing a person or principal is granted can reach them, and
+they reach nothing outside the run. A bound tool is still a granted tool: the
+binding wraps what the grant filter returned and can only narrow its arguments.
+A sub-agent that `forward_request` starts gets its own `GrantedToolSource`,
+built from its own principal's grants. Nothing the calling agent holds passes
+down.
 
 ### System principals
 
@@ -550,8 +568,11 @@ seconds, tokens }`. A chat turn derives it from the conversation's effort level
 (`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
 so interactive behaviour is unchanged. A headless run may pass one in
 `DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
-`seconds` and `tokens` are optional (`None` = unlimited). A sub-agent run is
-meant to be given a `Budget` of its own, not share its parent's.
+`seconds` and `tokens` are optional (`None` = unlimited). An agent run takes
+its budget from `main.budget` in its spec (rounds default to the `standard`
+effort cap). A sub-agent run gets its own budget from its own spec, never a
+share of its parent's: the parent's `forward_request` call waits for the
+sub-agent while the sub-agent's rounds count against the sub-agent alone.
 
 - **Tokens** are the upstream-reported usage (the `total_tokens` of each
   round's trailing usage frame, else prompt + completion), summed over the
@@ -581,7 +602,9 @@ and both `/v1` loops share it. Client-owned calls never pass through the
 gateway and are not scanned. `server/tools/injection.rs` holds the rest.
 
 A run carries an `InjectionScan { policy, classifier }`: `OpenAiDriver::injection`
-and `DriveParams::injection` (what `RunProfile` will set for an agent run). The
+and `DriveParams::injection`. `RunProfile` sets `Flag` for every agent run,
+main agent and sub-agent alike, so a sub-agent's `finish` result reaches the
+main agent screened like any other tool result. The
 default is `Off`, which skips scanning entirely, so the result reaches the model
 byte for byte as before. The `/v1` loops pass `Off` until they have a per-run
 setting of their own.
@@ -725,8 +748,9 @@ pausing is impossible. Nothing in the shipped registry is wrapped yet — the
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which
 suspends every ancestor turn and resumes innermost first
-([`agents.md`](agents.md#suspend-and-resume-82)). Nothing sets it yet; the
-propagation comes with sub-agent dispatch (#88).
+([`agents.md`](agents.md#suspend-and-resume-82)). Nothing sets it yet: agent
+runs, sub-agents included, are headless and refuse to pause, so the
+propagation comes with human-in-the-loop (#96).
 
 ### Streaming
 

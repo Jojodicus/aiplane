@@ -264,7 +264,7 @@ state:                                  # slot name -> definition
 verifiers:
   otp: { kind: mcp_code, connector: erp, send_tool: send_code, check_tool: check_code,
          input: secure_field, max_attempts: 5, code_ttl: 10m }
-router: { kind: rules }                 # or { kind: classifier, pool: small-fast }
+router: { kind: rules, order: [billing] } # or { kind: classifier, pool: small-fast }
 routes:
   billing:
     when: { all: [ { slot: issue, eq: billing },
@@ -340,9 +340,9 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
     checked for shape only.
   - *Publish*: everything above against the grants as they are now, plus
     `main.pool`, instructions, and every routed sub-agent having a live version.
-  - Still open: cycle and depth checks of the sub-agent graph (#88). Slot
-    run-time semantics landed with #85 ([below](#what-85-built)), gate type
-    checks with #86 ([§4](#what-86-built)).
+  - Slot run-time semantics landed with #85 ([below](#what-85-built)), gate
+    type checks with #86 ([§4](#what-86-built)), the sub-agent graph checks
+    with #88 ([§3](#what-8788-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
   or `is_admin`. The caller must also hold the permission on every request.
@@ -493,9 +493,9 @@ registered for that run, need no grant, and do not exist anywhere else.
   `pattern` on an `integer`) is an error, not silently unenforced. `schema` is a
   new slot key for `subject` slots only. A `subject` slot may not list `llm`:
   it says whose data the agent acts on.
-- **Not wired yet.** Nothing offers `SlotTools` to a run or puts
-  `render_view()` into a system message: both need the agent `RunProfile` and
-  `AgentToolSource` (#87/#88). There is no `state` SSE event yet either.
+- **Wired by #87/#88.** An agent run offers `SlotTools` and puts
+  `render_view()` into its system message every round
+  ([below](#what-8788-built)). There is no `state` SSE event yet.
 
 ### The call chain
 
@@ -526,7 +526,8 @@ principal; and `via_tool_call` is `via: Option<CallSite { turn_id,
 tool_call_id }>`, because the child session's `parent_turn_id` needs the turn,
 not only the call. `version` is `Option<i64>` until agent versions exist (#84).
 `RunChain::root` starts a chain, `enter` appends a sub-agent and refuses a
-fourth level (`ChainTooDeep`).
+fourth level (`EnterError::TooDeep`). Since #88 it also refuses an agent
+that is already in the chain (`EnterError::Cycle`).
 
 - `ToolContext.run: Option<Arc<RunChain>>`; `ToolContext::agent_active()` is
   `run.is_some()`. Its running frame must be `ToolContext.principal`:
@@ -603,6 +604,127 @@ grants.
 - **Repeated calls (#81):** the third call in a turn identical in
   `(tool, canonical JSON args)` gets a tool error. A fourth ends the run as
   `incomplete: repeated_call`.
+
+### What #87/#88 built
+
+`aiplane-runtime::agents::{profile, router, bind, run}`.
+
+- **Entry point.** `agents::run::run_turn(state, AgentTurn { agent_id,
+  session_id, message, visitor_id })` runs one visitor message as the agent's
+  principal on its **live** version and returns `AgentReply { session_id,
+  turn_id, status, answer, error }`. A new conversation is a principal-owned
+  session (`parent_turn_id` `NULL`, `agent_version` set). A `session_id` must
+  belong to that agent, or the call fails with `UnknownSession`. The chain is
+  `RunChain::root(session, visitor, main frame)`. `run_turn_with` takes
+  `RunOptions { now, classifier }`: the clock that gates and slot writes read,
+  and a `RouteClassifier` to use instead of the pool classifier. No HTTP route
+  calls it yet: the test chat is #90, the public endpoint #91.
+- **`RunProfile::load(state, agent_id, Role, options)`** reads the live version
+  and the principal (`load_active`, so a disabled one is refused). It returns
+  `{principal, version, model, budget, finish, injection, run: Arc<AgentRun>}`,
+  and `drive_params` turns that into `DriveParams`. `DriveParams.agent` and
+  `OpenAiDriver.agent` carry the `AgentRun` into the ordinary headless loop.
+  There is no second driver.
+  - *Model*: `main.pool` names a pool and a request names a model, so the run
+    uses the first model (by name) of a healthy backend of that pool that the
+    principal's pool grant reaches.
+  - *Budget*: `main.budget`, with rounds defaulting to the `standard` effort
+    cap.
+  - *Finish*: none for the main agent, which ends its turn with text. A
+    sub-agent's comes from its `finish.schema`, and without one it is
+    `{answer: string}`.
+  - *Injection*: `Flag` for both.
+- **System message** (`AgentRun::system_message`). It holds a line naming the
+  agent, `orchestration` and `response`, `render_view()`, one line per route
+  (`- billing (description): open` or `closed — <each unmet message>`), and
+  the compaction summary if any. It has no chat rules, no request context, no
+  memory and no connector listing. When the agent has state or routes it is
+  rebuilt before every round after the first, so a slot set in round *n* shows
+  in round *n+1*.
+- **Tools** (`RunToolSource`, the `AgentToolSource` of the sketch above;
+  [`tools-rbac.md`](tools-rbac.md#tool-sources)).
+  The run offers the spec's `main.tools` that are also in the principal's grant
+  (`AppState::granted_tool_ids`), then `set_<slot>` per model-writable slot,
+  then `forward_request` when the spec has routes. The synthetic tools sit
+  over the `GrantedToolSource`. The call policy sees them as offered, so each
+  call is decided and audited as `granted`. A granted tool missing from
+  `main.tools` is not offered, and a call to it is refused as `not_granted`.
+- **Router** (`forward_request()`, #87). It takes no arguments, and any key is
+  refused by name. It evaluates every gate and works only with the open
+  routes:
+  - *No open route*: the result is `{forwarded: false, reason:
+    "no_open_route", routes: [{route, missing: [Unmet]}]}`.
+  - *`rules` router*: the first open route in `router.order`, a new optional
+    key with route names, else the first open route by name. Deterministic.
+  - *Exactly one open route*: that route, without asking a model.
+  - *Otherwise* (`classifier`, or no router): a non-streaming call on
+    `router.pool`, else `main.pool`. It uses `response_format: json_schema`
+    with `route` constrained to `enum: <open routes>`, and sends the route
+    descriptions and the model's slot view, never trusted values. The answer
+    is checked in code again, so a closed, unknown or malformed answer
+    forwards nothing (`no_route_chosen`).
+  - Dispatch happens only through the `OpenRoute` that `RouteGates::open`
+    returns. A `human` route answers `human_unavailable` until #96.
+- **Dispatch** (#88). It is the five steps of
+  [Sub-agent dispatch](#sub-agent-dispatch):
+  1. Render `task` from the main agent's state with `bind::render_task`. A
+     placeholder may read any valid slot, verifier slots included: the task
+     goes to the sub-agent, not back to the visitor or the main model. A
+     placeholder that cannot be filled answers `task_incomplete`.
+  2. Resolve the route's `bind` against the state.
+  3. Load the sub-agent's profile with those values and enter the chain
+     (`CallSite { turn_id, tool_call_id }`; the call id comes from
+     `runner::current_call_id`, a task-local set around every `Tool::run`).
+  4. Open a child session owned by the sub-agent's principal
+     (`parent_turn_id` = the main turn) and `drive` it with its own budget,
+     contract, grants and injection policy.
+  5. Return `{forwarded: true, route, sub_agent, outcome: RunOutcome, note}`
+     as the tool result. The main agent's `Flag` policy screens it.
+
+  The sub-agent sees its system message and the task, never the transcript.
+  The call waits at most 15 minutes.
+- **Bound arguments** (`bind::BoundTool`). On a sub-agent, the route's values
+  bind every tool that **declares** the argument. A tool's own
+  `tool_resources.<tool>.bind` wins over a route value of the same name. Bound
+  parameters are dropped from `properties` and `required`, and the gateway's
+  value overwrites the model's. A main agent's slot-sourced bind is read at
+  call time and refuses the call while the slot is unset.
+- **Cycles and depth.** `RunChain::enter` returns `EnterError::{TooDeep,
+  Cycle}` at run time. The validator walks the live specs of every agent
+  reached (`SpecContext.live_specs`, from `agents::live_specs`). A route whose
+  graph loops back, or nests more than 3 agents counting this one, is an issue
+  at `routes.<r>.agent`.
+- **Gate rule completed.** A route needs a trusted gate when it binds from
+  state, or when its sub-agent, or anything below it, has a `bind`. A route
+  that binds from slot `s` must also gate on a non-`llm` provenance *of `s`
+  itself* (`Cond::requires_trusted_provenance_of`).
+- **Audit.** New `agent_audit` kinds, written on the calling principal with
+  its chain:
+  - `route_decision` (`{routes: [{route, gate}], picked, reason?}`)
+  - `sub_agent_dispatched` and `sub_agent_finished` (`{route, sub_agent,
+    sub_agent_id, version, session_id, turn_id, outcome?}`)
+
+  The sub-agent's own tool calls carry the extended chain.
+- **Deviations.**
+  - `main.skills` is not listed in the system message, and `read_skill` is
+    offered only if granted and listed in `main.tools`.
+  - Usage rows of the classifier call are not written (#92).
+  - A route's values bind by argument name. An ERP tool whose subject
+    parameter is named differently is not bound. Name the route's `bind` key
+    after the tool's parameter.
+  - The output policy (`Stream`/`Buffered`) is not part of the profile yet
+    (#89).
+- **Tests.** `agents/run/tests.rs` runs the support example end to end on
+  wiremock upstreams, both models and the ERP as a wiremock MCP server:
+  1. The closed gate's feedback.
+  2. A verifier write through `TrustedWriter`.
+  3. `forward_request` dispatches billing.
+  4. The bound `customer_id` overrides the model's `K-99999`.
+  5. The finish result comes back to the main agent, which answers.
+
+  More tests cover: a closed route the classifier names; `order` in the rules
+  router; separate budgets; a sub-agent that routes back to its caller; an
+  injection in a sub-agent result; and the audit chain.
 
 ### Suspend and resume (#82)
 
@@ -734,12 +856,13 @@ runs after the code gate passes and can only close the route.
 - **Deviations.**
   - The subject-bound check covers a route's own `bind`. Whether the routed
     sub-agent reaches a tool with a `bind` needs the sub-agent graph, so that
-    half of the rule lands with #88.
+    half of the rule landed with #88 ([§3](#what-8788-built)).
   - No slot-to-slot comparison (`{slot: a, eq_slot: b}`): §4 has none and no
     route needs one yet.
-- **Not wired yet.** `forward_request` (#87) is what calls `RouteGates` and
-  returns `Closed.missing` to the model; there is no `gate` SSE event or
-  `agent_audit` row for a gate decision until a run exists to record.
+- **Wired by #87.** `forward_request` calls `RouteGates`, returns
+  `Closed.missing` to the model and writes a `route_decision` row
+  ([§3](#what-8788-built)). There is no `gate` SSE event yet, and nothing
+  calls `open_reviewed`: no spec key selects a `DenyClassifier` yet.
 
 ### Value validation without a JSON-Schema crate
 

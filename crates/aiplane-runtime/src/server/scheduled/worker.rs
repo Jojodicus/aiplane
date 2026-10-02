@@ -316,6 +316,7 @@ async fn try_run_action(
             finish: None,
             budget: None,
             injection: Default::default(),
+            agent: None,
         },
     )
     .await;

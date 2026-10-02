@@ -34,6 +34,12 @@ pub enum AuditKind {
     /// A tool call inside an agent run, allowed or denied.
     ToolCall,
     InjectionDetected,
+    /// `forward_request`: every route's gate, and the route picked if any.
+    RouteDecision,
+    /// A sub-agent run started from a route.
+    SubAgentDispatched,
+    /// A sub-agent run ended, with its outcome.
+    SubAgentFinished,
     AgentCreated,
     AgentDraftUpdated,
     AgentPublished,
@@ -56,6 +62,9 @@ impl AuditKind {
             Self::TokenRevoked => "token_revoked",
             Self::ToolCall => "tool_call",
             Self::InjectionDetected => "injection_detected",
+            Self::RouteDecision => "route_decision",
+            Self::SubAgentDispatched => "sub_agent_dispatched",
+            Self::SubAgentFinished => "sub_agent_finished",
             Self::AgentCreated => "agent_created",
             Self::AgentDraftUpdated => "agent_draft_updated",
             Self::AgentPublished => "agent_published",
