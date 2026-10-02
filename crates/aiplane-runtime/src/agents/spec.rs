@@ -142,7 +142,17 @@ const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "h
 const HUMAN_KEYS: &[&str] = &["notify", "inbox"];
 const FINISH_KEYS: &[&str] = &["schema"];
 const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
-const PUBLISH_KEYS: &[&str] = &["origins", "idle_ttl", "retention_days", "output_filter"];
+const PUBLISH_KEYS: &[&str] = &[
+    "origins",
+    "idle_ttl",
+    "retention_days",
+    "rate_limits",
+    "budget",
+    "output_filter",
+];
+const RATE_SCOPES: &[&str] = &["visitor", "ip"];
+const RATE_KEYS: &[&str] = &["max", "per"];
+const BUDGET_PUBLISH_KEYS: &[&str] = &["monthly_cost", "monthly_tokens"];
 const OUTPUT_FILTER_KEYS: &[&str] = &["patterns", "action"];
 pub(super) const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
 const MAX_IDENT_LEN: usize = 48;
@@ -1372,6 +1382,48 @@ impl<'a> Check<'a> {
         if let Some(x) = map.get("retention_days") {
             self.positive_int(x, "publish.retention_days", None);
         }
+        if let Some(rates) = map.get("rate_limits")
+            && let Some(rates) = self.object(rates, "publish.rate_limits", RATE_SCOPES)
+        {
+            for scope in RATE_SCOPES {
+                let path = join("publish.rate_limits", scope);
+                let Some(rate) = rates.get(*scope) else {
+                    continue;
+                };
+                let Some(rate) = self.object(rate, &path, RATE_KEYS) else {
+                    continue;
+                };
+                for key in RATE_KEYS {
+                    let at = join(&path, key);
+                    match (rate.get(*key), *key) {
+                        (Some(x), "max") => self.positive_int(x, &at, None),
+                        (Some(x), _) => self.duration(x, &at),
+                        (None, _) => self.issue(
+                            &at,
+                            "a rate needs both `max` (how many) and `per` (over how long, e.g. \
+                             `10m`)"
+                                .to_string(),
+                        ),
+                    }
+                }
+            }
+        }
+        if let Some(budget) = map.get("budget")
+            && let Some(budget) = self.object(budget, "publish.budget", BUDGET_PUBLISH_KEYS)
+        {
+            if let Some(x) = budget.get("monthly_cost")
+                && !x.as_f64().is_some_and(|c| c > 0.0)
+            {
+                self.issue(
+                    "publish.budget.monthly_cost",
+                    "must be an amount above 0, in the currency the models are priced in"
+                        .to_string(),
+                );
+            }
+            if let Some(x) = budget.get("monthly_tokens") {
+                self.positive_int(x, "publish.budget.monthly_tokens", None);
+            }
+        }
         if let Some(filter) = map.get("output_filter")
             && let Some(f) = self.object(filter, "publish.output_filter", OUTPUT_FILTER_KEYS)
             && let Some(patterns) = f.get("patterns")
@@ -2175,6 +2227,46 @@ mod tests {
             over[0].message.contains("between 1 and 64"),
             "{}",
             over[0].message
+        );
+    }
+
+    #[test]
+    fn visitor_rates_and_the_owner_budget_are_checked() {
+        let ok = check(
+            json!({ "publish": {
+                "rate_limits": {
+                    "visitor": { "max": 20, "per": "10m" },
+                    "ip": { "max": 60, "per": "1h" }
+                },
+                "budget": { "monthly_cost": 25.5, "monthly_tokens": 2000000 }
+            } }),
+            Stage::Draft,
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+
+        let issues = check(
+            json!({ "publish": {
+                "rate_limits": {
+                    "visitor": { "max": 0, "per": "10" },
+                    "ip": { "per": "1m", "burst": 3 },
+                    "token": {}
+                },
+                "budget": { "monthly_cost": -1, "monthly_tokens": 1.5, "daily_cost": 1 }
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "publish.rate_limits.token",
+                "publish.rate_limits.visitor.max",
+                "publish.rate_limits.visitor.per",
+                "publish.rate_limits.ip.burst",
+                "publish.rate_limits.ip.max",
+                "publish.budget.daily_cost",
+                "publish.budget.monthly_cost",
+                "publish.budget.monthly_tokens",
+            ]
         );
     }
 

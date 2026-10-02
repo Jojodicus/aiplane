@@ -13,8 +13,12 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use jiff::SignedDuration;
-use serde_json::Value;
+use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agents as agents_db;
+use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
+use aiplane_core::server::limits::{LimitExceeded, Rate, RateExceeded, VisitorKey, VisitorRates};
+use jiff::{SignedDuration, Timestamp};
+use serde_json::{Value, json};
 
 use session_core::db as chat;
 
@@ -49,6 +53,226 @@ pub fn spec_allows_origin(spec: &Value, origin: &str) -> bool {
         None => true,
         Some(list) => list.iter().any(|o| o.as_str() == Some(origin)),
     }
+}
+
+/// Messages one visitor session may send when the spec sets no
+/// `publish.rate_limits.visitor`: a person typing, with room to spare.
+pub const DEFAULT_VISITOR_RATE: Rate = Rate {
+    max: 20,
+    per: SignedDuration::from_secs(10 * 60),
+};
+
+/// Conversations started plus messages sent from one client IP when the spec
+/// sets no `publish.rate_limits.ip`: an office behind one NAT, not a script.
+pub const DEFAULT_IP_RATE: Rate = Rate {
+    max: 60,
+    per: SignedDuration::from_secs(10 * 60),
+};
+
+fn rate(spec: &Value, scope: &str, default: Rate) -> Rate {
+    let at = |key: &str| spec.pointer(&format!("/publish/rate_limits/{scope}/{key}"));
+    let max = at("max")
+        .and_then(Value::as_u64)
+        .and_then(|m| u32::try_from(m).ok())
+        .filter(|m| *m > 0);
+    let per = at("per")
+        .and_then(Value::as_str)
+        .and_then(super::spec::parse_duration);
+    match (max, per) {
+        (Some(max), Some(per)) => Rate { max, per },
+        _ => default,
+    }
+}
+
+/// `publish.rate_limits` of a spec, each scope falling back to its default.
+pub fn visitor_rates(spec: &Value) -> VisitorRates {
+    VisitorRates {
+        visitor: rate(spec, "visitor", DEFAULT_VISITOR_RATE),
+        ip: rate(spec, "ip", DEFAULT_IP_RATE),
+    }
+}
+
+/// `publish.budget` of a spec as limits over the month: what the owner lets
+/// the agent's conversations spend. None by default: an owner who sets no
+/// budget relies on the operator's limits on the agent and its pools.
+pub fn owner_budget(spec: &Value) -> Vec<EffectiveLimit> {
+    let monthly = |dimension, value: Option<f64>| {
+        value.filter(|v| *v > 0.0).map(|value| EffectiveLimit {
+            model: None,
+            dimension,
+            window: Window::Month,
+            value,
+            source: SubjectType::AgentSpec,
+        })
+    };
+    let budget = |key: &str| spec.pointer(&format!("/publish/budget/{key}"));
+    [
+        monthly(
+            Dimension::Cost,
+            budget("monthly_cost").and_then(Value::as_f64),
+        ),
+        monthly(
+            Dimension::Tokens,
+            budget("monthly_tokens")
+                .and_then(Value::as_u64)
+                .map(|t| t as f64),
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Who is asking: the visitor session once there is one, and the client IP
+/// when the request carries one.
+#[derive(Debug, Clone, Copy)]
+pub struct Admission<'a> {
+    pub visitor_id: Option<&'a str>,
+    pub ip: Option<&'a str>,
+}
+
+/// Why a visitor request was refused before it reached the agent.
+#[derive(Debug, Clone)]
+pub enum Refusal {
+    /// Too many requests from this visitor or IP; wait `retry_after_secs`.
+    Rate(RateExceeded),
+    /// The agent's conversations have spent a budget; it is unavailable
+    /// until usage leaves the window.
+    Budget(LimitExceeded),
+}
+
+impl Refusal {
+    pub fn retry_after_secs(&self) -> i64 {
+        match self {
+            Refusal::Rate(r) => r.retry_after_secs,
+            Refusal::Budget(b) => b.retry_after_secs,
+        }
+    }
+
+    /// What the agent's managers read in its audit trail and in the agents
+    /// API: which limit, and the numbers behind it.
+    pub fn detail(&self, visitor_id: Option<&str>) -> Value {
+        match self {
+            Refusal::Rate(r) => json!({
+                "limit": format!("{}_rate", r.scope.as_str()),
+                "visitor_id": visitor_id,
+                "max": r.max,
+                "per_secs": r.per.as_secs(),
+                "retry_after_secs": r.retry_after_secs,
+            }),
+            Refusal::Budget(b) => budget_detail(b),
+        }
+    }
+}
+
+/// The budget breach as the owner reads it.
+pub fn budget_detail(b: &LimitExceeded) -> Value {
+    json!({
+        "limit": "budget",
+        "set_by": if b.subject == SubjectType::AgentSpec { "agent" } else { "operator" },
+        "dimension": b.dimension.as_str(),
+        "window": b.window.as_str(),
+        "max": b.limit,
+        "used": b.used,
+        "retry_after_secs": b.retry_after_secs,
+    })
+}
+
+/// Gate one visitor request to `agent_id` on the agent's live
+/// `publish.rate_limits` and budget, at `now` (a parameter so tests can
+/// stand inside a window). Every refusal is audited on the agent. An agent
+/// with no live version is not gated here; the endpoint refuses it anyway.
+pub async fn admit(
+    state: &RamaState,
+    agent_id: &str,
+    who: Admission<'_>,
+    now: Timestamp,
+) -> Result<(), Refusal> {
+    let spec = match agents_db::live(&state.db, agent_id).await {
+        Ok(Some((_, text))) => serde_json::from_str(&text).unwrap_or(Value::Null),
+        Ok(None) => return Ok(()),
+        Err(err) => {
+            tracing::warn!(error = %err, agent = agent_id, "reading the agent's limits; admitting");
+            return Ok(());
+        }
+    };
+    let key = VisitorKey {
+        principal_id: agent_id,
+        visitor_id: who.visitor_id,
+        ip: who.ip,
+    };
+    let refused = match state
+        .enforcer
+        .check_visitor(&visitor_rates(&spec), &key, now)
+        .await
+    {
+        Err(rate) => Refusal::Rate(rate),
+        Ok(()) => match state
+            .enforcer
+            .check_agent(agent_id, &owner_budget(&spec), now)
+            .await
+        {
+            Err(budget) => Refusal::Budget(budget),
+            Ok(()) => return Ok(()),
+        },
+    };
+    if let Err(err) = agent_audit::record_run_event(
+        &state.db,
+        AuditKind::LimitRefused,
+        agent_id,
+        None,
+        refused.detail(who.visitor_id),
+    )
+    .await
+    {
+        tracing::warn!(error = %err, agent = agent_id, "recording a refused visitor request");
+    }
+    Err(refused)
+}
+
+/// What an agent's managers see of its limits under the live spec `live`
+/// (`None` before it is published): the visitor rates and retention in
+/// force, each budget with what has been spent against it, and whether the
+/// agent is turning visitors away right now and why.
+pub async fn limits_view(
+    state: &RamaState,
+    agent_id: &str,
+    live: Option<&Value>,
+    now: Timestamp,
+) -> Value {
+    let spec = live.cloned().unwrap_or(Value::Null);
+    let rates = visitor_rates(&spec);
+    let rate = |r: Rate| json!({ "max": r.max, "per_secs": r.per.as_secs() });
+    let statuses = state
+        .enforcer
+        .agent_statuses(agent_id, &owner_budget(&spec), now)
+        .await;
+    let budget: Vec<Value> = statuses
+        .iter()
+        .map(|s| {
+            json!({
+                "set_by": if s.source == SubjectType::AgentSpec { "agent" } else { "operator" },
+                "dimension": s.dimension.as_str(),
+                "window": s.window.as_str(),
+                "max": s.limit,
+                "used": s.used,
+                "exceeded": s.exceeded(),
+                "refreshes_at": s.refreshes_at,
+            })
+        })
+        .collect();
+    let exhausted = state
+        .enforcer
+        .check_agent(agent_id, &owner_budget(&spec), now)
+        .await
+        .err();
+    json!({
+        "rate_limits": { "visitor": rate(rates.visitor), "ip": rate(rates.ip) },
+        "retention_days": super::retention::retention_days(&spec),
+        "budget": budget,
+        "available": exhausted.is_none(),
+        "unavailable_reason": exhausted.as_ref().map(budget_detail),
+    })
 }
 
 /// Runs one opened turn of an agent conversation as the agent's principal.
@@ -187,6 +411,56 @@ mod tests {
         assert!(!spec_allows_origin(&listed, "https://b.example"));
         let empty = json!({ "publish": { "origins": [] } });
         assert!(!spec_allows_origin(&empty, "https://a.example"));
+    }
+
+    #[test]
+    fn visitor_rates_come_from_the_publish_settings_scope_by_scope() {
+        let set = visitor_rates(&json!({ "publish": { "rate_limits": {
+            "visitor": { "max": 3, "per": "1m" }
+        } } }));
+        assert_eq!(
+            set.visitor,
+            Rate {
+                max: 3,
+                per: SignedDuration::from_secs(60)
+            }
+        );
+        assert_eq!(set.ip, DEFAULT_IP_RATE, "an unset scope keeps its default");
+        let none = visitor_rates(&json!({}));
+        assert_eq!(none.visitor, DEFAULT_VISITOR_RATE);
+        assert_eq!(DEFAULT_VISITOR_RATE.max, 20);
+        assert_eq!(DEFAULT_IP_RATE.max, 60);
+        let half = visitor_rates(&json!({ "publish": { "rate_limits": {
+            "visitor": { "max": 3 }
+        } } }));
+        assert_eq!(
+            half.visitor, DEFAULT_VISITOR_RATE,
+            "a rate is both or neither"
+        );
+    }
+
+    #[test]
+    fn the_owner_budget_is_a_monthly_ceiling_per_dimension_and_none_by_default() {
+        assert!(owner_budget(&json!({ "publish": {} })).is_empty());
+        let both = owner_budget(&json!({ "publish": { "budget": {
+            "monthly_cost": 25.5, "monthly_tokens": 1000
+        } } }));
+        let cells: Vec<(Dimension, Window, f64, SubjectType)> = both
+            .iter()
+            .map(|l| (l.dimension, l.window, l.value, l.source))
+            .collect();
+        assert_eq!(
+            cells,
+            [
+                (Dimension::Cost, Window::Month, 25.5, SubjectType::AgentSpec),
+                (
+                    Dimension::Tokens,
+                    Window::Month,
+                    1000.0,
+                    SubjectType::AgentSpec
+                ),
+            ]
+        );
     }
 
     #[test]

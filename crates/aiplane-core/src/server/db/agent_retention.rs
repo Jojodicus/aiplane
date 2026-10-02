@@ -1,0 +1,282 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Deleting an agent's conversations once its retention period has passed
+//! (`docs/agents.md` §5, "What #92 built").
+//!
+//! A conversation is a root `chat_sessions` row the agent's principal owns
+//! (`parent_turn_id IS NULL`). It goes together with every sub-agent run it
+//! started, however deep, because those child sessions hold the same
+//! visitor's data. The foreign keys take the rest: turns, tool calls,
+//! `agent_state`, the visitor session. A person's chat has `user_id` set and
+//! is never selected, neither as a conversation nor as a child.
+
+use jiff::Timestamp;
+
+use super::{DbError, Pool};
+
+/// What one sweep of one agent deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub conversations: u64,
+    pub sub_agent_runs: u64,
+}
+
+impl Swept {
+    pub fn is_empty(&self) -> bool {
+        self.conversations == 0 && self.sub_agent_runs == 0
+    }
+}
+
+/// Delete agent `principal_id`'s conversations whose last activity
+/// (`updated_at`) is before `idle_before`, with their sub-agent runs, in one
+/// transaction.
+pub async fn delete_idle_conversations(
+    pool: &Pool,
+    principal_id: &str,
+    idle_before: Timestamp,
+) -> Result<Swept, DbError> {
+    let mut tx = pool.begin().await?;
+    let candidates: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, updated_at FROM chat_sessions
+         WHERE principal_id = ? AND user_id IS NULL AND parent_turn_id IS NULL",
+    )
+    .bind(principal_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Parsed rather than compared as text: RFC 3339 with fractional seconds
+    // of varying length does not order as a string.
+    let roots: Vec<String> = candidates
+        .into_iter()
+        .filter(|(_, updated)| updated.parse::<Timestamp>().is_ok_and(|t| t < idle_before))
+        .map(|(id, _)| id)
+        .collect();
+
+    let mut children = Vec::new();
+    let mut frontier = roots.clone();
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for session in &frontier {
+            let found: Vec<String> = sqlx::query_scalar(
+                "SELECT c.id FROM chat_sessions c
+                 JOIN chat_turns t ON t.id = c.parent_turn_id
+                 WHERE t.session_id = ? AND c.user_id IS NULL",
+            )
+            .bind(session)
+            .fetch_all(&mut *tx)
+            .await?;
+            next.extend(found);
+        }
+        next.retain(|id| !children.contains(id) && !roots.contains(id));
+        children.extend(next.iter().cloned());
+        frontier = next;
+    }
+
+    for id in children.iter().chain(&roots) {
+        sqlx::query("DELETE FROM chat_sessions WHERE id = ? AND user_id IS NULL")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(Swept {
+        conversations: roots.len() as u64,
+        sub_agent_runs: children.len() as u64,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::db::visitor_sessions::{self, NewVisitorSession};
+    use crate::server::db::{agent_state, agents, embed_keys, system_principals as sp, users};
+    use jiff::SignedDuration;
+    use session_core::db as chat;
+    use std::path::Path;
+
+    const DAY: SignedDuration = SignedDuration::from_hours(24);
+
+    fn t0() -> Timestamp {
+        "2026-10-01T12:00:00Z".parse().unwrap()
+    }
+
+    async fn agent(pool: &Pool, name: &str) -> String {
+        agents::create(
+            pool,
+            &sp::NewPrincipal {
+                name,
+                display: name,
+                description: "",
+            },
+            "{}",
+            "alice",
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .principal
+        .id
+    }
+
+    async fn last_active(pool: &Pool, session: &str, at: Timestamp) {
+        sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+            .bind(at.to_string())
+            .bind(session)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn count(pool: &Pool, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    }
+
+    async fn visitor_conversation(pool: &Pool, agent: &str, key: &str, hash: &str) -> String {
+        visitor_sessions::start(
+            pool,
+            &NewVisitorSession {
+                principal_id: agent,
+                embed_key_id: key,
+                agent_version: 1,
+                token_hash: hash,
+                client_ip: None,
+                idle_ttl: SignedDuration::from_mins(30),
+                max_age: DAY,
+                now: t0(),
+            },
+        )
+        .await
+        .unwrap()
+        .session_id
+    }
+
+    async fn sub_agent_run(pool: &Pool, sub: &str, parent_session: &str) -> String {
+        let parent_turn = uuid::Uuid::new_v4().to_string();
+        chat::create_assistant_turn_in_progress(pool, parent_session, &parent_turn, "m")
+            .await
+            .unwrap();
+        chat::create_principal_session(
+            pool,
+            &chat::NewRunSession {
+                principal_id: sub,
+                title: None,
+                parent_turn_id: Some(&parent_turn),
+                agent_version: Some(1),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn an_idle_conversation_goes_with_its_sub_agent_runs_state_and_visitor() {
+        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let support = agent(&pool, "support").await;
+        let billing = agent(&pool, "billing").await;
+        let key = embed_keys::create(
+            &pool,
+            &embed_keys::NewEmbedKey {
+                principal_id: &support,
+                name: "site",
+                origins: &["https://a.example".to_string()],
+                key_hash: "kh",
+            },
+            "alice",
+        )
+        .await
+        .unwrap()
+        .id;
+        let old = visitor_conversation(&pool, &support, &key, "old").await;
+        let fresh = visitor_conversation(&pool, &support, &key, "fresh").await;
+        let child = sub_agent_run(&pool, &billing, &old).await;
+        let grandchild = sub_agent_run(&pool, &support, &child).await;
+        let billings_own = visitor_conversation_without_key(&pool, &billing).await;
+        agent_state::put(
+            &pool,
+            &old,
+            "issue",
+            &serde_json::json!("billing"),
+            "llm",
+            t0(),
+        )
+        .await
+        .unwrap();
+        for s in [&old, &child, &grandchild, &billings_own] {
+            last_active(&pool, s, t0()).await;
+        }
+        last_active(&pool, &fresh, t0() + 20 * DAY).await;
+
+        let swept = delete_idle_conversations(&pool, &support, t0() + 10 * DAY)
+            .await
+            .unwrap();
+        assert_eq!(
+            swept,
+            Swept {
+                conversations: 1,
+                sub_agent_runs: 2
+            }
+        );
+        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM chat_sessions ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let mut expected = vec![fresh.clone(), billings_own.clone()];
+        expected.sort();
+        assert_eq!(
+            left, expected,
+            "the fresh conversation and the sub-agent's own one stay"
+        );
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM agent_state").await, 0);
+        assert_eq!(
+            count(&pool, "SELECT COUNT(*) FROM visitor_sessions").await,
+            1,
+            "only the fresh conversation's visitor remains"
+        );
+    }
+
+    async fn visitor_conversation_without_key(pool: &Pool, agent: &str) -> String {
+        chat::create_principal_session(
+            pool,
+            &chat::NewRunSession {
+                principal_id: agent,
+                title: None,
+                parent_turn_id: None,
+                agent_version: Some(1),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_persons_chats_are_never_swept() {
+        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let support = agent(&pool, "support").await;
+        let now = Timestamp::now();
+        users::upsert(
+            &pool,
+            &users::User {
+                id: "alice".into(),
+                email: "alice@example.com".into(),
+                name: None,
+                roles: vec![],
+                created_at: now,
+                updated_at: now,
+                timezone: None,
+                speech_voice: None,
+            },
+        )
+        .await
+        .unwrap();
+        let chat = chat::create_session(&pool, "alice").await.unwrap();
+        last_active(&pool, &chat.id, t0()).await;
+
+        let swept = delete_idle_conversations(&pool, &support, t0() + 100 * DAY)
+            .await
+            .unwrap();
+        assert!(swept.is_empty());
+        assert_eq!(count(&pool, "SELECT COUNT(*) FROM chat_sessions").await, 1);
+    }
+}

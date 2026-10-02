@@ -32,6 +32,9 @@ const OTHER_SITE: &str = "https://evil.example";
 const ANSWER: &str = "Hello visitor, how can I help?";
 const PARTIAL: &str = "Let me check the ord";
 
+// Visitor limits, owner budget and retention (#92).
+mod limits;
+
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive
 /// the opened assistant turn to a terminal status", so this double writes a

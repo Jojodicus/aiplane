@@ -236,6 +236,8 @@ export const fr: Catalog = {
  "admin-users-you-badge": "vous",
  "admin-value-default": "défaut",
  "admin-value-na": "s/o",
+ "agent-embed-rate-limited": "Vous envoyez des messages plus vite que cet assistant ne les accepte. Veuillez patienter {seconds} secondes, puis réessayer.",
+ "agent-embed-unavailable": "Cet assistant est temporairement indisponible. Veuillez réessayer plus tard ou utiliser les autres moyens de contact du site.",
  "agent-output-redacted": "[supprimé]",
  "agent-output-withheld": "Je ne peux pas donner cette réponse, car elle mentionnait des informations que je n’ai pas pu vérifier pour vous. Veuillez reformuler votre question ou contacter l’assistance.",
  "agents-back": "Retour aux agents",

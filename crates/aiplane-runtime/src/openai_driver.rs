@@ -677,8 +677,15 @@ impl SessionDriver for OpenAiDriver {
                     aiplane_core::server::upstreams::PoolKind::Chat,
                 )
                 .unwrap_or(routing_model);
+            let access = self
+                .agent
+                .as_deref()
+                .map_or_else(aiplane_core::server::upstreams::PoolAccess::all, |run| {
+                    run.pools().clone()
+                });
             tokio::spawn(async move {
-                crate::server::compaction::maybe_autocompact(&state, &session_id, &model).await;
+                crate::server::compaction::maybe_autocompact(&state, &session_id, &model, &access)
+                    .await;
             });
         }
         result
@@ -981,7 +988,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         ..d.tool_ctx.clone()
     };
 
-    let access = d.state.pool_access_for_principal(&d.tool_ctx.principal);
+    let access = match d.agent.as_deref() {
+        Some(run) => run.pools().clone(),
+        None => d.state.pool_access_for_principal(&d.tool_ctx.principal),
+    };
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;
@@ -3265,29 +3275,34 @@ fn emit_usage(
     tokens: (Option<i64>, Option<i64>, Option<i64>),
 ) {
     let (prompt_tokens, completion_tokens, total_tokens) = tokens;
-    d.state.usage.emit(UsageRecord {
-        created_at: jiff::Timestamp::now(),
-        user_id: d.tool_ctx.principal.subject_id().to_string(),
-        user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
-        token_id: None,
-        token_name: None,
-        source: d.source,
-        kind: UsageKind::Chat,
-        backend: backend.to_string(),
-        model: model.to_string(),
-        status,
-        duration_ms: started.elapsed().as_millis() as i64,
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-        input_units: None,
-        output_units: None,
-        enforce_limits: d
-            .state
-            .upstreams
-            .enforce_limits_for_model(model, aiplane_core::server::upstreams::PoolKind::Chat),
-        principal_kind: d.tool_ctx.principal.kind(),
-    });
+    d.state.usage.emit(
+        UsageRecord {
+            created_at: jiff::Timestamp::now(),
+            user_id: d.tool_ctx.principal.subject_id().to_string(),
+            user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
+            token_id: None,
+            token_name: None,
+            source: d.source,
+            kind: UsageKind::Chat,
+            backend: backend.to_string(),
+            model: model.to_string(),
+            status,
+            duration_ms: started.elapsed().as_millis() as i64,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            input_units: None,
+            output_units: None,
+            enforce_limits: d
+                .state
+                .upstreams
+                .enforce_limits_for_model(model, aiplane_core::server::upstreams::PoolKind::Chat),
+            principal_kind: d.tool_ctx.principal.kind(),
+            agent_id: None,
+            chain: None,
+        }
+        .in_run(d.tool_ctx.run.as_deref()),
+    );
 }
 
 fn emit_selector_usage(
@@ -3301,32 +3316,37 @@ fn emit_selector_usage(
     ) else {
         return;
     };
-    d.state.usage.emit(UsageRecord {
-        created_at: jiff::Timestamp::now(),
-        user_id: d.tool_ctx.principal.subject_id().to_string(),
-        user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
-        token_id: None,
-        token_name: None,
-        source: d.source,
-        kind: UsageKind::SystemOne,
-        backend: backend.to_string(),
-        model: decision.selector_model.clone(),
-        status: 200,
-        duration_ms: decision.selector_duration_ms,
-        prompt_tokens: usage.input_tokens,
-        completion_tokens: usage.output_tokens,
-        total_tokens: match (usage.input_tokens, usage.output_tokens) {
-            (Some(input), Some(output)) => Some(input + output),
-            _ => None,
-        },
-        input_units: None,
-        output_units: None,
-        enforce_limits: d.state.upstreams.enforce_limits_for_model(
-            &decision.selector_model,
-            aiplane_core::server::upstreams::PoolKind::SystemOne,
-        ),
-        principal_kind: d.tool_ctx.principal.kind(),
-    });
+    d.state.usage.emit(
+        UsageRecord {
+            created_at: jiff::Timestamp::now(),
+            user_id: d.tool_ctx.principal.subject_id().to_string(),
+            user_email: (!user_email.is_empty()).then(|| user_email.to_string()),
+            token_id: None,
+            token_name: None,
+            source: d.source,
+            kind: UsageKind::SystemOne,
+            backend: backend.to_string(),
+            model: decision.selector_model.clone(),
+            status: 200,
+            duration_ms: decision.selector_duration_ms,
+            prompt_tokens: usage.input_tokens,
+            completion_tokens: usage.output_tokens,
+            total_tokens: match (usage.input_tokens, usage.output_tokens) {
+                (Some(input), Some(output)) => Some(input + output),
+                _ => None,
+            },
+            input_units: None,
+            output_units: None,
+            enforce_limits: d.state.upstreams.enforce_limits_for_model(
+                &decision.selector_model,
+                aiplane_core::server::upstreams::PoolKind::SystemOne,
+            ),
+            principal_kind: d.tool_ctx.principal.kind(),
+            agent_id: None,
+            chain: None,
+        }
+        .in_run(d.tool_ctx.run.as_deref()),
+    );
 }
 
 fn upstream_err<E: std::fmt::Display>(e: E) -> TurnError {

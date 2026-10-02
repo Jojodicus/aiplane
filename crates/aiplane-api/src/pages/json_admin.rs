@@ -953,7 +953,23 @@ pub async fn limits_save(State(state): State<Arc<RamaState>>, req: Request) -> R
                 None => return bad_request(format!("unknown user: {}", parsed.subject_id)),
             }
         }
+        limits::SubjectType::System => match db::agents::get(&state.db, &parsed.subject_id).await {
+            Ok(Some(a)) => a.principal.id,
+            Ok(None) => {
+                return bad_request(format!(
+                    "unknown agent: {} — give the agent's id as shown on its page",
+                    parsed.subject_id
+                ));
+            }
+            Err(err) => return internal(err),
+        },
         limits::SubjectType::Global => String::new(),
+        limits::SubjectType::AgentSpec => {
+            return bad_request(
+                "an agent's own budget is set in its spec (`publish.budget`), not here — use \
+                 subject type `system` to cap an agent",
+            );
+        }
     };
     let Some(dimension) = limits::Dimension::parse(&parsed.dimension) else {
         return bad_request(format!("unknown dimension: {}", parsed.dimension));

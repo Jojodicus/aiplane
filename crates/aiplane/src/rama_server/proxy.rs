@@ -119,6 +119,8 @@ impl RecordParams {
             output_units: self.output_units,
             enforce_limits: self.enforce_limits,
             principal_kind: self.principal_kind,
+            agent_id: None,
+            chain: None,
         });
     }
 }
@@ -1022,6 +1024,8 @@ fn record_selector_usage(state: &RamaState, user: &UserCtx, decision: &Automatic
             .upstreams
             .enforce_limits_for_model(&decision.selector_model, PoolKind::SystemOne),
         principal_kind: user.principal.kind(),
+        agent_id: None,
+        chain: None,
     });
 }
 

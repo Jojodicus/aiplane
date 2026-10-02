@@ -2,3 +2,8 @@
 
 agent-output-withheld = Je ne peux pas donner cette réponse, car elle mentionnait des informations que je n’ai pas pu vérifier pour vous. Veuillez reformuler votre question ou contacter l’assistance.
 agent-output-redacted = [supprimé]
+
+# What a website visitor reads when the public agent endpoint refuses a
+# request (#92): the agent's budget is spent, or a rate limit was hit.
+agent-embed-unavailable = Cet assistant est temporairement indisponible. Veuillez réessayer plus tard ou utiliser les autres moyens de contact du site.
+agent-embed-rate-limited = Vous envoyez des messages plus vite que cet assistant ne les accepte. Veuillez patienter { $seconds } secondes, puis réessayer.

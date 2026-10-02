@@ -178,10 +178,158 @@ pub async fn slide(
     })
 }
 
+/// A timestamp column read back as text, kept only when it is at or after
+/// `since`. The columns hold `Timestamp`'s own RFC 3339 text, whose
+/// fractional seconds vary in length and so do not order as strings within
+/// one second; SQL narrows by the whole second before, the comparison here
+/// is exact.
+fn at_or_after(rows: Vec<String>, since: Timestamp) -> Vec<Timestamp> {
+    rows.iter()
+        .filter_map(|t| t.parse::<Timestamp>().ok())
+        .filter(|t| *t >= since)
+        .collect()
+}
+
+fn second_before(since: Timestamp) -> String {
+    since
+        .checked_sub(SignedDuration::from_secs(1))
+        .unwrap_or(since)
+        .to_string()
+}
+
+/// When visitor session `id` sent each of its messages at or after `since`:
+/// the per-visitor rate window.
+pub async fn message_times(
+    pool: &Pool,
+    id: &str,
+    since: Timestamp,
+) -> Result<Vec<Timestamp>, DbError> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT t.created_at FROM chat_turns t
+         JOIN visitor_sessions v ON v.session_id = t.session_id
+         WHERE v.id = ? AND t.role = 'user' AND t.created_at >= ?",
+    )
+    .bind(id)
+    .bind(second_before(since))
+    .fetch_all(pool)
+    .await?;
+    Ok(at_or_after(rows, since))
+}
+
+/// Every conversation `ip` started with agent `principal_id`, and every
+/// message sent in one, at or after `since`: the per-IP rate window. Starting
+/// conversations counts too, or a client could open a fresh one for each
+/// message and never meet the per-visitor limit.
+pub async fn ip_event_times(
+    pool: &Pool,
+    principal_id: &str,
+    ip: &str,
+    since: Timestamp,
+) -> Result<Vec<Timestamp>, DbError> {
+    let from = second_before(since);
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT created_at FROM visitor_sessions
+         WHERE principal_id = ? AND client_ip = ? AND created_at >= ?
+         UNION ALL
+         SELECT t.created_at FROM chat_turns t
+         JOIN visitor_sessions v ON v.session_id = t.session_id
+         WHERE v.principal_id = ? AND v.client_ip = ? AND t.role = 'user' AND t.created_at >= ?",
+    )
+    .bind(principal_id)
+    .bind(ip)
+    .bind(&from)
+    .bind(principal_id)
+    .bind(ip)
+    .bind(&from)
+    .fetch_all(pool)
+    .await?;
+    Ok(at_or_after(rows, since))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::server::db::{agents, embed_keys, system_principals as sp};
+
+    async fn message_at(pool: &Pool, session_id: &str, at: Timestamp) {
+        let id = Uuid::new_v4().to_string();
+        chat::create_user_turn(pool, session_id, &id, "hi")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE chat_turns SET created_at = ? WHERE id = ?")
+            .bind(at.to_string())
+            .bind(&id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_visitors_message_times_are_its_own_user_turns_inside_the_window() {
+        let fx = fixture().await;
+        let v = fx.start("th", 30 * MIN, 24 * 60 * MIN).await;
+        let w = fx.start("th2", 30 * MIN, 24 * 60 * MIN).await;
+        message_at(&fx.pool, &v.session_id, add(t0(), MIN).unwrap()).await;
+        message_at(&fx.pool, &v.session_id, add(t0(), 5 * MIN).unwrap()).await;
+        message_at(&fx.pool, &w.session_id, add(t0(), 5 * MIN).unwrap()).await;
+        chat::create_assistant_turn_in_progress(&fx.pool, &v.session_id, "a1", "m")
+            .await
+            .unwrap();
+
+        let since = add(t0(), 2 * MIN).unwrap();
+        assert_eq!(
+            message_times(&fx.pool, &v.id, since).await.unwrap(),
+            [add(t0(), 5 * MIN).unwrap()],
+            "the other visitor's message, the answer and the older message do not count"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ips_events_are_the_conversations_it_started_and_their_messages() {
+        let fx = fixture().await;
+        let v = fx.start("th", 30 * MIN, 24 * 60 * MIN).await;
+        message_at(&fx.pool, &v.session_id, add(t0(), MIN).unwrap()).await;
+        let elsewhere = start(
+            &fx.pool,
+            &NewVisitorSession {
+                principal_id: &fx.agent,
+                embed_key_id: &fx.key,
+                agent_version: 3,
+                token_hash: "th3",
+                client_ip: Some("198.51.100.7"),
+                idle_ttl: 30 * MIN,
+                max_age: 60 * MIN,
+                now: t0(),
+            },
+        )
+        .await
+        .unwrap();
+        message_at(&fx.pool, &elsewhere.session_id, add(t0(), MIN).unwrap()).await;
+
+        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0())
+            .await
+            .unwrap();
+        times.sort();
+        assert_eq!(times, [t0(), add(t0(), MIN).unwrap()]);
+        assert!(
+            ip_event_times(
+                &fx.pool,
+                &fx.agent,
+                "192.0.2.1",
+                add(t0(), 2 * MIN).unwrap()
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0())
+                .await
+                .unwrap()
+                .is_empty(),
+            "a per-IP window is per agent"
+        );
+    }
     use std::path::Path;
 
     const MIN: SignedDuration = SignedDuration::from_secs(60);

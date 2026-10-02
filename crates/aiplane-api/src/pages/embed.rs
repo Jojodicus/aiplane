@@ -26,19 +26,19 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use rama::http::service::web::extract::State;
-use rama::http::{HeaderMap, Request, Response, StatusCode, header};
+use rama::http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use session_core::chat_json::{ChatEvent, SseTx, json_stream_response, sse_json};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
-use session_core::i18n::Lang;
+use session_core::i18n::{self, Lang, t, t_args};
 
 use super::{bad_request, internal, json_error, json_ok};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{self as embed_rt, OpenedTurn};
+use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal};
 use aiplane_runtime::rama_server::state::RamaState;
 
 macro_rules! or_return {
@@ -207,11 +207,49 @@ fn client_ip(req: &Request) -> Option<String> {
         .or_else(|| aiplane_features::server::geoip::peer_ip(req))
 }
 
-/// Where the per-visitor and per-IP limits of #92 plug in. Until then every
-/// accepted request passes; the agent's grants, gates and the owner's pool
-/// limits are what bound a visitor today.
-fn admit(_visitor: Option<&VisitorSession>, _client_ip: Option<&str>) -> Result<(), Response> {
-    Ok(())
+/// Gate a request that makes the agent work — a new conversation or a
+/// message — on the agent's visitor rates and budget (`docs/agents.md` §5,
+/// "What #92 built"). Reads cost the agent nothing and are not gated: the
+/// widget re-attaches to its event stream whenever it likes.
+async fn admit(
+    state: &RamaState,
+    agent_id: &str,
+    visitor_id: Option<&str>,
+    ip: Option<&str>,
+    lang: Lang,
+) -> Result<(), Response> {
+    let who = Admission { visitor_id, ip };
+    match embed_rt::admit(state, agent_id, who, Timestamp::now()).await {
+        Ok(()) => Ok(()),
+        Err(refusal) => Err(refused(&refusal, lang)),
+    }
+}
+
+/// A refusal in the visitor's language. The visitor learns to wait, or that
+/// the assistant is unavailable; why it is unavailable (the owner's budget)
+/// is for the agent's managers, who find it in the audit trail and in
+/// `GET /api/v0/agents/{id}` under `limits`.
+fn refused(refusal: &Refusal, lang: Lang) -> Response {
+    let retry = refusal.retry_after_secs();
+    let mut resp = match refusal {
+        Refusal::Rate(_) => refuse(
+            StatusCode::TOO_MANY_REQUESTS,
+            "visitor_rate_limited",
+            &t_args(
+                lang,
+                "agent-embed-rate-limited",
+                &i18n::args([("seconds", retry.into())]),
+            ),
+        ),
+        Refusal::Budget(_) => refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent_unavailable",
+            &t(lang, "agent-embed-unavailable"),
+        ),
+    };
+    resp.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(retry));
+    resp
 }
 
 fn agent_json(live: &Live) -> Value {
@@ -242,7 +280,8 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
     }
     let live = or_return!(live_agent(&state, &key.principal_id, None).await);
     or_return!(check_origin(&key, &live.spec, &headers));
-    or_return!(admit(None, ip.as_deref()));
+    let lang = Lang::from_request(&headers);
+    or_return!(admit(&state, &key.principal_id, None, ip.as_deref(), lang).await);
 
     let (visitor_token, token_hash) = token::mint_visitor();
     let idle_ttl = embed_rt::idle_ttl(&live.spec);
@@ -313,7 +352,6 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
         .and_then(|run| run.agent_version);
     let live = live_agent(state, &session.principal_id, pinned).await?;
     check_origin(&key, &live.spec, req.headers())?;
-    admit(Some(&session), client_ip(req).as_deref())?;
     let session = visitor_sessions::slide(&state.db, &session, now)
         .await
         .map_err(internal)?;
@@ -396,6 +434,7 @@ pub struct MessageBody {
 pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
+    let ip = client_ip(&req);
     let body: MessageBody = or_return!(super::read_json(req.into_body(), "the message body").await);
     let text = body.text.trim();
     if text.is_empty() {
@@ -407,6 +446,16 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
              again"
         ));
     }
+    or_return!(
+        admit(
+            &state,
+            &v.session.principal_id,
+            Some(&v.session.id),
+            ip.as_deref(),
+            lang,
+        )
+        .await
+    );
     let Some(runner) = state.agent_turns.runner() else {
         return refuse(
             StatusCode::SERVICE_UNAVAILABLE,

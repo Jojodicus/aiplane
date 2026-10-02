@@ -175,7 +175,7 @@ That compile pass is the audit of every place identity matters.
 | Pools/models (`PoolAccess`) | `allowed_groups` plus the token allowlist | `grants[pool]` only |
 | Memory, personal skills, user tool prefs | yes | no access: `user_id()` is `None` |
 | Usage | `usage_events.user_id` | `usage_events.principal_kind = 'system'`, with the principal id in `user_id` |
-| Limits | subject `user`/`role`/`global` | subject `system`: the owner's budget for this agent (#92) |
+| Limits | subject `user`/`role`/`global` | subject `system`: an operator's cap on the agent, next to the owner's `publish.budget` ([§5](#what-92-built)) |
 | Audit | `mcp_tool_audit.user_id` | plus `principal_kind` and `chain` columns |
 
 - **New connector scope `agent`.** It sits next to `per_user` and `global` in
@@ -286,7 +286,11 @@ on_tool_unavailable: reject             # reject | skip
 publish:
   origins: ["https://www.example.com"]
   idle_ttl: 30m
-  retention_days: 30
+  retention_days: 30                    # default 30
+  rate_limits:                          # defaults: visitor 20 per 10m, ip 60 per 10m
+    visitor: { max: 20, per: 10m }      # messages per visitor session
+    ip:      { max: 60, per: 10m }      # conversations started + messages per client IP
+  budget: { monthly_cost: 50, monthly_tokens: 2000000 }   # no default
   output_filter:
     patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" }
     action: withhold                    # withhold (default) | redact
@@ -613,8 +617,8 @@ that is already in the chain (`EnterError::Cycle`).
   chain, detail)`: tool-call decisions and #93's `injection_detected`
   findings both carry the chain when the call is inside an agent run.
 - `mcp_tool_audit` has a `chain` column (migration `0081`), set on every MCP
-  call inside an agent run. Usage rows do not carry the chain yet; that comes
-  with the per-agent limits and budgets (#92).
+  call inside an agent run. Since #92 usage rows carry it too, plus the
+  main agent as `agent_id` ([§5](#what-92-built)).
 - An agent run gets none of its owner's identity, memory, private skills or
   MCP connections: the request context reads the user row, memories and
   private skills only through `Principal::user_id()`, which is `None` for a
@@ -779,7 +783,7 @@ grants.
 - **Deviations.**
   - `main.skills` is not listed in the system message, and `read_skill` is
     offered only if granted and listed in `main.tools`.
-  - Usage rows of the classifier call are not written (#92).
+  - Usage rows of the classifier call were not written; #92 added them.
   - Whether a tool *declares* a subject parameter is known only from its
     schema, and MCP schemas exist only once the connector is connected. The
     validator therefore checks the route ↔ sub-agent contract (`route.`
@@ -1166,16 +1170,106 @@ untrusted audiences.
   `publish.origins`, in those too. The refusal says which list lacks it. The
   CORS layer only knows the keys, so an origin the spec excludes still gets a
   preflight answer, and the handler then refuses it.
-- **Rate limits are a stub.** `pages::embed::admit` is called with the visitor
-  session and client IP on every request and always admits. The per-visitor
-  and per-IP buckets of #92 go there. Until then a visitor is bounded by the
-  agent's grants, its gates and the limits on its pool.
+- **Rate limits** were a stub here (`pages::embed::admit`, always admitting);
+  #92 replaced it ([below](#what-92-built)).
 - **Not built here.** Secure input (`/api/v0/embed/secure-input/{request_id}`,
   #95) and resuming a suspended visitor turn (#96): the visitor view drops
   `suspension`, and a suspended turn ends the event stream with `idle`. The
   output filter itself is #89. The widget is #94. User-visible text is in
   the error envelope's English `message` with a stable `code`; the widget is
   expected to show its own Fluent strings per `code`.
+
+### What #92 built
+
+Limits that make an embedded agent safe to leave running, an owner budget, the
+pool rule, and retention.
+
+- **Migration `0084_agent_limits.sql`.** `usage_events` gains `agent_id` (the
+  main agent at the root of the run's call chain, `NULL` outside a run) and
+  `chain` (the serialized `RunChain`), with an index on `(agent_id,
+  created_at)`; `visitor_sessions` gains an index on `(principal_id,
+  client_ip)`. `UsageRecord::in_run(chain)` fills both. `user_id` still names
+  the principal that made the call, so a sub-agent's call reads
+  `user_id = <sub-agent>, agent_id = <main agent>`.
+- **Every model call of a conversation is metered**: the main agent's rounds
+  and the sub-agents' (as before, now with `agent_id`), and the router's
+  classifier call, which wrote no usage row until now. Usage rows need
+  `[usage] enabled`; with metrics off, nothing is ever spent against a budget.
+- **Spec settings** (`publish`, validated on save):
+  - `rate_limits.visitor` / `rate_limits.ip`: `{max, per}`, both required,
+    `max ≥ 1`, `per` a duration. Defaults when unset: **20 messages per 10
+    minutes per visitor session**, **60 events per 10 minutes per client IP**.
+  - `budget`: `monthly_cost` (> 0, in the currency models are priced in) and/or
+    `monthly_tokens` (≥ 1). No default.
+  - `retention_days` (existing key): default **30**.
+
+  Limits, budget and retention are read from the agent's **live** version, not
+  the version a conversation is pinned to: lowering a budget or a retention
+  period applies to every open conversation at once.
+- **Visitor rates** (`limits::Enforcer::check_visitor`, `limits::Rate`). An
+  exact sliding window, not the hour-snapped `Window` of spend limits: a
+  visitor told to wait 40 s may send after 40 s. What is counted is what a
+  request leaves behind — the per-visitor bucket counts the visitor's user
+  turns; the per-IP bucket counts conversations started from that IP *and*
+  their messages, per agent, so opening a fresh conversation per message does
+  not dodge the per-visitor limit. A refused request writes nothing, so it
+  never counts. Only `POST /api/v0/embed/sessions` and `POST
+  /api/v0/embed/messages` are gated; reads (`GET …/session`, `…/events`) cost
+  the agent nothing and the widget re-attaches freely.
+- **Owner budget** (`limits::Enforcer::check_agent`). The spec's
+  `publish.budget` becomes month-window limits labelled `AgentSpec`; an
+  operator may add a `limits` rule with the new subject **`system`** (subject
+  id = the agent's id, set at `/api/v0/admin/limits`). Each is its own
+  ceiling — the tightest decides, none widens another — measured against
+  `usage_events.agent_id`. Debt model, like every other limit: the message
+  that crosses the line is served, the next is refused. The owner's budget is
+  part of the agent and applies even with `[limits] enabled = false`; that
+  switch only governs the operator's rules. Both are checked on starting a
+  conversation and on every message.
+- **Refusals.**
+  - Rate: `429 visitor_rate_limited` with `Retry-After` (when the oldest
+    counted event leaves the window) and the Fluent message
+    `agent-embed-rate-limited` in the request's `Accept-Language`.
+  - Budget: `503 agent_unavailable` with `Retry-After` and
+    `agent-embed-unavailable` ("temporarily unavailable"). The visitor is not
+    told why.
+  - Every refusal is an `agent_audit` row `limit_refused` on the agent:
+    `{limit: visitor_rate|ip_rate, visitor_id, max, per_secs,
+    retry_after_secs}` or `{limit: budget, set_by: agent|operator, dimension,
+    window, max, used, retry_after_secs}`. The client IP is not stored in it.
+  - Managers see the state in `GET /api/v0/agents/{id}` under `agent.limits`:
+    `{rate_limits: {visitor, ip}, retention_days, budget: [{set_by,
+    dimension, window, max, used, exceeded, refreshes_at}], available,
+    unavailable_reason}`, where `unavailable_reason` is the budget detail
+    above.
+- **Pools.** An agent run reaches only pools that are both granted and named
+  by its spec: `PoolAccess::for_system_pools(principal, listed)`. Routing goes
+  by model, so before this a model served by a second granted pool (a cloud
+  pool next to the self-hosted one an owner picked for PII) could be reached.
+  The narrowed access applies to the turn's rounds (`main.pool`), the
+  router's classifier (`router.pool`), and the conversation's compaction
+  summary, which used to route over every pool. A sub-agent uses its own
+  spec's pool. Tools that call a pool themselves (image generation) keep the
+  principal's pool grants: the tool grant is what allows them.
+- **Retention** (`agents::retention`, `db::agent_retention`). A sweeper runs
+  at boot and every hour (`spawn_retention_sweeper`, started in `main.rs`).
+  Per agent it deletes the conversations — root sessions it owns, visitor and
+  test-chat (`agent_version = 0`) alike — whose last activity
+  (`chat_sessions.updated_at`) is older than `retention_days`, together with
+  every sub-agent run below them, however deep. The foreign keys take turns,
+  tool calls, `agent_state` and the visitor session. The selection requires
+  `user_id IS NULL` at every step, so a person's chat is never touched. Each
+  sweep that deleted something writes `conversations_swept` with
+  `{retention_days, conversations, sub_agent_runs}` — counts only.
+- **Deviations and limits of this.**
+  - The per-IP bucket trusts the client IP the gateway derives
+    (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`, then the peer), like
+    GeoIP does. Behind no proxy, a client can set those headers; the
+    per-visitor limit and the budget still hold.
+  - A refusal storm writes one audit row per refused request.
+  - The compaction summary call is still not metered, for agents or people.
+  - The admin limits page in the SPA does not offer subject `system` yet; the
+    API accepts it.
 
 ## 6. Crate placement
 
@@ -1217,7 +1311,7 @@ helpers.
 | #89 output filter | §5 output policy | public main agents are buffered per answer |
 | #90 builder UI, test chat | §2, §6 | draft runs only in the test chat |
 | #91 public endpoint, visitor sessions | §5 | `gwe_` embed keys, `gwv_` visitor tokens in `sessionStorage`, fetch-streamed events, CORS only on `/api/v0/embed/*` |
-| #92 limits, budget, pools, retention | §1, §5 | limits subject `system`; per-visitor and per-IP buckets; retention sweeps agent conversations |
+| #92 limits, budget, pools, retention | §1, §5 | limits subject `system` plus the spec's `publish.budget`; exact per-visitor and per-IP windows; runs narrowed to granted ∩ listed pools; retention sweeps agent conversations |
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken` |

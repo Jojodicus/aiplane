@@ -121,6 +121,23 @@ pub struct UsageRecord {
     pub enforce_limits: bool,
     /// Whether `user_id` is a `users.id` or a `system_principals.id`.
     pub principal_kind: crate::server::principal::PrincipalKind,
+    /// The main agent at the root of the call chain, on a call made inside
+    /// an agent run: whose owner budget the call spends. See [`Self::in_run`].
+    pub agent_id: Option<String>,
+    /// That run's serialized call chain.
+    pub chain: Option<String>,
+}
+
+impl UsageRecord {
+    /// Attribute the record to the agent run it was made in, if any. A
+    /// sub-agent's call names its own principal in `user_id` but the main
+    /// agent in `agent_id`, because the conversation it served is the main
+    /// agent's and so is the budget.
+    pub fn in_run(mut self, run: Option<&crate::server::run_chain::RunChain>) -> Self {
+        self.agent_id = run.map(|r| r.agent().principal_id.clone());
+        self.chain = run.map(|r| r.to_json().to_string());
+        self
+    }
 }
 
 /// Pull token counts out of an OpenAI-compatible completion body or trailing
@@ -234,8 +251,8 @@ pub async fn insert_batch(pool: &Pool, recs: &[UsageRecord]) -> Result<(), DbErr
                (id, created_at, user_id, user_email, token_id, token_name,
                 source, kind, backend, model, status, duration_ms,
                  prompt_tokens, completion_tokens, total_tokens, input_units, output_units,
-                 cost, enforce_limits, principal_kind)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 cost, enforce_limits, principal_kind, agent_id, chain)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&created)
@@ -257,6 +274,8 @@ pub async fn insert_batch(pool: &Pool, recs: &[UsageRecord]) -> Result<(), DbErr
         .bind(cost)
         .bind(i64::from(r.enforce_limits))
         .bind(r.principal_kind.as_str())
+        .bind(r.agent_id.as_deref())
+        .bind(r.chain.as_deref())
         .execute(&mut *tx)
         .await?;
 
@@ -861,6 +880,9 @@ pub enum Subject<'a> {
     User(&'a str),
     /// One API token's own slice of it.
     Token(&'a str),
+    /// One agent's owner budget: every call made in its conversations, its
+    /// sub-agents' and its router's included (`usage_events.agent_id`).
+    Agent(&'a str),
 }
 
 impl<'a> Subject<'a> {
@@ -870,11 +892,12 @@ impl<'a> Subject<'a> {
         match self {
             Subject::User(_) => "user_id",
             Subject::Token(_) => "token_id",
+            Subject::Agent(_) => "agent_id",
         }
     }
     fn id(self) -> &'a str {
         match self {
-            Subject::User(id) | Subject::Token(id) => id,
+            Subject::User(id) | Subject::Token(id) | Subject::Agent(id) => id,
         }
     }
 }
@@ -947,6 +970,8 @@ mod tests {
             output_units: None,
             enforce_limits: true,
             principal_kind: crate::server::principal::PrincipalKind::User,
+            agent_id: None,
+            chain: None,
         }
     }
 
@@ -1128,6 +1153,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((user.requests, user.tokens), (3, 1110));
+    }
+
+    /// A record made in a run names the run's main agent as `agent_id` and
+    /// stores the chain, whichever principal made the call.
+    #[tokio::test]
+    async fn a_record_in_an_agent_run_is_charged_to_the_runs_main_agent() {
+        use crate::server::principal::{GrantSet, SystemPrincipal};
+        use crate::server::run_chain::{Frame, RunChain};
+        let principal = |id: &str| SystemPrincipal {
+            id: id.into(),
+            name: format!("{id}-name"),
+            grants: std::sync::Arc::new(GrantSet::default()),
+        };
+        let chain = RunChain::root(
+            "s1",
+            None,
+            Frame::for_principal(&principal("main"), Some(1)),
+        )
+        .enter(Frame::for_principal(&principal("sub"), Some(2)))
+        .unwrap();
+        let pool = pool().await;
+        let now = Timestamp::now();
+        insert_batch(
+            &pool,
+            &[
+                rec("sub", "b", UsageSource::Scheduled, 30, now).in_run(Some(&chain)),
+                rec("main", "b", UsageSource::Scheduled, 5, now).in_run(None),
+            ],
+        )
+        .await
+        .unwrap();
+        let since = now - SignedDuration::from_hours(1);
+        let spent = usage_in_window(&pool, Subject::Agent("main"), since, None)
+            .await
+            .unwrap();
+        assert_eq!((spent.requests, spent.tokens), (1, 30));
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT chain FROM usage_events WHERE agent_id = 'main'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&stored.unwrap()).unwrap();
+        assert_eq!(stored, chain.to_json());
     }
 
     #[test]
@@ -1324,6 +1392,8 @@ mod tests {
                 output_units: None,
                 enforce_limits: true,
                 principal_kind: crate::server::principal::PrincipalKind::User,
+                agent_id: None,
+                chain: None,
             }],
         )
         .await
@@ -1370,6 +1440,8 @@ mod tests {
                 output_units: Some(1.0),
                 enforce_limits: true,
                 principal_kind: crate::server::principal::PrincipalKind::User,
+                agent_id: None,
+                chain: None,
             }],
         )
         .await

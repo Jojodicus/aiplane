@@ -31,7 +31,7 @@ use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 use crate::rama_server::state::RamaState;
 use aiplane_core::server::config::CompactionConfig;
 use aiplane_core::server::db::{chat_compactions, model_defaults};
-use aiplane_core::server::upstreams::PoolKind;
+use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
 /// Hard timeout on the summariser call — a sticky upstream can't keep the
 /// background task alive indefinitely.
@@ -60,8 +60,15 @@ summary\" — output only the summary itself.\n\
 ///
 /// Called (spawned) by the driver after an assistant turn finalises. `model`
 /// is the **resolved real model** (the driver maps any alias first) — used both
-/// to resolve the context window and to route the summariser call.
-pub async fn maybe_autocompact(state: &RamaState, session_id: &str, model: &str) {
+/// to resolve the context window and to route the summariser call, over the
+/// pools `access` reaches: the summary carries the conversation, so an agent's
+/// may only go to the pools its own turns may.
+pub async fn maybe_autocompact(
+    state: &RamaState,
+    session_id: &str,
+    model: &str,
+    access: &PoolAccess,
+) {
     let cfg = &state.config().chat.compaction;
     if !cfg.enabled {
         return;
@@ -94,7 +101,7 @@ pub async fn maybe_autocompact(state: &RamaState, session_id: &str, model: &str)
         %session_id, %model, current, threshold, window,
         "compaction: context over threshold, summarising"
     );
-    match run_compaction(state, session_id, model, Some(current)).await {
+    match run_compaction(state, session_id, model, access, Some(current)).await {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(%session_id, "compaction: nothing to fold (guarded)");
@@ -136,6 +143,7 @@ async fn run_compaction(
     state: &RamaState,
     session_id: &str,
     model: &str,
+    access: &PoolAccess,
     tokens_before: Option<i64>,
 ) -> Result<bool, String> {
     let turns = chat::list_turns(&state.db, session_id)
@@ -152,7 +160,13 @@ async fn run_compaction(
 
     let raw = tokio::time::timeout(
         std::time::Duration::from_secs(TIMEOUT_SECS),
-        call_summarizer(state, model, &plan.input_text, cfg.summary_max_tokens),
+        call_summarizer(
+            state,
+            model,
+            access,
+            &plan.input_text,
+            cfg.summary_max_tokens,
+        ),
     )
     .await
     .map_err(|_| "summariser timed out".to_string())??;
@@ -314,12 +328,13 @@ fn append_turn(out: &mut String, t: &TurnWithTools) {
 async fn call_summarizer(
     state: &RamaState,
     model: &str,
+    access: &PoolAccess,
     input: &str,
     max_tokens: i64,
 ) -> Result<String, String> {
     let acquired = state
         .upstreams
-        .route(model, PoolKind::Chat)
+        .route_access(model, PoolKind::Chat, access)
         .map_err(|e| e.to_string())?;
     let real_model = acquired.resolved_model().to_string();
     let backend = acquired.backend();

@@ -210,13 +210,11 @@ impl RunProfile {
             .and_then(Value::as_str)
             .ok_or_else(|| bad("it names no `main.pool`".into()))?
             .to_string();
-        let model =
-            pool_model(state, &pool, &PoolAccess::for_system(&principal)).ok_or_else(|| {
-                AgentRunError::NoModel {
-                    agent: principal.name.clone(),
-                    pool: pool.clone(),
-                }
-            })?;
+        let pools = PoolAccess::for_system_pools(&principal, [pool.as_str()]);
+        let model = pool_model(state, &pool, &pools).ok_or_else(|| AgentRunError::NoModel {
+            agent: principal.name.clone(),
+            pool: pool.clone(),
+        })?;
         let finish = match &role {
             Role::Main => None,
             Role::SubAgent { .. } => {
@@ -277,6 +275,7 @@ impl RunProfile {
             synthetic,
             binds,
             schema: (!schema.is_empty()).then_some(schema),
+            pools,
         };
         Ok(Self {
             budget: budget(&spec),
@@ -371,9 +370,17 @@ pub struct AgentRun {
     synthetic: BTreeMap<String, Arc<dyn Tool>>,
     binds: ToolBinds,
     schema: Option<Arc<StateSchema>>,
+    pools: PoolAccess,
 }
 
 impl AgentRun {
+    /// The pools this run's own model calls may use: `main.pool`, if the
+    /// principal holds a grant on it. The turn's rounds and the compaction
+    /// of its conversation both route through it.
+    pub fn pools(&self) -> &PoolAccess {
+        &self.pools
+    }
+
     /// The tools offered this round: the spec's tools the principal is
     /// granted (`granted`), then the synthetic ones.
     pub fn state_schema(&self) -> Option<&Arc<StateSchema>> {
@@ -562,6 +569,7 @@ mod tests {
             binds: ToolBinds::from_spec(&spec)
                 .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
             schema: None,
+            pools: PoolAccess::all(),
         }
     }
 

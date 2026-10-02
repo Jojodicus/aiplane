@@ -199,6 +199,8 @@ mod tests {
             output_units: None,
             enforce_limits: true,
             principal_kind: crate::server::principal::PrincipalKind::User,
+            agent_id: None,
+            chain: None,
         }
     }
 
