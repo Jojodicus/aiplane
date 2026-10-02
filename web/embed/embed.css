@@ -1,0 +1,100 @@
+@import "tailwindcss" source(none);
+@source "./";
+
+@theme {
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@plugin "daisyui" {
+    themes: false;
+}
+
+@plugin "daisyui/theme" {
+    name: "light";
+    default: true;
+    prefersdark: false;
+    color-scheme: "light";
+
+    --color-base-100: #ffffff;
+    --color-base-200: #f6f6f6;
+    --color-base-300: #e7e3ec;
+    --color-base-content: #1d1d1b;
+
+    --color-primary: #6c3eb5;
+    --color-primary-content: #ffffff;
+
+    --color-secondary: #fca68c;
+    --color-secondary-content: #1d1d1b;
+
+    --color-accent: #0a889a;
+    --color-accent-content: #ffffff;
+
+    --color-neutral: #1d1d1b;
+    --color-neutral-content: #ffffff;
+
+    --color-info: oklch(64% 0.18 233);
+    --color-info-content: oklch(98% 0 0);
+
+    --color-success: oklch(60% 0.15 152);
+    --color-success-content: oklch(98% 0 0);
+
+    --color-warning: #fca68c;
+    --color-warning-content: #1d1d1b;
+
+    --color-error: oklch(51.2% 0.244 27.5);
+    --color-error-content: oklch(98% 0 0);
+
+    --radius-selector: 0.5rem;
+    --radius-field: 0.75rem;
+    --radius-box: 1.125rem;
+    --size-selector: 0.25rem;
+    --size-field: 0.25rem;
+    --border: 1px;
+    --depth: 0;
+    --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+    name: "dark";
+    default: false;
+    prefersdark: true;
+    color-scheme: "dark";
+
+    --color-base-100: #1d1d1b;
+    --color-base-200: #292927;
+    --color-base-300: #41413f;
+    --color-base-content: #ffffff;
+
+    --color-primary: #8e54e9;
+    --color-primary-content: #ffffff;
+
+    --color-secondary: #fca68c;
+    --color-secondary-content: #1d1d1b;
+
+    --color-accent: #0a889a;
+    --color-accent-content: #ffffff;
+
+    --color-neutral: #f6f6f6;
+    --color-neutral-content: #1d1d1b;
+
+    --color-info: oklch(64% 0.18 233);
+    --color-info-content: oklch(98% 0 0);
+
+    --color-success: oklch(60% 0.15 152);
+    --color-success-content: oklch(98% 0 0);
+
+    --color-warning: #fca68c;
+    --color-warning-content: #1d1d1b;
+
+    --color-error: oklch(70.4% 0.191 22.2);
+    --color-error-content: oklch(98% 0 0);
+
+    --radius-selector: 0.5rem;
+    --radius-field: 0.75rem;
+    --radius-box: 1.125rem;
+    --size-selector: 0.25rem;
+    --size-field: 0.25rem;
+    --border: 1px;
+    --depth: 0;
+    --noise: 0;
+}

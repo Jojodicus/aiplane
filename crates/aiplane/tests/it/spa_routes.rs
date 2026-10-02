@@ -45,6 +45,7 @@ async fn the_spa_owns_every_unclaimed_path() {
         "/",
         "/chat",
         "/admin/settings",
+        "/embed.js",
         "/_app/immutable/entry/START-AbC123.js",
     ] {
         let (status, _ct, _body) = get(uri).await;

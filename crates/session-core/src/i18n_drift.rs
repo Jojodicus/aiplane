@@ -145,4 +145,41 @@ mod tests {
             );
         }
     }
+
+    /// The widget's own catalog (`web/embed/locales.generated.ts`) carries
+    /// exactly the `embed-*` keys of every language, so a host page never
+    /// shows a raw key and never downloads strings that are not its own.
+    #[test]
+    fn the_embed_catalog_matches_the_fluent_sources() {
+        let root = repo_root();
+        let path = root.join("web/embed/locales.generated.ts");
+        let body = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!(
+                "read {}: {err} — run `mise run gen-locales`",
+                path.display()
+            )
+        });
+        for lang in LANGS {
+            let source: BTreeSet<String> = ftl_keys(&root, lang)
+                .into_iter()
+                .filter(|key| key.starts_with("embed-"))
+                .collect();
+            let start = body
+                .find(&format!("\n \"{lang}\": {{"))
+                .unwrap_or_else(|| panic!("{lang} is missing from the embed catalog"));
+            let section = &body[start + 1..];
+            let section = &section[..section.find("\n }").unwrap_or(section.len())];
+            let generated: BTreeSet<String> = section
+                .lines()
+                .filter_map(|line| {
+                    let rest = line.strip_prefix("  \"")?;
+                    Some(rest.split_once("\":")?.0.to_string())
+                })
+                .collect();
+            assert_eq!(
+                source, generated,
+                "{lang}: the embed catalog is stale — run `mise run gen-locales`"
+            );
+        }
+    }
 }

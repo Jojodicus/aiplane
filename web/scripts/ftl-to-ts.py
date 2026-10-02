@@ -17,6 +17,8 @@ import sys
 
 SRC = 'crates/session-core/locales'
 OUT = 'web/src/lib/locales'
+EMBED_OUT = 'web/embed/locales.generated.ts'
+EMBED_PREFIX = 'embed-'
 LANGS = ['en', 'de', 'fr', 'es', 'ru', 'zh']
 
 KEY_RE = re.compile(r'^([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*(.*)$')
@@ -109,6 +111,24 @@ def main():
             f.write(f'{header}\nimport type {{ Catalog }} from \'../i18n.svelte\';\n\n'
                     f'export const {lang}: Catalog = {body};\n')
         print(f'wrote {OUT}/{lang}.ts')
+    write_embed_catalog(catalogs)
+
+
+def write_embed_catalog(catalogs):
+    """The widget ships in a host page and must not carry the SPA's ~1800
+    messages per language, so it gets its own file with only `embed-*` keys,
+    all six languages inline (a few hundred bytes each)."""
+    subset = {
+        lang: {k: v for k, v in sorted(cat.items()) if k.startswith(EMBED_PREFIX)}
+        for lang, cat in catalogs.items()
+    }
+    body = json.dumps(subset, ensure_ascii=False, indent=1, sort_keys=True)
+    with open(EMBED_OUT, 'w', encoding='utf-8') as f:
+        f.write('// Generated from crates/session-core/locales/<lang>/*.ftl by\n'
+                '// web/scripts/ftl-to-ts.py (`mise run gen-locales`): the `embed-*`\n'
+                '// keys only. Do not edit.\n\n'
+                f'export const catalogs: Record<string, Record<string, string>> = {body};\n')
+    print(f'wrote {EMBED_OUT}')
 
 
 main()

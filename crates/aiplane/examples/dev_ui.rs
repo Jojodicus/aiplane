@@ -633,7 +633,8 @@ async fn main() -> anyhow::Result<()> {
     // pool is moved into the session store.
     let usage = aiplane_core::server::usage::spawn(pool.clone(), 90);
     let sessions = SessionStore::new(pool, session_secret);
-    let state = RamaState::new(app, sessions, usage);
+    let state = RamaState::new(app, sessions, usage)
+        .with_agent_runner(Arc::new(aiplane_runtime::agents::embed::LiveAgentRunner));
 
     // --- Seed a user + session so the authed UI is reachable ---------
     use aiplane_core::server::db::users;
@@ -675,6 +676,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Seed representative (non-croit) demo data so the README pages
     // render populated instead of empty "create your first…" states.
     seed_demo_data(&state).await?;
+    seed_embed_agent(&state).await?;
 
     let session = state.sessions.create("dev").await?;
     let cookie = state.sessions.sign(&session.id);
@@ -687,6 +689,9 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DEV_UI_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string())
     );
     eprintln!("authed pages: /, /settings/tokens, /chat, /theme/toggle, /api/v0/*");
+    eprintln!("embed widget: key {DEV_EMBED_KEY}");
+    eprintln!("    serve examples/embed on :8000 (python3 -m http.server 8000 -d examples/embed)");
+    eprintln!("    and open http://localhost:8000/?gateway=http://127.0.0.1:8080");
     eprintln!("seed cookie (paste into playwright / curl):");
     eprintln!("    id={cookie}");
     eprintln!("non-admin (engineering) seed cookie:");
@@ -704,6 +709,59 @@ async fn main() -> anyhow::Result<()> {
     router::serve(Arc::new(state), addr).await?;
     drop(chat_mock);
     drop(voice_mock);
+    Ok(())
+}
+
+/// The embed key `examples/embed/index.html` ships with. Public by design (it
+/// sits in page source), fixed so the example works without copy-pasting.
+const DEV_EMBED_KEY: &str = "gwe_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A published agent on the `chat` pool with an embed key for the example
+/// page, served from `localhost:8000` or `127.0.0.1:8000`.
+async fn seed_embed_agent(state: &RamaState) -> anyhow::Result<()> {
+    use aiplane_core::server::auth::token;
+    use aiplane_core::server::db::{agents, embed_keys, system_principals};
+    use aiplane_core::server::principal::GrantKind;
+
+    let spec = serde_json::json!({
+        "main": {
+            "pool": "chat",
+            "instructions": { "orchestration": "Answer visitors briefly and politely." },
+            "tools": []
+        }
+    })
+    .to_string();
+    let agent = agents::create(
+        &state.db,
+        &system_principals::NewPrincipal {
+            name: "website-helper",
+            display: "Website helper",
+            description: "Answers visitors on the embed example page.",
+        },
+        &spec,
+        "dev",
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("the dev embed agent already exists"))?;
+    let id = &agent.principal.id;
+    system_principals::add_grant(&state.db, id, GrantKind::Pool, "chat", "dev").await?;
+    agents::publish(&state.db, id, &spec, "dev").await?;
+    let key_hash = token::hash_embed_key(DEV_EMBED_KEY)
+        .ok_or_else(|| anyhow::anyhow!("DEV_EMBED_KEY is not a well-formed embed key"))?;
+    embed_keys::create(
+        &state.db,
+        &embed_keys::NewEmbedKey {
+            principal_id: id,
+            name: "embed example page",
+            origins: &[
+                "http://localhost:8000".to_string(),
+                "http://127.0.0.1:8000".to_string(),
+            ],
+            key_hash: &key_hash,
+        },
+        "dev",
+    )
+    .await?;
     Ok(())
 }
 

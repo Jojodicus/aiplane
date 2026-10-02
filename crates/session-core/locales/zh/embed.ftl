@@ -1,0 +1,19 @@
+# 可嵌入智能体小组件的文本 (web/embed)。
+
+embed-launcher-open = 打开聊天
+embed-launcher-close = 关闭聊天
+embed-default-title = 助手
+embed-input-label = 您的消息
+embed-input-placeholder = 请输入消息…
+embed-send = 发送
+embed-working = 正在准备回答…
+embed-speaker-you = 您
+embed-speaker-agent = 助手
+embed-new-conversation = 新对话
+embed-session-restarted = 对话已超时，已开始新的对话。
+embed-error-generic = 出了点问题，请重试。
+embed-error-network = 与助手的连接失败。请检查网络后重试。
+embed-error-unavailable = 该助手目前不可用。
+embed-error-origin = 该助手未对此网站启用。
+embed-error-busy = 请等待上一条消息的回答。
+embed-error-too-long = 消息过长，请缩短。
