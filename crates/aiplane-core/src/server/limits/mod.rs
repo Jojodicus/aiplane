@@ -891,7 +891,10 @@ mod tests {
         let now = at("2026-10-01T12:10:00Z");
         let err = sliding_window(RateScope::Visitor, rate, &[], now).unwrap_err();
         assert_eq!(err.max, 0);
-        assert_eq!(err.retry_after_secs, 600, "nothing will ever fit; retry after a window");
+        assert_eq!(
+            err.retry_after_secs, 600,
+            "nothing will ever fit; retry after a window"
+        );
         assert!(sliding_window(RateScope::Ip, rate, &[at("2026-10-01T12:09:00Z")], now).is_err());
     }
 
