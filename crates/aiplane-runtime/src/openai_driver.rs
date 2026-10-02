@@ -26,6 +26,7 @@ use session_core::db::{self as chat, ToolCallStatus, Turn, TurnRole, TurnStatus}
 use session_core::driver::{SessionContext, SessionDriver, TurnError, TurnOutcome};
 use session_core::workers::{SteerNote, TurnUpdate};
 
+use crate::budget::{Budget, Clock, Limit};
 use crate::finish::{
     FINISH_NUDGE, FINISH_TOOL_NAME, FinishRun, IncompleteReason, RunOutcome, gateway_summary,
 };
@@ -479,6 +480,11 @@ pub struct OpenAiDriver {
     /// schema-valid `finish` call or an incomplete outcome, settled into this
     /// slot. `None` for every interactive turn.
     pub finish: Option<Arc<FinishRun>>,
+    /// What this run may spend. `None` derives it from the conversation's
+    /// effort level, which is every interactive turn.
+    pub budget: Option<Budget>,
+    /// Where the run reads "now" for its `seconds` limit.
+    pub clock: Clock,
 }
 
 /// Build the per-turn [`ToolContext`] for a persisted chat session — the single
@@ -709,8 +715,8 @@ async fn close_contracted_run(
     run: &FinishRun,
     collected: &[ToolCallAcc],
     round_content: &str,
-    rounds: u32,
-    tools_run: &[String],
+    gateway_account: String,
+    reason: IncompleteReason,
 ) -> Result<TurnOutcome, TurnError> {
     let mut rejection = None;
     if let Some(call) = collected.iter().find(|c| c.name == FINISH_TOOL_NAME) {
@@ -729,7 +735,7 @@ async fn close_contracted_run(
     }
     let text = round_content.trim();
     let mut summary = if text.is_empty() {
-        gateway_summary(rounds, tools_run)
+        gateway_account
     } else {
         text.to_string()
     };
@@ -738,13 +744,10 @@ async fn close_contracted_run(
     }
     tracing::warn!(
         model = %ctx.model,
-        rounds,
-        "contracted run spent its round budget without a valid finish; recording it as incomplete"
+        ?reason,
+        "contracted run spent its budget without a valid finish; recording it as incomplete"
     );
-    run.settle(RunOutcome::Incomplete {
-        reason: IncompleteReason::RoundBudgetExhausted { rounds },
-        summary,
-    });
+    run.settle(RunOutcome::Incomplete { reason, summary });
     Ok(TurnOutcome {
         notice: Some(INCOMPLETE_MESSAGE.to_string()),
     })
@@ -1059,7 +1062,11 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             serving.dialect,
         )
         .await;
-    let max_rounds = effort.max_rounds();
+    let budget = d.budget.unwrap_or_else(|| Budget::from_effort(effort));
+    let max_rounds = budget.rounds();
+    let run_started = (d.clock)();
+    let mut tokens_used: u64 = 0;
+    let mut limit_hit: Option<Limit> = None;
 
     // Monotonic zero point of the reasoning phase, set on the first
     // reasoning chunk. Used to compute the single authoritative
@@ -1173,7 +1180,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // the turn ends with no visible answer (the "stuck after N tool
         // calls" failure). Withholding tools turns that last round into a
         // guaranteed text answer.
-        let final_round = round + 1 == max_rounds;
+        if limit_hit.is_none() {
+            limit_hit = budget.exhausted((d.clock)().duration_since(run_started), tokens_used);
+        }
+        let final_round = round + 1 == max_rounds || limit_hit.is_some();
 
         // Build the request. `stream: true` so we can forward
         // content deltas; tools injected if the user has any
@@ -1191,7 +1201,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             "messages": messages,
             "stream": true,
         });
-        if (metrics_on || compaction_enabled)
+        if (metrics_on || compaction_enabled || budget.tokens().is_some())
             && let Some(obj) = request_body.as_object_mut()
         {
             obj.insert(
@@ -1577,6 +1587,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             started,
             round_tokens,
         );
+        tokens_used += round_tokens
+            .2
+            .or_else(|| Some(round_tokens.0.unwrap_or(0) + round_tokens.1.unwrap_or(0)))
+            .map_or(0, |t| t.max(0) as u64);
 
         // Track the context size for the compaction trigger. Persisted only
         // when it grows, so a tool-using turn writes at most once per round
@@ -1673,8 +1687,8 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 run,
                 &collected,
                 &round_content,
-                round + 1,
-                &tools_run,
+                gateway_summary(round + 1, &tools_run),
+                budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
             )
             .await;
         }

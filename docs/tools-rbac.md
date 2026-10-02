@@ -446,6 +446,34 @@ client tool in one turn.
   intact (clearing would invalidate the cached prefix). Only the replayed
   messages shrink; the stored turn keeps the full results.
 
+### Run budgets
+
+Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
+seconds, tokens }`. A chat turn derives it from the conversation's effort level
+(`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
+so interactive behaviour is unchanged. A headless run may pass one in
+`DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
+`seconds` and `tokens` are optional (`None` = unlimited). A sub-agent run is
+meant to be given a `Budget` of its own, not share its parent's.
+
+- **Tokens** are the upstream-reported usage (the `total_tokens` of each
+  round's trailing usage frame, else prompt + completion), summed over the
+  run's rounds. A run with a token limit always requests `include_usage`, even
+  when metrics and compaction are off. An upstream that reports no usage
+  counts as zero.
+- **Seconds** are wall clock from the start of the run, read through the
+  driver's `Clock` (a test seam; production is `Instant::now`).
+- Time and tokens are checked **between rounds**, before each request is
+  built, never mid-stream: aborting a reply would discard output already paid
+  for and leave a half-written message. A run can overshoot by at most one
+  round.
+- Running out of *any* limit makes the next request the final round, exactly as
+  running out of rounds does (tools withheld, or only `finish` offered under a
+  contract). A contracted run that does not finish there settles as
+  `Incomplete` with `round_budget_exhausted { rounds }`,
+  `seconds_exhausted { seconds }` or `tokens_exhausted { tokens }`, naming the
+  limit that hit. A run always gets at least one request.
+
 ### Finish contract
 
 An interactive turn ends when a round comes back without tool calls. That is
@@ -474,7 +502,8 @@ Inside the chat driver, with a contract:
   replaced, `tool_choice` dropped: `"none"` would forbid the one call that
   matters). The model is told to call it or write what is left undone.
   Anything but a valid `finish` there ends the run as
-  `Incomplete { reason: round_budget_exhausted { rounds } }`, with the model's
+  `Incomplete { reason: round_budget_exhausted { rounds } }` (or the
+  `seconds_exhausted` / `tokens_exhausted` of a [run budget](#run-budgets)), with the model's
   last text as `summary`, or a gateway-written account of the rounds and tools
   when it wrote none. No closing round follows. The turn carries a notice.
 - A contracted run still passes through the repeated-call guard. A guard stop

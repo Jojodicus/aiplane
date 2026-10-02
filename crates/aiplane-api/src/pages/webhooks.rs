@@ -163,6 +163,7 @@ pub async fn webhook_trigger(
         source: UsageSource::Webhook,
         history_limit,
         finish: None,
+        budget: None,
     };
 
     if hook.synchronous {

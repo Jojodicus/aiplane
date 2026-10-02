@@ -90,6 +90,11 @@ pub enum RunOutcome {
 pub enum IncompleteReason {
     /// Every round the budget allows was spent.
     RoundBudgetExhausted { rounds: u32 },
+    /// The run's wall-clock allowance ran out.
+    SecondsExhausted { seconds: u64 },
+    /// The run's token allowance (prompt + completion, summed over its rounds)
+    /// ran out.
+    TokensExhausted { tokens: u64 },
     /// The repeated-call guard stopped the run: the model kept making one
     /// identical call to `tool`.
     RepeatedToolCall { tool: String },
