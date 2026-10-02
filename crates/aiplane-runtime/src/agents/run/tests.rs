@@ -941,6 +941,87 @@ async fn a_rules_router_dispatches_the_first_open_route_in_its_order() {
     assert_eq!(helper[0]["messages"][1]["content"], "Technical: technical");
 }
 
+/// Models batch calls: `set_issue` and `forward_request` in one round, in
+/// either order. The forward must see the issue every time, so each order
+/// runs repeatedly against a fresh world.
+#[tokio::test]
+async fn a_forward_in_the_round_that_sets_its_slot_sees_the_slot() {
+    for attempt in 0..30 {
+        let set = ("c1", "set_issue", json!({"value": "technical"}));
+        let fwd = ("fwd", "forward_request", json!({}));
+        let round = if attempt % 2 == 0 {
+            calls(&[set, fwd])
+        } else {
+            calls(&[fwd, set])
+        };
+        let main = llm(vec![round, text("Done.")]).await;
+        let helper = llm(vec![finish("h1", json!({"answer": "ok"}))]).await;
+        let world = World::new(
+            &[
+                ("support-pool", "support-model", &main),
+                ("helper-pool", "helper-model", &helper),
+            ],
+            None,
+        )
+        .await;
+        let helper_id = world
+            .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+            .await;
+        world.publish(&helper_id, &helper_spec(4)).await;
+        let support = world
+            .agent(
+                "support",
+                &[
+                    (GrantKind::Pool, "support-pool"),
+                    (GrantKind::Connector, "erp"),
+                ],
+            )
+            .await;
+        let spec = triage_spec(
+            &helper_id,
+            json!({"kind": "rules", "order": ["billing", "technical", "sales"]}),
+        );
+        world.publish(&support, &spec).await;
+
+        run_turn(
+            &world.state,
+            AgentTurn {
+                agent_id: &support,
+                session_id: None,
+                message: "My printer is on fire.",
+                visitor_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let sent = requests(&main).await;
+        let dispatched = tool_answer(&sent, "fwd");
+        assert!(
+            dispatched.contains("\"forwarded\": true"),
+            "attempt {attempt}: {dispatched}"
+        );
+        let tool_ids: Vec<&Value> = sent[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .map(|m| &m["tool_call_id"])
+            .collect();
+        let expected = if attempt % 2 == 0 {
+            ["c1", "fwd"]
+        } else {
+            ["fwd", "c1"]
+        };
+        assert_eq!(
+            tool_ids, expected,
+            "attempt {attempt}: results keep the order of the calls"
+        );
+        let helper = requests(&helper).await;
+        assert_eq!(helper.len(), 1, "attempt {attempt}");
+        assert_eq!(helper[0]["messages"][1]["content"], "Technical: technical");
+    }
+}
+
 #[tokio::test]
 async fn each_sub_agent_spends_its_own_budget() {
     let main = llm(vec![

@@ -44,7 +44,7 @@ use crate::finish::FinishContract;
 use crate::rama_server::state::RamaState;
 use crate::server::headless::DriveParams;
 use crate::server::tools::injection::{InjectionPolicy, InjectionScan};
-use crate::server::tools::{Tool, ToolSource};
+use crate::server::tools::{Tool, ToolPhase, ToolSource};
 use aiplane_core::server::db::usage::UsageSource;
 
 /// Why an agent could not be run.
@@ -242,11 +242,14 @@ impl RunProfile {
 
         let output_filter = OutputFilter::from_spec(&spec)
             .map_err(|e| bad(format!("`publish.output_filter`: {e}")))?;
-        let mut synthetic: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
+        let mut synthetic: BTreeMap<String, Synthetic> = BTreeMap::new();
+        let mut add = |tool: Arc<dyn Tool>, phase: ToolPhase| {
+            synthetic.insert(tool.id().to_string(), Synthetic { tool, phase });
+        };
         let slot_tools = SlotTools::with_clock(schema.clone(), options.now.clone());
         for id in slot_tools.ids() {
             if let Some(tool) = slot_tools.get(&id) {
-                synthetic.insert(id, tool);
+                add(tool, ToolPhase::WritesState);
             }
         }
         if matches!(role, Role::Main) {
@@ -257,7 +260,7 @@ impl RunProfile {
                 options: options.clone(),
             };
             for tool in verifier::tools(&Verifiers::from_spec(&spec), &run) {
-                synthetic.insert(tool.id().to_string(), tool);
+                add(tool, ToolPhase::WritesState);
             }
         }
         let routes = spec.get("routes").cloned().unwrap_or_else(|| json!({}));
@@ -279,10 +282,10 @@ impl RunProfile {
             if matches!(role, Role::Main)
                 && let Some(human) = RequestHuman::new(router.clone(), options.clone())
             {
-                synthetic.insert(human.id().to_string(), Arc::new(human));
+                add(Arc::new(human), ToolPhase::ActsOnState);
             }
             let forward = ForwardRequest::new(state.clone(), router, options.clone());
-            synthetic.insert(forward.id().to_string(), Arc::new(forward));
+            add(Arc::new(forward), ToolPhase::ActsOnState);
         }
         let binds = match role {
             Role::Main => ToolBinds::from_spec(&spec),
@@ -391,13 +394,20 @@ struct Conversation {
     now: state::Clock,
 }
 
+/// A run-scoped tool, and when it runs among the calls of its round: the one
+/// place a tool is tagged with a [`ToolPhase`] other than the default.
+struct Synthetic {
+    tool: Arc<dyn Tool>,
+    phase: ToolPhase,
+}
+
 /// What the driver consults on every round of an agent run.
 pub struct AgentRun {
     name: String,
     instructions: String,
     conversation: Option<Conversation>,
     tools: Vec<String>,
-    synthetic: BTreeMap<String, Arc<dyn Tool>>,
+    synthetic: BTreeMap<String, Synthetic>,
     binds: ToolBinds,
     permissions: Permissions,
     schema: Option<Arc<StateSchema>>,
@@ -559,8 +569,8 @@ impl ToolSource for RunToolSource<'_> {
         let Some(run) = self.run else {
             return self.inner.get(id);
         };
-        if let Some(tool) = run.synthetic.get(id) {
-            return Some(tool.clone());
+        if let Some(synthetic) = run.synthetic.get(id) {
+            return Some(synthetic.tool.clone());
         }
         self.inner.get(id).map(|t| self.bound(run, t))
     }
@@ -572,7 +582,7 @@ impl ToolSource for RunToolSource<'_> {
         allowed
             .iter()
             .filter_map(|id| match run.synthetic.get(id) {
-                Some(tool) => Some(tool.schema()),
+                Some(synthetic) => Some(synthetic.tool.schema()),
                 None => self
                     .inner
                     .defs_for(std::slice::from_ref(id))
@@ -596,6 +606,12 @@ impl ToolSource for RunToolSource<'_> {
 
     fn contains(&self, id: &str) -> bool {
         self.run.is_some_and(|r| r.synthetic.contains_key(id)) || self.inner.contains(id)
+    }
+
+    fn phase(&self, id: &str) -> ToolPhase {
+        self.run
+            .and_then(|r| r.synthetic.get(id))
+            .map_or(ToolPhase::Concurrent, |s| s.phase)
     }
 }
 

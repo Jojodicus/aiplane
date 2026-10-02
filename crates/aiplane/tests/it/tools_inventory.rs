@@ -52,6 +52,7 @@ const NOT_REAL_TOOLS: &[&str] = &[
     "bound_fixture",
     "check_code",
     "lookup_invoice",
+    "phase_step",
 ];
 
 /// Tools whose `category_for` is legitimately `Utility` — the catch-all is a

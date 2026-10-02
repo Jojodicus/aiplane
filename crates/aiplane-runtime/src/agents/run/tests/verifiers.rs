@@ -633,6 +633,68 @@ async fn a_lookup_vouches_with_its_own_provenance_and_caps_its_attempts() {
     );
 }
 
+/// The slots a lookup reads, the lookup itself and the forward it opens, all
+/// in one round: writers run first in call order, so the forward sees what
+/// the lookup vouched for every time.
+#[tokio::test]
+async fn a_forward_in_the_round_of_the_lookup_that_opens_its_route_is_dispatched() {
+    for attempt in 0..30 {
+        let main = llm(vec![
+            calls(&[
+                ("fwd", "forward_request", json!({})),
+                ("k1", "set_name", json!({ "value": "Alice Smith" })),
+                ("k2", "set_customer_number", json!({ "value": "K-1" })),
+                ("k3", "verify_kyc", json!({})),
+            ]),
+            text("Done."),
+        ])
+        .await;
+        let helper = llm(vec![finish("h1", json!({"answer": "ok"}))]).await;
+        let (erp, _) = erp().await;
+        let world = World::new(
+            &[
+                ("support-pool", "support-model", &main),
+                ("helper-pool", "helper-model", &helper),
+            ],
+            None,
+        )
+        .await;
+        world.connect_erp(&erp).await;
+        let helper_id = world
+            .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+            .await;
+        world.publish(&helper_id, &helper_spec(4)).await;
+        let mut spec = otp_spec(json!({}));
+        spec["router"] = json!({ "kind": "rules" });
+        spec["routes"] = json!({
+            "account": {
+                "when": { "slot": "verified", "provenance": "verifier:kyc" },
+                "agent": helper_id,
+                "task": "Account of {verified.customer_id}"
+            }
+        });
+        let agent = support(&world, &spec).await;
+        let (_, options) = clock();
+
+        let done = says(&world, &agent, &options, "I am Alice Smith, K-1").await;
+        assert_eq!(done.status, chat::TurnStatus::Completed, "{done:?}");
+        let sent = requests(&main).await;
+        let verified = tool_answer(&sent, "k3");
+        assert!(
+            verified.contains("\"verified\": true"),
+            "attempt {attempt}: {verified}"
+        );
+        let dispatched = tool_answer(&sent, "fwd");
+        assert!(
+            dispatched.contains("\"forwarded\": true"),
+            "attempt {attempt}: {dispatched}"
+        );
+        let helper = requests(&helper).await;
+        assert_eq!(helper.len(), 1, "attempt {attempt}");
+        assert_eq!(helper[0]["messages"][1]["content"], "Account of K-1");
+    }
+}
+
 // --- host identity tokens ----------------------------------------------------
 
 const SECRET: &str = "a-shared-secret-of-at-least-32-bytes!";

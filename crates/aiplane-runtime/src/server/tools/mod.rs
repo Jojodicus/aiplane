@@ -33,7 +33,7 @@ pub mod runner;
 pub mod sandbox;
 pub mod time;
 
-pub use registry::{GrantedToolSource, ToolRegistry, ToolSource};
+pub use registry::{GrantedToolSource, ToolPhase, ToolRegistry, ToolSource};
 
 /// Carried into each `Tool::run` invocation. Lets a tool read the
 /// caller's identity + roles and reach the gateway's datastore

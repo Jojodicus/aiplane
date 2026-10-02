@@ -521,6 +521,24 @@ registered for that run, need no grant, and do not exist anywhere else.
 | `verify_<id>_request_code()`, `verify_<id>_submit_code()`, `verify_<id>()` | main agent | the verifier flows ([#95](#what-95-built)); no arguments |
 | `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
 
+**Order within a round.** A model batches calls, so `set_issue` and
+`forward_request` often arrive in one round. A round's calls normally run
+concurrently, which would let the forward read the state before the write
+landed. Each synthetic tool is therefore tagged with a `ToolPhase` where the run
+builds it (`AgentRun` in `agents/profile.rs`, the only place a tool leaves the
+default), and the runner (`execute_tool_calls`) runs the phases in turn:
+
+1. **Writes state**: `set_<slot>` and every verifier tool, one at a time in the
+   order the model made the calls (a lookup reads the slots a `set_<slot>`
+   before it wrote).
+2. **Concurrent**: every other tool, in parallel as before. A bound argument may
+   be read from state, so these too run after the writers.
+3. **Acts on state**: `forward_request` and `request_human`, one at a time in
+   call order, on the state the round left.
+
+Each result still answers its own `tool_call_id`, in call order. Outside an
+agent run every tool is `Concurrent`, so chat and `/v1` are unchanged.
+
 `forward_request` takes **no arguments** about the route or the subject.
 - The router decides from state.
 - With `kind: classifier`, a separate small call returns one route name from an
