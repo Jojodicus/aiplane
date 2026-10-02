@@ -340,8 +340,9 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
     checked for shape only.
   - *Publish*: everything above against the grants as they are now, plus
     `main.pool`, instructions, and every routed sub-agent having a live version.
-  - Still open: gate type checks (#86), cycle and depth checks of the sub-agent
-    graph (#88), slot run-time semantics (#85).
+  - Still open: cycle and depth checks of the sub-agent graph (#88). Slot
+    run-time semantics landed with #85 ([below](#what-85-built)), gate type
+    checks with #86 ([§4](#what-86-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
   or `is_admin`. The caller must also hold the permission on every request.
@@ -448,6 +449,53 @@ registered for that run, need no grant, and do not exist anywhere else.
 - The router decides from state.
 - With `kind: classifier`, a separate small call returns one route name from an
   enum. It can only pick among routes whose gate is already open.
+
+### What #85 built
+
+- **Migration `0082_agent_state.sql`** creates `agent_state` as above, plus a
+  `CHECK` that `provenance` is `llm`, `host` or `verifier:<id>`. It references
+  `chat_sessions(id)` only, so it holds for a user-owned and a principal-owned
+  session alike and does not depend on #83's rebuild (`0081`). Storage is
+  `aiplane-core::server::db::agent_state` (`put`, `for_session`); it knows
+  neither types nor writers and has one caller.
+- **Typed slots** (`aiplane-runtime::agents::state`). `StateSchema::from_spec`
+  reads `state` into `SlotDef`s. `SlotDef::check` validates in code and returns
+  what to fix:
+  - `string`: `min_length`, `max_length` (characters), `pattern`.
+  - `email`: `local@domain.tld`, no whitespace; `max_length`.
+  - `enum`: one of `values`.
+  - `integer`, `number`: `minimum`, `maximum`.
+  - `boolean`.
+  - `subject`: an object, checked against an optional `schema` by #78's
+    schema-subset validator (`finish::validate`).
+- **Two write doors.** `set_<slot>` always writes provenance `llm`.
+  `write_trusted(pool, schema, session, slot, value, TrustedWriter, now)` is
+  the only way to store `verifier:<id>` or `host`; `TrustedWriter` has no
+  conversion from a string or JSON, so a value parsed from a tool call cannot
+  become one. Both refuse a writer outside `set_by` before looking at the
+  value, then refuse an invalid value with the validator's message. A rewrite
+  replaces the row, provenance and `set_at` included.
+- **`set_<slot>` tools** (`agents::slot_tools`). `SlotTools` is a `ToolSource`
+  with one `SetSlotTool` per slot whose `set_by` lists `llm`, and none for any
+  other. A tool takes exactly `{value}` (`additionalProperties: false`); any
+  other key, such as `slot`, `provenance` or `session_id`, is refused by name.
+  The session comes from `ToolContext.session_id`. Invalid values come back as
+  `InvalidArgs` ending in "call set_<slot> again".
+- **The model's view.** `AgentState::load` judges each stored row against the
+  current schema: `set`, `missing`, or `invalid` (a writer the spec no longer
+  allows, or a value that no longer fits). `view()` returns `SlotView`s and
+  `render_view()` the system-message block. A value is shown only when its
+  provenance is `llm`; a trusted slot says `set by verifier:otp`, and its
+  invalid reason never echoes the value.
+- **Clock.** Writes take `now`, and `SlotTools::with_clock` injects it, so
+  tests fix `set_at` and every `max_age` gate on top of it.
+- **Spec checks added.** A constraint on a type it does not apply to (e.g.
+  `pattern` on an `integer`) is an error, not silently unenforced. `schema` is a
+  new slot key for `subject` slots only. A `subject` slot may not list `llm`:
+  it says whose data the agent acts on.
+- **Not wired yet.** Nothing offers `SlotTools` to a run or puts
+  `render_view()` into a system message: both need the agent `RunProfile` and
+  `AgentToolSource` (#87/#88). There is no `state` SSE event yet either.
 
 ### The call chain
 
@@ -639,6 +687,58 @@ They are ANDed together.
 
 **Optional LLM classifier per route.** It may add a denial ("off-topic"). It
 runs after the code gate passes and can only close the route.
+
+### What #86 built
+
+`aiplane-runtime::agents::gate`.
+
+- **Grammar as implemented** — exactly the tree above. A leaf is
+  `{slot, set?, eq?, in?, provenance?, max_age?}` with at least one check, and
+  its checks are ANDed. `eq` and `in` compare the slot's whole JSON value
+  (a `subject` compares as an object). `max_age` holds while
+  `now - set_at <= d`; a value stamped after `now` is not old. `Cond::parse`
+  reads a tree; the spec validator still reports shape problems with paths.
+- **Semantics.** A slot that is missing, `invalid` (§3) or not declared fails
+  every check on it, except a leaf that is only `set: false`, which holds.
+  `all` holds if every child does, `any` if one does, `not` if its child does
+  not. So `{not: …}` over a missing slot holds, as "missing = false" implies.
+- **`evaluate(cond, GateInput { schema, state, now }) -> Vec<Unmet>`** returns
+  every unmet leaf in document order; empty means open. For an `any` with no
+  holding child it returns every child's leaves. An `Unmet` is
+  `{path, slot?, kind, …, message}` with `kind` one of `missing`, `invalid`,
+  `must_be_unset`, `not_equal {expected}`, `not_in {expected}`,
+  `wrong_provenance {required, actual}`, `too_old {max_age}`, `excluded` (a
+  `not` whose child holds), `unknown_route`, `denied`. The `message` tells the
+  model what to do: `call set_email`, or `it is set by verifier:otp or host,
+  not by you`. It never contains a value the model did not write; `expected`
+  comes from the spec.
+- **`RouteGates::from_spec(spec)`** holds each route's gate.
+  `gate_status(route, input)` is `Open` or `Closed { missing }`; an unknown
+  route is closed with `unknown_route`. A route is invoked through an
+  `OpenRoute`, which only `open` and `open_reviewed` construct and only for an
+  open gate, so dispatch (#88) cannot be reached around a closed one.
+- **Classifier seam.** `DenyClassifier::review(route, &[SlotView]) ->
+  Result<Verdict, String>` gets the model's view of the state, never trusted
+  values. `open_reviewed` consults it only after the code gate opened.
+  `Verdict::Deny` and an `Err` both close the route (`denied`); nothing it
+  returns can open a closed gate. There is no LLM implementation yet, only a
+  test double. *Decided, deferred:* the implementation will classify on the
+  agent's `main.pool` unless the spec names a pool for it.
+- **Spec type checks.** On save and publish, each leaf must be able to hold:
+  every `eq` and `in` value must pass the slot's own validator, and
+  `provenance` must be in the slot's `set_by`. A route with a `bind` must have a
+  gate that `requires_trusted_provenance`: a non-`llm` `provenance` leaf on
+  every way through it (any child of an `all`, every child of an `any`, never
+  under a `not`).
+- **Deviations.**
+  - The subject-bound check covers a route's own `bind`. Whether the routed
+    sub-agent reaches a tool with a `bind` needs the sub-agent graph, so that
+    half of the rule lands with #88.
+  - No slot-to-slot comparison (`{slot: a, eq_slot: b}`): §4 has none and no
+    route needs one yet.
+- **Not wired yet.** `forward_request` (#87) is what calls `RouteGates` and
+  returns `Closed.missing` to the model; there is no `gate` SSE event or
+  `agent_audit` row for a gate decision until a run exists to record.
 
 ### Value validation without a JSON-Schema crate
 
