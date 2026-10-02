@@ -31,5 +31,6 @@ pub mod router;
 pub mod run;
 pub mod slot_tools;
 pub mod spec;
+pub mod spec_cache;
 pub mod state;
 pub mod verifier;

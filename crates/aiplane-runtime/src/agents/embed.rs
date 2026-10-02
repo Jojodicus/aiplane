@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aiplane_core::server::db::agent_audit::{self, AuditKind};
-use aiplane_core::server::db::agents as agents_db;
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
 use aiplane_core::server::limits::{LimitExceeded, Rate, RateExceeded, VisitorKey, VisitorRates};
 use jiff::{SignedDuration, Timestamp};
@@ -195,8 +194,8 @@ pub async fn admit(
     who: Admission<'_>,
     now: Timestamp,
 ) -> Result<(), Refusal> {
-    let spec = match state.refusals.live_spec(&state.db, agent_id).await {
-        Ok(Some(spec)) => spec,
+    let compiled = match state.agent_specs.live_recent(&state.db, agent_id).await {
+        Ok(Some(compiled)) => compiled,
         Ok(None) => return Ok(()),
         Err(err) => {
             tracing::warn!(error = %err, agent = agent_id, "reading the agent's limits; admitting");
@@ -209,15 +208,16 @@ pub async fn admit(
         a2a_context: who.a2a_context,
         ip: who.ip,
     };
+    let spec = &compiled.spec;
     let refused = match state
         .enforcer
-        .check_visitor(&visitor_rates(&spec), &key, now)
+        .check_visitor(&visitor_rates(spec), &key, now)
         .await
     {
         Err(rate) => Refusal::Rate(rate),
         Ok(()) => match state
             .enforcer
-            .check_agent(agent_id, &owner_budget(&spec), now)
+            .check_agent(agent_id, &owner_budget(spec), now)
             .await
         {
             Err(budget) => Refusal::Budget(budget),
@@ -233,25 +233,19 @@ pub async fn admit(
 }
 
 const REFUSAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
-const SPEC_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Keeps a flood of refused requests from becoming a flood of database
 /// work: one `limit_refused` audit row per (agent, subject, limit) per
 /// window, whose `count` is set to the refusals it stands for when the
-/// window closes, and the live spec each admission reads held for a few
-/// seconds.
+/// window closes.
 #[derive(Clone)]
 pub struct RefusalAudit {
     window: std::time::Duration,
     open: Arc<Mutex<HashMap<RefusalKey, OpenRefusal>>>,
-    specs: Arc<Mutex<HashMap<String, CachedSpec>>>,
 }
 
 /// `(agent, subject, limit kind)`: one open refusal window per triple.
 type RefusalKey = (String, String, String);
-
-/// A live spec and when it was read.
-type CachedSpec = (std::time::Instant, Option<Value>);
 
 struct OpenRefusal {
     audit_id: String,
@@ -269,35 +263,7 @@ impl RefusalAudit {
         Self {
             window,
             open: Arc::default(),
-            specs: Arc::default(),
         }
-    }
-
-    async fn live_spec(
-        &self,
-        db: &aiplane_core::server::db::Pool,
-        agent_id: &str,
-    ) -> Result<Option<Value>, aiplane_core::server::db::DbError> {
-        let cached = self
-            .specs
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(agent_id)
-            .filter(|(at, _)| at.elapsed() < SPEC_TTL)
-            .map(|(_, spec)| spec.clone());
-        if let Some(spec) = cached {
-            return Ok(spec);
-        }
-        let spec = agents_db::live(db, agent_id)
-            .await?
-            .map(|(_, text)| serde_json::from_str(&text).unwrap_or(Value::Null));
-        let mut specs = self.specs.lock().unwrap_or_else(|p| p.into_inner());
-        specs.retain(|_, (at, _)| at.elapsed() < SPEC_TTL);
-        specs.insert(
-            agent_id.to_string(),
-            (std::time::Instant::now(), spec.clone()),
-        );
-        Ok(spec)
     }
 
     async fn record(

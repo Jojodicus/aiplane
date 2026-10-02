@@ -37,6 +37,7 @@ use super::human::{RequestHuman, human_routes};
 use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
+use super::spec_cache::CompiledSpec;
 use super::state::{self, AgentState, StateSchema, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
 use crate::budget::{Budget, SpendMeter};
@@ -192,34 +193,33 @@ impl RunProfile {
         let principal = sp::load_active(&state.db, agent_id)
             .await?
             .ok_or_else(|| AgentRunError::Unavailable(agent_id.to_string()))?;
-        let (version, text) = match source {
-            SpecSource::Live => agents_db::live(&state.db, agent_id)
+        let compiled = match source {
+            SpecSource::Live => state
+                .agent_specs
+                .live(&state.db, agent_id)
                 .await?
                 .ok_or_else(|| AgentRunError::NotLive(principal.name.clone()))?,
-            SpecSource::Pinned(v) => agents_db::version(&state.db, agent_id, v)
+            SpecSource::Pinned(v) => state
+                .agent_specs
+                .version(&state.db, agent_id, v)
                 .await?
-                .map(|row| (row.version, row.spec))
                 .ok_or_else(|| AgentRunError::MissingVersion {
                     agent: principal.name.clone(),
                     version: v,
                 })?,
-            SpecSource::Draft(spec) => (agents_db::DRAFT_VERSION, spec.to_string()),
+            SpecSource::Draft(spec) => {
+                Arc::new(CompiledSpec::compile(agents_db::DRAFT_VERSION, spec))
+            }
         };
+        let version = compiled.version;
         let bad = |message: String| AgentRunError::BadSpec {
             agent: principal.name.clone(),
             version,
             message,
         };
-        let spec: Value =
-            serde_json::from_str(&text).map_err(|e| bad(format!("it is not JSON ({e})")))?;
-        let schema = Arc::new(
-            StateSchema::from_spec(&spec)
-                .map_err(|i| bad(format!("at `{}`, {}", i.path, i.message)))?,
-        );
-        let gates = Arc::new(
-            RouteGates::from_spec(&spec)
-                .map_err(|i| bad(format!("at `{}`, {}", i.path, i.message)))?,
-        );
+        let spec = &compiled.spec;
+        let parts = compiled.parts().map_err(|m| bad(m.to_string()))?;
+        let (schema, gates) = (parts.schema.clone(), parts.gates.clone());
         let pool = spec
             .pointer("/main/pool")
             .and_then(Value::as_str)
@@ -240,8 +240,7 @@ impl RunProfile {
             }
         };
 
-        let output_filter = OutputFilter::from_spec(&spec)
-            .map_err(|e| bad(format!("`publish.output_filter`: {e}")))?;
+        let output_filter = parts.output_filter.clone().map_err(bad)?;
         let mut synthetic: BTreeMap<String, Synthetic> = BTreeMap::new();
         let mut add = |tool: Arc<dyn Tool>, phase: ToolPhase| {
             synthetic.insert(tool.id().to_string(), Synthetic { tool, phase });
@@ -259,7 +258,7 @@ impl RunProfile {
                 schema: schema.clone(),
                 options: options.clone(),
             };
-            for tool in verifier::tools(&Verifiers::from_spec(&spec), &run) {
+            for tool in verifier::tools(&Verifiers::from_spec(spec), &run) {
                 add(tool, ToolPhase::WritesState);
             }
         }
@@ -288,12 +287,12 @@ impl RunProfile {
             add(Arc::new(forward), ToolPhase::ActsOnState);
         }
         let binds = match role {
-            Role::Main => ToolBinds::from_spec(&spec),
-            Role::SubAgent { route_binds } => ToolBinds::from_spec(&spec).with_route(route_binds),
+            Role::Main => ToolBinds::from_spec(spec),
+            Role::SubAgent { route_binds } => ToolBinds::from_spec(spec).with_route(route_binds),
         };
         let run = AgentRun {
             name: principal.name.clone(),
-            instructions: instructions(&spec),
+            instructions: instructions(spec),
             conversation,
             tools: spec
                 .pointer("/main/tools")
@@ -305,13 +304,13 @@ impl RunProfile {
                 .collect(),
             synthetic,
             binds,
-            permissions: Permissions::from_spec(&spec),
+            permissions: Permissions::from_spec(spec),
             schema: (!schema.is_empty()).then_some(schema),
             pools,
             spend: options.spend.clone(),
         };
         Ok(Self {
-            budget: budget(&spec),
+            budget: budget(spec),
             principal,
             version,
             model,
