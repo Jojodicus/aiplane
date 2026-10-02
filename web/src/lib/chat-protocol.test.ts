@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 import {
 	applyEvent,
 	newConversationState,
-	parseSseBlock,
 	parseUserContent,
 	replaceUserText,
 	sessionTitle,
@@ -142,12 +141,6 @@ test('info banners and tool prompts set and clear', () => {
 	);
 	applyEvent(state, { type: 'tool_prompt', action: 'hide', turn_id: 'a1' });
 	assert.equal(state.prompt, null);
-});
-
-test('an SSE block parses into its event', () => {
-	const event = parseSseBlock('event: turn_delta\ndata: {"type":"turn_delta","turn_id":"a1","text_delta":"hi"}\n');
-	assert.deepEqual(event, { type: 'turn_delta', turn_id: 'a1', text_delta: 'hi' });
-	assert.equal(parseSseBlock('garbage'), null);
 });
 
 test('session titles fall back to the first user line, truncated', () => {

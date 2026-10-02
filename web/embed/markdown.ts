@@ -8,6 +8,7 @@
  * code, bullet and numbered lists, headings (shown as bold paragraphs),
  * `code`, **bold**, *emphasis* and http(s) links.
  */
+import { isSafeHref } from '../shared/url.ts';
 
 export type Inline =
 	| { kind: 'text'; text: string }
@@ -64,12 +65,6 @@ export function parseBlocks(source: string): Block[] {
 	}
 	flush();
 	return blocks;
-}
-
-const SAFE_HREF = /^https?:\/\/[^\s<>"']+$/i;
-
-export function isSafeHref(href: string): boolean {
-	return SAFE_HREF.test(href);
 }
 
 export function parseInline(source: string): Inline[] {
