@@ -26,6 +26,13 @@ pub enum AuditKind {
     TokenIssued,
     TokenRevoked,
     InjectionDetected,
+    AgentCreated,
+    AgentDraftUpdated,
+    AgentPublished,
+    AgentLiveVersionSet,
+    AgentShareSet,
+    AgentShareRemoved,
+    AgentDeleted,
 }
 
 impl AuditKind {
@@ -38,6 +45,13 @@ impl AuditKind {
             Self::TokenIssued => "token_issued",
             Self::TokenRevoked => "token_revoked",
             Self::InjectionDetected => "injection_detected",
+            Self::AgentCreated => "agent_created",
+            Self::AgentDraftUpdated => "agent_draft_updated",
+            Self::AgentPublished => "agent_published",
+            Self::AgentLiveVersionSet => "agent_live_version_set",
+            Self::AgentShareSet => "agent_share_set",
+            Self::AgentShareRemoved => "agent_share_removed",
+            Self::AgentDeleted => "agent_deleted",
         }
     }
 }

@@ -1,0 +1,1435 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! The agent spec: its JSON layout and the validator that runs on every save
+//! and again on publish (`docs/agents.md` §2 → "Spec layout").
+//!
+//! The validator walks the JSON itself rather than deserializing into typed
+//! structs, so it can report *every* problem at once, each with the path the
+//! builder UI points at (`routes.billing.when.all[0].slot`), instead of
+//! serde's first error at a line and column nobody typed.
+//!
+//! What it checks:
+//! - **Shape.** Unknown keys anywhere are errors, never ignored — a misspelt
+//!   `tool_resource` must not silently leave a tool unbound. Types, enums,
+//!   durations, origins and regexes are checked; the `finish` schema goes
+//!   through [`FinishContract::new`], the run-time validator itself.
+//! - **Grants.** Every pool, tool, connector and skill the spec names must be
+//!   granted to this agent's principal. The spec cannot widen what the
+//!   principal holds; it can only pick from it.
+//! - **References.** Sub-agents are named by agent id and must exist (and, on
+//!   publish, be live). Gate leaves, templates and `set_by` entries must name
+//!   slots and verifiers the spec declares.
+//! - **Binds.** A bound argument is hidden from the model, so its source is a
+//!   state slot the model cannot write (no `llm` in its `set_by`), or a
+//!   `{"const": …}` literal.
+//!
+//! What it does not: type-check gate values against slots (#86), check the
+//! sub-agent graph for cycles and depth (#88), or give slots run-time meaning
+//! (#85). Those build on the shape fixed here.
+
+use std::collections::{BTreeSet, HashMap};
+
+use aiplane_core::server::principal::{GrantKind, GrantSet};
+use aiplane_core::server::reasoning::HARD_ROUND_CAP;
+use serde::Serialize;
+use serde_json::{Map, Value};
+
+use crate::finish::FinishContract;
+use crate::server::tools::mcp::MCP_ID_PREFIX;
+
+/// One problem with a spec: where, and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpecIssue {
+    pub path: String,
+    pub message: String,
+}
+
+/// A draft may be incomplete; a published version must be runnable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Draft,
+    Publish,
+}
+
+/// What a spec is validated against.
+pub struct SpecContext<'a> {
+    /// The agent whose spec this is — its principal id.
+    pub agent_id: &'a str,
+    /// That principal's grants, as stored now.
+    pub grants: &'a GrantSet,
+    /// Every agent id, mapped to whether it has a live version.
+    pub agents: &'a HashMap<String, bool>,
+}
+
+const TOP_KEYS: &[&str] = &[
+    "profile",
+    "main",
+    "state",
+    "verifiers",
+    "router",
+    "routes",
+    "finish",
+    "on_tool_unavailable",
+    "publish",
+];
+const PROFILE_KEYS: &[&str] = &["display", "avatar", "color"];
+const MAIN_KEYS: &[&str] = &[
+    "pool",
+    "instructions",
+    "tools",
+    "skills",
+    "tool_resources",
+    "budget",
+];
+const INSTRUCTION_KEYS: &[&str] = &["orchestration", "response"];
+const TOOL_RESOURCE_KEYS: &[&str] = &["bind", "permission"];
+const PERMISSIONS: &[&str] = &["always_allow", "always_ask"];
+const BUDGET_KEYS: &[&str] = &["rounds", "seconds", "tokens"];
+const SLOT_KEYS: &[&str] = &[
+    "type",
+    "set_by",
+    "description",
+    "values",
+    "min_length",
+    "max_length",
+    "minimum",
+    "maximum",
+    "pattern",
+];
+const SLOT_TYPES: &[&str] = &[
+    "string", "email", "enum", "integer", "number", "boolean", "subject",
+];
+const VERIFIER_KEYS: &[&str] = &[
+    "kind",
+    "connector",
+    "send_tool",
+    "check_tool",
+    "input",
+    "max_attempts",
+    "code_ttl",
+];
+const ROUTER_KEYS: &[&str] = &["kind", "pool"];
+const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
+const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "human"];
+const HUMAN_KEYS: &[&str] = &["notify", "inbox"];
+const FINISH_KEYS: &[&str] = &["schema"];
+const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
+const PUBLISH_KEYS: &[&str] = &["origins", "idle_ttl", "retention_days", "output_filter"];
+const OUTPUT_FILTER_KEYS: &[&str] = &["patterns"];
+const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
+const MAX_IDENT_LEN: usize = 48;
+
+/// Every problem with `spec`, in document order. Empty means valid.
+pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIssue> {
+    let mut check = Check {
+        ctx,
+        stage,
+        issues: Vec::new(),
+        slots: HashMap::new(),
+        verifiers: BTreeSet::new(),
+    };
+    check.spec(spec);
+    check.issues
+}
+
+struct Check<'a> {
+    ctx: &'a SpecContext<'a>,
+    stage: Stage,
+    issues: Vec<SpecIssue>,
+    /// Slot name → whether the model may write it.
+    slots: HashMap<String, bool>,
+    verifiers: BTreeSet<String>,
+}
+
+fn join(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+fn index(path: &str, i: usize) -> String {
+    format!("{path}[{i}]")
+}
+
+fn is_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && s.len() <= MAX_IDENT_LEN
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// `30s`, `15m`, `2h`, `30d` — a positive count and one unit.
+fn is_duration(s: &str) -> bool {
+    let Some(unit) = s.chars().last() else {
+        return false;
+    };
+    let digits = &s[..s.len() - unit.len_utf8()];
+    matches!(unit, 's' | 'm' | 'h' | 'd')
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && digits.parse::<u64>().is_ok_and(|n| n > 0)
+}
+
+/// Exactly `scheme://host[:port]`, the form a browser sends in `Origin`.
+fn is_origin(s: &str) -> bool {
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return false;
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (rest, None),
+    };
+    matches!(scheme, "http" | "https")
+        && !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && port.is_none_or(|p| p.parse::<u16>().is_ok_and(|n| n > 0))
+}
+
+fn type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
+impl<'a> Check<'a> {
+    fn issue(&mut self, path: &str, message: impl Into<String>) {
+        self.issues.push(SpecIssue {
+            path: path.to_string(),
+            message: message.into(),
+        });
+    }
+
+    fn grant_hint(&self, kind: &str, reference: &str) -> String {
+        format!(
+            "grant it with POST /api/v0/system-principals/{}/grants \
+             {{\"kind\": \"{kind}\", \"ref\": \"{reference}\"}}",
+            self.ctx.agent_id
+        )
+    }
+
+    /// The object at `path` with only `allowed` keys, or `None` after
+    /// recording why not.
+    fn object<'v>(
+        &mut self,
+        v: &'v Value,
+        path: &str,
+        allowed: &[&str],
+    ) -> Option<&'v Map<String, Value>> {
+        let Value::Object(map) = v else {
+            self.issue(path, format!("must be an object, not {}", type_name(v)));
+            return None;
+        };
+        for key in map.keys() {
+            if !allowed.contains(&key.as_str()) {
+                self.issue(
+                    &join(path, key),
+                    format!(
+                        "unknown key `{key}` — expected one of: {}",
+                        allowed.join(", ")
+                    ),
+                );
+            }
+        }
+        Some(map)
+    }
+
+    /// A map keyed by identifiers (`state`, `routes`, `verifiers`).
+    fn named_map<'v>(&mut self, v: &'v Value, path: &str) -> Vec<(&'v str, &'v Value)> {
+        let Value::Object(map) = v else {
+            self.issue(
+                path,
+                format!("must be an object keyed by name, not {}", type_name(v)),
+            );
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (name, value) in map {
+            if is_ident(name) {
+                out.push((name.as_str(), value));
+            } else {
+                self.issue(
+                    &join(path, name),
+                    format!(
+                        "`{name}` is not a valid name — use lowercase letters, digits and `_`, \
+                         starting with a letter, at most {MAX_IDENT_LEN} characters"
+                    ),
+                );
+            }
+        }
+        out
+    }
+
+    fn string<'v>(&mut self, v: &'v Value, path: &str) -> Option<&'v str> {
+        match v {
+            Value::String(s) => Some(s),
+            other => {
+                self.issue(path, format!("must be a string, not {}", type_name(other)));
+                None
+            }
+        }
+    }
+
+    fn nullable_string(&mut self, v: &Value, path: &str) {
+        if !v.is_null() {
+            self.string(v, path);
+        }
+    }
+
+    fn one_of(&mut self, v: &Value, path: &str, allowed: &[&str]) -> Option<String> {
+        let s = self.string(v, path)?;
+        if allowed.contains(&s) {
+            Some(s.to_string())
+        } else {
+            self.issue(
+                path,
+                format!(
+                    "`{s}` is not allowed here — use one of: {}",
+                    allowed.join(", ")
+                ),
+            );
+            None
+        }
+    }
+
+    fn positive_int(&mut self, v: &Value, path: &str, max: Option<u64>) {
+        match v.as_u64() {
+            Some(n) if n >= 1 && max.is_none_or(|m| n <= m) => {}
+            _ => {
+                let range = match max {
+                    Some(m) => format!("between 1 and {m}"),
+                    None => "of at least 1".into(),
+                };
+                self.issue(path, format!("must be a whole number {range}"));
+            }
+        }
+    }
+
+    fn duration(&mut self, v: &Value, path: &str) {
+        if let Some(s) = self.string(v, path)
+            && !is_duration(s)
+        {
+            self.issue(
+                path,
+                format!("`{s}` is not a duration — write a count and a unit, e.g. `30s`, `15m`, `2h`, `30d`"),
+            );
+        }
+    }
+
+    fn regex(&mut self, v: &Value, path: &str) {
+        if let Some(s) = self.string(v, path)
+            && let Err(err) = regex::Regex::new(s)
+        {
+            self.issue(path, format!("is not a valid regular expression: {err}"));
+        }
+    }
+
+    fn string_list<'v>(&mut self, v: &'v Value, path: &str) -> Vec<(String, &'v str)> {
+        let Value::Array(items) = v else {
+            self.issue(
+                path,
+                format!("must be an array of strings, not {}", type_name(v)),
+            );
+            return Vec::new();
+        };
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            let p = index(path, i);
+            if let Some(s) = self.string(item, &p) {
+                if seen.insert(s) {
+                    out.push((p, s));
+                } else {
+                    self.issue(&p, format!("`{s}` is listed twice"));
+                }
+            }
+        }
+        out
+    }
+
+    fn require_grant(&mut self, path: &str, kind: GrantKind, reference: &str, what: &str) {
+        if !self.ctx.grants.has(kind, reference) {
+            let hint = self.grant_hint(kind.as_str(), reference);
+            self.issue(
+                path,
+                format!(
+                    "{what} `{reference}` is not granted to this agent — {hint}, or remove it \
+                     from the spec"
+                ),
+            );
+        }
+    }
+
+    // --- the layout --------------------------------------------------------
+
+    fn spec(&mut self, spec: &Value) {
+        let Some(top) = self.object(spec, "", TOP_KEYS) else {
+            return;
+        };
+        // Declarations first, so references to them can be checked wherever
+        // they appear.
+        if let Some(v) = top.get("verifiers") {
+            self.verifiers_decl(v);
+        }
+        if let Some(v) = top.get("state") {
+            self.state(v);
+        }
+        if let Some(v) = top.get("profile") {
+            self.profile(v);
+        }
+        match top.get("main") {
+            Some(v) => self.main(v),
+            None if self.stage == Stage::Publish => self.issue(
+                "main",
+                "a published agent needs `main` with a `pool` and its instructions",
+            ),
+            None => {}
+        }
+        if let Some(v) = top.get("router") {
+            self.router(v);
+        }
+        if let Some(v) = top.get("routes") {
+            for (name, route) in self.named_map(v, "routes") {
+                self.route(route, &join("routes", name));
+            }
+        }
+        if let Some(v) = top.get("finish") {
+            self.finish(v);
+        }
+        if let Some(v) = top.get("on_tool_unavailable") {
+            self.one_of(v, "on_tool_unavailable", ON_TOOL_UNAVAILABLE);
+        }
+        if let Some(v) = top.get("publish") {
+            self.publish(v);
+        }
+    }
+
+    fn profile(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "profile", PROFILE_KEYS) else {
+            return;
+        };
+        if let Some(d) = map.get("display") {
+            self.string(d, "profile.display");
+        }
+        for key in ["avatar", "color"] {
+            if let Some(x) = map.get(key) {
+                self.nullable_string(x, &join("profile", key));
+            }
+        }
+    }
+
+    fn main(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "main", MAIN_KEYS) else {
+            return;
+        };
+        match map.get("pool") {
+            Some(pool) => {
+                if let Some(name) = self.string(pool, "main.pool") {
+                    self.require_grant("main.pool", GrantKind::Pool, name, "pool");
+                }
+            }
+            None if self.stage == Stage::Publish => self.issue(
+                "main.pool",
+                "a published agent needs a pool to run on — set `main.pool` to one of its pool \
+                 grants",
+            ),
+            None => {}
+        }
+        self.instructions(map.get("instructions"));
+
+        let mut tools = BTreeSet::new();
+        if let Some(list) = map.get("tools") {
+            for (path, tool) in self.string_list(list, "main.tools") {
+                self.tool_reference(&path, tool);
+                tools.insert(tool.to_string());
+            }
+        }
+        if let Some(list) = map.get("skills") {
+            for (path, skill) in self.string_list(list, "main.skills") {
+                self.require_grant(&path, GrantKind::Skill, skill, "skill");
+            }
+        }
+        if let Some(resources) = map.get("tool_resources") {
+            self.tool_resources(resources, &tools);
+        }
+        if let Some(budget) = map.get("budget")
+            && let Some(b) = self.object(budget, "main.budget", BUDGET_KEYS)
+        {
+            if let Some(r) = b.get("rounds") {
+                self.positive_int(r, "main.budget.rounds", Some(u64::from(HARD_ROUND_CAP)));
+            }
+            for key in ["seconds", "tokens"] {
+                if let Some(x) = b.get(key) {
+                    self.positive_int(x, &join("main.budget", key), None);
+                }
+            }
+        }
+    }
+
+    fn instructions(&mut self, v: Option<&Value>) {
+        let path = "main.instructions";
+        let mut written = false;
+        if let Some(v) = v
+            && let Some(map) = self.object(v, path, INSTRUCTION_KEYS)
+        {
+            for key in INSTRUCTION_KEYS {
+                if let Some(x) = map.get(*key)
+                    && let Some(s) = self.string(x, &join(path, key))
+                {
+                    written |= !s.trim().is_empty();
+                }
+            }
+        }
+        if self.stage == Stage::Publish && !written {
+            self.issue(
+                path,
+                "a published agent needs instructions — write `orchestration` (what to do), \
+                 `response` (how to answer), or both",
+            );
+        }
+    }
+
+    /// A registry tool needs a `tool` grant; an MCP tool
+    /// (`mcp__<connector>__<tool>`) needs its connector granted.
+    fn tool_reference(&mut self, path: &str, tool: &str) {
+        let Some(rest) = tool.strip_prefix(MCP_ID_PREFIX) else {
+            self.require_grant(path, GrantKind::Tool, tool, "tool");
+            return;
+        };
+        match rest.split_once("__") {
+            Some((connector, name)) if !connector.is_empty() && !name.is_empty() => {
+                if !self.ctx.grants.has(GrantKind::Connector, connector) {
+                    let hint = self.grant_hint("connector", connector);
+                    self.issue(
+                        path,
+                        format!(
+                            "tool `{tool}` comes from connector `{connector}`, which is not \
+                             granted to this agent — {hint}, or remove the tool from the spec"
+                        ),
+                    );
+                }
+            }
+            _ => self.issue(
+                path,
+                format!(
+                    "`{tool}` is not an MCP tool id — they read `{MCP_ID_PREFIX}<connector>__<tool>`"
+                ),
+            ),
+        }
+    }
+
+    fn tool_resources(&mut self, v: &Value, tools: &BTreeSet<String>) {
+        let path = "main.tool_resources";
+        let Value::Object(map) = v else {
+            self.issue(
+                path,
+                format!("must be an object keyed by tool, not {}", type_name(v)),
+            );
+            return;
+        };
+        for (tool, resource) in map {
+            let p = join(path, tool);
+            if !tools.contains(tool) {
+                self.issue(
+                    &p,
+                    format!(
+                        "configures `{tool}`, which is not in `main.tools` — add it there or \
+                         remove this entry"
+                    ),
+                );
+            }
+            let Some(r) = self.object(resource, &p, TOOL_RESOURCE_KEYS) else {
+                continue;
+            };
+            if let Some(perm) = r.get("permission") {
+                self.one_of(perm, &join(&p, "permission"), PERMISSIONS);
+            }
+            if let Some(bind) = r.get("bind") {
+                self.bind(bind, &join(&p, "bind"));
+            }
+        }
+    }
+
+    /// `{arg: source}` where source is a non-`llm` slot path or `{"const": v}`.
+    fn bind(&mut self, v: &Value, path: &str) {
+        let Value::Object(map) = v else {
+            self.issue(
+                path,
+                format!(
+                    "must be an object of argument → source, not {}",
+                    type_name(v)
+                ),
+            );
+            return;
+        };
+        for (arg, source) in map {
+            let p = join(path, arg);
+            match source {
+                Value::String(slot_path) => self.bind_slot(&p, slot_path),
+                Value::Object(lit) if lit.len() == 1 && lit.contains_key("const") => {}
+                other => self.issue(
+                    &p,
+                    format!(
+                        "a bind source is a state slot (`\"verified\"`, `\"verified.customer_id\"`) \
+                         or a fixed value (`{{\"const\": …}}`), not {}",
+                        type_name(other)
+                    ),
+                ),
+            }
+        }
+    }
+
+    fn bind_slot(&mut self, path: &str, slot_path: &str) {
+        let slot = slot_path.split('.').next().unwrap_or_default();
+        match self.slots.get(slot) {
+            None => self.issue(
+                path,
+                format!(
+                    "binds from `{slot_path}`, but `{slot}` is not a slot in `state` — declare \
+                     it, or bind a fixed value with {{\"const\": …}}"
+                ),
+            ),
+            Some(true) => self.issue(
+                path,
+                format!(
+                    "binds from slot `{slot}`, which the model can set (`llm` in its `set_by`). \
+                     A bound argument decides whose data a tool touches, so it must come from a \
+                     verifier or the host — remove `llm` from `state.{slot}.set_by` or bind \
+                     another slot"
+                ),
+            ),
+            Some(false) => {}
+        }
+    }
+
+    fn verifiers_decl(&mut self, v: &Value) {
+        for (id, verifier) in self.named_map(v, "verifiers") {
+            self.verifiers.insert(id.to_string());
+            let p = join("verifiers", id);
+            let Some(map) = self.object(verifier, &p, VERIFIER_KEYS) else {
+                continue;
+            };
+            match map.get("kind") {
+                Some(kind) => {
+                    self.string(kind, &join(&p, "kind"));
+                }
+                None => self.issue(&join(&p, "kind"), "a verifier needs a `kind`"),
+            }
+            if let Some(c) = map.get("connector") {
+                let cp = join(&p, "connector");
+                if let Some(connector) = self.string(c, &cp) {
+                    self.require_grant(&cp, GrantKind::Connector, connector, "connector");
+                }
+            }
+            for key in ["send_tool", "check_tool", "input"] {
+                if let Some(x) = map.get(key) {
+                    self.string(x, &join(&p, key));
+                }
+            }
+            if let Some(x) = map.get("max_attempts") {
+                self.positive_int(x, &join(&p, "max_attempts"), None);
+            }
+            if let Some(x) = map.get("code_ttl") {
+                self.duration(x, &join(&p, "code_ttl"));
+            }
+        }
+    }
+
+    fn state(&mut self, v: &Value) {
+        for (name, slot) in self.named_map(v, "state") {
+            let p = join("state", name);
+            let Some(map) = self.object(slot, &p, SLOT_KEYS) else {
+                continue;
+            };
+            let ty = match map.get("type") {
+                Some(t) => self.one_of(t, &join(&p, "type"), SLOT_TYPES),
+                None => {
+                    self.issue(
+                        &join(&p, "type"),
+                        format!("a slot needs a `type` — one of: {}", SLOT_TYPES.join(", ")),
+                    );
+                    None
+                }
+            };
+            let llm = self.set_by(map.get("set_by"), &join(&p, "set_by"));
+            self.slots.insert(name.to_string(), llm);
+
+            match (ty.as_deref(), map.get("values")) {
+                (Some("enum"), Some(Value::Array(values))) if !values.is_empty() => {}
+                (Some("enum"), _) => self.issue(
+                    &join(&p, "values"),
+                    "an `enum` slot needs a non-empty `values` list",
+                ),
+                (_, Some(_)) => self.issue(
+                    &join(&p, "values"),
+                    "`values` only applies to a slot of type `enum`",
+                ),
+                _ => {}
+            }
+            for key in ["min_length", "max_length"] {
+                if let Some(x) = map.get(key)
+                    && x.as_u64().is_none()
+                {
+                    self.issue(&join(&p, key), "must be a whole number of at least 0");
+                }
+            }
+            for key in ["minimum", "maximum"] {
+                if let Some(x) = map.get(key)
+                    && !x.is_number()
+                {
+                    self.issue(&join(&p, key), "must be a number");
+                }
+            }
+            if let Some(x) = map.get("description") {
+                self.string(x, &join(&p, "description"));
+            }
+            if let Some(x) = map.get("pattern") {
+                self.regex(x, &join(&p, "pattern"));
+            }
+        }
+    }
+
+    /// Whether `llm` is among the writers. A slot nobody can write is
+    /// refused: its gate could never open.
+    fn set_by(&mut self, v: Option<&Value>, path: &str) -> bool {
+        let Some(v) = v else {
+            self.issue(
+                path,
+                "a slot needs `set_by` — who may write it: `llm`, `host` or `verifier:<id>`",
+            );
+            return false;
+        };
+        let writers = self.string_list(v, path);
+        if writers.is_empty() && v.is_array() {
+            self.issue(
+                path,
+                "lists nobody — a slot nobody can write never opens a gate",
+            );
+        }
+        let mut llm = false;
+        for (p, writer) in writers {
+            llm |= writer == "llm";
+            self.provenance(&p, writer);
+        }
+        llm
+    }
+
+    fn provenance(&mut self, path: &str, value: &str) {
+        match value {
+            "llm" | "host" => {}
+            other => match other.strip_prefix("verifier:") {
+                Some(id) if self.verifiers.contains(id) => {}
+                Some(id) => self.issue(
+                    path,
+                    format!("names verifier `{id}`, which is not declared in `verifiers`"),
+                ),
+                None => self.issue(
+                    path,
+                    format!("`{other}` is not a writer — use `llm`, `host` or `verifier:<id>`"),
+                ),
+            },
+        }
+    }
+
+    fn router(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "router", ROUTER_KEYS) else {
+            return;
+        };
+        let kind = match map.get("kind") {
+            Some(k) => self.one_of(k, "router.kind", ROUTER_KINDS),
+            None => {
+                self.issue(
+                    "router.kind",
+                    "the router needs a `kind`: `rules` or `classifier`",
+                );
+                None
+            }
+        };
+        match map.get("pool") {
+            Some(pool) => {
+                if let Some(name) = self.string(pool, "router.pool") {
+                    self.require_grant("router.pool", GrantKind::Pool, name, "pool");
+                }
+            }
+            None if kind.as_deref() == Some("classifier") => self.issue(
+                "router.pool",
+                "a `classifier` router needs a `pool` to classify with",
+            ),
+            None => {}
+        }
+    }
+
+    fn route(&mut self, v: &Value, path: &str) {
+        let Some(map) = self.object(v, path, ROUTE_KEYS) else {
+            return;
+        };
+        if let Some(d) = map.get("description") {
+            self.string(d, &join(path, "description"));
+        }
+        match map.get("when") {
+            Some(when) => self.cond(when, &join(path, "when")),
+            None => self.issue(
+                &join(path, "when"),
+                "a route needs a `when` gate — use `{\"slot\": …, \"set\": true}` for the \
+                 simplest one",
+            ),
+        }
+        match (map.get("agent"), map.get("human")) {
+            (Some(agent), None) => {
+                self.sub_agent(agent, &join(path, "agent"));
+                match map.get("task") {
+                    Some(task) => self.template(task, &join(path, "task")),
+                    None => self.issue(
+                        &join(path, "task"),
+                        "a route to a sub-agent needs a `task` — the sub-agent sees this, \
+                         never the transcript",
+                    ),
+                }
+                if let Some(bind) = map.get("bind") {
+                    self.bind(bind, &join(path, "bind"));
+                }
+            }
+            (None, Some(human)) => {
+                if let Some(h) = self.object(human, &join(path, "human"), HUMAN_KEYS) {
+                    if let Some(n) = h.get("notify") {
+                        self.string_list(n, &join(path, "human.notify"));
+                    }
+                    if let Some(i) = h.get("inbox") {
+                        self.string(i, &join(path, "human.inbox"));
+                    }
+                }
+                for key in ["task", "bind"] {
+                    if map.contains_key(key) {
+                        self.issue(
+                            &join(path, key),
+                            format!("`{key}` only applies to a route to a sub-agent"),
+                        );
+                    }
+                }
+            }
+            (Some(_), Some(_)) => self.issue(
+                path,
+                "a route goes to a sub-agent (`agent`) or to a human (`human`), not both",
+            ),
+            (None, None) => self.issue(
+                path,
+                "a route needs a target — `agent` (a sub-agent's id) or `human`",
+            ),
+        }
+    }
+
+    fn sub_agent(&mut self, v: &Value, path: &str) {
+        let Some(id) = self.string(v, path) else {
+            return;
+        };
+        if id == self.ctx.agent_id {
+            self.issue(path, "an agent cannot route to itself");
+            return;
+        }
+        match self.ctx.agents.get(id) {
+            None => self.issue(
+                path,
+                format!(
+                    "there is no agent with id `{id}` — sub-agents are referenced by agent id, \
+                     as listed by GET /api/v0/agents"
+                ),
+            ),
+            Some(false) if self.stage == Stage::Publish => self.issue(
+                path,
+                format!(
+                    "sub-agent `{id}` has never been published, so this route could not run — \
+                     publish it first"
+                ),
+            ),
+            Some(_) => {}
+        }
+    }
+
+    /// Every `{slot}` / `{slot.field}` placeholder must name a declared slot.
+    fn template(&mut self, v: &Value, path: &str) {
+        let Some(text) = self.string(v, path) else {
+            return;
+        };
+        let mut rest = text;
+        while let Some(open) = rest.find('{') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('}') else {
+                self.issue(path, "has a `{` that is never closed");
+                return;
+            };
+            let placeholder = after[..close].trim();
+            let slot = placeholder.split('.').next().unwrap_or_default();
+            if !self.slots.contains_key(slot) {
+                self.issue(
+                    path,
+                    format!("uses `{{{placeholder}}}`, but `{slot}` is not a slot in `state`"),
+                );
+            }
+            rest = &after[close + 1..];
+        }
+    }
+
+    /// The gate condition tree (`docs/agents.md` §4). Only its shape and the
+    /// slots it names; type checks are #86.
+    fn cond(&mut self, v: &Value, path: &str) {
+        let Value::Object(map) = v else {
+            self.issue(
+                path,
+                format!("a condition must be an object, not {}", type_name(v)),
+            );
+            return;
+        };
+        for combinator in ["all", "any"] {
+            if let Some(children) = map.get(combinator) {
+                if map.len() != 1 {
+                    self.issue(
+                        path,
+                        format!("`{combinator}` must be the only key of its condition"),
+                    );
+                }
+                match children {
+                    Value::Array(items) if !items.is_empty() => {
+                        for (i, child) in items.iter().enumerate() {
+                            self.cond(child, &index(&join(path, combinator), i));
+                        }
+                    }
+                    _ => self.issue(
+                        &join(path, combinator),
+                        "must be a non-empty array of conditions",
+                    ),
+                }
+                return;
+            }
+        }
+        if let Some(child) = map.get("not") {
+            if map.len() != 1 {
+                self.issue(path, "`not` must be the only key of its condition");
+            }
+            self.cond(child, &join(path, "not"));
+            return;
+        }
+        for key in map.keys() {
+            if !LEAF_KEYS.contains(&key.as_str()) {
+                self.issue(
+                    &join(path, key),
+                    format!(
+                        "unknown key `{key}` — a condition is `all`, `any`, `not`, or a leaf \
+                         with: {}",
+                        LEAF_KEYS.join(", ")
+                    ),
+                );
+            }
+        }
+        match map.get("slot") {
+            Some(slot) => {
+                if let Some(name) = self.string(slot, &join(path, "slot"))
+                    && !self.slots.contains_key(name)
+                {
+                    self.issue(
+                        &join(path, "slot"),
+                        format!("`{name}` is not a slot in `state`"),
+                    );
+                }
+            }
+            None => self.issue(&join(path, "slot"), "a leaf condition needs a `slot`"),
+        }
+        if !LEAF_KEYS[1..].iter().any(|k| map.contains_key(*k)) {
+            self.issue(
+                path,
+                "a leaf condition checks nothing — add `set`, `eq`, `in`, `provenance` or \
+                 `max_age`",
+            );
+        }
+        if let Some(x) = map.get("set")
+            && !x.is_boolean()
+        {
+            self.issue(&join(path, "set"), "must be true or false");
+        }
+        if let Some(x) = map.get("in")
+            && !x.is_array()
+        {
+            self.issue(&join(path, "in"), "must be an array of values");
+        }
+        if let Some(x) = map.get("provenance") {
+            let p = join(path, "provenance");
+            if let Some(s) = self.string(x, &p) {
+                self.provenance(&p, s);
+            }
+        }
+        if let Some(x) = map.get("max_age") {
+            self.duration(x, &join(path, "max_age"));
+        }
+    }
+
+    fn finish(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "finish", FINISH_KEYS) else {
+            return;
+        };
+        let Some(schema) = map.get("schema") else {
+            self.issue("finish.schema", "`finish` needs a `schema` for the result");
+            return;
+        };
+        if let Err(err) = FinishContract::new(schema.clone()) {
+            let at = if err.path.is_empty() || err.path == "/" {
+                "finish.schema".to_string()
+            } else {
+                format!("finish.schema{}", err.path)
+            };
+            self.issue(&at, err.to_string());
+        }
+    }
+
+    fn publish(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "publish", PUBLISH_KEYS) else {
+            return;
+        };
+        if let Some(origins) = map.get("origins") {
+            for (p, origin) in self.string_list(origins, "publish.origins") {
+                if !is_origin(origin) {
+                    self.issue(
+                        &p,
+                        format!(
+                            "`{origin}` is not an origin — write exactly `https://host` or \
+                             `https://host:port`, without a path or trailing slash"
+                        ),
+                    );
+                }
+            }
+        }
+        if let Some(x) = map.get("idle_ttl") {
+            self.duration(x, "publish.idle_ttl");
+        }
+        if let Some(x) = map.get("retention_days") {
+            self.positive_int(x, "publish.retention_days", None);
+        }
+        if let Some(filter) = map.get("output_filter")
+            && let Some(f) = self.object(filter, "publish.output_filter", OUTPUT_FILTER_KEYS)
+            && let Some(patterns) = f.get("patterns")
+        {
+            for (name, pattern) in self.named_map(patterns, "publish.output_filter.patterns") {
+                self.regex(pattern, &join("publish.output_filter.patterns", name));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const SELF: &str = "self-id";
+    const BILLING: &str = "billing-id";
+    const UNPUBLISHED: &str = "draft-id";
+
+    fn grants() -> GrantSet {
+        GrantSet::new([
+            (GrantKind::Pool, "chat".to_string()),
+            (GrantKind::Pool, "small".to_string()),
+            (GrantKind::Tool, "rag_search".to_string()),
+            (GrantKind::Connector, "erp".to_string()),
+            (GrantKind::Skill, "brand".to_string()),
+        ])
+    }
+
+    fn agents() -> HashMap<String, bool> {
+        HashMap::from([
+            (SELF.to_string(), false),
+            (BILLING.to_string(), true),
+            (UNPUBLISHED.to_string(), false),
+        ])
+    }
+
+    fn check(spec: Value, stage: Stage) -> Vec<SpecIssue> {
+        let grants = grants();
+        let agents = agents();
+        validate(
+            &spec,
+            &SpecContext {
+                agent_id: SELF,
+                grants: &grants,
+                agents: &agents,
+            },
+            stage,
+        )
+    }
+
+    fn paths(issues: &[SpecIssue]) -> Vec<&str> {
+        issues.iter().map(|i| i.path.as_str()).collect()
+    }
+
+    /// The layout from docs/agents.md §2, in JSON, with the sub-agent
+    /// referenced by id.
+    fn full() -> Value {
+        json!({
+            "profile": { "display": "croit Support", "avatar": null, "color": null },
+            "main": {
+                "pool": "chat",
+                "instructions": {
+                    "orchestration": "Collect name, email and issue before forwarding.",
+                    "response": "Friendly, short, in the visitor's language."
+                },
+                "tools": ["rag_search", "mcp__erp__lookup"],
+                "skills": ["brand"],
+                "tool_resources": {
+                    "rag_search": { "bind": { "collection": { "const": "produktdoku" } } },
+                    "mcp__erp__lookup": {
+                        "bind": { "customer_id": "verified.customer_id" },
+                        "permission": "always_ask"
+                    }
+                },
+                "budget": { "rounds": 12, "seconds": 60, "tokens": 40000 }
+            },
+            "state": {
+                "name": { "type": "string", "max_length": 120, "set_by": ["llm"] },
+                "email": { "type": "email", "set_by": ["llm"] },
+                "issue": { "type": "enum", "values": ["billing", "technical"], "set_by": ["llm"] },
+                "verified": { "type": "subject", "set_by": ["verifier:otp", "host"] },
+                "issue_summary": { "type": "string", "max_length": 2000, "set_by": ["llm"] }
+            },
+            "verifiers": {
+                "otp": { "kind": "mcp_code", "connector": "erp", "send_tool": "send_code",
+                         "check_tool": "check_code", "input": "secure_field",
+                         "max_attempts": 5, "code_ttl": "10m" }
+            },
+            "router": { "kind": "classifier", "pool": "small" },
+            "routes": {
+                "billing": {
+                    "when": { "all": [
+                        { "slot": "issue", "eq": "billing" },
+                        { "slot": "verified", "provenance": "verifier:otp", "max_age": "15m" }
+                    ] },
+                    "agent": BILLING,
+                    "task": "Invoice question from {verified.customer_id}: {issue_summary}",
+                    "bind": { "customer_id": "verified.customer_id" }
+                },
+                "human": {
+                    "when": { "not": { "slot": "issue", "set": false } },
+                    "human": { "notify": ["push"], "inbox": "support" }
+                }
+            },
+            "finish": { "schema": { "type": "object", "required": ["answer"],
+                "properties": { "answer": { "type": "string" } } } },
+            "on_tool_unavailable": "reject",
+            "publish": {
+                "origins": ["https://www.example.com", "http://localhost:5173"],
+                "idle_ttl": "30m",
+                "retention_days": 30,
+                "output_filter": { "patterns": { "invoice": "RE-\\d{6}" } }
+            }
+        })
+    }
+
+    #[test]
+    fn the_documented_layout_is_valid_for_publishing() {
+        assert_eq!(check(full(), Stage::Publish), []);
+    }
+
+    #[test]
+    fn an_empty_draft_is_valid_but_cannot_be_published() {
+        assert_eq!(check(json!({}), Stage::Draft), []);
+        assert_eq!(check(json!({ "main": {} }), Stage::Draft), []);
+        assert_eq!(paths(&check(json!({}), Stage::Publish)), ["main"]);
+        assert_eq!(
+            paths(&check(json!({ "main": {} }), Stage::Publish)),
+            ["main.pool", "main.instructions"]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_are_reported_at_every_level_with_the_expected_ones() {
+        let issues = check(
+            json!({
+                "mian": {},
+                "main": { "tool_resource": {} },
+                "state": { "x": { "type": "string", "set_by": ["llm"], "maxlen": 3 } },
+                "routes": { "r": { "when": { "slot": "x", "set": true, "equals": 1 },
+                                   "agent": BILLING, "task": "t" } }
+            }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "mian",
+                "state.x.maxlen",
+                "main.tool_resource",
+                "routes.r.when.equals"
+            ]
+        );
+        assert!(
+            issues[0].message.contains("expected one of: profile, main"),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn an_ungranted_tool_pool_skill_or_connector_is_rejected_with_the_grant_to_make() {
+        let issues = check(
+            json!({ "main": {
+                "pool": "gpu-big",
+                "tools": ["send_email", "mcp__crm__find", "rag_search"],
+                "skills": ["legal"]
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "main.pool",
+                "main.tools[0]",
+                "main.tools[1]",
+                "main.skills[0]"
+            ]
+        );
+        assert!(
+            issues[1].message.contains(
+                "POST /api/v0/system-principals/self-id/grants {\"kind\": \"tool\", \"ref\": \"send_email\"}"
+            ),
+            "{}",
+            issues[1].message
+        );
+        assert!(
+            issues[2].message.contains("connector `crm`"),
+            "{}",
+            issues[2].message
+        );
+    }
+
+    #[test]
+    fn a_tool_resource_must_belong_to_a_listed_tool() {
+        let issues = check(
+            json!({ "main": { "tools": [], "tool_resources": {
+                "rag_search": { "permission": "sometimes" } } } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "main.tool_resources.rag_search",
+                "main.tool_resources.rag_search.permission"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bind_source_must_be_a_slot_the_model_cannot_write_or_a_const() {
+        let spec = |bind: Value| {
+            json!({
+                "state": {
+                    "name": { "type": "string", "set_by": ["llm"] },
+                    "verified": { "type": "subject", "set_by": ["host"] }
+                },
+                "main": { "tools": ["rag_search"],
+                          "tool_resources": { "rag_search": { "bind": bind } } }
+            })
+        };
+        assert_eq!(
+            check(spec(json!({ "a": "verified.customer_id" })), Stage::Draft),
+            []
+        );
+        assert_eq!(
+            check(spec(json!({ "a": { "const": 7 } })), Stage::Draft),
+            []
+        );
+
+        let unknown = check(spec(json!({ "a": "customer" })), Stage::Draft);
+        assert_eq!(paths(&unknown), ["main.tool_resources.rag_search.bind.a"]);
+        assert!(unknown[0].message.contains("not a slot in `state`"));
+
+        let llm = check(spec(json!({ "a": "name" })), Stage::Draft);
+        assert!(
+            llm[0].message.contains("the model can set"),
+            "{}",
+            llm[0].message
+        );
+
+        let shape = check(
+            spec(json!({ "a": 3, "b": { "const": 1, "x": 2 } })),
+            Stage::Draft,
+        );
+        assert_eq!(shape.len(), 2);
+    }
+
+    #[test]
+    fn sub_agents_are_referenced_by_an_existing_agent_id_and_must_be_live_to_publish() {
+        let route = |agent: &str| {
+            let mut spec = full();
+            spec["routes"]["billing"]["agent"] = json!(agent);
+            spec
+        };
+        let missing = check(route("billing-subagent"), Stage::Draft);
+        assert_eq!(paths(&missing), ["routes.billing.agent"]);
+        assert!(missing[0].message.contains("no agent with id"));
+
+        assert_eq!(check(route(UNPUBLISHED), Stage::Draft), []);
+        let unpublished = check(route(UNPUBLISHED), Stage::Publish);
+        assert!(unpublished[0].message.contains("never been published"));
+
+        let itself = check(route(SELF), Stage::Draft);
+        assert!(itself[0].message.contains("itself"));
+    }
+
+    #[test]
+    fn a_route_needs_one_target_a_gate_and_for_a_sub_agent_a_task() {
+        let issues = check(
+            json!({ "routes": {
+                "a": { "agent": BILLING },
+                "b": { "when": { "all": [] } },
+                "c": { "when": { "slot": "x" }, "agent": BILLING, "human": {}, "task": "t" },
+                "Bad Name": {}
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "routes.Bad Name",
+                "routes.a.when",
+                "routes.a.task",
+                "routes.b.when.all",
+                "routes.b",
+                "routes.c.when.slot",
+                "routes.c.when",
+                "routes.c"
+            ]
+        );
+    }
+
+    #[test]
+    fn gate_leaves_and_templates_must_name_declared_slots_and_verifiers() {
+        let issues = check(
+            json!({
+                "state": { "issue": { "type": "string", "set_by": ["llm", "verifier:sms"] } },
+                "routes": { "r": {
+                    "when": { "any": [
+                        { "slot": "issue", "provenance": "verifier:otp", "max_age": "soon" },
+                        { "slot": "ghost", "in": "x" }
+                    ] },
+                    "agent": BILLING,
+                    "task": "About {issue} for {customer.id} {"
+                } }
+            }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "state.issue.set_by[1]",
+                "routes.r.when.any[0].provenance",
+                "routes.r.when.any[0].max_age",
+                "routes.r.when.any[1].slot",
+                "routes.r.when.any[1].in",
+                "routes.r.task",
+                "routes.r.task"
+            ]
+        );
+    }
+
+    #[test]
+    fn slot_definitions_are_checked_for_type_writers_and_values() {
+        let issues = check(
+            json!({ "state": {
+                "a": { "set_by": ["llm"] },
+                "b": { "type": "enum", "set_by": ["llm"] },
+                "c": { "type": "string", "set_by": [], "values": ["x"], "pattern": "(" },
+                "d": { "type": "date", "set_by": ["robot"] }
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "state.a.type",
+                "state.b.values",
+                "state.c.set_by",
+                "state.c.values",
+                "state.c.pattern",
+                "state.d.type",
+                "state.d.set_by[0]"
+            ]
+        );
+    }
+
+    #[test]
+    fn budgets_finish_schemas_and_publish_settings_are_checked() {
+        let issues = check(
+            json!({
+                "main": { "budget": { "rounds": 0, "seconds": -1, "tokens": "many" } },
+                "finish": { "schema": { "type": "object", "oneOf": [] } },
+                "on_tool_unavailable": "retry",
+                "publish": {
+                    "origins": ["https://example.com/", "example.com", "https://ok.example:8443"],
+                    "idle_ttl": "30",
+                    "retention_days": 0,
+                    "output_filter": { "patterns": { "bad": "[" } }
+                },
+                "router": { "kind": "classifier" }
+            }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "main.budget.rounds",
+                "main.budget.seconds",
+                "main.budget.tokens",
+                "router.pool",
+                "finish.schema",
+                "on_tool_unavailable",
+                "publish.origins[0]",
+                "publish.origins[1]",
+                "publish.idle_ttl",
+                "publish.retention_days",
+                "publish.output_filter.patterns.bad"
+            ]
+        );
+        let over = check(
+            json!({ "main": { "budget": { "rounds": 65 } } }),
+            Stage::Draft,
+        );
+        assert!(
+            over[0].message.contains("between 1 and 64"),
+            "{}",
+            over[0].message
+        );
+    }
+
+    #[test]
+    fn a_spec_that_is_not_an_object_says_so() {
+        let issues = check(json!([1, 2]), Stage::Draft);
+        assert_eq!(paths(&issues), [""]);
+        assert!(issues[0].message.contains("not an array"));
+    }
+
+    #[test]
+    fn durations_and_origins_follow_their_documented_forms() {
+        for ok in ["30s", "15m", "2h", "30d"] {
+            assert!(is_duration(ok), "{ok}");
+        }
+        for bad in ["", "m", "0m", "15", "15 m", "1w", "-1m"] {
+            assert!(!is_duration(bad), "{bad}");
+        }
+        for ok in ["https://a.example", "http://localhost:8080"] {
+            assert!(is_origin(ok), "{ok}");
+        }
+        for bad in [
+            "https://a.example/",
+            "ftp://a",
+            "https://",
+            "https://a:0",
+            "https://a b",
+        ] {
+            assert!(!is_origin(bad), "{bad}");
+        }
+    }
+}

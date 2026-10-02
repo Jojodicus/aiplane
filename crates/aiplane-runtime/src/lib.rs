@@ -10,6 +10,7 @@
 //! - [`server::state`] / [`rama_server::state`] — `AppState` and the `RamaState`
 //!   that wraps it. This is the layer that ties the whole world together, which
 //!   is why it sits above both `aiplane-core` and `aiplane-features`.
+//! - [`agents`] — the agent spec layout and its validator (`docs/agents.md`).
 //! - [`budget`] — what one run may spend: rounds, seconds, tokens.
 //! - [`finish`] — the completion contract a non-interactive run ends by.
 //! - [`suspend`] — durable pause and resume of a turn at a tool call that
@@ -21,6 +22,7 @@
 //! `aiplane-tools` and `aiplane-api` both depend on this and on nothing of each
 //! other, so a tool edit and a page edit stay independent.
 
+pub mod agents;
 pub mod budget;
 pub mod content_guard;
 pub mod finish;

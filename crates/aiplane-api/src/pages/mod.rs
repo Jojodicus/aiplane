@@ -370,6 +370,7 @@ pub use tool_toggles::{
 // every signed-in user; the list is scoped to the tools their roles
 // grant. Re-export the two handler entry points for the router.
 pub mod json_admin;
+pub mod json_agents;
 pub mod json_principals;
 pub mod json_skills;
 pub mod json_tokens;

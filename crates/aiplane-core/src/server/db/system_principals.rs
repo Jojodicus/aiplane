@@ -81,7 +81,7 @@ pub fn invalid_name_reason(name: &str) -> Option<String> {
     None
 }
 
-fn map_principal(row: &SqliteRow) -> Result<PrincipalRow, DbError> {
+pub(crate) fn map_principal(row: &SqliteRow) -> Result<PrincipalRow, DbError> {
     Ok(PrincipalRow {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -106,7 +106,8 @@ fn map_token(row: &SqliteRow) -> Result<SystemToken, DbError> {
     })
 }
 
-const PRINCIPAL_COLS: &str = "id, name, display, description, created_by, created_at, disabled_at";
+pub(crate) const PRINCIPAL_COLS: &str =
+    "id, name, display, description, created_by, created_at, disabled_at";
 const TOKEN_COLS: &str =
     "id, principal_id, name, created_by, created_at, last_used_at, expires_at, revoked_at";
 
@@ -116,9 +117,23 @@ pub async fn create(
     new: &NewPrincipal<'_>,
     actor_id: &str,
 ) -> Result<Option<PrincipalRow>, DbError> {
-    let id = Uuid::new_v4().to_string();
-    let now = Timestamp::now();
     let mut tx = pool.begin().await?;
+    let Some(id) = insert(&mut tx, new, actor_id).await? else {
+        return Ok(None);
+    };
+    tx.commit().await?;
+    get(pool, &id).await
+}
+
+/// Write the principal row and its `principal_created` audit row on the
+/// caller's transaction, so an agent can create its principal atomically with
+/// itself. `Ok(None)` when the name is taken.
+pub(crate) async fn insert(
+    conn: &mut sqlx::SqliteConnection,
+    new: &NewPrincipal<'_>,
+    actor_id: &str,
+) -> Result<Option<String>, DbError> {
+    let id = Uuid::new_v4().to_string();
     let inserted = sqlx::query(
         "INSERT INTO system_principals (id, name, display, description, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -129,23 +144,22 @@ pub async fn create(
     .bind(new.display)
     .bind(new.description)
     .bind(actor_id)
-    .bind(now.to_string())
-    .execute(&mut *tx)
+    .bind(Timestamp::now().to_string())
+    .execute(&mut *conn)
     .await?
     .rows_affected();
     if inserted == 0 {
         return Ok(None);
     }
     agent_audit::record(
-        &mut tx,
+        conn,
         AuditKind::PrincipalCreated,
         &id,
         actor_id,
         json!({ "name": new.name }),
     )
     .await?;
-    tx.commit().await?;
-    get(pool, &id).await
+    Ok(Some(id))
 }
 
 pub async fn list(pool: &Pool) -> Result<Vec<PrincipalRow>, DbError> {
