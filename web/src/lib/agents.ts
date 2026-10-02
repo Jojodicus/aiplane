@@ -479,6 +479,31 @@ export function slotInfos(spec: Spec): SlotInfo[] {
 	}));
 }
 
+/* ---- routes ---------------------------------------------------------- */
+
+/** A route as the form builder and the canvas both create it: a gate on no slot yet, and no sub-agent chosen. */
+export const newRoute = (): Spec => ({ when: { slot: '', set: true }, agent: '', task: '' });
+
+/** Adds a fresh route to `spec.routes` and returns its name. */
+export function addRoute(spec: Spec): string {
+	spec.routes ??= {};
+	const name = freshName(spec.routes, 'route');
+	spec.routes[name] = newRoute();
+	return name;
+}
+
+export function removeRoute(spec: Spec, name: string): void {
+	delete spec.routes?.[name];
+}
+
+/** Renames route `from` to `to` (trimmed), keeping its position. A blank or taken name changes nothing. Returns the name the route has afterwards. */
+export function renameRoute(spec: Spec, from: string, to: string): string {
+	const name = to.trim();
+	if (!name || name === from || name in spec.routes || !(from in spec.routes)) return from;
+	spec.routes = renameKey(spec.routes, from, name);
+	return name;
+}
+
 /** What the agent's principal has been granted, for the editor's pickers. */
 export interface Granted {
 	pools: string[];
