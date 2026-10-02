@@ -515,6 +515,59 @@ meant to be given a `Budget` of its own, not share its parent's.
   `seconds_exhausted { seconds }` or `tokens_exhausted { tokens }`, naming the
   limit that hit. A run always gets at least one request.
 
+### Injection scanning of tool results
+
+What an MCP server, RAG, a web fetch or a database returns may have been
+written by an outsider, so a gateway-owned result is screened before it becomes
+a `role: tool` message. The hook is `runner::screen_result`, called at the end
+of `execute_tool_calls`, so the chat driver, the headless runs, the resume path
+and both `/v1` loops share it. Client-owned calls never pass through the
+gateway and are not scanned. `server/tools/injection.rs` holds the rest.
+
+A run carries an `InjectionScan { policy, classifier }`: `OpenAiDriver::injection`
+and `DriveParams::injection` (what `RunProfile` will set for an agent run). The
+default is `Off`, which skips scanning entirely, so the result reaches the model
+byte for byte as before. The `/v1` loops pass `Off` until they have a per-run
+setting of their own.
+
+| Policy | What the model sees for a result with a hit |
+|---|---|
+| `Off` | the result, untouched (and nothing is audited) |
+| `Flag` | `{"untrusted_tool_output": {notice, tool, signals, data}}`: the original under `data`, with a notice that it is data and not instructions. A `tool_content_parts` result keeps its shape; the notice is a leading text part |
+| `Redact` | the result with each matched span replaced by `[removed: possible prompt injection]`. A hit with no span (the classifier) drops the whole result instead |
+| `Drop` | `{"error": "The result of `<tool>` was withheld ..."}` |
+
+**Layer 1, heuristics** (`scan_text`, no dependency beyond `regex` and `base64`).
+Case-insensitive, English and German, run over every string of the JSON result
+after decoding, so `\u200b` escapes are seen. The families (`Signal`):
+`ignore_instructions` ("ignore all previous instructions"), `role_override`
+("you are now a ...", "from now on you must", "du bist jetzt ein"),
+`system_prompt_probe` ("reveal your system prompt", "new instructions:"),
+`role_markup` (`<|im_start|>`, `[INST]`, `<<SYS>>`, `<system>`), `role_prefix`
+(a line starting `system:` or `assistant:`), `hidden_text` (zero-width space,
+word joiner, BOM, bidi overrides, Unicode tag characters; the joiner/non-joiner
+used by emoji and Persian are deliberately allowed), `encoded_payload` (a base64
+run of 60+ characters that decodes to text matching another family),
+`tool_request` ("you must now call the X tool"), `secret_request` ("send me the
+API key"), `exfil_url` (an instruction verb next to a URL with a query
+parameter, or a URL whose parameter is a placeholder such as `{{data}}`). Image
+parts are never scanned. The set is a tripwire for lazy attacks and will
+produce false positives in text that *discusses* injection; each pattern has a
+test, and so do clean code, JSON, prose and a German letter. Add a pattern with
+a failing fixture first, and a clean fixture if it is broad.
+
+**Layer 2, classifier.** `InjectionClassifier::classify(text) -> Verdict` is the
+seam for a model-based check. It runs only when the heuristics found nothing and
+the policy is not `Off`. Nothing implements it against a real model yet; tests
+use a canned double, because the model is an external service. An implementation
+chooses whether an unreachable model fails open or closed.
+
+**Recording.** Every hit logs a `warn` (tool, principal, policy, signals). When
+the acting principal is a system principal it also writes an `agent_audit` row of
+kind `injection_detected` (no acting user; `detail` has `tool`, `call_id`,
+`policy`, `signals`, never the matched text). A person's run is logged only.
+Suspension requests (`extract_suspend`) are never rewritten.
+
 ### Finish contract
 
 An interactive turn ends when a round comes back without tool calls. That is

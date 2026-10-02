@@ -25,6 +25,7 @@ pub enum AuditKind {
     GrantRemoved,
     TokenIssued,
     TokenRevoked,
+    InjectionDetected,
 }
 
 impl AuditKind {
@@ -36,6 +37,7 @@ impl AuditKind {
             Self::GrantRemoved => "grant_removed",
             Self::TokenIssued => "token_issued",
             Self::TokenRevoked => "token_revoked",
+            Self::InjectionDetected => "injection_detected",
         }
     }
 }
@@ -57,6 +59,29 @@ pub async fn record(
     kind: AuditKind,
     principal_id: &str,
     actor_id: &str,
+    detail: Value,
+) -> Result<(), DbError> {
+    insert(conn, kind, principal_id, Some(actor_id), detail).await
+}
+
+/// Write one row for something the principal itself ran into, with no acting
+/// user: a run event, not a management change, so there is no transaction to
+/// join.
+pub async fn record_run_event(
+    pool: &Pool,
+    kind: AuditKind,
+    principal_id: &str,
+    detail: Value,
+) -> Result<(), DbError> {
+    let mut conn = pool.acquire().await?;
+    insert(&mut conn, kind, principal_id, None, detail).await
+}
+
+async fn insert(
+    conn: &mut sqlx::SqliteConnection,
+    kind: AuditKind,
+    principal_id: &str,
+    actor_id: Option<&str>,
     detail: Value,
 ) -> Result<(), DbError> {
     sqlx::query(

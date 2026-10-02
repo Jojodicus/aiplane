@@ -485,6 +485,9 @@ pub struct OpenAiDriver {
     /// What this run may spend. `None` derives it from the conversation's
     /// effort level, which is every interactive turn.
     pub budget: Option<Budget>,
+    /// How gateway-owned tool results are screened for prompt injection
+    /// before the model sees them. Off for every interactive turn.
+    pub injection: crate::server::tools::injection::InjectionScan,
     /// Where the run reads "now" for its `seconds` limit.
     pub clock: Clock,
     /// Set when this turn was suspended and is being continued: the claimed
@@ -1896,6 +1899,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &d.tool_ctx,
             &call_refs,
             &mut repeated_calls,
+            &d.injection,
         )
         .await
         {
