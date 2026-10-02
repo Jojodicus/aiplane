@@ -1413,10 +1413,12 @@ pool rule, and retention.
   sweep that deleted something writes `conversations_swept` with
   `{retention_days, conversations, sub_agent_runs}` — counts only.
 - **Deviations and limits of this.**
-  - The per-IP bucket trusts the client IP the gateway derives
-    (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`, then the peer), like
-    GeoIP does. Behind no proxy, a client can set those headers; the
-    per-visitor limit and the budget still hold.
+  - The per-IP bucket uses the client IP the gateway derives (#98): the TCP
+    peer, or — only when the peer is in `$AIPLANE_TRUSTED_PROXIES` — the
+    rightmost `X-Forwarded-For` hop that is not itself a trusted proxy, the
+    same resolution GeoIP uses. With nothing trusted a forged header changes
+    nothing; behind a reverse proxy that is *not* listed, every visitor
+    shares the proxy's bucket.
   - A refusal storm writes one audit row per refused request.
   - The compaction summary call is still not metered, for agents or people.
   - The admin limits page in the SPA does not offer subject `system` yet; the

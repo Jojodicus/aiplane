@@ -28,6 +28,7 @@ pub mod setup;
 pub mod sse;
 pub mod tool_args;
 pub mod tool_naming;
+pub mod trusted_proxies;
 pub mod upstreams;
 pub mod usage;
 

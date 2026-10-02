@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use rama::Service;
+use rama::extensions::ExtensionsRef;
 use rama::http::{Body, Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 
@@ -21,11 +22,28 @@ use aiplane_runtime::agents::retention;
 use session_core::db as chat;
 use session_core::i18n::{self, Lang};
 
+/// The reverse proxy the embed fixture sits behind; `embed_with` trusts it.
+const PROXY: &str = "10.0.0.1";
+
 impl Embed {
     /// A POST to `uri` from [`SITE`], with the visitor token if any, a
     /// forwarded client IP and an `Accept-Language`.
     async fn post_as(
         &self,
+        uri: &str,
+        bearer: Option<&str>,
+        ip: &str,
+        lang: &str,
+        body: Value,
+    ) -> Reply {
+        self.post_via(PROXY, uri, bearer, ip, lang, body).await
+    }
+
+    /// The same request as seen arriving from TCP peer `peer`, with `ip` in
+    /// `X-Forwarded-For`. The fixture trusts [`PROXY`] only.
+    async fn post_via(
+        &self,
+        peer: &str,
         uri: &str,
         bearer: Option<&str>,
         ip: &str,
@@ -42,10 +60,12 @@ impl Embed {
         if let Some(b) = bearer {
             req = req.header(header::AUTHORIZATION, format!("Bearer {b}"));
         }
-        let resp = common::app(self.fx.state.clone())
-            .serve(req.body(Body::from(body.to_string())).unwrap())
-            .await
-            .unwrap();
+        let req = req.body(Body::from(body.to_string())).unwrap();
+        req.extensions().insert(rama::net::stream::SocketInfo::new(
+            None,
+            rama::net::address::SocketAddress::new(peer.parse::<std::net::IpAddr>().unwrap(), 4000),
+        ));
+        let resp = common::app(self.fx.state.clone()).serve(req).await.unwrap();
         let status = resp.status();
         let headers = resp.headers().clone();
         let bytes = common::read_body(resp).await;
@@ -193,6 +213,45 @@ async fn one_ip_cannot_dodge_the_visitor_limit_by_starting_new_conversations() {
         "the audit row does not keep the IP: {}",
         refusals[0]
     );
+}
+
+#[tokio::test]
+async fn a_spoofed_forwarded_header_cannot_dodge_the_ip_limit() {
+    let e = limited(json!({ "rate_limits": { "ip": { "max": 3, "per": "1h" } } })).await;
+    let attacker = "198.51.100.50";
+    let e = &e;
+    let start = |forged: String| async move {
+        e.post_via(
+            attacker,
+            "/api/v0/embed/sessions",
+            None,
+            &forged,
+            "en",
+            json!({ "key": e.key }),
+        )
+        .await
+    };
+    for n in 0..3 {
+        assert_eq!(
+            start(format!("203.0.113.{n}")).await.status,
+            StatusCode::CREATED
+        );
+    }
+    let r = start("203.0.113.99".into()).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    assert_eq!(code(&r), "visitor_rate_limited");
+
+    // A genuine visitor reaching the trusted proxy is counted on their own.
+    token_of(&e.start_from("192.0.2.77").await);
+}
+
+#[tokio::test]
+async fn visitors_behind_the_trusted_proxy_are_limited_by_their_forwarded_address() {
+    let e = limited(json!({ "rate_limits": { "ip": { "max": 1, "per": "1h" } } })).await;
+    token_of(&e.start_from("192.0.2.1").await);
+    let r = e.start_from("192.0.2.1").await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.body);
+    token_of(&e.start_from("192.0.2.2").await);
 }
 
 #[tokio::test]

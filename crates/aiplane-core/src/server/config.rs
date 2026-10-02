@@ -1197,6 +1197,25 @@ impl Config {
         )
     }
 
+    /// The reverse proxies whose `X-Forwarded-For` / `X-Real-IP` are believed:
+    /// `$AIPLANE_TRUSTED_PROXIES`, comma-separated addresses or CIDR networks.
+    /// Unset means none — every client IP is the TCP peer.
+    ///
+    /// Environment only, like [`Self::bind_address`]: which hops sit in front
+    /// of the process is a fact about where it runs. A bad entry is fatal
+    /// rather than skipped, because dropping it would silently stop trusting a
+    /// proxy and collapse every visitor onto the proxy's address.
+    pub fn trusted_proxies(
+        &self,
+    ) -> Result<crate::server::trusted_proxies::TrustedProxies, ConfigError> {
+        crate::server::trusted_proxies::TrustedProxies::parse(
+            crate::server::env::var("AIPLANE_TRUSTED_PROXIES")
+                .unwrap_or_default()
+                .as_str(),
+        )
+        .map_err(|e| ConfigError::Conflict(e.to_string()))
+    }
+
     /// Resolves the config file path and loads it. Missing files are not an
     /// error — we fall back to defaults so `mise run dev` can start without
     /// any setup.

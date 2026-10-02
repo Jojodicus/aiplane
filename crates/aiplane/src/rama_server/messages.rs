@@ -78,8 +78,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(15);
 pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     // Source IP for `get_user_location`, captured before the request is split
     // so the socket extension is still reachable. Same as the OpenAI path.
-    let client_ip = aiplane_features::server::geoip::client_ip(req.headers())
-        .or_else(|| aiplane_features::server::geoip::peer_ip(&req));
+    let client_ip = state.client_ip(&req);
     let (parts, body) = req.into_parts();
 
     let user = match require_bearer(&state, &parts.headers).await {

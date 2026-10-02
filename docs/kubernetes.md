@@ -135,6 +135,24 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"   # uploads
 ```
 
+### The client IP behind the ingress
+
+Every request reaches AIplane from the ingress controller, so by default the
+client IP is the controller's pod address: the public agent's per-IP rate limit
+and GeoIP then see one visitor. AIplane reads `X-Forwarded-For` only from a TCP
+peer you declare trusted (a header from anyone else is ignored — otherwise a
+visitor could forge one per request and dodge the limit):
+
+```yaml
+trustedProxies: "10.42.0.0/16"   # your ingress controller's pod network
+```
+
+The client is then the rightmost `X-Forwarded-For` hop that is not itself a
+trusted proxy, so a CDN or a second proxy in front of the controller works if
+its network is listed too. Keep the list to proxies you run: trusting a network
+that clients can reach directly lets them forge their address again. A bad entry
+stops the pod at boot with the entry named.
+
 ## Step 4 — Run the setup wizard
 
 Open AIplane. A fresh install lands on **`/setup`**.

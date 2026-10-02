@@ -696,11 +696,8 @@ async fn chat_bytedumb(
 }
 
 pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    // Source IP for `get_user_location`: proxy header (behind a load
-    // balancer) first, else the direct TCP socket peer. Captured before
-    // we split the request so the socket extension is still reachable.
-    let client_ip = aiplane_features::server::geoip::client_ip(req.headers())
-        .or_else(|| aiplane_features::server::geoip::peer_ip(&req));
+    // Captured before the split so the socket extension is still reachable.
+    let client_ip = state.client_ip(&req);
     let (parts, body) = req.into_parts();
     let user = match require_bearer(&state, &parts.headers).await {
         Ok(u) => u,

@@ -63,7 +63,7 @@ RAG tuning are all configured at `/admin/settings`; upstream pools and backends
 at `/admin/upstreams`; groups at `/admin/groups`; and the OIDC provider in the
 setup wizard on first run. What is left is a property of where the process runs
 and comes from the environment: `$AIPLANE_SESSION_KEY`, `$AIPLANE_DB_PATH`,
-`$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`, `$IP` / `$PORT`.
+`$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`, `$AIPLANE_TRUSTED_PROXIES`, `$IP` / `$PORT`.
 
 ### Locked out?
 

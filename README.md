@@ -570,11 +570,16 @@ export AIPLANE_DB_PATH=/var/lib/gateway/gateway.sqlite # optional: overrides the
                                                       # AIPLANE_DATA_DIR
 export AIPLANE_BOOTSTRAP_ADMIN_GROUPS=platform-admins # optional: break-glass admin claim values,
                                                       # comma-separated
+export AIPLANE_TRUSTED_PROXIES=10.42.0.0/16,127.0.0.1 # optional: reverse proxies (addresses / CIDRs) whose
+                                                      # X-Forwarded-For / X-Real-IP are believed. Default:
+                                                      # none — the client IP is the TCP peer
 export AIPLANE_OIDC_CLIENT_SECRET=…                   # only for an upgrade: resolves the legacy
                                                       # [oidc] block's client_secret_env on import.
                                                       # A new install enters the secret at /setup
 export AIPLANE_ENCRYPTION_KEY=$(openssl rand -hex 32) # optional: 32-byte key encrypting the DB's at-rest secrets
 ```
+
+`AIPLANE_TRUSTED_PROXIES` is a comma-separated list of addresses and CIDR networks (IPv4 or IPv6) of the reverse proxies in front of AIplane — your ingress controller's pod network on Kubernetes (`trustedProxies` in the Helm values), `127.0.0.1,::1` for a Caddy/nginx on the same host as the Quadlet. Only a connection *from* one of them may name the real client through `X-Forwarded-For` / `X-Real-IP`; the client is then the rightmost `X-Forwarded-For` hop that is not itself a trusted proxy. Unset, no proxy is trusted: the client IP is the TCP peer and the headers are ignored, so a visitor cannot forge an address to dodge the public agent's per-IP rate limit. The catch: behind a proxy you did not list, every visitor shares the proxy's address (one rate-limit bucket, one GeoIP location). A malformed entry stops AIplane at boot, naming it. `CF-Connecting-IP` is no longer read — list Cloudflare's networks and its `X-Forwarded-For` is used.
 
 Every one of these is also read under its old `GATEWAY_*` spelling — the project was called croit LLM Gateway, and a running deployment must not stop at boot because a variable was renamed. The old names log a deprecation warning and go away in a future breaking release; the one case that needs care is a `GATEWAY_DATA_DIR` override, which the container image's own `AIPLANE_DATA_DIR` would outrank (AIplane refuses to start rather than pick one). See [`docs/renaming.md`](docs/renaming.md).
 
@@ -607,6 +612,7 @@ AIplane itself no longer reads any of them.
 | `[gateway]` | Session + API-token lifetimes, and whether admins may impersonate | `/admin/settings` → Access & usage |
 | `[gateway].public_url` | AIplane's own base URL | `/setup` |
 | `[gateway].bootstrap_admin_groups` | Break-glass admin claim values | `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS` — deliberately **not** in the DB, so a broken group table cannot lock everyone out |
+| client IP / trusted proxies | Which reverse proxies may name the real client | `$AIPLANE_TRUSTED_PROXIES` — a fact about the network in front of the process, like `$IP` / `$PORT` |
 | `[db].path` | Where the SQLite database lives | `$AIPLANE_DB_PATH` — it has to be found before anything can be read *out* of the database |
 | `[oidc]` | The identity provider | `/setup` |
 | `[bind]` | The listen socket | **Removed** — use `$IP` / `$PORT` |

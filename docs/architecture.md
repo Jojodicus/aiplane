@@ -224,6 +224,9 @@ stored rows over its defaults on boot, so the hundred call sites that say
 `state.config().chat.ocr.dpi` never had to change. What is left outside the
 database is what has to be resolved *before* it can be opened:
 `$AIPLANE_SESSION_KEY`, `$AIPLANE_DB_PATH`, `$AIPLANE_DATA_DIR`,
-`$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`, and `$IP` / `$PORT`.
+`$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`,
+`$AIPLANE_TRUSTED_PROXIES`, and `$IP` / `$PORT`. The last decides the client IP
+for every consumer (`RamaState::client_ip`): the TCP peer unless it is a trusted
+proxy, then the rightmost untrusted `X-Forwarded-For` hop.
 
 See the per-subsystem docs for what each screen controls.

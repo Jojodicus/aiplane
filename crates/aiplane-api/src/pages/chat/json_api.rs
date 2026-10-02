@@ -44,8 +44,8 @@ use session_core::i18n::{Lang, t};
 
 /// The request facts a turn needs, read off the request while it is intact.
 ///
-/// Must be called before `req.into_parts()`: `peer_ip` wants the whole
-/// request, not just its headers. `client_ip` is the sole input to the GeoIP
+/// Must be called before `req.into_parts()`: the socket peer lives in the
+/// request's extensions, not its headers. `client_ip` is the sole input to the GeoIP
 /// path in `get_user_location` — the fallback for when the browser declines
 /// to share a precise position — so a hardcoded `None` leaves that tool
 /// waiting out its timeout and then failing. `transport_is_secure` reads the
@@ -53,8 +53,7 @@ use session_core::i18n::{Lang, t};
 /// gateway behind a TLS-terminating proxy is not reported as plaintext.
 fn request_ctx(state: &RamaState, req: &Request, voice_mode: bool) -> RequestCtx {
     RequestCtx {
-        client_ip: aiplane_features::server::geoip::client_ip(req.headers())
-            .or_else(|| aiplane_features::server::geoip::peer_ip(req)),
+        client_ip: state.client_ip(req),
         secure: aiplane_features::server::geoip::transport_is_secure(
             req.headers(),
             &state.public_url(),

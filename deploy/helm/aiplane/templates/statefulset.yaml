@@ -101,6 +101,10 @@ spec:
             - name: AIPLANE_BOOTSTRAP_ADMIN_GROUPS
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.trustedProxies }}
+            - name: AIPLANE_TRUSTED_PROXIES
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.logLevel }}
             - name: RUST_LOG
               value: {{ . | quote }}
