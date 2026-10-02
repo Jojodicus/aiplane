@@ -120,6 +120,9 @@ impl RpcError {
     }
 }
 
+/// Largest JSON-RPC request body read from an A2A caller.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
 fn parse_error(message: impl Into<String>) -> RpcError {
     RpcError::new(-32700, "PARSE_ERROR", message)
 }
@@ -406,9 +409,25 @@ pub async fn rpc(State(state): State<Arc<RamaState>>, req: Request) -> Response 
     let version = requested_version(&req);
     let ip = state.client_ip(&req);
     let lang = Lang::from_request(req.headers());
-    let bytes = match session_core::chrome::read_body_to_bytes(req.into_body()).await {
+    let bytes = match session_core::chrome::read_body_capped(req.into_body(), MAX_BODY_BYTES).await
+    {
         Ok(b) => b,
-        Err(err) => return error_response(&null, parse_error(err.to_string())),
+        Err(session_core::chrome::CappedBodyError::TooLarge { max }) => {
+            return error_response(
+                &null,
+                RpcError::aiplane(
+                    "PAYLOAD_TOO_LARGE",
+                    format!(
+                        "the request body is larger than {}; send a smaller message",
+                        super::human_size(max)
+                    ),
+                )
+                .status(StatusCode::PAYLOAD_TOO_LARGE),
+            );
+        }
+        Err(session_core::chrome::CappedBodyError::Read(err)) => {
+            return error_response(&null, parse_error(err));
+        }
     };
     let body: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,

@@ -56,6 +56,10 @@ macro_rules! or_return {
 
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
+/// Largest request body a public embed route reads. A message is capped at
+/// [`MAX_MESSAGE_CHARS`]; this leaves room for JSON escaping and an identity
+/// token, and stops an anonymous client from making the gateway buffer more.
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 /// How often the event stream re-reads the running turn when no claim
 /// release woke it. A backstop only: the answer is delivered whole, and the
@@ -273,7 +277,9 @@ pub struct StartBody {
 pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let ip = state.client_ip(&req);
     let headers = req.headers().clone();
-    let body: StartBody = or_return!(super::read_json(req.into_body(), "the session body").await);
+    let body: StartBody = or_return!(
+        super::read_json_capped(req.into_body(), "the session body", MAX_BODY_BYTES).await
+    );
     let Some(key_hash) = token::hash_embed_key(body.key.trim()) else {
         return embed_key_invalid();
     };
@@ -448,7 +454,9 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
     let ip = state.client_ip(&req);
-    let body: MessageBody = or_return!(super::read_json(req.into_body(), "the message body").await);
+    let body: MessageBody = or_return!(
+        super::read_json_capped(req.into_body(), "the message body", MAX_BODY_BYTES).await
+    );
     let text = body.text.trim();
     if text.is_empty() {
         return bad_request("the message is empty — send `{\"text\": \"…\"}`");
@@ -637,7 +645,9 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
     let ip = state.client_ip(&req);
-    let body: ResumeBody = or_return!(super::read_json(req.into_body(), "the resume body").await);
+    let body: ResumeBody = or_return!(
+        super::read_json_capped(req.into_body(), "the resume body", MAX_BODY_BYTES).await
+    );
     let decision = match super::chat::json_api::decision_from(body.decision, body.value) {
         Ok(decision) => decision,
         Err(msg) => return bad_request(msg),
@@ -726,8 +736,9 @@ const MAX_IDENTITY_TOKEN: usize = 8 * 1024;
 pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     use aiplane_runtime::agents::verifier::host_jwt::{self, IdentityError};
     let v = or_return!(visitor(&state, &req).await);
-    let body: IdentityBody =
-        or_return!(super::read_json(req.into_body(), "the identity body").await);
+    let body: IdentityBody = or_return!(
+        super::read_json_capped(req.into_body(), "the identity body", MAX_BODY_BYTES).await
+    );
     if body.token.len() > MAX_IDENTITY_TOKEN {
         return bad_request(format!(
             "the identity token is longer than {MAX_IDENTITY_TOKEN} bytes — sign only the claims \

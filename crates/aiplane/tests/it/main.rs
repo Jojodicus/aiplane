@@ -52,3 +52,4 @@ mod tools_inventory;
 mod transcriptions;
 mod turn_suspension;
 mod typst_compile;
+mod webhook_trigger;

@@ -26,7 +26,7 @@ use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde_json::json;
 
-use session_core::chrome::read_body_to_bytes;
+use session_core::chrome::read_body_prefix;
 use session_core::db as chat;
 use session_core::db::TurnStatus;
 
@@ -78,12 +78,11 @@ pub async fn webhook_trigger(
         .unwrap_or("")
         .to_string();
     let (_, body) = req.into_parts();
-    let raw = match read_body_to_bytes(body).await {
+    let raw = match read_body_prefix(body, MAX_PAYLOAD_BYTES).await {
         Ok(b) => b,
         Err(_) => return trigger_error(StatusCode::BAD_REQUEST, "could not read request body"),
     };
-    let capped = &raw[..raw.len().min(MAX_PAYLOAD_BYTES)];
-    let payload = String::from_utf8_lossy(capped).into_owned();
+    let payload = String::from_utf8_lossy(&raw).into_owned();
     let input = build_input(&hook.prompt, &method, &content_type, &payload);
 
     // Retain the payload so the owner can rerun this fire with a different

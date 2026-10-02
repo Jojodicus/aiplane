@@ -943,3 +943,42 @@ async fn a_streamed_message_is_the_task_then_its_whole_answer_then_its_final_sta
         results[0]["task"]["contextId"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// The request body cap
+
+#[tokio::test]
+async fn a_request_body_over_the_cap_is_refused_without_buffering_it() {
+    let llm = upstream(vec![text(ANSWER)]).await;
+    let a = served(&llm).await;
+    let request = |body: Body| {
+        Request::builder()
+            .method(Method::POST)
+            .uri(a.endpoint())
+            .header(header::AUTHORIZATION, format!("Bearer {}", a.token))
+            .header("A2A-Version", "1.0")
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap()
+    };
+    let declared = Body::from(vec![b' '; 1024 * 1024 + 1]);
+    for body in [declared, common::endless_body()] {
+        let resp = common::serve_promptly(&a.fx.state, request(body)).await;
+        let r = Reply {
+            status: resp.status(),
+            headers: resp.headers().clone(),
+            body: serde_json::from_slice(&common::read_body(resp).await).unwrap(),
+        };
+        assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE, "{}", r.body);
+        assert_eq!(r.reason(), "PAYLOAD_TOO_LARGE", "{}", r.body);
+        assert!(
+            r.body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("1 MiB"),
+            "{}",
+            r.body
+        );
+    }
+    assert!(sent(&llm).await.is_empty());
+}
