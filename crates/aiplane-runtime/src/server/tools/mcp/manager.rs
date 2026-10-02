@@ -811,6 +811,7 @@ impl Tool for AuditedTool {
         let tool_id = self.inner.id().to_string();
         let principal = ctx.principal.clone();
         let session = ctx.session_id.clone();
+        let chain = ctx.run.clone();
         let args_summary = serde_json::to_string(&args).ok();
         let inner = self.inner.clone();
         Box::pin(async move {
@@ -828,6 +829,7 @@ impl Tool for AuditedTool {
                 outcome,
                 error.as_deref(),
                 session.as_deref(),
+                chain.as_deref(),
             )
             .await
             {
@@ -1274,6 +1276,7 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            run: None,
         };
         let audited = AuditedTool {
             inner: Arc::new(Echo) as Arc<dyn Tool>,

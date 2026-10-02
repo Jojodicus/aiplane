@@ -80,6 +80,9 @@ dependency doesn't change the trait signature:
   `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
   through `ctx.person(tool_id)`, which refuses with a message naming the
   principal when there is no person behind the call.
+- **Agent run** — `run: Option<Arc<RunChain>>`, the call chain when the call
+  is part of an agent run (`ctx.agent_active()`); `None` everywhere else. See
+  [`agents.md`](agents.md#the-call-chain).
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -345,6 +348,13 @@ The principal-aware entry points on `AppState` are
 tools that check a resource themselves (`rag_*`, `read_skill`). On the `/v1`
 path every granted tool is offered directly — there are no token tool prefs and
 no Auto disclosure for a principal; the grants are the whole policy.
+
+The same holds for a headless run as a principal (`headless::drive` with
+`Principal::System`, the agent path): its offer is its grants, and a call to a
+registered tool outside them is answered with a `not granted` refusal instead
+of the chat path's auto-enable. Inside an agent run every call's decision is
+also written to `agent_audit` with the call chain
+([`agents.md`](agents.md#the-call-chain)).
 
 **Who may grant.** Users whose groups have `can_manage_agents` (admin implies
 it), through `/api/v0/system-principals/*`. A grant is refused unless the

@@ -163,6 +163,10 @@ pub struct ToolContext {
     /// model, or what was decided if it is running again after one. Only the
     /// interactive chat path can pause. See [`crate::suspend`].
     pub suspend: crate::suspend::Suspend,
+    /// The agent call chain when this call runs inside an agent run, `None`
+    /// for a person's chat, a scheduled action or a `/v1` request. Its
+    /// running frame is `principal`; see [`Self::agent_active`].
+    pub run: Option<std::sync::Arc<aiplane_core::server::run_chain::RunChain>>,
 }
 
 /// Test-support constructor. Not `#[cfg(test)]`-gated because the tool
@@ -200,6 +204,7 @@ impl ToolContext {
             push: None,
             model: None,
             suspend: crate::suspend::Suspend::Unavailable,
+            run: None,
         }
     }
 
@@ -213,6 +218,13 @@ impl ToolContext {
 }
 
 impl ToolContext {
+    /// Whether this call runs inside an agent run. An agent run acts as the
+    /// agent's system principal and nobody else: no person's memory,
+    /// connectors or skills, and every call is audited with the chain.
+    pub fn agent_active(&self) -> bool {
+        self.run.is_some()
+    }
+
     /// The person this tool acts for, or the refusal to hand the model when
     /// the caller is a system principal. Memory, notifications, scheduled
     /// actions, location and browser control only make sense for a person —

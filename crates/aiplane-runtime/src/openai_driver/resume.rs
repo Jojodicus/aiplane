@@ -410,8 +410,8 @@ mod tests {
         let tool_ctx = build_tool_context(
             state,
             TurnFacts {
-                user_id: "u1".into(),
-                roles: Vec::new(),
+                principal: crate::server::tools::ToolContext::test_user("u1"),
+                run: None,
                 session_id: session_id.into(),
                 assistant_turn_id: "a-turn".into(),
                 client_ip: None,

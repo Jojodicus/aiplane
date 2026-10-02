@@ -1003,7 +1003,7 @@ pub async fn webhooks_rerun(
     let (session_id, assistant_turn_id) = match headless::open_session(
         &state.db,
         OpenParams {
-            user_id: &hook.user_id,
+            owner: headless::Owner::User(&hook.user_id),
             title: &hook.name,
             prompt: &input,
             model: &hook.model,
@@ -1034,8 +1034,11 @@ pub async fn webhooks_rerun(
     headless::drive(
         &state,
         DriveParams {
-            user_id: hook.user_id.clone(),
-            roles,
+            principal: aiplane_core::server::principal::Principal::User {
+                id: hook.user_id.clone(),
+                roles,
+            },
+            run: None,
             session_id: session_id.clone(),
             assistant_turn_id: assistant_turn_id.clone(),
             model: hook.model.clone(),

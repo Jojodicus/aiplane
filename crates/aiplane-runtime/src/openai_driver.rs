@@ -36,7 +36,10 @@ use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::db::user_memories::KindCounts;
 use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
 
+mod call_policy;
 mod resume;
+
+use call_policy::CallPolicy;
 
 /// Reasoning tags some vLLM reasoning-parser configs leak into the *content*
 /// channel even though reasoning is delivered separately via
@@ -503,11 +506,14 @@ pub struct OpenAiDriver {
 /// with nothing but order to tell them apart — a swap the compiler would accept
 /// and no test would obviously catch.
 pub struct TurnFacts {
-    pub user_id: String,
-    /// The user's RBAC grant, which is also the tool gate: the real roles to
-    /// grant their normal tools, or an empty vec to run with no tools at all
-    /// (the scheduler's "tools off").
-    pub roles: Vec<String>,
+    /// Who the turn acts as. For a person, the roles are also the tool gate:
+    /// the real roles grant their normal tools, an empty vec runs with no
+    /// group grant at all (the scheduler's "tools off"). A system principal
+    /// is gated by its grants alone.
+    pub principal: aiplane_core::server::principal::Principal,
+    /// The agent call chain, on an agent run. Its running frame must be
+    /// `principal`.
+    pub run: Option<Arc<aiplane_core::server::run_chain::RunChain>>,
     pub session_id: String,
     pub assistant_turn_id: String,
     /// The caller's source IP. `None` headless — the scheduler has no request.
@@ -530,8 +536,8 @@ pub struct TurnFacts {
 
 pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolContext {
     let TurnFacts {
-        user_id,
-        roles,
+        principal,
+        run,
         session_id,
         assistant_turn_id,
         client_ip,
@@ -542,9 +548,15 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
     } = facts;
     // Session paths: whatever the user's groups reach. Bearer paths hand in
     // their own, already narrowed by the token's allowlist.
-    let pool_access = pool_access.unwrap_or_else(|| state.pool_access_for(&roles));
+    debug_assert!(
+        run.as_ref()
+            .is_none_or(|run| run.current().principal_id == principal.subject_id()),
+        "an agent run acts as its chain's running principal"
+    );
+    let pool_access = pool_access.unwrap_or_else(|| state.pool_access_for_principal(&principal));
     ToolContext {
-        principal: aiplane_core::server::principal::Principal::User { id: user_id, roles },
+        principal,
+        run,
         token_id: None,
         pool_access,
         db: state.db.clone(),
@@ -808,29 +820,17 @@ async fn classify_and_dispatch_tool_calls(
         let _ = ctx.broadcast.send(TurnUpdate::Tick);
 
         assistant_tool_calls.push(assistant_tool_call(acc));
-        if crate::server::tools::ToolSource::contains(tool_source, &acc.name) {
-            let key = crate::server::tools::catalog::entry_key_for(&acc.name);
-            // Hard block: the user switched this tool off for the
-            // conversation. Don't run it, don't auto-enable it — answer
-            // the call with a refusal the model can read and adapt to.
-            if disabled_keys.contains(key) {
-                let reason = "This tool is disabled by the user for this conversation; it cannot be \
-                         used here.";
-                if let Err(err) = chat::complete_tool_call(
-                    &d.state.db,
-                    &ctx.assistant_turn_id,
-                    &acc.id,
-                    reason,
-                    ToolCallStatus::Errored,
-                )
-                .await
-                {
-                    tracing::warn!(error = %err, tool = %acc.name, "recording refused tool call");
-                }
-                let _ = ctx.broadcast.send(TurnUpdate::Tick);
-                refused.push((acc.id.clone(), reason.to_string()));
-                continue;
-            }
+        let known = crate::server::tools::ToolSource::contains(tool_source, &acc.name);
+        let key = crate::server::tools::catalog::entry_key_for(&acc.name);
+        let policy = CallPolicy::decide(
+            &d.tool_ctx.principal,
+            known,
+            known && disabled_keys.contains(key),
+            allowed_tools.contains(&acc.name),
+        );
+        call_policy::audit(&d.tool_ctx, &acc.id, &acc.name, policy).await;
+        let refusal = match policy {
+            CallPolicy::Granted => None,
             // Implicit miss-recovery: the model called a tool whose
             // schema wasn't in this round's tools array — it's
             // guessing from training (`fetch_url(url=...)` is the
@@ -841,39 +841,53 @@ async fn classify_and_dispatch_tool_calls(
             // the InvalidArgs reply now has a real schema to retry
             // against). Same round-trip cost as if the model had
             // called `enable_tools` itself.
-            if !allowed_tools.contains(&acc.name)
-                && let Some(session_id) = d.tool_ctx.session_id.as_deref()
-            {
-                if let Err(err) = aiplane_core::server::db::chat_session_tools::set(
-                    &d.state.db,
-                    session_id,
-                    key,
-                    true,
-                    "auto-call",
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %err, tool = %acc.name, key,
-                        "auto-enable on direct call: persist failed"
-                    );
-                } else {
-                    tracing::info!(
-                        tool = %acc.name, key,
-                        "auto-enabled tool the model called without going through enable_tools"
-                    );
+            CallPolicy::AutoEnabled => {
+                if let Some(session_id) = d.tool_ctx.session_id.as_deref() {
+                    if let Err(err) = aiplane_core::server::db::chat_session_tools::set(
+                        &d.state.db,
+                        session_id,
+                        key,
+                        true,
+                        "auto-call",
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %err, tool = %acc.name, key,
+                            "auto-enable on direct call: persist failed"
+                        );
+                    } else {
+                        tracing::info!(
+                            tool = %acc.name, key,
+                            "auto-enabled tool the model called without going through enable_tools"
+                        );
+                    }
                 }
+                None
             }
-            call_refs.push(runner::ToolCallRef {
-                id: acc.id.clone(),
-                name: acc.name.clone(),
-                arguments_raw: acc.arguments.clone(),
-            });
-        } else {
+            CallPolicy::NotGranted => Some(call_policy::not_granted_message(
+                &acc.name,
+                &d.tool_ctx.principal,
+            )),
+            // Hard block: the user switched this tool off for the
+            // conversation. Don't run it, don't auto-enable it — answer
+            // the call with a refusal the model can read and adapt to.
+            CallPolicy::DisabledInConversation => Some(
+                "This tool is disabled by the user for this conversation; it cannot be used here."
+                    .to_string(),
+            ),
             // A remote integration's metadata is opaque: only its advertised
             // tool schemas are callable. Resolve this row so an invented or
             // stale name cannot leave the turn permanently in "Calling".
-            let reason = unavailable_tool_message(&acc.name, allowed_tools);
+            CallPolicy::UnknownTool => {
+                tracing::debug!(
+                    wire_name = %acc.name,
+                    "chat-stream got tool_call for a tool we don't own; answered with an error"
+                );
+                Some(unavailable_tool_message(&acc.name, allowed_tools))
+            }
+        };
+        if let Some(reason) = refusal {
             if let Err(err) = chat::complete_tool_call(
                 &d.state.db,
                 &ctx.assistant_turn_id,
@@ -883,15 +897,17 @@ async fn classify_and_dispatch_tool_calls(
             )
             .await
             {
-                tracing::warn!(error = %err, tool = %acc.name, "recording unknown tool call");
+                tracing::warn!(error = %err, tool = %acc.name, "recording refused tool call");
             }
             let _ = ctx.broadcast.send(TurnUpdate::Tick);
-            tracing::debug!(
-                wire_name = %acc.name,
-                "chat-stream got tool_call for a tool we don't own; answered with an error"
-            );
             refused.push((acc.id.clone(), reason));
+            continue;
         }
+        call_refs.push(runner::ToolCallRef {
+            id: acc.id.clone(),
+            name: acc.name.clone(),
+            arguments_raw: acc.arguments.clone(),
+        });
     }
     Ok((assistant_tool_calls, call_refs, refused))
 }
@@ -1099,15 +1115,18 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // carry no API token, so token fields stay `None`. Skipped entirely when
     // metrics are disabled — no extra DB read on the kill-switched path.
     let metrics_on = d.state.usage.is_enabled();
-    let user_email = if metrics_on {
-        aiplane_core::server::db::users::find_by_id(&d.state.db, d.tool_ctx.principal.subject_id())
-            .await
-            .ok()
-            .flatten()
-            .map(|u| u.email)
-            .unwrap_or_default()
-    } else {
-        String::new()
+    let user_email = match (metrics_on, d.tool_ctx.principal.system()) {
+        (false, _) => String::new(),
+        (true, Some(sp)) => sp.name.clone(),
+        (true, None) => aiplane_core::server::db::users::find_by_id(
+            &d.state.db,
+            d.tool_ctx.principal.subject_id(),
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|u| u.email)
+        .unwrap_or_default(),
     };
     if metrics_on && let Some(decision) = automatic_decision.as_ref() {
         emit_selector_usage(d, &user_email, decision);
@@ -2096,11 +2115,15 @@ async fn build_request_context(
     // One user-row read serves identity + timezone (the row is loaded here
     // anyway). Identity (name/email) lets the model act AS the signed-in
     // user — e.g. fill the sender/signature of a letter — without asking.
-    let user =
-        aiplane_core::server::db::users::find_by_id(&d.state.db, d.tool_ctx.principal.subject_id())
+    // A system principal has no person behind it, so nobody's identity is
+    // offered — least of all its owner's.
+    let user = match d.tool_ctx.principal.user_id() {
+        Some(user_id) => aiplane_core::server::db::users::find_by_id(&d.state.db, user_id)
             .await
             .ok()
-            .flatten();
+            .flatten(),
+        None => None,
+    };
     let name = user.as_ref().and_then(|u| u.name.clone());
     let email = user
         .as_ref()
@@ -2261,7 +2284,8 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     // no memories at all, and that path costs exactly one cheap query. A read
     // failure degrades to "no memories" — a missing section is a far better
     // outcome than a failed turn.
-    let counts = user_memories::counts_by_kind(&d.state.db, d.tool_ctx.principal.subject_id())
+    let user_id = d.tool_ctx.principal.user_id()?;
+    let counts = user_memories::counts_by_kind(&d.state.db, user_id)
         .await
         .unwrap_or_default();
     if counts.is_empty() {
@@ -2277,7 +2301,7 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     let preferences: Vec<String> = if counts.preference > 0 {
         user_memories::recall_recent(
             &d.state.db,
-            d.tool_ctx.principal.subject_id(),
+            user_id,
             Some(user_memories::MemoryKind::Preference),
             PREFERENCE_FETCH_LIMIT,
         )
@@ -2508,7 +2532,7 @@ async fn build_skills_section(d: &OpenAiDriver) -> Option<String> {
     // operator skills plus this user's own private skills.
     let registry = d
         .state
-        .combined_skills_for(d.tool_ctx.principal.subject_id())?;
+        .skill_registry_for_principal(&d.tool_ctx.principal)?;
     let allowed = d.state.allowed_skills_for_principal(&d.tool_ctx.principal);
     if allowed.is_empty() {
         return None;
@@ -3200,7 +3224,7 @@ fn emit_usage(
             .state
             .upstreams
             .enforce_limits_for_model(model, aiplane_core::server::upstreams::PoolKind::Chat),
-        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
+        principal_kind: d.tool_ctx.principal.kind(),
     });
 }
 
@@ -3239,7 +3263,7 @@ fn emit_selector_usage(
             &decision.selector_model,
             aiplane_core::server::upstreams::PoolKind::SystemOne,
         ),
-        principal_kind: aiplane_core::server::principal::PrincipalKind::User,
+        principal_kind: d.tool_ctx.principal.kind(),
     });
 }
 
