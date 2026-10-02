@@ -400,6 +400,7 @@ pub async fn publish(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     let id = &agent.principal.id;
     let draft = parse_spec(&agent.draft_spec);
     or_return!(require_valid(&state, id, &draft, Stage::Publish, "publish the agent").await);
+    or_return!(super::json_agent_tests::require_green_suite(&state, &agent).await);
     match agents_db::publish(&state.db, id, &agent.draft_spec, &user.id).await {
         Ok(Some(version)) => json_ok(
             StatusCode::CREATED,

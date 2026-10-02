@@ -418,7 +418,7 @@ are in `web/src/lib/components/agents/`.
 
 - **`/agents`**: the agents shared with the caller, and a dialog to create one.
 - **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
-  Save draft / Publish / Delete, and seven tabs (`?tab=` keeps the choice in the
+  Save draft / Publish / Delete, and eight tabs (`?tab=` keeps the choice in the
   URL):
   - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
@@ -434,6 +434,22 @@ are in `web/src/lib/components/agents/`.
     suggestions come from `/api/v0/agent-resources`. The server's refusal
     (`grant_exceeds_manager`, unknown resource) is shown verbatim.
   - *Test chat*: see below.
+  - *Tests*: stored test cases and suite runs (`TestsPanel`, see
+    [`agents.md`](agents.md#what-99-built)). A case form edits the conversation
+    script (visitor messages, and trusted slot writes as `host` or
+    `verifier:<id>` between them) and the deterministic expectations (last turn
+    finished, output-filter outcome, route chosen or none, gates with the slots
+    they still miss, sub-agents and tools called or not, bound values, answer
+    contains or not) plus an optional rubric. The source selector runs the saved
+    draft (saving an unsaved buffer first) or any published version; the run
+    shows each case as a Goal / Plan / Action card with every check, what was
+    expected and what happened, and the conversation. The rubric verdict is a
+    separate dashed block labelled as model-judged, and never colours pass or
+    fail. A warning shows when the draft or the cases changed since the latest
+    draft run, because the publish guard
+    (`publish.require_passing_tests`, a checkbox in Settings) would refuse it.
+    The pure half, `web/src/lib/agent-tests.ts` (form model to and from the
+    stored case, run state), is unit-tested.
   - *Versions*: draft vs live, the publish blockers (`publish_issues`), every
     snapshot with its JSON, and "make live" (rollback).
   - *Analytics*: what the agent did over the last 7, 30 or 90 days, for all

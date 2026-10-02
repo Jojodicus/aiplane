@@ -294,6 +294,7 @@ publish:
   output_filter:
     patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" }
     action: withhold                    # withhold (default) | redact
+  require_passing_tests: false          # true: publish needs a green test run of this draft (#99)
 ```
 
 A sub-agent's spec uses the same layout. It has no `state`, `routes` or
@@ -1492,6 +1493,114 @@ that already exist. No second event store.
   id, and asserts every number exactly, the daily series, the version filter,
   no leakage between agents, no visitor content, and the share rules.
 
+### What #99 built
+
+Evaluation: stored test cases per agent, run against the draft or a published
+version and judged on more than the final answer.
+
+- **Migration `0089_agent_tests.sql`**: `agent_test_cases`, `agent_test_runs`,
+  `agent_test_results`. `0087` and `0088` are claimed by the concurrent
+  branches (#96, #95); renumber if either lands under another number, and the pinned line in
+  `aiplane-core/tests/migration-checksums.txt` with it. Rows live
+  in `aiplane-core::server::db::agent_tests`; the logic in
+  `aiplane-runtime::agents::eval` (and `eval_judge` for the rubric).
+- **Case.** `{name, script, expect, rubric?}`; the name is unique per agent. A
+  case is validated when stored (`422 invalid_test_case` with `issues[{path,
+  message}]`): a case that checks nothing, or names an unknown key, is refused.
+- **Script.** An ordered list of steps: `{"say": "<visitor message>"}` or
+  `{"write": {"slot", "value", "writer"}}`, with `writer` either `host` or
+  `verifier:<id>`. A write goes through `write_trusted` with a `TrustedWriter`
+  built from that text, so the slot's `set_by` and its type still apply; a
+  refused write fails the case with the reason. It is the only place text
+  becomes a trusted writer, and only the test runner reaches it: no public or
+  visitor path accepts a script. The model's own `llm` writes cannot be
+  scripted. The first step must be a `say`, because the conversation only
+  exists once the visitor has spoken. A turn that suspends (an approval, a
+  secure input) before the last step stops the script: a script cannot answer
+  it.
+- **Expectations** (`expect`, all deterministic; an omitted key is not
+  checked):
+
+  | Key | Meaning |
+  |---|---|
+  | `gates.<route>` | `{open: bool, missing?: [slot]}`: the gate after the last step; for a closed gate, these slots must still be among what it misses |
+  | `route` | the route `forward_request` picked last (`"billing"`), or `null` for none |
+  | `sub_agents` | `{called?: [route], not_called?: [route]}`, by route name |
+  | `bound` | `[{route, name, equals}]`: the route was dispatched, and its `bind` resolves `name` to `equals` |
+  | `tools` | `{called?: [tool], not_called?: [tool]}`: allowed `tool_call` decisions of the run, `set_<slot>` and `forward_request` included |
+  | `answer` | `{contains?: [text], not_contains?: [text]}`, case-insensitive, on the last answer as delivered (after the output filter) |
+  | `filter` | `passed`, `withheld` or `redacted`: what the output filter did to the last answer |
+  | `finished` | `true`: the last turn ended with an answer; `false`: it did not |
+
+  `bound` reads the values from the final state with the same resolver
+  dispatch uses, so a state change after the dispatch can differ from what was
+  passed. `tools` and `sub_agents` read the audit rows of the whole
+  conversation, nested sub-agents included.
+- **Rubric.** Optional free text per case. After the deterministic checks, one
+  non-streaming call on the agent's `main.pool`, as its principal, grades the
+  visitor messages and the agent's answers (nothing else: no slot values, no
+  tool results) as `{passed, reason}`. It is reported as `report.rubric`
+  (`verdict`: `passed`, `failed`, `error`, `skipped`) and counted apart in the
+  run's `rubric`. It never changes a case's `passed`, a run's `green` or the
+  publish guard.
+- **Goal-Plan-Action report.** Each case yields `{passed, error, goal, plan,
+  action, rubric, turns, debug}`; each section is `{passed, checks: [{check,
+  passed, expected, actual, message}]}`.
+  - *Goal*: `finished`, `answer.*`, `filter`: did the conversation end as meant.
+  - *Plan*: `gates.*`, `route`: did the gates hold and the router choose right.
+  - *Action*: `sub_agents.*`, `tools.*`, `bound`: were the right things called.
+
+  `passed` holds when the script ran through and every check in the three
+  sections holds. `turns` carries each message with its status and answer;
+  `debug` is the test chat's debug payload after the last step ([#90](#what-90-built)).
+- **Running.** Each case is its own conversation through `run_draft_turn`, the
+  test chat's door: version 0 (`DRAFT_VERSION`), the agent's grants, gates,
+  binds and budgets, its tools really running. A version is tested by passing
+  its stored spec as the draft, so no second execution path exists and nothing
+  about "live" is overridden. A sub-agent a case dispatches to runs its live
+  version, as in the test chat. Cases run one after the other in the order
+  they were created.
+- **Test data.** Version-0 conversations are what analytics leave out
+  ([#100](#what-100-built)) and what retention sweeps like any conversation; a
+  stored result keeps its report after the conversation is swept (`session_id`
+  carries no foreign key). The `agent_tests` integration suite runs a suite and
+  shows the analytics response unchanged and the conversation at version 0.
+- **API** (`aiplane-api::pages::json_agent_tests`; the share rules of the other
+  agent routes: `read` lists, `write` writes and runs, admins hold both):
+
+  | Method | Path | Share | Purpose |
+  |---|---|---|---|
+  | GET | `/api/v0/agents/{id}/tests` | read | `{cases, latest_draft_run, latest_draft_run_current}` |
+  | POST | `/api/v0/agents/{id}/tests` | write | create `{name, script, expect, rubric?}`; 201, 409 on a taken name |
+  | PUT | `/api/v0/agents/{id}/tests/{case}` | write | replace a case |
+  | DELETE | `/api/v0/agents/{id}/tests/{case}` | write | delete a case; 204 |
+  | POST | `/api/v0/agents/{id}/tests/run` | write | `{source: "draft" \| "version:N"}`: run every case, synchronously; 201 with the stored run and its results. 400 without cases or with another `source`, 404 for an unknown version |
+  | GET | `/api/v0/agents/{id}/test-runs` | read | the newest 50 runs, without results |
+  | GET | `/api/v0/agents/{id}/test-runs/{run}` | read | one run with a result per case |
+
+  A run is `{id, source, version, started_by, started_at, finished_at, passed,
+  failed, green, rubric?, results?}`; `green` means no failed case and at least
+  one passed. `passed` and `failed` count the deterministic result only.
+- **Publish guard.** `publish.require_passing_tests: true` (a boolean in the
+  spec, validated on save) makes `POST …/publish` answer `422
+  agent_tests_failing` unless the newest draft run is green **for the draft and
+  the suite as they are now**: each run stores a hash of the spec it ran and of
+  the cases, so editing either makes the last run stale and the message says
+  to run the suite again. With failing cases, `error.failing` lists `[{case_id,
+  case_name, problems}]` with the failed checks in words; with no cases or no
+  matching run it is empty. Rolling back (`/live`) is not guarded: it publishes
+  nothing new.
+- **Deviations.** A run is synchronous, like the test chat: the request returns
+  when the suite is done. A case cannot write state before the first message.
+  The judge's call writes no usage row.
+- **Tests.** `crates/aiplane/tests/it/agent_evaluation.rs` runs a passing
+  suite, a failing gate and route expectation, a trusted write with a bound
+  value, a refused trusted write, the filter outcome, a version run, the
+  publish guard through its whole cycle (no cases, no run, failing, edited
+  suite, green, changed draft), the rubric reported apart, validation, the
+  share rules, and analytics unchanged by a run. Parsing and judging are unit
+  tests in `eval.rs`.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -1499,7 +1608,7 @@ upward.
 
 | Piece | Crate | Why there |
 |---|---|---|
-| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
+| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
@@ -1537,6 +1646,7 @@ helpers.
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken` |
 | #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind |
+| #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #97 later | — | unchanged |
 
