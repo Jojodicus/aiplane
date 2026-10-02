@@ -1218,3 +1218,77 @@ async fn the_public_path_withholds_an_unverified_identifier_in_the_visitors_lang
         .unwrap();
     assert!(audit.iter().any(|a| a.kind == "output_blocked"));
 }
+
+#[tokio::test]
+async fn a_draft_reaches_the_test_chat_and_never_the_public_path() {
+    let upstream = MockServer::start().await;
+    let sse = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices": [{"index": 0, "delta": {"content": "ok"}}]})
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(&upstream)
+        .await;
+    let e = embed_live(&upstream, None).await;
+    let (status, body) =
+        e.fx.put_draft(&e.fx.alice, &e.agent, spec("DRAFT-ONLY"))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, test) =
+        e.fx.post(
+            &e.fx.alice,
+            &format!("/api/v0/agents/{}/test-turn", e.agent),
+            json!({ "message": "manager here" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{test}");
+    let token = e.visitor().await;
+    let r = e.say(&token, "visitor here").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    let session = e.conversation_of(&token).await;
+    let turns = chat::list_turns(&e.fx.state.db, &session).await.unwrap();
+    e.wait_terminal(&session, &turns[1].turn.id).await;
+
+    let systems: Vec<String> = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let body: Value = serde_json::from_slice(&r.body).unwrap();
+            body["messages"][0]["content"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(systems.len(), 2, "{systems:?}");
+    assert!(
+        systems[0].contains("DRAFT-ONLY"),
+        "the test chat runs the draft"
+    );
+    assert!(
+        !systems[1].contains("DRAFT-ONLY") && systems[1].contains("v1"),
+        "the visitor runs published version 1: {}",
+        systems[1]
+    );
+
+    let db = e.fx.state.db.clone();
+    let version = |id: String| {
+        let db = db.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT agent_version FROM chat_sessions WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(version(session).await, Some(1));
+    assert_eq!(
+        version(test["session_id"].as_str().unwrap().to_string()).await,
+        Some(0)
+    );
+}

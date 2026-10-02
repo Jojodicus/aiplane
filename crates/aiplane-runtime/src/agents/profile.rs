@@ -128,6 +128,18 @@ pub struct RunProfile {
     pub output_filter: Option<OutputFilter>,
 }
 
+/// Which spec of an agent a run loads.
+#[derive(Debug, Clone)]
+pub enum SpecSource {
+    /// The published version the agent points at: what visitors get.
+    Live,
+    /// A published version, so a conversation keeps the one it started on.
+    Pinned(i64),
+    /// An unpublished spec, run as version [`agents_db::DRAFT_VERSION`]. Its
+    /// only caller is the test-turn handler.
+    Draft(Value),
+}
+
 impl RunProfile {
     /// Load agent `agent_id`'s live version and its principal's grants.
     pub async fn load(
@@ -148,20 +160,35 @@ impl RunProfile {
         role: Role,
         options: &RunOptions,
     ) -> Result<Self, AgentRunError> {
+        let source = pinned.map_or(SpecSource::Live, SpecSource::Pinned);
+        Self::load_from(state, agent_id, source, role, options).await
+    }
+
+    /// Load agent `agent_id` from an explicit [`SpecSource`]. Only the
+    /// internal test chat passes [`SpecSource::Draft`]; every other caller
+    /// reaches a draft by no path at all.
+    pub async fn load_from(
+        state: &Arc<RamaState>,
+        agent_id: &str,
+        source: SpecSource,
+        role: Role,
+        options: &RunOptions,
+    ) -> Result<Self, AgentRunError> {
         let principal = sp::load_active(&state.db, agent_id)
             .await?
             .ok_or_else(|| AgentRunError::Unavailable(agent_id.to_string()))?;
-        let (version, text) = match pinned {
-            None => agents_db::live(&state.db, agent_id)
+        let (version, text) = match source {
+            SpecSource::Live => agents_db::live(&state.db, agent_id)
                 .await?
                 .ok_or_else(|| AgentRunError::NotLive(principal.name.clone()))?,
-            Some(v) => agents_db::version(&state.db, agent_id, v)
+            SpecSource::Pinned(v) => agents_db::version(&state.db, agent_id, v)
                 .await?
                 .map(|row| (row.version, row.spec))
                 .ok_or_else(|| AgentRunError::MissingVersion {
                     agent: principal.name.clone(),
                     version: v,
                 })?,
+            SpecSource::Draft(spec) => (agents_db::DRAFT_VERSION, spec.to_string()),
         };
         let bad = |message: String| AgentRunError::BadSpec {
             agent: principal.name.clone(),

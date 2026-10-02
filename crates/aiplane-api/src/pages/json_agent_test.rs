@@ -49,7 +49,9 @@ fn run_error(err: AgentRunError) -> Response {
     let (status, code) = match &err {
         AgentRunError::Unavailable(_) => (StatusCode::NOT_FOUND, "agent_unavailable"),
         AgentRunError::UnknownSession { .. } => (StatusCode::NOT_FOUND, "unknown_session"),
-        AgentRunError::NotLive(_) | AgentRunError::BadSpec { .. } => {
+        AgentRunError::NotLive(_)
+        | AgentRunError::BadSpec { .. }
+        | AgentRunError::MissingVersion { .. } => {
             (StatusCode::UNPROCESSABLE_ENTITY, "agent_not_runnable")
         }
         AgentRunError::NoModel { .. } => (StatusCode::SERVICE_UNAVAILABLE, "agent_no_model"),

@@ -419,17 +419,18 @@ test chat behind it.
     matching `sub_agent_finished` (with `outcome`) once it ended.
   - `tool_calls`: this turn's `tool_call` decisions (`allowed`/`denied` and
     the policy).
-- **How the draft is run.** `RunProfile::load` reads the live version through
-  `agents_db::live`. `agents_db::with_draft_as_live(id, spec, fut)` is a
-  task-local that makes `live` answer the draft as version `0`
-  (`DRAFT_VERSION`) for that one agent id while `fut` runs. A sub-agent the
-  draft dispatches to still loads its own published version, and the draft
-  never becomes visible to any other request. The conversation is recorded
-  with `agent_version = 0`, which is how a test conversation is told from a
-  visitor's. The runtime half is `agents::run::draft`
-  (`run_draft_turn`, `collect_debug`); it sits under `run` rather than as a
-  new sibling of `profile`/`spec` to leave those files alone while the public
-  endpoint (#91) was being wired.
+- **How the draft is run.** `RunProfile::load_from(state, id, SpecSource,
+  role, options)` takes the spec explicitly: `Live`, `Pinned(version)` or
+  `Draft(spec)`. `load` and `load_version` are the first two, and only
+  `agents::run::draft::run_draft_turn`, called by the test-turn handler,
+  passes `Draft`. It opens the session itself and then uses the same
+  `drive_opened` as a visitor's turn, so nothing about what "live" means is
+  overridden and no other path can reach a draft. The draft is recorded as
+  version `0` (`DRAFT_VERSION`): a test session is never continued as a
+  visitor's (`MissingVersion`), nor a visitor's as a test (`unknown_session`).
+  A sub-agent the draft dispatches to loads its own live version. The
+  `embed` integration test publishes v1, edits the draft, and shows the test
+  chat running the draft while a visitor message gets v1.
 - **`GET /api/v0/agent-resources`** lists what the calling manager holds and
   can therefore grant: `{pools, tools: [{id, name, description}], connectors:
   [{key, name, tools}], skills, rag_collections: [{id, name}]}`. It applies the

@@ -5,11 +5,13 @@
 //! agent's **draft**, and what a manager may see of it that a visitor never
 //! does.
 //!
-//! The turn goes through [`run_turn_with`] unchanged. The draft stands in for
-//! the live version only for the load of this one agent
-//! ([`agents_db::with_draft_as_live`]), so gates, slots, tools, binds and
-//! budgets behave exactly as they will once published, and the conversation
-//! is recorded as version [`DRAFT_VERSION`].
+//! The draft is passed explicitly as [`SpecSource::Draft`]; nothing about
+//! "live" is overridden anywhere, so no other path can reach a draft. The turn
+//! then goes through the same `open_session` and `drive_opened` as a
+//! visitor's, so gates, slots, tools, binds and budgets behave as they will
+//! once published. The conversation is recorded as version [`DRAFT_VERSION`],
+//! which no published version has: a visitor session can never continue it,
+//! and a test session can never be continued as one.
 
 use std::sync::Arc;
 
@@ -17,12 +19,14 @@ use aiplane_core::server::db::{DbError, agent_audit, agents as agents_db};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::Value;
+use session_core::db as chat;
 
-use super::{AgentReply, AgentTurn, run_turn_with};
+use super::{AgentReply, AgentTurn, OpenedTurn, drive_opened};
 use crate::agents::gate::{GateInput, GateStatus, RouteGates, Unmet};
-use crate::agents::profile::{AgentRunError, RunOptions};
+use crate::agents::profile::{AgentRunError, Role, RunOptions, RunProfile, SpecSource};
 use crate::agents::state::{AgentState, Provenance, SlotState, StateSchema};
 use crate::rama_server::state::RamaState;
+use crate::server::headless::{OpenParams, Owner, open_session};
 
 pub use agents_db::DRAFT_VERSION;
 
@@ -33,12 +37,53 @@ pub async fn run_draft_turn(
     draft: &Value,
     options: RunOptions,
 ) -> Result<AgentReply, AgentRunError> {
-    agents_db::with_draft_as_live(
+    if let Some(session) = turn.session_id {
+        let continues = chat::get_principal_session(&state.db, turn.agent_id, session)
+            .await
+            .map_err(DbError::from)?
+            .is_some_and(|run| run.agent_version == Some(DRAFT_VERSION));
+        if !continues {
+            let agent = aiplane_core::server::db::system_principals::get(&state.db, turn.agent_id)
+                .await?
+                .map_or_else(|| turn.agent_id.to_string(), |p| p.name);
+            return Err(AgentRunError::UnknownSession {
+                agent,
+                session: session.to_string(),
+            });
+        }
+    }
+    let profile = RunProfile::load_from(
+        state,
         turn.agent_id,
-        draft.to_string(),
-        run_turn_with(state, turn, options),
+        SpecSource::Draft(draft.clone()),
+        Role::Main,
+        &options,
     )
-    .await
+    .await?;
+    let (session_id, turn_id) = open_session(
+        &state.db,
+        OpenParams {
+            owner: Owner::Run {
+                principal_id: &profile.principal.id,
+                parent_turn_id: None,
+                agent_version: Some(DRAFT_VERSION),
+            },
+            title: &profile.principal.name,
+            prompt: turn.message,
+            model: &profile.model,
+            existing_session: turn.session_id.map(str::to_string),
+        },
+    )
+    .await?;
+    let opened = OpenedTurn {
+        agent_id: profile.principal.id.clone(),
+        version: DRAFT_VERSION,
+        session_id,
+        turn_id,
+        visitor_id: None,
+        lang: options.lang,
+    };
+    drive_opened(state, &profile, &opened).await
 }
 
 #[derive(Debug, Clone, Serialize)]
