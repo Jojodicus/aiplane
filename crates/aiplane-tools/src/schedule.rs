@@ -81,7 +81,7 @@ fn max_duration() -> Option<std::time::Duration> {
 /// The user's stored timezone, or UTC. Same source `get_current_timestamp`
 /// reads, so "every day at 07:00" means the same thing in both tools.
 async fn default_timezone(ctx: &ToolContext) -> String {
-    users::find_by_id(&ctx.db, &ctx.user_id)
+    users::find_by_id(&ctx.db, ctx.principal.subject_id())
         .await
         .ok()
         .flatten()
@@ -319,7 +319,7 @@ impl Tool for ScheduleAction {
             let action = scheduled::create(
                 &ctx.db,
                 NewAction {
-                    user_id: ctx.user_id.clone(),
+                    user_id: ctx.person(self.id())?.to_string(),
                     name: name.to_string(),
                     prompt: prompt.to_string(),
                     model,
@@ -374,7 +374,7 @@ impl Tool for ListScheduledActions {
 
     fn run<'a>(&'a self, ctx: ToolContext, _args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
-            let actions = scheduled::list_for_user(&ctx.db, &ctx.user_id)
+            let actions = scheduled::list_for_user(&ctx.db, ctx.person(self.id())?)
                 .await
                 .map_err(|e| ToolError::Failed(format!("listing scheduled actions: {e}")))?;
             let items: Vec<Value> = actions.iter().map(action_json).collect();
@@ -439,7 +439,7 @@ impl Tool for DeleteScheduledAction {
             // Scoped read first: this both tells us the name (for a
             // confirmation the user can actually judge) and makes another
             // user's action indistinguishable from a nonexistent one.
-            let action = scheduled::get(&ctx.db, &ctx.user_id, id)
+            let action = scheduled::get(&ctx.db, ctx.person(self.id())?, id)
                 .await
                 .map_err(|e| ToolError::Failed(format!("reading the scheduled action: {e}")))?
                 .ok_or_else(|| {
@@ -479,7 +479,7 @@ impl Tool for DeleteScheduledAction {
                 Confirmation::NoAnswer => return Err(no_answer_error("deleted")),
             }
 
-            let removed = scheduled::delete(&ctx.db, &ctx.user_id, id)
+            let removed = scheduled::delete(&ctx.db, ctx.person(self.id())?, id)
                 .await
                 .map_err(|e| ToolError::Failed(format!("deleting the scheduled action: {e}")))?;
             Ok(json!({
@@ -518,7 +518,10 @@ mod tests {
     /// confirmation can never be answered.
     fn ctx_unattended(pool: &db::Pool) -> ToolContext {
         ToolContext {
-            user_id: "u1".into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             model: Some("qwen-32b".into()),
             ..ToolContext::for_test(pool.clone())
         }
@@ -607,7 +610,10 @@ mod tests {
         let (broadcast, rx) = tokio::sync::broadcast::channel(16);
         let ask_hub = std::sync::Arc::new(FeedbackHub::default());
         let ctx = ToolContext {
-            user_id: "u1".into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             model: Some("qwen-32b".into()),
             assistant_turn_id: Some("t1".into()),
             session_id: Some("s1".into()),
@@ -830,7 +836,10 @@ mod tests {
     async fn without_a_known_model_it_refuses_early() {
         let pool = seeded().await;
         let ctx = ToolContext {
-            user_id: "u1".into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             ..ToolContext::for_test(pool.clone())
         };
         let err = ScheduleAction

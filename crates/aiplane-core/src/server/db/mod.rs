@@ -12,6 +12,7 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 
+pub mod agent_audit;
 pub mod app_settings;
 pub mod audit;
 pub mod automatic_routes;
@@ -33,6 +34,7 @@ pub mod rag_documents;
 pub mod rag_oauth;
 pub mod reseal;
 pub mod skill_grants;
+pub mod system_principals;
 pub mod token_models;
 pub mod token_tool_prefs;
 pub mod tokens;

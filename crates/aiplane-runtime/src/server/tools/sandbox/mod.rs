@@ -478,7 +478,7 @@ impl SandboxClient {
     ) -> Result<Value, String> {
         let safe = sanitize_filename(&a.name).ok_or("unsafe artifact filename")?;
         let run = uuid::Uuid::new_v4().to_string();
-        let scope = format!("sandbox/{}/{}", ctx.user_id, run);
+        let scope = format!("sandbox/{}/{}", ctx.principal.subject_id(), run);
         let outcome = chat_attachments::upload(s3, &scope, &safe, &a.mime, bytes)
             .await
             .map_err(|e| e.to_string())?;

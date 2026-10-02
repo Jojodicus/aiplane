@@ -80,7 +80,13 @@ mod skill_overlay_tests {
         // enable_tools round needed.
         let state = state_with_skill_grant(&["*"]).await;
         let allowed = state
-            .allowed_tools_for_session(&["user".into()], "u1", "s1")
+            .allowed_tools_for_session(
+                &aiplane_core::server::principal::Principal::User {
+                    id: "u1".into(),
+                    roles: vec!["user".into()],
+                },
+                "s1",
+            )
             .await;
         assert!(
             allowed.iter().any(|id| id == READ_SKILL_ID),
@@ -95,7 +101,13 @@ mod skill_overlay_tests {
         // the normal lazy/enable_tools path).
         let state = state_with_skill_grant(&[]).await;
         let allowed = state
-            .allowed_tools_for_session(&["user".into()], "u1", "s1")
+            .allowed_tools_for_session(
+                &aiplane_core::server::principal::Principal::User {
+                    id: "u1".into(),
+                    roles: vec!["user".into()],
+                },
+                "s1",
+            )
             .await;
         assert!(
             !allowed.iter().any(|id| id == READ_SKILL_ID),
@@ -108,6 +120,7 @@ mod token_gate_tests {
     use aiplane_core::server::auth::UserCtx;
     use aiplane_core::server::config::Config;
     use aiplane_core::server::db::{self, token_tool_prefs};
+    use aiplane_core::server::principal::{GrantKind, GrantSet, Principal, SystemPrincipal};
     use aiplane_core::server::rbac::Resolver;
     use aiplane_core::server::rbac::config::{RbacConfig, RoleConfig};
     use aiplane_core::server::upstreams::UpstreamRegistry;
@@ -148,16 +161,78 @@ mod token_gate_tests {
 
     fn ctx(token_id: &str, tools_enabled: bool) -> UserCtx {
         UserCtx {
-            user_id: "alice".into(),
+            principal: Principal::User {
+                id: "alice".into(),
+                roles: vec![], // empty → default role "all" applies
+            },
             user_email: "alice@example.com".into(),
             token_id: token_id.into(),
             token_name: token_id.into(),
-            roles: vec![], // empty → default role "all" applies
             tools_enabled,
             // These tests are about tool grants, not model scope; `None` is
             // the unrestricted default every token has.
             allowed_models: None,
         }
+    }
+
+    fn system_ctx(grants: &[(GrantKind, &str)]) -> UserCtx {
+        let principal = SystemPrincipal {
+            id: "p1".into(),
+            name: "ci".into(),
+            grants: Arc::new(GrantSet::new(
+                grants.iter().map(|(k, r)| (*k, r.to_string())),
+            )),
+        };
+        UserCtx {
+            user_email: principal.name.clone(),
+            principal: Principal::System(principal),
+            token_id: "st1".into(),
+            token_name: "pipeline".into(),
+            tools_enabled: true,
+            allowed_models: None,
+        }
+    }
+
+    /// The default group grants `*` to everyone, which is exactly the
+    /// inheritance a system principal must not get: with no grants it is
+    /// offered nothing, not even the default group's wildcard.
+    #[tokio::test]
+    async fn a_system_principal_inherits_no_default_group_or_wildcard() {
+        let state = star_state().await;
+        let (always, auto, mcp) = state.api_tool_layer(&system_ctx(&[])).await;
+        assert!(always.is_empty(), "{always:?}");
+        assert!(auto.is_empty(), "{auto:?}");
+        assert!(mcp.is_empty());
+        assert!(
+            state
+                .allowed_tools_for_principal(&system_ctx(&[]).principal)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_system_principal_is_offered_exactly_its_granted_tool() {
+        let state = star_state().await;
+        let ctx = system_ctx(&[
+            (GrantKind::Tool, "get_current_timestamp"),
+            (GrantKind::Tool, "not_a_registered_tool"),
+        ]);
+        let (always, auto, _) = state.api_tool_layer(&ctx).await;
+        assert_eq!(always, vec!["get_current_timestamp".to_string()]);
+        assert!(auto.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_system_principal_reaches_no_pool_it_was_not_granted() {
+        let state = star_state().await;
+        let access = state.pool_access_for_token(&system_ctx(&[(GrantKind::Pool, "chat")]));
+        assert!(!access.is_admin);
+        assert!(access.role_ids.is_empty());
+        assert_eq!(
+            access.granted_pools.as_deref(),
+            Some(&std::collections::HashSet::from(["chat".to_string()]))
+        );
     }
 
     /// Seed a user + token so `token_tool_prefs` (FK to tokens) can hold

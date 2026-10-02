@@ -73,7 +73,13 @@ merging two distinct MCP tools.
 Carries the caller's identity plus the handles a tool may need, so adding a
 dependency doesn't change the trait signature:
 
-- **Identity / RBAC** — `user_id`, `roles`, `client_ip`.
+- **Identity / RBAC** — `principal` (a person, `Principal::User { id, roles }`,
+  or a system principal with its grants — see
+  [System principals](#system-principals)), `token_id`, `client_ip`. Scope rows
+  by `principal.subject_id()`. A tool that acts *for a person* (memory,
+  `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
+  through `ctx.person(tool_id)`, which refuses with a message naming the
+  principal when there is no person behind the call.
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -313,6 +319,37 @@ tools = ["*"]               # everything registered
 The layers compose in one direction only: RBAC (roles + groups) decides what a
 user *may* use; the per-conversation, per-token, and per-user layers can only
 subtract.
+
+### System principals
+
+A `gws_` token resolves to a **system principal** (`docs/agents.md` §1), and
+none of the above applies to it. It holds exactly the rows in
+`principal_grants`, one resource each:
+
+| Grant kind | What it unlocks | What it does *not* get |
+|---|---|---|
+| `tool` | that registry tool (or loaded `comfyui_<id>` workflow) | default groups, `*`, the `enable_tools` bootstrap, anything `requires_chat_session` |
+| `connector` | every tool of that **global** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply |
+| `skill` | that global skill | anyone's private skills |
+| `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
+| `pool` | that upstream pool | open pools; `is_admin` bypass |
+
+The principal-aware entry points on `AppState` are
+`allowed_tools_for_principal`, `allowed_skills_for_principal`,
+`pool_access_for_principal`, `mcp_layer_for` and `mcp_grant_for_principal`;
+`Resolver::principal_resource_allowed` / `principal_skills` do the same for
+tools that check a resource themselves (`rag_*`, `read_skill`). On the `/v1`
+path every granted tool is offered directly — there are no token tool prefs and
+no Auto disclosure for a principal; the grants are the whole policy.
+
+**Who may grant.** Users whose groups have `can_manage_agents` (admin implies
+it), through `/api/v0/system-principals/*`. A grant is refused unless the
+manager holds the resource *at that moment*, checked with the rule that decides
+their own access (`allowed_tools` + ComfyUI expansion, connector
+`allowed_groups` + MCP grant, `allowed_skills`, `resource_allowed`, pool
+access). After that the grant belongs to the principal: it is never re-derived
+from the manager, so it survives the manager losing rights or leaving. Every
+change is written to `agent_audit` in the same transaction.
 
 ## Tool injection
 

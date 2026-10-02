@@ -37,6 +37,8 @@ pub struct McpToolEvent {
     pub outcome: String,
     pub error: Option<String>,
     pub session_id: Option<String>,
+    /// `user` or `system`: which table `user_id` points into.
+    pub principal_kind: String,
     pub created_at: Timestamp,
 }
 
@@ -58,6 +60,7 @@ fn map_row(row: &SqliteRow) -> Result<McpToolEvent, DbError> {
         outcome: row.try_get("outcome")?,
         error: row.try_get("error")?,
         session_id: row.try_get("session_id")?,
+        principal_kind: row.try_get("principal_kind")?,
         created_at,
     })
 }
@@ -79,11 +82,12 @@ fn truncate_args(args: &str) -> String {
 /// fails — the tool call itself is authoritative, not the audit write.
 ///
 /// The acting user's email is looked up and denormalised so the row survives
-/// user deletion; an unknown/deleted user records an empty email.
+/// user deletion; an unknown/deleted user records an empty email. A system
+/// principal records its name in that column, and `principal_kind = 'system'`.
 #[allow(clippy::too_many_arguments)]
 pub async fn record(
     pool: &Pool,
-    user_id: &str,
+    principal: &crate::server::principal::Principal,
     connector_key: &str,
     tool_id: &str,
     arguments: Option<&str>,
@@ -91,17 +95,22 @@ pub async fn record(
     error: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<(), DbError> {
-    let user_email: String = sqlx::query("SELECT email FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?
-        .and_then(|r| r.try_get::<String, _>("email").ok())
-        .unwrap_or_default();
+    let user_id = principal.subject_id();
+    let user_email: String = match principal.system() {
+        Some(sp) => sp.name.clone(),
+        None => sqlx::query("SELECT email FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|r| r.try_get::<String, _>("email").ok())
+            .unwrap_or_default(),
+    };
     let arguments = arguments.map(truncate_args);
     sqlx::query(
         "INSERT INTO mcp_tool_audit
-           (id, user_id, user_email, connector_key, tool_id, arguments, outcome, error, session_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+           (id, user_id, user_email, connector_key, tool_id, arguments, outcome, error, session_id,
+            principal_kind, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(user_id)
@@ -112,6 +121,7 @@ pub async fn record(
     .bind(outcome)
     .bind(error)
     .bind(session_id)
+    .bind(principal.kind().as_str())
     .bind(Timestamp::now().to_string())
     .execute(pool)
     .await?;
@@ -153,6 +163,40 @@ mod tests {
             .unwrap()
     }
 
+    fn user(id: &str) -> crate::server::principal::Principal {
+        crate::server::principal::Principal::User {
+            id: id.into(),
+            roles: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_system_principal_is_recorded_by_kind_and_name() {
+        use crate::server::principal::{GrantSet, Principal, SystemPrincipal};
+        let pool = pool().await;
+        let principal = Principal::System(SystemPrincipal {
+            id: "p1".into(),
+            name: "ci-bot".into(),
+            grants: std::sync::Arc::new(GrantSet::default()),
+        });
+        record(
+            &pool,
+            &principal,
+            "erp",
+            "mcp__erp__lookup",
+            None,
+            "ok",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ev = &recent(&pool, 1).await.unwrap()[0];
+        assert_eq!(ev.user_id, "p1");
+        assert_eq!(ev.user_email, "ci-bot");
+        assert_eq!(ev.principal_kind, "system");
+    }
+
     #[tokio::test]
     async fn record_then_recent_round_trips_newest_first() {
         let pool = pool().await;
@@ -160,7 +204,7 @@ mod tests {
 
         record(
             &pool,
-            "u1",
+            &user("u1"),
             "discord",
             "mcp__discord__send_private_message",
             Some(r#"{"userId":"1","message":"hi"}"#),
@@ -172,7 +216,7 @@ mod tests {
         .unwrap();
         record(
             &pool,
-            "u1",
+            &user("u1"),
             "discord",
             "mcp__discord__create_webhook",
             Some(r#"{"channelId":"2","name":"x"}"#),
@@ -203,7 +247,7 @@ mod tests {
         let pool = pool().await;
         record(
             &pool,
-            "u",
+            &user("u"),
             "discord",
             "mcp__discord__send_message",
             None,
@@ -215,7 +259,7 @@ mod tests {
         .unwrap();
         record(
             &pool,
-            "u",
+            &user("u"),
             "github",
             "mcp__github__create_issue",
             None,
@@ -246,9 +290,18 @@ mod tests {
     async fn arguments_are_truncated() {
         let pool = pool().await;
         let big = "x".repeat(MAX_ARGS_LEN + 500);
-        record(&pool, "u", "discord", "t", Some(&big), "ok", None, None)
-            .await
-            .unwrap();
+        record(
+            &pool,
+            &user("u"),
+            "discord",
+            "t",
+            Some(&big),
+            "ok",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let ev = recent(&pool, 1).await.unwrap();
         let stored = ev[0].arguments.as_deref().unwrap();
         assert!(stored.len() < big.len());

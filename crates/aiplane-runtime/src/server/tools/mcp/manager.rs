@@ -283,6 +283,50 @@ impl McpConnectionManager {
         layer
     }
 
+    /// The overlay for a system principal: exactly the connectors it was
+    /// granted, and only those with one shared gateway identity (`global`).
+    /// `user_mcp` — every person's own connections and tool preferences — is
+    /// never read, so a principal cannot reach anyone's OAuth tokens even when
+    /// granted a per-user connector's key. Connector `allowed_groups` does not
+    /// apply: the grant is the whole decision. `ask`-mode tools stay hidden;
+    /// there is no one to approve a call.
+    pub async fn layer_for_principal(
+        &self,
+        principal: &aiplane_core::server::principal::SystemPrincipal,
+    ) -> UserMcpLayer {
+        use aiplane_core::server::principal::GrantKind;
+        let granted: Vec<&str> = principal.grants.refs(GrantKind::Connector).collect();
+        if granted.is_empty() {
+            return UserMcpLayer::default();
+        }
+        let connectors: Vec<Connector> = mcp_catalog::list_enabled(&self.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.is_global() && granted.contains(&c.key.as_str()))
+            .collect();
+        let futs = connectors.into_iter().map(|connector| async move {
+            match self.ensure_global(&connector).await {
+                Ok(tools) => Some((connector.key.clone(), tools, connector.audit)),
+                Err(err) => {
+                    tracing::warn!(principal = %principal.name, connector = %connector.key,
+                        error = %err, "granted MCP connector unavailable this request");
+                    None
+                }
+            }
+        });
+        let mut layer = UserMcpLayer::default();
+        for (key, tools, audit) in rama::futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .flatten()
+        {
+            let audit_db = audit.then(|| self.db.clone());
+            layer.add(&key, &tools, &HashMap::new(), false, audit_db.as_ref());
+        }
+        layer
+    }
+
     /// RBAC gate at exposure time: a connector restricted to `allowed_groups`
     /// is only exposed to users holding one of those gateway groups (admins
     /// bypass). Re-checked every turn, so revoking a group or restricting a
@@ -765,7 +809,7 @@ impl Tool for AuditedTool {
         let db = self.db.clone();
         let connector = self.connector_key.clone();
         let tool_id = self.inner.id().to_string();
-        let user_id = ctx.user_id.clone();
+        let principal = ctx.principal.clone();
         let session = ctx.session_id.clone();
         let args_summary = serde_json::to_string(&args).ok();
         let inner = self.inner.clone();
@@ -777,7 +821,7 @@ impl Tool for AuditedTool {
             };
             if let Err(e) = mcp_audit::record(
                 &db,
-                &user_id,
+                &principal,
                 &connector,
                 &tool_id,
                 args_summary.as_deref(),
@@ -1150,9 +1194,9 @@ mod tests {
             "alice"
         );
         let mut alice_ctx = ToolContext::for_test(pool.clone());
-        alice_ctx.user_id = "alice".into();
+        alice_ctx.principal = ToolContext::test_user("alice");
         let mut bob_ctx = ToolContext::for_test(pool);
-        bob_ctx.user_id = "bob".into();
+        bob_ctx.principal = ToolContext::test_user("bob");
         let alice_result = alice[0]
             .run(alice_ctx, serde_json::json!({}))
             .await
@@ -1208,8 +1252,10 @@ mod tests {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         let ctx = |db: Pool| ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db,
             s3: None,

@@ -234,6 +234,7 @@ impl Tool for BrowserControl {
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
+            ctx.person(self.id())?;
             let args: Args = serde_json::from_value(args).map_err(|e| {
                 ToolError::InvalidArgs(format!("expected {{actions: [{{action, …}}]}}: {e}"))
             })?;
@@ -408,7 +409,7 @@ pub(crate) async fn audit(
     };
     if let Err(err) = aiplane_core::server::db::browser_audit::record(
         &ctx.db,
-        &ctx.user_id,
+        ctx.principal.subject_id(),
         turn_id,
         ctx.session_id.as_deref(),
         actions,

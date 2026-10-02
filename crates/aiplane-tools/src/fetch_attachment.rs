@@ -633,7 +633,7 @@ async fn read_ocr(
         }));
     }
     let meta = aiplane_features::server::ocr::UsageMeta {
-        user_id: ctx.user_id.clone(),
+        user_id: ctx.principal.subject_id().to_string(),
         // A chat session means the chat UI; without one this is the `/v1`
         // proxy. `ToolContext` doesn't carry the access method, so a
         // scheduled / webhook turn that calls this tool explicitly is
@@ -1115,8 +1115,10 @@ mod tests {
     fn ctx_no_s3(pool: aiplane_core::server::db::Pool) -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u1".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u1".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,
@@ -1160,8 +1162,10 @@ mod tests {
             .unwrap();
         let ctx = ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             // Deliberately Some so we'd reach the s3 call if validation slipped —

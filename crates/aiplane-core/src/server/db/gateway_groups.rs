@@ -27,6 +27,9 @@ pub struct GroupRow {
     pub description: String,
     pub is_admin: bool,
     pub is_default: bool,
+    /// May create and configure system principals (`docs/agents.md` §1).
+    /// `is_admin` implies it; see `Resolver::can_manage_agents`.
+    pub can_manage_agents: bool,
 }
 
 /// Everything the [`crate::server::rbac::Resolver`] needs to answer access
@@ -46,6 +49,7 @@ fn map_group(row: &sqlx::sqlite::SqliteRow) -> Result<GroupRow, DbError> {
         description: row.try_get("description")?,
         is_admin: row.try_get::<i64, _>("is_admin")? != 0,
         is_default: row.try_get::<i64, _>("is_default")? != 0,
+        can_manage_agents: row.try_get::<i64, _>("can_manage_agents")? != 0,
     })
 }
 
@@ -53,7 +57,8 @@ fn map_group(row: &sqlx::sqlite::SqliteRow) -> Result<GroupRow, DbError> {
 /// group-picker `<datalist>` reused on every resource form.
 pub async fn list_groups(pool: &Pool) -> Result<Vec<GroupRow>, DbError> {
     let rows = sqlx::query(
-        "SELECT name, description, is_admin, is_default FROM gateway_groups ORDER BY name",
+        "SELECT name, description, is_admin, is_default, can_manage_agents
+           FROM gateway_groups ORDER BY name",
     )
     .fetch_all(pool)
     .await?;
@@ -168,6 +173,26 @@ pub async fn upsert_group(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Set a group's agent-management capability. Separate from
+/// [`upsert_group`] so a save that does not mention the flag leaves it as it
+/// was. `Ok(false)` when there is no such group.
+pub async fn set_can_manage_agents(
+    pool: &Pool,
+    name: &str,
+    enabled: bool,
+) -> Result<bool, DbError> {
+    let changed = sqlx::query(
+        "UPDATE gateway_groups SET can_manage_agents = ?, updated_at = ? WHERE name = ?",
+    )
+    .bind(i64::from(enabled))
+    .bind(Timestamp::now().to_string())
+    .bind(name)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(changed > 0)
 }
 
 /// Delete a group. `ON DELETE CASCADE` drops its mappings + tool grants; the
@@ -435,6 +460,25 @@ mod tests {
         assert!(groups[0].is_admin);
         assert_eq!(groups[1].name, "developers");
         assert_eq!(groups[1].description, "Dev team");
+    }
+
+    #[tokio::test]
+    async fn agent_management_is_off_by_default_and_survives_a_plain_upsert() {
+        let pool = fresh().await;
+        upsert_group(&pool, "agents", "", false, false)
+            .await
+            .unwrap();
+        assert!(!list_groups(&pool).await.unwrap()[0].can_manage_agents);
+
+        assert!(set_can_manage_agents(&pool, "agents", true).await.unwrap());
+        upsert_group(&pool, "agents", "renamed", false, false)
+            .await
+            .unwrap();
+        let group = &list_groups(&pool).await.unwrap()[0];
+        assert!(group.can_manage_agents);
+        assert_eq!(group.description, "renamed");
+
+        assert!(!set_can_manage_agents(&pool, "ghost", true).await.unwrap());
     }
 
     #[tokio::test]

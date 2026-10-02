@@ -127,7 +127,10 @@ ALTER TABLE gateway_groups ADD COLUMN can_manage_agents INTEGER NOT NULL DEFAULT
   resource: `allowed_tools`, `resource_allowed` for pools, collections and
   connectors, `allowed_skills`. A refused grant returns an actionable error
   naming the resource. Grants are never re-derived later.
-- **Every grant change is audited** in `agent_audit` (§3).
+- **Every grant change is audited** in `agent_audit` (§3). The table landed with
+  #77 (migration `0077`), with one column more than §3 lists: `actor_id`, the
+  user who made a management change, so "who" is queryable rather than buried in
+  `detail`. `chain` is `NULL` on those rows.
 
 ### The `Principal` type
 
@@ -175,7 +178,9 @@ That compile pass is the audit of every place identity matters.
 | Limits | subject `user`/`role`/`global` | subject `system`: the owner's budget for this agent (#92) |
 | Audit | `mcp_tool_audit.user_id` | plus `principal_kind` and `chain` columns |
 
-- **New connector scope `agent`.** It sits next to `per_user` and `global` in
+- **New connector scope `agent`** *(not yet built — #77 shipped grants of
+  `global` connectors only; a per-user connector is refused at grant time and
+  ignored at run time).* It sits next to `per_user` and `global` in
   `mcp_catalog`. Such a connector is invisible to every person and usable only
   by principals that were granted it. This is how an owner wires their own ERP
   or ticket MCP, with a static bearer, without exposing it to employees.

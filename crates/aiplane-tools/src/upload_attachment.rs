@@ -228,8 +228,10 @@ mod tests {
             .unwrap();
         let ctx = ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: Some(std::sync::Arc::new(
@@ -285,8 +287,10 @@ mod tests {
             .unwrap();
         let ctx = ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: pool,
             s3: None,

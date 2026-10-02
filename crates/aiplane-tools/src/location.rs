@@ -70,7 +70,7 @@ impl Tool for GetUserLocation {
     fn run<'a>(&'a self, ctx: ToolContext, _args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
             // 1. Fresh browser-shared position wins.
-            match users::find_location(&ctx.db, &ctx.user_id).await {
+            match users::find_location(&ctx.db, ctx.person(self.id())?).await {
                 Ok(Some(loc)) if loc.is_fresh(FRESH_SECS) => {
                     return Ok(precise_payload(loc.lat, loc.lon, loc.accuracy));
                 }
@@ -279,7 +279,10 @@ mod tests {
         .await
         .unwrap();
         ToolContext {
-            user_id: user_id.into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: user_id.into(),
+                roles: vec![],
+            },
             ..ToolContext::for_test(pool)
         }
     }

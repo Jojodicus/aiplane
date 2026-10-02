@@ -281,8 +281,10 @@ mod tests {
     async fn ctx_no_s3() -> ToolContext {
         ToolContext {
             token_id: None,
-            user_id: "u".into(),
-            roles: vec![],
+            principal: aiplane_core::server::principal::Principal::User {
+                id: "u".into(),
+                roles: vec![],
+            },
             pool_access: aiplane_core::server::upstreams::PoolAccess::all(),
             db: db::open(std::path::Path::new(":memory:")).await.unwrap(),
             s3: None,

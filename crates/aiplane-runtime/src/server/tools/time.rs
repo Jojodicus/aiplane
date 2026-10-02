@@ -76,7 +76,7 @@ impl Tool for CurrentTimestamp {
             // swallow DB errors here — a transient sqlite hiccup is
             // not worth failing the whole tool call when UTC is a
             // perfectly reasonable last-ditch answer.
-            let stored_tz = users::find_by_id(&ctx.db, &ctx.user_id)
+            let stored_tz = users::find_by_id(&ctx.db, ctx.principal.subject_id())
                 .await
                 .ok()
                 .flatten()
@@ -142,7 +142,10 @@ mod tests {
             users::set_timezone(pool, user_id, tz).await.unwrap();
         }
         ToolContext {
-            user_id: user_id.into(),
+            principal: aiplane_core::server::principal::Principal::User {
+                id: user_id.into(),
+                roles: vec![],
+            },
             ..ToolContext::for_test(pool.clone())
         }
     }
