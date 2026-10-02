@@ -68,6 +68,7 @@ pub(super) fn take_pause(
             continue;
         };
         result.body = json!({ "error": refusal });
+        result.failed = true;
     }
     pause
 }
@@ -237,14 +238,14 @@ pub(super) async fn resume_into(
             Value::String(refusal)
         }
         (child_result, decided) => {
-            let body = match child_result {
-                Some(body) => body.clone(),
+            let (body, status) = match child_result {
+                Some(body) => (body.clone(), ToolCallStatus::Completed),
                 None => {
                     let tool_ctx = ToolContext {
                         suspend: Suspend::Decided(decided.clone()),
                         ..tool_ctx.clone()
                     };
-                    let body = runner::execute_tool_calls(
+                    let (status, body) = runner::execute_tool_calls(
                         tools,
                         &tool_ctx,
                         std::slice::from_ref(&call),
@@ -252,14 +253,20 @@ pub(super) async fn resume_into(
                     )
                     .await
                     .pop()
-                    .map(|record| record.body)
-                    .unwrap_or_else(|| json!({ "error": "the tool produced no result" }));
-                    match (suspension.kind, decided) {
+                    .map(|record| (record.status(), record.body))
+                    .unwrap_or_else(|| {
+                        (
+                            ToolCallStatus::Errored,
+                            json!({ "error": "the tool produced no result" }),
+                        )
+                    });
+                    let body = match (suspension.kind, decided) {
                         (SuspensionKind::SecureInput, Decision::Value { value }) => {
                             withhold_secret(body, value)
                         }
                         _ => body,
-                    }
+                    };
+                    (body, status)
                 }
             };
             if let Some(request) = extract_suspend(&body) {
@@ -275,7 +282,7 @@ pub(super) async fn resume_into(
                 return Ok(Resumed::Paused);
             }
             let output = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into());
-            settle_call(d, ctx, &call.id, &output, ToolCallStatus::Completed).await?;
+            settle_call(d, ctx, &call.id, &output, status).await?;
             match extract_content_parts(&body) {
                 Some(parts) => Value::Array(parts.clone()),
                 None => {

@@ -534,3 +534,136 @@ async fn gateway_tools_for(world: &World, _user: &str) {
         .unwrap();
     world.state.reload_rbac().await;
 }
+
+/// An agent whose `always_ask` echo pauses the visitor's turn, with a human
+/// route to hand off to and an output filter on invoice numbers.
+fn resuming_spec() -> Value {
+    let mut spec = handoff_spec(json!({ "timeout": "5m" }));
+    spec["main"]["tools"] = json!([ECHO]);
+    spec["main"]["tool_resources"] =
+        json!({ ECHO: { "permission": "always_ask", "approval_timeout": "2h" } });
+    spec["publish"] = json!({ "output_filter": { "patterns": { "invoice": "RE-\\d+" } } });
+    spec
+}
+
+async fn resuming(world: &World) -> String {
+    let id = world
+        .agent(
+            "support",
+            &[(GrantKind::Pool, "support-pool"), (GrantKind::Tool, ECHO)],
+        )
+        .await;
+    assert_eq!(world.issues(&id, &resuming_spec()).await, []);
+    world.publish(&id, &resuming_spec()).await;
+    id
+}
+
+async fn visitor_in(world: &World, agent: &str, lang: Lang, message: &str) -> AgentReply {
+    let paused = run_turn_with(
+        &world.state,
+        AgentTurn {
+            agent_id: agent,
+            session_id: None,
+            message,
+            visitor_id: None,
+        },
+        RunOptions {
+            lang,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(paused.status, chat::TurnStatus::Suspended, "{paused:?}");
+    paused
+}
+
+async fn staff_in(world: &World, agent: &str, paused: &AgentReply, lang: Lang) -> AgentReply {
+    let claimed = claim(
+        &world.state,
+        AgentResume {
+            agent_id: agent,
+            ..answer(paused, Decision::AllowOnce, staff())
+        },
+    )
+    .await
+    .unwrap();
+    run_claimed(&world.state, claimed, RunOptions::default(), lang)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_staff_member_resuming_in_german_leaves_an_english_visitor_in_english() {
+    let main = llm(vec![
+        call("e1", ECHO, json!({"message": "hello"})),
+        text("RE-999 is refunded."),
+    ])
+    .await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    let agent = resuming(&world).await;
+    let paused = visitor_in(&world, &agent, Lang::En, "Refund me, please.").await;
+
+    let done = staff_in(&world, &agent, &paused, Lang::De).await;
+    assert_eq!(
+        done.answer.as_deref(),
+        Some(session_core::i18n::t(Lang::En, "agent-output-withheld").as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_handoff_after_a_resume_is_recorded_in_the_visitors_language() {
+    let main = llm(vec![
+        call("e1", ECHO, json!({"message": "hello"})),
+        call("s1", "set_issue", json!({"value": "refund"})),
+        call("h1", "request_human", json!({"question": QUESTION})),
+    ])
+    .await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    let agent = resuming(&world).await;
+    let paused = visitor_in(&world, &agent, Lang::De, "Bitte erstatten.").await;
+
+    let handed_off = staff_in(&world, &agent, &paused, Lang::En).await;
+    let waiting = handed_off.suspension.expect("handed off to a person");
+    assert_eq!(waiting.kind, SuspensionKind::HumanAnswer);
+    let pending = chat::pending_by_request(world.db(), &waiting.request_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending.suspension.run_context.unwrap()["handoff"]["lang"],
+        "de"
+    );
+}
+
+#[tokio::test]
+async fn a_timeout_for_a_german_visitor_answers_in_german() {
+    let main = llm(vec![
+        call("e1", ECHO, json!({"message": "hello"})),
+        text("RE-999 is refunded."),
+    ])
+    .await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    let agent = resuming(&world).await;
+    let paused = visitor_in(&world, &agent, Lang::De, "Bitte erstatten.").await;
+    sqlx::query("UPDATE chat_turn_suspensions SET expires_at = ?")
+        .bind((jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1)).to_string())
+        .execute(world.db())
+        .await
+        .unwrap();
+
+    resume_expired(&world.state).await;
+    wait_settled(&world, &paused.session_id, &paused.turn_id).await;
+    for _ in 0..400 {
+        if !world.state.agent_turns.is_running(&paused.session_id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let done = wait_settled(&world, &paused.session_id, &paused.turn_id).await;
+    assert_eq!(
+        done.content.as_deref(),
+        Some(session_core::i18n::t(Lang::De, "agent-output-withheld").as_str()),
+        "the filter has ruled once the sweeper's hold is released"
+    );
+}

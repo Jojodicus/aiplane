@@ -850,15 +850,32 @@ grants.
   - the conversation's slots not written by `llm`;
   - the outputs of the turn's **successful** tool calls. An errored call
     contributes nothing: its message is the tool talking about its input
-    ("no invoice RE-99999 found"). The `set_<slot>` calls are left out
-    because they echo model-written values.
+    ("no invoice RE-99999 found"). *Errored* is the call's real outcome: the
+    runner marks a result `failed` (`ToolResultRecord::failed`) when the tool
+    returned an error (an MCP `isError` included), rejected its arguments,
+    timed out, was unregistered, or never ran (refused as a repeat, over the
+    budget, a second suspend request in a round), and the driver stores
+    those rows as `errored` — which is also what the chat UI shows as a
+    failed call. The `set_<slot>` calls are left out because they echo
+    model-written values.
   - *Echo rule.* An identifier in a call's output does not vouch for itself
-    when one of that call's model-supplied argument values contains it: the
-    model chose it, the data did not. Otherwise the model could launder a
-    visitor's claim by passing it to a tool that repeats it. The stored
-    arguments are the model's own; a bound argument is filled in by the
-    gateway afterwards, so a tool repeating a bound value is not an echo (and
-    the value came from a verified slot, which is trusted on its own anyway).
+    when that call's model-supplied argument values could have supplied it:
+    the model chose it, the data did not. Otherwise the model could launder a
+    visitor's claim by passing it to a tool that repeats it. Both sides are
+    compared as lowercase letters and digits only, so reformatting does not
+    hide an echo (`{"invoice": 999999}`, `"re 999 999"` or `"RE-"` +
+    `"999999"` all supply `RE-999999`). An identifier with digit runs of at
+    least 4 digits is supplied when *every* such run occurs in some argument:
+    the runs tell one customer from another, a prefix is the pattern's. One
+    without such runs is supplied when its whole alphanumeric core occurs in
+    one argument. Shorter runs are ignored because they occur in almost any
+    argument by chance, so a lookup by `{"year": 2026}` still vouches for the
+    `RE-2026-0042` it returned. *Chosen over* a pattern's capture group: it
+    asks every spec author to mark the distinctive part, and a spec without
+    one would fall back to the weaker verbatim test. The stored arguments
+    are the model's own; a bound argument is filled in by the gateway
+    afterwards, so a tool repeating a bound value is not an echo (and the
+    value came from a verified slot, which is trusted on its own anyway).
   - *Sub-agents.* A `forward_request` result is not trusted text: a sub-agent
     repeats its task (which can carry an `llm` slot) as readily as a model
     repeats a visitor. Instead the successful tool calls of every sub-agent
@@ -885,7 +902,8 @@ grants.
   `run_turn` and the public endpoint's runner are both covered.
 - **Language.** `OpenedTurn.lang` picks the catalog language of the fallback
   text: `RunOptions.lang` (default English) for `run_turn`, the request's
-  `Accept-Language` for a visitor message.
+  `Accept-Language` for a visitor message, and the conversation's recorded
+  language on a resume ([Suspend and resume](#suspend-and-resume-82)).
 - **No early peek.** The turn row is terminal before the filter has ruled, so
   the embed endpoint treats a session as unfinished while `AgentTurns` still
   holds its claim (`is_running`): the snapshot shows the turn in progress and
@@ -894,9 +912,12 @@ grants.
   rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
   tool the agent calls that returns another customer's data makes that data
   trusted. Grant tools bound to the verified subject (#88) for that. The echo
-  rule is a containment test on whole argument values: a tool that assembles
-  an identifier from fragments of its arguments (`"RE-"` + `"99999"`) is not
-  recognized as echoing. A successful lookup by a number the visitor gave
+  rule errs towards withholding: a tool that returns an identifier whose
+  digit runs merely happen to occur in its arguments (an invoice numbered
+  like the customer) does not vouch for it. A tool that answers an error as
+  a successful result (`{"error": …}` without failing) is not recognised as
+  failed; the echo rule still catches the number the model passed it. A
+  successful lookup by a number the visitor gave
   does not confirm that number either, only what the lookup returned beside
   it. Only this turn's calls count: an identifier a tool returned in an
   earlier turn must be looked up again. An A2A route's remote answer is never
@@ -905,8 +926,11 @@ grants.
   another customer's invoice is withheld and audited; identifiers from the
   verified slot and the sub-agent's lookup pass; redaction; no patterns leaves
   the answer unchanged. `agents/run/tests/output_filter.rs` covers the echo
-  rule end to end: an errored lookup that names the visitor's number, an echo
-  tool, a lookup that vouches only for what it found, and a billing sub-agent
+  rule end to end: an errored lookup that names the visitor's number, a
+  failed lookup whose error names another invoice, a lookup that formats the
+  model's bare number as an invoice, a lookup by customer whose invoice
+  passes, an echo tool, a lookup that vouches only for what it found, and a
+  billing sub-agent
   whose looked-up invoice passes while the number it only read in its task is
   withheld. Pure cases are in `output_filter.rs`.
 
@@ -1008,6 +1032,18 @@ agent runs pause and resume durably, sub-agent runs included.
   resume is audited as `run_resumed` (`{session_id, turn_id, request_id, kind,
   decision, answered_by, waiting_turn}`, with `actor_id` for staff). A level
   that cannot be rebuilt (agent disabled since) errors every claimed turn.
+- **The visitor's language.** A resumed run speaks the language the
+  conversation's turn was asked in, whoever gives the decision: staff answer
+  from the inbox in their own, and the timeout sweeper has none. Every new
+  turn (`drive_opened`, so `run_turn`, the embed and A2A runners and a
+  queued message alike) records `OpenedTurn.lang` as `chat_sessions.lang`
+  (migration `0093`), and `run_claimed` reads it back for `RunOptions.lang`
+  and `OpenedTurn.lang`. That covers the output filter's fallback texts, a
+  timed-out handoff's `agent-human-no-answer`, and the `lang` of a handoff
+  the resumed run records. The language argument of `run_claimed` (and
+  `AgentTurnRunner::resume`) is only the fallback for a conversation that
+  recorded none (one whose last turn started before `0093`); the inbox and
+  the sweeper pass English.
 - **Secure values.** A `value` goes to the requesting tool through
   `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
   `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's

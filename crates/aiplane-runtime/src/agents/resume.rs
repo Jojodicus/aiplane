@@ -339,17 +339,23 @@ async fn rebuild(
 /// Continue a claimed resume to its end: every sub-agent run innermost
 /// first, then the conversation's turn. Returns how that turn ended; a
 /// message queued behind the decision runs after it.
+///
+/// The run speaks the language the conversation's turn was asked in, not
+/// the one of whoever decided: staff answer from the inbox in theirs, and a
+/// timeout has none. `fallback_lang` is only for a conversation that
+/// recorded no language.
 pub async fn run_claimed(
     state: &Arc<RamaState>,
     claimed: ClaimedResume,
     options: RunOptions,
-    lang: Lang,
+    fallback_lang: Lang,
 ) -> Result<AgentReply, AgentRunError> {
     let ClaimedResume {
         levels,
         decision,
         by,
     } = claimed;
+    let lang = levels[0].session.lang.unwrap_or(fallback_lang);
     let options = RunOptions { lang, ..options };
     let (profiles, chains, opened) = match rebuild(state, &levels, &options, lang).await {
         Ok(rebuilt) => rebuilt,
