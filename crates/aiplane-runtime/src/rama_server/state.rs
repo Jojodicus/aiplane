@@ -79,6 +79,9 @@ pub struct RamaState {
     /// No runner until one is installed with [`Self::with_agent_runner`]; the
     /// endpoint then refuses messages instead of accepting turns nothing runs.
     pub agent_turns: crate::agents::embed::AgentTurns,
+    /// Proxies whose forwarded headers are believed; empty until
+    /// [`Self::with_trusted_proxies`]. Read through [`Self::client_ip`].
+    trusted_proxies: aiplane_core::server::trusted_proxies::TrustedProxies,
     /// Test-only override of `[gateway] upstream_wait_secs`. See
     /// [`Self::with_upstream_wait`].
     upstream_wait_override: Option<std::time::Duration>,
@@ -103,8 +106,25 @@ impl RamaState {
             enforcer,
             topology_dirty: Arc::new(AtomicU32::new(0)),
             agent_turns: Default::default(),
+            trusted_proxies: Default::default(),
             upstream_wait_override: None,
         }
+    }
+
+    pub fn with_trusted_proxies(
+        mut self,
+        trusted: aiplane_core::server::trusted_proxies::TrustedProxies,
+    ) -> Self {
+        self.trusted_proxies = trusted;
+        self
+    }
+
+    /// The caller's IP — the single resolution GeoIP, the request context and
+    /// the public agent's per-IP limit all use, so none can disagree about who
+    /// a client is. Call before the request is split: the socket peer lives in
+    /// its extensions.
+    pub fn client_ip(&self, req: &rama::http::Request) -> Option<String> {
+        aiplane_features::server::geoip::client_ip(req, &self.trusted_proxies)
     }
 
     /// Install what runs a visitor's turn on the public agent endpoint.

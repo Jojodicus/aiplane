@@ -202,11 +202,6 @@ async fn live_agent(
     })
 }
 
-fn client_ip(req: &Request) -> Option<String> {
-    aiplane_features::server::geoip::client_ip(req.headers())
-        .or_else(|| aiplane_features::server::geoip::peer_ip(req))
-}
-
 /// Gate a request that makes the agent work — a new conversation or a
 /// message — on the agent's visitor rates and budget (`docs/agents.md` §5,
 /// "What #92 built"). Reads cost the agent nothing and are not gated: the
@@ -264,7 +259,7 @@ pub struct StartBody {
 
 /// POST /api/v0/embed/sessions — start a visitor conversation.
 pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let ip = client_ip(&req);
+    let ip = state.client_ip(&req);
     let headers = req.headers().clone();
     let body: StartBody = or_return!(super::read_json(req.into_body(), "the session body").await);
     let Some(key_hash) = token::hash_embed_key(body.key.trim()) else {
@@ -434,7 +429,7 @@ pub struct MessageBody {
 pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
-    let ip = client_ip(&req);
+    let ip = state.client_ip(&req);
     let body: MessageBody = or_return!(super::read_json(req.into_body(), "the message body").await);
     let text = body.text.trim();
     if text.is_empty() {

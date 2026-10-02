@@ -406,6 +406,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %err, "seeding default MCP connectors failed");
     }
 
+    let trusted_proxies = config.trusted_proxies()?;
     let mut state = AppState::new(config, db, upstreams, tools, rbac)
         .with_runtime_handle(runtime)
         .with_crypto(crypto)
@@ -605,6 +606,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(
         aiplane::rama_server::RamaState::new(state, sessions, usage)
+            .with_trusted_proxies(trusted_proxies)
             .with_ocr(ocr)
             .with_agent_runner(Arc::new(aiplane_runtime::agents::embed::LiveAgentRunner)),
     );
