@@ -7,7 +7,8 @@
  */
 import { EmbedApi, EmbedError } from './api.ts';
 import { applyFrame, emptyConversation, fromTurns, type Conversation, type Message } from './conversation.ts';
-import { isSafeHref, parseBlocks, type Block, type Inline } from './markdown.ts';
+import { isSafeHref } from '../shared/url.ts';
+import { parseBlocks, type Block, type Inline } from './markdown.ts';
 import { secureInputForm, secureRequest } from './secure-input.ts';
 import { trackWaiting, waitingFromTurns, waitingLabel, WAIT_POLL_MS, type Waiting } from './waiting.ts';
 

@@ -401,14 +401,6 @@ export function applyEvent(state: ConversationState, event: ChatEvent): void {
 	}
 }
 
-/** Parse one SSE block (`event:` + `data:` lines) into a `ChatEvent`. */
-export function parseSseBlock(block: string): ChatEvent | null {
-	const eventLine = block.split('\n').find((l) => l.startsWith('event: '));
-	const dataLine = block.split('\n').find((l) => l.startsWith('data: '));
-	if (!eventLine || !dataLine) return null;
-	return JSON.parse(dataLine.slice('data: '.length)) as ChatEvent;
-}
-
 /** The sidebar's display title: the stored one, else the first user message. */
 export function sessionTitle(session: ChatSession, turns: Iterable<LiveTurn>): string {
 	if (session.title?.trim()) return session.title;

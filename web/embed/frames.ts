@@ -6,6 +6,8 @@
  * keep-alives) carry nothing and are dropped.
  */
 
+import { SseSplitter } from '../shared/sse.ts';
+
 export interface Frame {
 	event: string;
 	data: Record<string, unknown>;
@@ -13,33 +15,23 @@ export interface Frame {
 
 /** Splits a byte stream into frames; feed it decoded text chunks as they arrive. */
 export class FrameParser {
-	private buffer = '';
+	private readonly splitter = new SseSplitter();
 
 	push(chunk: string): Frame[] {
-		this.buffer += chunk.replaceAll('\r\n', '\n');
-		const blocks = this.buffer.split('\n\n');
-		this.buffer = blocks.pop() ?? '';
 		const frames: Frame[] = [];
-		for (const block of blocks) {
-			const frame = parseBlock(block);
-			if (frame) frames.push(frame);
+		for (const { event, data } of this.splitter.push(chunk)) {
+			const parsed = parseObject(data);
+			if (parsed) frames.push({ event, data: parsed });
 		}
 		return frames;
 	}
 }
 
-function parseBlock(block: string): Frame | null {
-	let event: string | null = null;
-	const data: string[] = [];
-	for (const line of block.split('\n')) {
-		if (line.startsWith('event:')) event = line.slice(6).trim();
-		else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
-	}
-	if (event === null || data.length === 0) return null;
+function parseObject(json: string): Record<string, unknown> | null {
 	try {
-		const parsed: unknown = JSON.parse(data.join('\n'));
+		const parsed: unknown = JSON.parse(json);
 		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-		return { event, data: parsed as Record<string, unknown> };
+		return parsed as Record<string, unknown>;
 	} catch {
 		return null;
 	}

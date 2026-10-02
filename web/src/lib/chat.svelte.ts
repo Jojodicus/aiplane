@@ -13,7 +13,7 @@
  * the documented universal-reactivity pattern, and the returned object's
  * methods close over it directly.
  */
-import { applyEvent, newConversationState, parseSseBlock, type ChatEvent } from './chat-protocol';
+import { applyEvent, newConversationState, type ChatEvent } from './chat-protocol';
 import { api } from './api';
 import { handleBrowserAction } from './browser-bridge';
 
@@ -101,8 +101,7 @@ export function createConversationController(sessionId: string): ConversationCon
 			};
 			for (const name of EVENT_NAMES) {
 				es.addEventListener(name, (ev) => {
-					const event = parseSseBlock(`event: ${name}\ndata: ${(ev as MessageEvent).data}`);
-					if (event) controller.apply(event);
+					controller.apply(JSON.parse((ev as MessageEvent).data) as ChatEvent);
 				});
 			}
 		},
