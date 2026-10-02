@@ -779,6 +779,7 @@ async fn headless_run(
             finish: None,
             budget: None,
             injection: Default::default(),
+            agent: None,
         },
     )
     .await;

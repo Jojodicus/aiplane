@@ -881,6 +881,19 @@ pub(crate) fn normalize_assistant_tool_call_args(message: &mut Value) {
     }
 }
 
+tokio::task_local! {
+    // Per call, not per turn, so it cannot ride in `ToolContext`, which is
+    // built once per turn and constructed in dozens of places.
+    static CURRENT_CALL_ID: String;
+}
+
+/// The id of the tool call the current [`Tool::run`] is answering, when it
+/// runs through [`execute_tool_calls`]. A sub-agent dispatch records it as the
+/// call site of the run it starts.
+pub fn current_call_id() -> Option<String> {
+    CURRENT_CALL_ID.try_with(Clone::clone).ok()
+}
+
 pub async fn execute_tool_calls(
     tools: &dyn ToolSource,
     ctx: &ToolContext,
@@ -931,7 +944,11 @@ pub async fn execute_tool_calls(
             // family) declare a longer ceiling via `max_duration`.
             let (principal, db, chain) = (ctx.principal.clone(), ctx.db.clone(), ctx.run.clone());
             let tool_timeout = tool.max_duration().unwrap_or(TOOL_TIMEOUT);
-            let outcome = tokio::time::timeout(tool_timeout, tool.run(ctx, args)).await;
+            let outcome = tokio::time::timeout(
+                tool_timeout,
+                CURRENT_CALL_ID.scope(call.id.clone(), tool.run(ctx, args)),
+            )
+            .await;
             let elapsed_ms = started.elapsed().as_millis();
             let body = match outcome {
                 Ok(Ok(value)) => {

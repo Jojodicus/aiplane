@@ -32,15 +32,17 @@
 //!   or `in` value the slot would accept, a `provenance` its `set_by` lists
 //!   ([`Cond::type_check`]). A route that binds arguments from state needs a
 //!   gate that cannot open without a verifier- or host-written slot
-//!   ([`Cond::requires_trusted_provenance`]).
+//!   ([`Cond::requires_trusted_provenance`]), on every slot it binds from. So
+//!   does a route whose sub-agent, or any agent below it, binds a tool.
 //!
-//! What it does not: check the sub-agent graph for cycles and depth, or
-//! whether a sub-agent reaches a tool with a `bind` (#88).
+//! - **The sub-agent graph**, over the live specs of the agents it routes to:
+//!   acyclic and at most [`MAX_DEPTH`] agents deep, this one included.
 
 use std::collections::{BTreeSet, HashMap};
 
 use aiplane_core::server::principal::{GrantKind, GrantSet};
 use aiplane_core::server::reasoning::HARD_ROUND_CAP;
+use aiplane_core::server::run_chain::MAX_DEPTH;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -71,6 +73,9 @@ pub struct SpecContext<'a> {
     pub grants: &'a GrantSet,
     /// Every agent id, mapped to whether it has a live version.
     pub agents: &'a HashMap<String, bool>,
+    /// Every published agent's live spec, by id: the sub-agent graph the
+    /// cycle, depth and bind-reach checks walk.
+    pub live_specs: &'a HashMap<String, Value>,
 }
 
 const TOP_KEYS: &[&str] = &[
@@ -131,7 +136,7 @@ const VERIFIER_KEYS: &[&str] = &[
     "max_attempts",
     "code_ttl",
 ];
-const ROUTER_KEYS: &[&str] = &["kind", "pool"];
+const ROUTER_KEYS: &[&str] = &["kind", "pool", "order"];
 const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
 const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "human"];
 const HUMAN_KEYS: &[&str] = &["notify", "inbox"];
@@ -141,6 +146,89 @@ const PUBLISH_KEYS: &[&str] = &["origins", "idle_ttl", "retention_days", "output
 const OUTPUT_FILTER_KEYS: &[&str] = &["patterns"];
 pub(super) const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
 const MAX_IDENT_LEN: usize = 48;
+
+/// What a route's gate has to guarantee because of what the route binds.
+struct BindDemand<'a> {
+    /// The slots the route's own `bind` reads, when it has one.
+    bound_slots: Option<Vec<String>>,
+    /// The routed sub-agent, when it reaches a tool with a `bind`.
+    sub_agent: Option<&'a str>,
+}
+
+/// The slot each state-sourced bind reads (`verified.customer_id` → `verified`).
+fn bound_slots(bind: &Value) -> Vec<String> {
+    let mut slots: Vec<String> = bind
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.values())
+        .filter_map(Value::as_str)
+        .filter_map(|path| path.split('.').next())
+        .map(str::to_string)
+        .collect();
+    slots.sort();
+    slots.dedup();
+    slots
+}
+
+/// The agent ids a spec's routes dispatch to.
+pub fn routed_agents(spec: &Value) -> Vec<&str> {
+    spec.get("routes")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|routes| routes.values())
+        .filter_map(|route| route.get("agent").and_then(Value::as_str))
+        .collect()
+}
+
+fn binds_anything(spec: &Value) -> bool {
+    let tool_binds = spec
+        .pointer("/main/tool_resources")
+        .and_then(Value::as_object)
+        .is_some_and(|tools| tools.values().any(|r| r.get("bind").is_some()));
+    let route_binds = spec
+        .get("routes")
+        .and_then(Value::as_object)
+        .is_some_and(|routes| routes.values().any(|r| r.get("bind").is_some()));
+    tool_binds || route_binds
+}
+
+/// Whether agent `id`, or any agent it routes to, runs a tool with a `bind`.
+fn reaches_bind(live: &HashMap<String, Value>, id: &str, seen: &mut Vec<String>) -> bool {
+    if seen.iter().any(|s| s == id) {
+        return false;
+    }
+    seen.push(id.to_string());
+    let Some(spec) = live.get(id) else {
+        return false;
+    };
+    binds_anything(spec)
+        || routed_agents(spec)
+            .into_iter()
+            .any(|child| reaches_bind(live, child, seen))
+}
+
+/// How many agents deep the graph goes from `id` down, `id` included; the
+/// looping path when it reaches an agent already on `trail`.
+fn depth_below(
+    live: &HashMap<String, Value>,
+    id: &str,
+    trail: &mut Vec<String>,
+) -> Result<usize, Vec<String>> {
+    if let Some(at) = trail.iter().position(|t| t == id) {
+        let mut cycle = trail[at..].to_vec();
+        cycle.push(id.to_string());
+        return Err(cycle);
+    }
+    trail.push(id.to_string());
+    let mut deepest = 0;
+    if let Some(spec) = live.get(id) {
+        for child in routed_agents(spec) {
+            deepest = deepest.max(depth_below(live, child, trail)?);
+        }
+    }
+    trail.pop();
+    Ok(deepest + 1)
+}
 
 /// Every problem with `spec`, in document order. Empty means valid.
 pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIssue> {
@@ -435,7 +523,7 @@ impl<'a> Check<'a> {
             None => {}
         }
         if let Some(v) = top.get("router") {
-            self.router(v);
+            self.router(v, top.get("routes"));
         }
         if let Some(v) = top.get("routes") {
             for (name, route) in self.named_map(v, "routes") {
@@ -827,10 +915,28 @@ impl<'a> Check<'a> {
         }
     }
 
-    fn router(&mut self, v: &Value) {
+    fn router(&mut self, v: &Value, routes: Option<&Value>) {
         let Some(map) = self.object(v, "router", ROUTER_KEYS) else {
             return;
         };
+        if let Some(order) = map.get("order") {
+            if map.get("kind").and_then(Value::as_str) == Some("classifier") {
+                self.issue(
+                    "router.order",
+                    "`order` ranks open routes for a `rules` router; a `classifier` router picks \
+                     by itself — remove `order` or switch `kind` to `rules`",
+                );
+            } else {
+                for (p, name) in self.string_list(order, "router.order") {
+                    if routes.and_then(|r| r.get(name)).is_none() {
+                        self.issue(
+                            &p,
+                            format!("`{name}` is not a route — `order` lists names from `routes`"),
+                        );
+                    }
+                }
+            }
+        }
         let kind = match map.get("kind") {
             Some(k) => self.one_of(k, "router.kind", ROUTER_KINDS),
             None => {
@@ -868,7 +974,14 @@ impl<'a> Check<'a> {
                 let before = self.issues.len();
                 self.cond(when, &at);
                 if self.issues.len() == before {
-                    self.gate_semantics(when, &at, map.contains_key("bind"));
+                    let demand = BindDemand {
+                        bound_slots: map.get("bind").map(bound_slots),
+                        sub_agent: map
+                            .get("agent")
+                            .and_then(Value::as_str)
+                            .filter(|id| reaches_bind(self.ctx.live_specs, id, &mut Vec::new())),
+                    };
+                    self.gate_semantics(when, &at, demand);
                 }
             }
             None => self.issue(
@@ -944,7 +1057,7 @@ impl<'a> Check<'a> {
                      publish it first"
                 ),
             ),
-            Some(_) => {}
+            Some(_) => self.sub_agent_graph(id, path),
         }
     }
 
@@ -1067,7 +1180,7 @@ impl<'a> Check<'a> {
     /// A well-shaped gate, checked against the slots: no leaf that can never
     /// hold, and — on a route that binds arguments from state — a gate that
     /// cannot open on model-written slots alone (§4 "Type-checked").
-    fn gate_semantics(&mut self, when: &Value, path: &str, binds: bool) {
+    fn gate_semantics(&mut self, when: &Value, path: &str, demand: BindDemand<'_>) {
         let Ok(cond) = Cond::parse(when) else {
             return;
         };
@@ -1079,13 +1192,64 @@ impl<'a> Check<'a> {
         for (at, message) in problems {
             self.issue(&join(path, &at), message);
         }
-        if binds && !cond.requires_trusted_provenance() {
-            self.issue(
+        const LEAF_HINT: &str = "add a leaf such as {\"slot\": \"verified\", \"provenance\": \
+                                 \"verifier:<id>\"} that every way through the gate has to pass";
+        if !cond.requires_trusted_provenance() {
+            if demand.bound_slots.is_some() {
+                self.issue(
+                    path,
+                    format!(
+                        "this route binds arguments from state, so its gate must require a slot \
+                         set by a verifier or the host — {LEAF_HINT}"
+                    ),
+                );
+            } else if let Some(agent) = demand.sub_agent {
+                self.issue(
+                    path,
+                    format!(
+                        "sub-agent `{agent}` reaches a tool with bound arguments, so this route's \
+                         gate must require a slot set by a verifier or the host — {LEAF_HINT}"
+                    ),
+                );
+            }
+            return;
+        }
+        for slot in demand.bound_slots.unwrap_or_default() {
+            if !cond.requires_trusted_provenance_of(&slot) {
+                self.issue(
+                    path,
+                    format!(
+                        "this route binds an argument from `{slot}`, so its gate must require \
+                         `{slot}` itself to be set by a verifier or the host — add \
+                         {{\"slot\": \"{slot}\", \"provenance\": …}} on every way through the gate"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// The sub-agent graph below a route: no agent reached twice on one path,
+    /// and at most [`MAX_DEPTH`] agents from this one down.
+    fn sub_agent_graph(&mut self, id: &str, path: &str) {
+        let mut trail = vec![self.ctx.agent_id.to_string()];
+        match depth_below(self.ctx.live_specs, id, &mut trail) {
+            Err(cycle) => self.issue(
                 path,
-                "this route binds arguments from state, so its gate must require a slot set by a \
-                 verifier or the host — add a leaf such as {\"slot\": \"verified\", \
-                 \"provenance\": \"verifier:<id>\"} that every way through the gate has to pass",
-            );
+                format!(
+                    "routing to `{id}` loops back: {} — an agent cannot reach itself through its \
+                     sub-agents; change the routes so they do not loop",
+                    cycle.join(" → ")
+                ),
+            ),
+            Ok(below) if below + 1 > MAX_DEPTH => self.issue(
+                path,
+                format!(
+                    "routing to `{id}` nests {} agents deep, and at most {MAX_DEPTH} are allowed \
+                     — route to a sub-agent with fewer levels below it",
+                    below + 1
+                ),
+            ),
+            Ok(_) => {}
         }
     }
 
@@ -1177,6 +1341,7 @@ mod tests {
                 agent_id: SELF,
                 grants: &grants,
                 agents: &agents,
+                live_specs: &HashMap::new(),
             },
             stage,
         )
@@ -1556,6 +1721,148 @@ mod tests {
             );
         }
         assert_eq!(check(gated(llm_only, None), Stage::Draft), []);
+    }
+
+    #[test]
+    fn every_slot_a_route_binds_from_must_itself_be_gated_on_a_trusted_provenance() {
+        let mut spec = gated(
+            json!({ "slot": "verified", "provenance": "verifier:otp" }),
+            Some(json!({ "customer_id": "verified.customer_id", "account": "account" })),
+        );
+        spec["state"]["account"] = json!({ "type": "subject", "set_by": ["host"] });
+        let issues = check(spec.clone(), Stage::Draft);
+        assert_eq!(paths(&issues), ["routes.r.when"]);
+        assert!(
+            issues[0].message.contains("`account`"),
+            "{}",
+            issues[0].message
+        );
+
+        spec["routes"]["r"]["when"] = json!({ "all": [
+            { "slot": "verified", "provenance": "verifier:otp" },
+            { "slot": "account", "provenance": "host" }
+        ] });
+        assert_eq!(check(spec, Stage::Draft), []);
+    }
+
+    fn check_live(spec: Value, live: &[(&str, Value)]) -> Vec<SpecIssue> {
+        let grants = grants();
+        let mut agents = agents();
+        for (id, _) in live {
+            agents.insert(id.to_string(), true);
+        }
+        let live_specs: HashMap<String, Value> = live
+            .iter()
+            .map(|(id, spec)| (id.to_string(), spec.clone()))
+            .collect();
+        validate(
+            &spec,
+            &SpecContext {
+                agent_id: SELF,
+                grants: &grants,
+                agents: &agents,
+                live_specs: &live_specs,
+            },
+            Stage::Draft,
+        )
+    }
+
+    fn routes_to(agent: &str) -> Value {
+        json!({ "routes": { "r": {
+            "when": { "not": { "slot": "issue", "set": true } },
+            "agent": agent, "task": "t"
+        } }, "state": {
+            "issue": { "type": "string", "set_by": ["llm"] }
+        } })
+    }
+
+    #[test]
+    fn a_route_to_a_sub_agent_that_binds_a_tool_needs_a_trusted_gate_too() {
+        let binding_billing = json!({ "main": {
+            "tools": ["mcp__erp__invoices"],
+            "tool_resources": { "mcp__erp__invoices": { "bind": { "tenant": { "const": "t1" } } } }
+        } });
+        let issues = check_live(routes_to(BILLING), &[(BILLING, binding_billing)]);
+        assert_eq!(paths(&issues), ["routes.r.when"]);
+        assert!(
+            issues[0]
+                .message
+                .contains("reaches a tool with bound arguments"),
+            "{}",
+            issues[0].message
+        );
+        let plain_billing = json!({ "main": { "tools": ["rag_search"] } });
+        assert_eq!(
+            check_live(routes_to(BILLING), &[(BILLING, plain_billing)]),
+            []
+        );
+    }
+
+    #[test]
+    fn the_sub_agent_graph_must_be_acyclic() {
+        let back = check_live(routes_to(BILLING), &[(BILLING, routes_to(SELF))]);
+        assert_eq!(paths(&back), ["routes.r.agent"]);
+        assert!(
+            back[0].message.contains("loops back"),
+            "{}",
+            back[0].message
+        );
+
+        let around = check_live(
+            routes_to(BILLING),
+            &[
+                (BILLING, routes_to("refunds-id")),
+                ("refunds-id", routes_to(SELF)),
+            ],
+        );
+        assert_eq!(paths(&around), ["routes.r.agent"]);
+        assert!(
+            around[0]
+                .message
+                .contains("billing-id → refunds-id → self-id"),
+            "{}",
+            around[0].message
+        );
+    }
+
+    #[test]
+    fn the_sub_agent_graph_is_at_most_three_agents_deep() {
+        let three = check_live(
+            routes_to(BILLING),
+            &[
+                (BILLING, routes_to("refunds-id")),
+                ("refunds-id", json!({})),
+            ],
+        );
+        assert_eq!(three, []);
+        let four = check_live(
+            routes_to(BILLING),
+            &[
+                (BILLING, routes_to("refunds-id")),
+                ("refunds-id", routes_to("ledger-id")),
+                ("ledger-id", json!({})),
+            ],
+        );
+        assert_eq!(paths(&four), ["routes.r.agent"]);
+        assert!(
+            four[0].message.contains("4 agents deep"),
+            "{}",
+            four[0].message
+        );
+    }
+
+    #[test]
+    fn a_rules_router_may_order_its_routes_by_name() {
+        let mut spec = routes_to(BILLING);
+        spec["router"] = json!({ "kind": "rules", "order": ["r"] });
+        assert_eq!(check(spec.clone(), Stage::Draft), []);
+        spec["router"] = json!({ "kind": "rules", "order": ["r", "nope", "r"] });
+        assert_eq!(
+            paths(&check(spec.clone(), Stage::Draft)),
+            ["router.order[2]", "router.order[1]"]
+        );
+        spec["router"] = json!({ "kind": "classifier", "pool": "small", "order": ["r"] });
+        assert_eq!(paths(&check(spec, Stage::Draft)), ["router.order"]);
     }
 
     #[test]
