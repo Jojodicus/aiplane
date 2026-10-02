@@ -7,9 +7,10 @@
 //! The spec names the identifier shapes (`publish.output_filter.patterns`).
 //! Before a main agent's answer is delivered, every match of every pattern
 //! must also occur in the *trusted text* of the turn: the conversation's
-//! verified slots, or what this turn's tools and sub-agents returned. A match
-//! found nowhere else came from the model's imagination, the visitor's own
-//! message, or another customer's data it should never have seen.
+//! verified slots, or what the successful tool calls of this turn and of its
+//! sub-agent runs returned, less what the model passed into each call. A
+//! match found nowhere else came from the model's imagination, the visitor's
+//! own message, or another customer's data it should never have seen.
 //!
 //! The decision is pure ([`OutputFilter::check`]); [`guard_answer`] gathers
 //! the trusted text and writes the audit row.
@@ -23,6 +24,8 @@ use serde_json::{Value, json};
 use session_core::db as chat;
 use session_core::i18n::{Lang, t};
 
+use super::human::REQUEST_HUMAN;
+use super::router::FORWARD_TOOL_NAME;
 use super::state::{AgentState, Provenance, StateSchema};
 use crate::rama_server::state::RamaState;
 
@@ -46,6 +49,32 @@ impl Action {
             "redact" => Some(Self::Redact),
             _ => None,
         }
+    }
+}
+
+/// One text the run established, with what the model itself put into it.
+///
+/// A tool's output can repeat its arguments ("no invoice RE-99999 found"),
+/// and the model chose those. An identifier found in `text` vouches for
+/// itself only if no entry of `echoed` contains it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Evidence {
+    pub text: String,
+    /// The string and number leaves of the model's arguments to the call
+    /// that produced `text`; empty for a verified slot.
+    pub echoed: Vec<String>,
+}
+
+impl Evidence {
+    pub fn verified(text: String) -> Self {
+        Self {
+            text,
+            echoed: Vec::new(),
+        }
+    }
+
+    fn echoes(&self, identifier: &str) -> bool {
+        self.echoed.iter().any(|arg| arg.contains(identifier))
     }
 }
 
@@ -96,15 +125,17 @@ impl OutputFilter {
         Ok(Some(Self { patterns, action }))
     }
 
-    /// Judge `answer` against `trusted`, the text the run established.
+    /// Judge `answer` against `trusted`, what the run established.
     /// `marker` replaces a redacted identifier.
-    pub fn check(&self, answer: &str, trusted: &[String], marker: &str) -> Verdict {
+    pub fn check(&self, answer: &str, trusted: &[Evidence], marker: &str) -> Verdict {
         let known: BTreeSet<(&str, &str)> = self
             .patterns
             .iter()
             .flat_map(|(name, re)| {
-                trusted.iter().flat_map(move |text| {
-                    re.find_iter(text).map(move |m| (name.as_str(), m.as_str()))
+                trusted.iter().flat_map(move |ev| {
+                    re.find_iter(&ev.text)
+                        .filter(|m| !ev.echoes(m.as_str()))
+                        .map(move |m| (name.as_str(), m.as_str()))
                 })
             })
             .collect();
@@ -156,15 +187,85 @@ pub fn leaves(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// The text the filter may trust for this turn. Slots the model wrote itself
-/// are left out — it can copy a visitor's claim into one — as are the
-/// `set_<slot>` tool calls that echo them.
+/// `raw` as JSON leaves, or as one string when it is not JSON.
+fn leaves_of(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    match serde_json::from_str::<Value>(raw) {
+        Ok(v) => leaves(&v, &mut out),
+        Err(_) => out.push(raw.to_string()),
+    }
+    out
+}
+
+/// What one tool call of the run establishes.
+///
+/// Only a successful call counts: an error message is the tool talking about
+/// its input. Its output is evidence with the model's arguments as the echo.
+///
+/// A `forward_request` result is the dispatched run's own words: a sub-agent
+/// repeats its task as readily as a model repeats a visitor, and a remote
+/// agent's answer is not ours to vouch for. What a sub-agent's tools
+/// returned counts instead, gathered from its run below. A person's answer
+/// to a handoff is trusted whole: staff read the request and wrote it.
+fn evidence_of(call: &chat::ToolCall, slot_tools: &BTreeSet<String>) -> Vec<Evidence> {
+    if call.status != chat::ToolCallStatus::Completed || slot_tools.contains(&call.name) {
+        return Vec::new();
+    }
+    let Some(output) = &call.output_json else {
+        return Vec::new();
+    };
+    let handoff = call.name == FORWARD_TOOL_NAME || call.name == REQUEST_HUMAN;
+    let staff_answered =
+        handoff && serde_json::from_str::<Value>(output).is_ok_and(|o| o["answered"] == true);
+    if staff_answered {
+        return leaves_of(output)
+            .into_iter()
+            .map(Evidence::verified)
+            .collect();
+    }
+    if call.name == FORWARD_TOOL_NAME {
+        return Vec::new();
+    }
+    let echoed = leaves_of(&call.arguments_json);
+    leaves_of(output)
+        .into_iter()
+        .map(|text| Evidence {
+            text,
+            echoed: echoed.clone(),
+        })
+        .collect()
+}
+
+/// The assistant turns of the sub-agent runs `turn_id` dispatched.
+async fn child_turns(
+    state: &RamaState,
+    turn_id: &str,
+) -> Result<Vec<(String, String)>, aiplane_core::server::db::DbError> {
+    Ok(sqlx::query_as(
+        "SELECT t.session_id, t.id FROM chat_turns t
+           JOIN chat_sessions s ON s.id = t.session_id
+          WHERE s.parent_turn_id = ? AND t.role = 'assistant'",
+    )
+    .bind(turn_id)
+    .fetch_all(&state.db)
+    .await?)
+}
+
+/// What the filter may trust for this turn: the conversation's slots not
+/// written by `llm` (the model can copy a visitor's claim into one), and the
+/// outputs of the successful tool calls of the turn and of every sub-agent
+/// run below it, each with the model's arguments to that call as its echo.
+/// The `set_<slot>` calls are left out: they echo model-written values.
+///
+/// The stored arguments are the model's own: a bound argument is filled in
+/// by the gateway afterwards, so a tool's repeat of it is no echo, and its
+/// value came from a verified slot, which is trusted on its own anyway.
 async fn trusted_text(
     state: &RamaState,
     schema: Option<&StateSchema>,
     session_id: &str,
     turn_id: &str,
-) -> Result<Vec<String>, aiplane_core::server::db::DbError> {
+) -> Result<Vec<Evidence>, aiplane_core::server::db::DbError> {
     let mut trusted = Vec::new();
     if let Some(schema) = schema {
         let slots = AgentState::load(&state.db, schema, session_id).await?;
@@ -172,7 +273,9 @@ async fn trusted_text(
             if let Some(entry) = slots.valid(&def.name)
                 && entry.provenance != Provenance::Llm
             {
-                leaves(&entry.value, &mut trusted);
+                let mut values = Vec::new();
+                leaves(&entry.value, &mut values);
+                trusted.extend(values.into_iter().map(Evidence::verified));
             }
         }
     }
@@ -181,20 +284,18 @@ async fn trusted_text(
         .flat_map(StateSchema::slots)
         .map(|d| format!("set_{}", d.name))
         .collect();
-    if let Some(turn) = chat::get_turn_with_tools(&state.db, session_id, turn_id).await? {
-        for call in turn
-            .tool_calls
-            .iter()
-            .filter(|c| !slot_tools.contains(&c.name))
-        {
-            let Some(output) = &call.output_json else {
-                continue;
-            };
-            match serde_json::from_str::<Value>(output) {
-                Ok(v) => leaves(&v, &mut trusted),
-                Err(_) => trusted.push(output.clone()),
+    let mut pending = vec![(session_id.to_string(), turn_id.to_string())];
+    let mut seen = BTreeSet::new();
+    while let Some((session, turn)) = pending.pop() {
+        if !seen.insert(turn.clone()) {
+            continue;
+        }
+        if let Some(found) = chat::get_turn_with_tools(&state.db, &session, &turn).await? {
+            for call in &found.tool_calls {
+                trusted.extend(evidence_of(call, &slot_tools));
             }
         }
+        pending.extend(child_turns(state, &turn).await?);
     }
     Ok(trusted)
 }
@@ -269,8 +370,102 @@ mod tests {
         .unwrap()
     }
 
-    fn trusted(texts: &[&str]) -> Vec<String> {
-        texts.iter().map(|s| s.to_string()).collect()
+    fn trusted(texts: &[&str]) -> Vec<Evidence> {
+        texts
+            .iter()
+            .map(|s| Evidence::verified(s.to_string()))
+            .collect()
+    }
+
+    fn output(text: &str, args: &[&str]) -> Evidence {
+        Evidence {
+            text: text.into(),
+            echoed: args.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn an_identifier_a_tool_was_given_does_not_vouch_for_itself() {
+        let f = filter("withhold");
+        let not_found = [output("no invoice RE-999999 found", &["RE-999999"])];
+        assert_eq!(
+            f.check("RE-999999 is paid.", &not_found, "[x]"),
+            Verdict::Withheld {
+                hits: vec!["invoice".into()]
+            }
+        );
+        let found = [output(
+            "{\"invoice\": \"RE-500000\", \"replaced_by\": \"RE-500001\"}",
+            &["please look up RE-500000"],
+        )];
+        assert_eq!(
+            f.check("Replaced by RE-500001.", &found, "[x]"),
+            Verdict::Pass
+        );
+        assert_eq!(
+            f.check("RE-500000 is replaced.", &found, "[x]"),
+            Verdict::Withheld {
+                hits: vec!["invoice".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn an_echo_in_one_call_leaves_another_source_of_the_same_value_standing() {
+        let v = filter("withhold").check(
+            "K-12345 owes RE-123456.",
+            &[
+                output("customer K-12345: RE-123456", &["K-12345"]),
+                Evidence::verified("K-12345".into()),
+            ],
+            "[x]",
+        );
+        assert_eq!(v, Verdict::Pass);
+    }
+
+    fn tool_call(name: &str, args: Value, output: Value) -> chat::ToolCall {
+        chat::ToolCall {
+            id: "c".into(),
+            turn_id: "t".into(),
+            seq: 0,
+            name: name.into(),
+            arguments_json: args.to_string(),
+            output_json: Some(output.to_string()),
+            status: chat::ToolCallStatus::Completed,
+            created_at: jiff::Timestamp::now(),
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn a_successful_calls_output_is_evidence_echoing_its_arguments() {
+        let call = tool_call("lookup", json!({"id": "RE-1"}), json!({"next": "RE-2"}));
+        assert_eq!(
+            evidence_of(&call, &BTreeSet::new()),
+            [output("RE-2", &["RE-1"])]
+        );
+        let mut errored = call;
+        errored.status = chat::ToolCallStatus::Errored;
+        assert_eq!(evidence_of(&errored, &BTreeSet::new()), []);
+        let slots = BTreeSet::from(["set_issue".to_string()]);
+        let set = tool_call("set_issue", json!({"value": "x"}), json!("x"));
+        assert_eq!(evidence_of(&set, &slots), []);
+    }
+
+    #[test]
+    fn a_forward_request_result_counts_only_when_a_person_answered() {
+        let none = BTreeSet::new();
+        let forwarded = json!({"forwarded": true, "outcome": {"answer": "RE-1"}});
+        let call = tool_call(FORWARD_TOOL_NAME, json!({}), forwarded);
+        assert_eq!(evidence_of(&call, &none), []);
+        let staff = json!({"answered": true, "answer": "RE-1"});
+        for name in [FORWARD_TOOL_NAME, REQUEST_HUMAN] {
+            let call = tool_call(name, json!({"question": "RE-1?"}), staff.clone());
+            assert!(
+                evidence_of(&call, &none).contains(&Evidence::verified("RE-1".into())),
+                "{name}"
+            );
+        }
     }
 
     #[test]

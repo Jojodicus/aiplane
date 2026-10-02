@@ -44,12 +44,14 @@ const UNDOCUMENTED: &[&str] = &[];
 /// tools. `mcp__demo__echo` is a fixture inside the MCP manager's own tests;
 /// `big_result` is one inside the tool runner's result-stubbing tests;
 /// `bound_fixture` one inside the bound-argument tests; `check_code` the
-/// secure-input fixture of the suspend tests, which `main` never registers.
+/// secure-input fixture of the suspend tests, which `main` never registers;
+/// `lookup_invoice` the invoice lookup of the output-filter tests.
 const NOT_REAL_TOOLS: &[&str] = &[
     "mcp__demo__echo",
     "big_result",
     "bound_fixture",
     "check_code",
+    "lookup_invoice",
 ];
 
 /// Tools whose `category_for` is legitimately `Utility` — the catch-all is a

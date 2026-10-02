@@ -470,6 +470,33 @@ async fn support_example() -> Support {
 /// The support example with `publish` merged into its spec and `answer` as
 /// the main agent's closing words.
 async fn support_example_with(publish: Option<Value>, answer: &str) -> Support {
+    support_example_scripted(
+        publish,
+        "Charged twice in March",
+        vec![
+            call(
+                "b1",
+                INVOICES,
+                json!({"customer_id": "K-99999", "year": 2026}),
+            ),
+            finish(
+                "b2",
+                json!({"answer": "Invoice RE-1 was billed twice; a refund is issued."}),
+            ),
+        ],
+        answer,
+    )
+    .await
+}
+
+/// [`support_example_with`] with the issue summary the main agent writes
+/// (the billing sub-agent's task carries it) and the sub-agent's rounds.
+async fn support_example_scripted(
+    publish: Option<Value>,
+    summary: &str,
+    sub_rounds: Vec<Value>,
+    answer: &str,
+) -> Support {
     let spec_of = |billing: &str| {
         let mut spec = support_spec(billing);
         if let Some(publish) = &publish {
@@ -481,11 +508,7 @@ async fn support_example_with(publish: Option<Value>, answer: &str) -> Support {
     let main = llm(vec![
         calls(&[
             ("c1", "set_issue", json!({"value": "billing"})),
-            (
-                "c2",
-                "set_issue_summary",
-                json!({"value": "Charged twice in March"}),
-            ),
+            ("c2", "set_issue_summary", json!({"value": summary})),
         ]),
         call("fwd1", "forward_request", json!({})),
         text("Please confirm it is you with the code we just sent."),
@@ -493,18 +516,7 @@ async fn support_example_with(publish: Option<Value>, answer: &str) -> Support {
         text(answer),
     ])
     .await;
-    let sub = llm(vec![
-        call(
-            "b1",
-            INVOICES,
-            json!({"customer_id": "K-99999", "year": 2026}),
-        ),
-        finish(
-            "b2",
-            json!({"answer": "Invoice RE-1 was billed twice; a refund is issued."}),
-        ),
-    ])
-    .await;
+    let sub = llm(sub_rounds).await;
     let world = World::new(
         &[
             ("support-pool", "support-model", &main),
@@ -1411,5 +1423,6 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
 mod a2a;
 mod hil;
 mod loop_route;
+mod output_filter;
 mod suspend;
 mod verifiers;

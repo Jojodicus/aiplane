@@ -821,11 +821,33 @@ grants.
   publish) and `publish.output_filter.action` (`withhold`, the default, or
   `redact`). No patterns, no filter: the answer is untouched.
 - **Rule.** Every match of every pattern in the answer must also occur, as
-  the same pattern's match, in the turn's *trusted text*: the conversation's
-  slots not written by `llm`, and the outputs of the turn's tool calls
-  (`forward_request` carries the sub-agent's result; the `set_<slot>` calls
-  are left out because they echo model-written values). Anything else, the
-  visitor's own message included, is untraceable.
+  the same pattern's match, in the turn's *trusted text*. Anything else, the
+  visitor's own message included, is untraceable. Trusted text is:
+  - the conversation's slots not written by `llm`;
+  - the outputs of the turn's **successful** tool calls. An errored call
+    contributes nothing: its message is the tool talking about its input
+    ("no invoice RE-99999 found"). The `set_<slot>` calls are left out
+    because they echo model-written values.
+  - *Echo rule.* An identifier in a call's output does not vouch for itself
+    when one of that call's model-supplied argument values contains it: the
+    model chose it, the data did not. Otherwise the model could launder a
+    visitor's claim by passing it to a tool that repeats it. The stored
+    arguments are the model's own; a bound argument is filled in by the
+    gateway afterwards, so a tool repeating a bound value is not an echo (and
+    the value came from a verified slot, which is trusted on its own anyway).
+  - *Sub-agents.* A `forward_request` result is not trusted text: a sub-agent
+    repeats its task (which can carry an `llm` slot) as readily as a model
+    repeats a visitor. Instead the successful tool calls of every sub-agent
+    run below the turn (`chat_sessions.parent_turn_id`, recursively, loop
+    workers and critics included) count by the same rule. A sub-agent's
+    answer can thus name an invoice its own lookup returned, but not one it
+    only read in its task. *Chosen over* trusting the identifiers of the
+    sub-agent's finish result that also occur in those tool outputs: that
+    only narrows trust to what the sub-agent chose to mention, which adds no
+    safety, and walking the tool calls needs no second notion of "the result".
+  - *People.* A staff answer to a handoff (`{answered: true}` from
+    `forward_request`'s human route or `request_human`) is trusted whole:
+    a person read the request and wrote it.
 - **Withhold** replaces the whole answer with the `agent-output-withheld`
   catalog message; **redact** replaces each offending identifier with
   `agent-output-redacted`. The stored turn is overwritten the same way, so a
@@ -847,11 +869,22 @@ grants.
 - **Limits.** The filter matches text, not meaning: an identifier the model
   rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
   tool the agent calls that returns another customer's data makes that data
-  trusted. Grant tools bound to the verified subject (#88) for that.
+  trusted. Grant tools bound to the verified subject (#88) for that. The echo
+  rule is a containment test on whole argument values: a tool that assembles
+  an identifier from fragments of its arguments (`"RE-"` + `"99999"`) is not
+  recognized as echoing. A successful lookup by a number the visitor gave
+  does not confirm that number either, only what the lookup returned beside
+  it. Only this turn's calls count: an identifier a tool returned in an
+  earlier turn must be looked up again. An A2A route's remote answer is never
+  trusted text.
 - **Tests.** `agents/run/tests.rs` runs the support example with a filter:
   another customer's invoice is withheld and audited; identifiers from the
-  verified slot and the sub-agent result pass; redaction; no patterns leaves
-  the answer unchanged. Pure cases are in `output_filter.rs`.
+  verified slot and the sub-agent's lookup pass; redaction; no patterns leaves
+  the answer unchanged. `agents/run/tests/output_filter.rs` covers the echo
+  rule end to end: an errored lookup that names the visitor's number, an echo
+  tool, a lookup that vouches only for what it found, and a billing sub-agent
+  whose looked-up invoice passes while the number it only read in its task is
+  withheld. Pure cases are in `output_filter.rs`.
 
 ### Suspend and resume (#82)
 
@@ -1063,7 +1096,7 @@ runs. Migration `0087_human_in_the_loop.sql`.
   note}`) and the model passes it on in the visitor's language. The visitor
   and the staff member need not share a language, the conversation stays one
   the model continues, and the answer still passes the output filter (#89; a
-  tool result is trusted text, so identifiers staff quote pass). A staff
+  staff answer is trusted text, so identifiers staff quote pass). A staff
   `deny` is a tool error the model explains.
 - **Nobody answers.** When a handoff's deadline passes, `run_claimed` does not
   ask the model: the waiting call is settled as unanswered and the turn ends
