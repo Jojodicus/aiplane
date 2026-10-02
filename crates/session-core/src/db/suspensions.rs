@@ -497,11 +497,20 @@ pub async fn suspended_turn_in_session(
         .map_err(Into::into)
 }
 
+/// The string the SQL prefilter on `expires_at` compares against: the second
+/// after `now`, truncated to whole seconds. RFC 3339 strings with and without
+/// fractional seconds do not sort as the instants they name, but they do sort
+/// by whole second, so every deadline at or before `now` is below this bound;
+/// the exact comparison is done after parsing.
+fn deadline_bound(now: Timestamp) -> String {
+    let next_second = Timestamp::from_second(now.as_second() + 1).unwrap_or(now);
+    next_second.to_string()
+}
+
 /// Every suspension whose deadline has passed at `now`, oldest deadline first.
 ///
-/// Compared after parsing rather than in SQL: RFC 3339 strings with and
-/// without fractional seconds do not sort as the instants they name. The
-/// table only holds turns that are waiting, so reading it whole is cheap.
+/// Only person-owned conversations: the chat path resumes as the owner, and a
+/// principal-owned run has no person to resume as.
 ///
 /// Only person-owned conversations: the chat path resumes as the owner, and a
 /// principal-owned run has no person to resume as.
@@ -514,8 +523,9 @@ pub async fn expired_suspensions(
            FROM chat_turn_suspensions s
            JOIN chat_turns t ON t.id = s.turn_id
            JOIN chat_sessions cs ON cs.id = t.session_id
-           WHERE cs.user_id IS NOT NULL"#,
+           WHERE cs.user_id IS NOT NULL AND s.expires_at < ?"#,
     )
+    .bind(deadline_bound(now))
     .fetch_all(pool)
     .await?;
     let mut expired = Vec::new();
@@ -551,8 +561,10 @@ pub async fn expired_run_suspensions(
            FROM chat_turn_suspensions s
            JOIN chat_turns t ON t.id = s.turn_id
            JOIN chat_sessions cs ON cs.id = t.session_id
-           WHERE cs.principal_id IS NOT NULL AND cs.parent_turn_id IS NULL"#,
+           WHERE cs.principal_id IS NOT NULL AND cs.parent_turn_id IS NULL
+             AND s.expires_at < ?"#,
     )
+    .bind(deadline_bound(now))
     .fetch_all(pool)
     .await?;
     let mut expired = Vec::new();
@@ -977,6 +989,33 @@ mod tests {
         assert_eq!(ids, ["early", "late"]);
         assert_eq!(expired[1].user_id, "u1");
         assert_eq!(expired[1].on_timeout, TimeoutFallback::AllowOnce);
+    }
+
+    #[tokio::test]
+    async fn a_deadline_within_the_current_second_counts_however_it_is_written() {
+        let pool = pool().await;
+        for id in ["whole", "fraction", "later"] {
+            running_turn(&pool, id).await;
+        }
+        let now = Timestamp::from_millisecond(1_800_000_000_500).unwrap();
+        let at = |ms| Timestamp::from_millisecond(ms).unwrap();
+        suspend_turn(&pool, &suspension("whole", at(1_800_000_000_000)))
+            .await
+            .unwrap();
+        suspend_turn(&pool, &suspension("fraction", at(1_800_000_000_250)))
+            .await
+            .unwrap();
+        suspend_turn(&pool, &suspension("later", at(1_800_000_000_900)))
+            .await
+            .unwrap();
+
+        let ids: Vec<_> = expired_suspensions(&pool, now)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.turn_id)
+            .collect();
+        assert_eq!(ids, ["whole", "fraction"]);
     }
 
     /// A run owned by a system principal has no person to resume as; it is

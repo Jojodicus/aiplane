@@ -56,7 +56,7 @@ impl Action {
 ///
 /// A tool's output can repeat its arguments ("no invoice RE-99999 found"),
 /// and the model chose those. An identifier found in `text` vouches for
-/// itself only if no entry of `echoed` contains it.
+/// itself only if [`Evidence::echoes`] says the arguments did not supply it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Evidence {
     pub text: String,
@@ -73,9 +73,42 @@ impl Evidence {
         }
     }
 
+    /// Whether the model's arguments could have supplied `identifier`, with
+    /// the formatting a tool adds or drops ignored: both sides are compared
+    /// as their lowercase letters and digits only, so `999999`, `"re 999
+    /// 999"` and `"RE-"` + `"999999"` all supply `RE-999999`.
+    ///
+    /// An identifier with digit runs of at least [`DISTINCT_DIGITS`] digits
+    /// is supplied when every such run occurs in some argument: the runs are
+    /// the part of it that tells one customer from another, a prefix is the
+    /// pattern's. One without is supplied when its whole alphanumeric core
+    /// occurs in one argument. Shorter runs are left out because they occur
+    /// in almost any argument (`2026`, a page number) by chance.
     fn echoes(&self, identifier: &str) -> bool {
-        self.echoed.iter().any(|arg| arg.contains(identifier))
+        let args: Vec<String> = self.echoed.iter().map(|a| alphanumeric(a)).collect();
+        let supplied = |part: &str| args.iter().any(|arg| arg.contains(part));
+        let runs: Vec<&str> = identifier
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|run| run.len() >= DISTINCT_DIGITS)
+            .collect();
+        if runs.is_empty() {
+            let core = alphanumeric(identifier);
+            !core.is_empty() && supplied(&core)
+        } else {
+            runs.into_iter().all(supplied)
+        }
     }
+}
+
+/// The shortest digit run that counts as an identifier's own (see
+/// [`Evidence::echoes`]).
+const DISTINCT_DIGITS: usize = 4;
+
+fn alphanumeric(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -421,6 +454,77 @@ mod tests {
             "[x]",
         );
         assert_eq!(v, Verdict::Pass);
+    }
+
+    #[test]
+    fn an_echo_is_recognised_through_reformatting() {
+        let f = filter("withhold");
+        for args in [
+            &["999999"][..],
+            &["re 999 999"],
+            &["Invoice 999-999"],
+            &["RE-", "999999"],
+        ] {
+            assert_eq!(
+                f.check(
+                    "RE-999999 is paid.",
+                    &[output("RE-999999: paid", args)],
+                    "[x]"
+                ),
+                Verdict::Withheld {
+                    hits: vec!["invoice".into()]
+                },
+                "{args:?}"
+            );
+        }
+        let year_scoped = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+            "patterns": { "invoice": "RE-\\d{4}-\\d{4}" }
+        }}}))
+        .unwrap()
+        .unwrap();
+        let found = [output("RE-2026-0042", &["2026"])];
+        assert_eq!(
+            year_scoped.check("RE-2026-0042", &found, "[x]"),
+            Verdict::Pass
+        );
+        let echoed = [output("RE-2026-0042", &["2026", "42"])];
+        assert_eq!(
+            year_scoped.check("RE-2026-0042", &echoed, "[x]"),
+            Verdict::Pass,
+            "a short run of the arguments is no echo of a longer one"
+        );
+        let both = [output("RE-2026-0042", &["2026", "0042"])];
+        assert!(matches!(
+            year_scoped.check("RE-2026-0042", &both, "[x]"),
+            Verdict::Withheld { .. }
+        ));
+    }
+
+    #[test]
+    fn a_lookup_by_another_identifier_vouches_for_what_it_returned() {
+        let v = filter("withhold").check(
+            "RE-123456 is open.",
+            &[output("{\"invoices\": [\"RE-123456\"]}", &["K-12345"])],
+            "[x]",
+        );
+        assert_eq!(v, Verdict::Pass);
+    }
+
+    #[test]
+    fn an_identifier_without_a_long_digit_run_is_echoed_by_its_alphanumeric_core() {
+        let f = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+            "patterns": { "ticket": "T-[A-Z]{3}" }
+        }}}))
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            f.check("T-ABC", &[output("ticket T-ABC", &["t abc"])], "[x]"),
+            Verdict::Withheld { .. }
+        ));
+        assert_eq!(
+            f.check("T-ABC", &[output("ticket T-ABC", &["T-XYZ"])], "[x]"),
+            Verdict::Pass
+        );
     }
 
     fn tool_call(name: &str, args: Value, output: Value) -> chat::ToolCall {

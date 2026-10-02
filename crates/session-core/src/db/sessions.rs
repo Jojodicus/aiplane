@@ -2,6 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 use super::*;
+use crate::i18n::Lang;
 
 /// Who a conversation belongs to: a person, or a system principal running it
 /// (an agent run). Exactly one, enforced by a CHECK on `chat_sessions`.
@@ -35,6 +36,8 @@ pub struct RunSession {
     pub agent_version: Option<i64>,
     /// The visitor session the conversation serves, on a public agent's.
     pub visitor_id: Option<String>,
+    /// The language its latest turn was asked in ([`set_run_lang`]).
+    pub lang: Option<Lang>,
     pub title: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -57,6 +60,7 @@ where
         parent_turn_id: new.parent_turn_id.map(str::to_string),
         agent_version: new.agent_version,
         visitor_id: None,
+        lang: None,
         title: new.title.map(str::to_string),
         created_at: now,
         updated_at: now,
@@ -111,8 +115,8 @@ pub async fn run_session_of_turn(
     row.as_ref().map(map_run_session).transpose()
 }
 
-const RUN_SESSION_COLUMNS: &str =
-    "id, principal_id, parent_turn_id, agent_version, visitor_id, title, created_at, updated_at";
+const RUN_SESSION_COLUMNS: &str = "id, principal_id, parent_turn_id, agent_version, visitor_id, \
+                                   lang, title, created_at, updated_at";
 
 fn map_run_session(r: &SqliteRow) -> Result<RunSession, DbError> {
     Ok(RunSession {
@@ -121,10 +125,25 @@ fn map_run_session(r: &SqliteRow) -> Result<RunSession, DbError> {
         parent_turn_id: r.try_get("parent_turn_id")?,
         agent_version: r.try_get("agent_version")?,
         visitor_id: r.try_get("visitor_id")?,
+        lang: r
+            .try_get::<Option<String>, _>("lang")?
+            .as_deref()
+            .and_then(Lang::from_code),
         title: r.try_get("title")?,
         created_at: parse_ts(r.try_get("created_at")?, "created_at")?,
         updated_at: parse_ts(r.try_get("updated_at")?, "updated_at")?,
     })
+}
+
+/// Record the language a turn of the principal-owned conversation
+/// `session_id` was asked in, so a later resume of it speaks the same one.
+pub async fn set_run_lang(pool: &Pool, session_id: &str, lang: Lang) -> Result<(), DbError> {
+    sqlx::query("UPDATE chat_sessions SET lang = ? WHERE id = ? AND principal_id IS NOT NULL")
+        .bind(lang.code())
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Who owns `session_id`; `None` when it does not exist.
@@ -470,6 +489,25 @@ mod tests {
                 .is_none(),
             "another principal cannot open the run"
         );
+    }
+
+    #[tokio::test]
+    async fn a_run_session_keeps_the_language_it_was_last_asked_in() {
+        let pool = pool().await;
+        let run = create_principal_session(&pool, &run_session(None))
+            .await
+            .unwrap();
+        assert_eq!(run.lang, None);
+        set_run_lang(&pool, &run.id, Lang::De).await.unwrap();
+        let turn = completed_turn(&pool, &run.id, "Hallo").await;
+        let read = run_session_of_turn(&pool, &turn).await.unwrap().unwrap();
+        assert_eq!(read.lang, Some(Lang::De));
+        set_run_lang(&pool, &run.id, Lang::Fr).await.unwrap();
+        let read = get_principal_session(&pool, "p1", &run.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.lang, Some(Lang::Fr));
     }
 
     #[tokio::test]

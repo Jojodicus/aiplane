@@ -805,7 +805,7 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let v = or_return!(visitor(&state, &req).await);
     let session_id = v.session.session_id;
     let lang = Lang::from_request(req.headers());
-    let releases = state.agent_turns.releases();
+    let releases = state.agent_turns.releases(&session_id);
     let turns = or_return!(visitor_turns(&state, &session_id, lang).await);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
@@ -855,7 +855,7 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
 
 /// Until a turn claim is released, or `fallback` has passed.
 pub(crate) async fn await_release(
-    releases: &mut tokio::sync::watch::Receiver<u64>,
+    releases: &mut aiplane_runtime::agents::embed::ReleaseWatch,
     fallback: Duration,
 ) {
     if let Ok(Err(_)) = tokio::time::timeout(fallback, releases.changed()).await {
@@ -868,7 +868,7 @@ async fn tail_buffered(
     session_id: String,
     turn_id: String,
     lang: Lang,
-    mut releases: tokio::sync::watch::Receiver<u64>,
+    mut releases: aiplane_runtime::agents::embed::ReleaseWatch,
     tx: SseTx,
 ) {
     let started = tokio::time::Instant::now();

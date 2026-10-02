@@ -331,12 +331,12 @@ pub fn prepare_closing_round(body: &mut Value) {
 fn unrun_tool_results(calls: &[ToolCallRef]) -> Vec<ToolResultRecord> {
     calls
         .iter()
-        .map(|call| ToolResultRecord {
-            call_id: call.id.clone(),
-            body: error_to_tool_message(
+        .map(|call| {
+            ToolResultRecord::failure(
+                call.id.clone(),
                 "not run: the tool budget for this request is spent. Answer now from the results \
                  you already have.",
-            ),
+            )
         })
         .collect()
 }
@@ -938,13 +938,10 @@ async fn execute_tool_call(
     let call = call.clone();
     let ctx = ctx.clone();
     let Some(tool) = tools.get(&call.name) else {
-        return ToolResultRecord {
-            call_id: call.id,
-            body: error_to_tool_message(&format!(
-                "tool `{name}` is no longer registered",
-                name = call.name
-            )),
-        };
+        return ToolResultRecord::failure(
+            call.id,
+            &format!("tool `{name}` is no longer registered", name = call.name),
+        );
     };
     let args: Value = tool_arguments_object(&call.arguments_raw);
     // Trace each tool call with timing + the args we sent. Lets
@@ -979,6 +976,7 @@ async fn execute_tool_call(
     )
     .await;
     let elapsed_ms = started.elapsed().as_millis();
+    let failed = !matches!(outcome, Ok(Ok(_)));
     let body = match outcome {
         Ok(Ok(value)) => {
             tracing::info!(
@@ -1020,6 +1018,7 @@ async fn execute_tool_call(
     ToolResultRecord {
         call_id: call.id,
         body,
+        failed,
     }
 }
 
@@ -1111,10 +1110,7 @@ pub async fn execute_tool_calls_guarded(
         .zip(&verdicts)
         .map(|(call, verdict)| match verdict {
             CallVerdict::Run => executed.next().expect("one result per runnable call"),
-            _ => ToolResultRecord {
-                call_id: call.id.clone(),
-                body: error_to_tool_message(REFUSAL_MESSAGE),
-            },
+            _ => ToolResultRecord::failure(call.id.clone(), REFUSAL_MESSAGE),
         })
         .collect())
 }
@@ -1161,6 +1157,28 @@ fn error_to_tool_message(message: &str) -> Value {
 pub struct ToolResultRecord {
     pub call_id: String,
     pub body: Value,
+    /// The tool did not produce a result: it failed, rejected its arguments,
+    /// timed out, or never ran. `body` is then the error the model reads.
+    pub failed: bool,
+}
+
+impl ToolResultRecord {
+    /// The status the call's row records.
+    pub fn status(&self) -> session_core::db::ToolCallStatus {
+        if self.failed {
+            session_core::db::ToolCallStatus::Errored
+        } else {
+            session_core::db::ToolCallStatus::Completed
+        }
+    }
+
+    fn failure(call_id: String, message: &str) -> Self {
+        Self {
+            call_id,
+            body: error_to_tool_message(message),
+            failed: true,
+        }
+    }
 }
 
 fn append_round_to_messages(
@@ -1612,6 +1630,25 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].call_id, "c1");
         assert_eq!(results[0].body["message"], "yo");
+    }
+
+    #[tokio::test]
+    async fn a_result_says_whether_the_tool_produced_it() {
+        let call = |id: &str, name: &str, args: &str| ToolCallRef {
+            id: id.into(),
+            name: name.into(),
+            arguments_raw: args.into(),
+        };
+        let calls = [
+            call("ok", "company_echo", "{\"message\":\"yo\"}"),
+            call("bad", "company_echo", "{\"message\":4}"),
+            call("gone", "no_such_tool", "{}"),
+        ];
+        let results =
+            execute_tool_calls(&registry(), &ctx().await, &calls, &InjectionScan::default()).await;
+        let failed: Vec<bool> = results.iter().map(|r| r.failed).collect();
+        assert_eq!(failed, [false, true, true]);
+        assert!(unrun_tool_results(&calls).iter().all(|r| r.failed));
     }
 
     /// Logs its start and end under `name` around a few yields, so

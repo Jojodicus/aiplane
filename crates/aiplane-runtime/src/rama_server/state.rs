@@ -79,6 +79,7 @@ pub struct RamaState {
     /// No runner until one is installed with [`Self::with_agent_runner`]; the
     /// endpoint then refuses messages instead of accepting turns nothing runs.
     pub agent_turns: crate::agents::embed::AgentTurns,
+    pub refusals: crate::agents::embed::RefusalAudit,
     /// Proxies whose forwarded headers are believed; empty until
     /// [`Self::with_trusted_proxies`]. Read through [`Self::client_ip`].
     trusted_proxies: aiplane_core::server::trusted_proxies::TrustedProxies,
@@ -106,6 +107,7 @@ impl RamaState {
             enforcer,
             topology_dirty: Arc::new(AtomicU32::new(0)),
             agent_turns: Default::default(),
+            refusals: Default::default(),
             trusted_proxies: Default::default(),
             upstream_wait_override: None,
         }

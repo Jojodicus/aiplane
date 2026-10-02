@@ -391,6 +391,7 @@ pub(crate) mod tests {
                 parent_turn_id TEXT,
                 agent_version  INTEGER,
                 visitor_id     TEXT,
+                lang           TEXT,
                 title          TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL,

@@ -2064,7 +2064,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 &ctx.assistant_turn_id,
                 &call.id,
                 &output_str,
-                ToolCallStatus::Completed,
+                result.status(),
             )
             .await
             .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;

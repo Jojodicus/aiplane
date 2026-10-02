@@ -121,10 +121,14 @@ pub(crate) async fn guard_principal(
     if principal.created_by == user.id || state.rbac.is_admin(&group_ids(state, user)) {
         return Ok(());
     }
-    Err(not_found(format!(
-        "there is no system principal `{}` you manage — only its creator or an admin can see          or change it",
-        principal.id
-    )))
+    Err(not_found(not_managed_message(&principal.id)))
+}
+
+fn not_managed_message(principal_id: &str) -> String {
+    format!(
+        "there is no system principal `{principal_id}` you manage — only its creator or an admin \
+         can see or change it"
+    )
 }
 
 pub(super) fn parse_spec(text: &str) -> Value {
@@ -816,6 +820,14 @@ pub async fn embed_key_revoke(State(state): State<Arc<RamaState>>, req: Request)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_not_managed_message_is_one_line() {
+        assert_eq!(
+            not_managed_message("p1"),
+            "there is no system principal `p1` you manage — only its creator or an admin can see or change it"
+        );
+    }
 
     #[test]
     fn origins_are_exact_deduplicated_and_never_empty() {
