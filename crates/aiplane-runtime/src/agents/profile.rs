@@ -27,7 +27,7 @@ use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
-use super::bind::{BoundTool, ToolBinds, without_bound};
+use super::bind::{BoundTool, ToolBinds, WithheldTool, without_bound};
 use super::gate::{GateInput, GateStatus, RouteGates};
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
@@ -119,15 +119,6 @@ pub struct RunProfile {
     pub run: Arc<AgentRun>,
 }
 
-/// The default `finish` schema of a sub-agent whose spec declares none.
-fn default_finish_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["answer"],
-        "properties": { "answer": { "type": "string" } },
-    })
-}
-
 impl RunProfile {
     /// Load agent `agent_id`'s live version and its principal's grants.
     pub async fn load(
@@ -192,14 +183,12 @@ impl RunProfile {
             })?;
         let finish = match &role {
             Role::Main => None,
-            Role::SubAgent { .. } => Some(
-                FinishContract::new(
-                    spec.pointer("/finish/schema")
-                        .cloned()
-                        .unwrap_or_else(default_finish_schema),
-                )
-                .map_err(|e| bad(e.to_string()))?,
-            ),
+            Role::SubAgent { .. } => {
+                let schema = spec.pointer("/finish/schema").cloned().ok_or_else(|| {
+                    bad("it declares no `finish.schema`, which a routed sub-agent needs".into())
+                })?;
+                Some(FinishContract::new(schema).map_err(|e| bad(e.to_string()))?)
+            }
         };
 
         let mut synthetic: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
@@ -456,11 +445,10 @@ impl<'a> RunToolSource<'a> {
     }
 
     fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
-        let binds = run.binds.for_tool(tool.id(), &tool.schema());
-        if binds.is_empty() {
-            tool
-        } else {
-            Arc::new(BoundTool::new(tool, binds, run.schema.clone()))
+        match run.binds.for_tool(tool.id(), &tool.schema()) {
+            Ok(binds) if binds.is_empty() => tool,
+            Ok(binds) => Arc::new(BoundTool::new(tool, binds, run.schema.clone())),
+            Err(unbound) => Arc::new(WithheldTool::new(tool, unbound)),
         }
     }
 }
@@ -489,9 +477,9 @@ impl ToolSource for RunToolSource<'_> {
                     .defs_for(std::slice::from_ref(id))
                     .into_iter()
                     .next()
-                    .map(|def| {
-                        let binds = run.binds.for_tool(id, &def);
-                        without_bound(def, &binds)
+                    .and_then(|def| {
+                        let binds = run.binds.for_tool(id, &def).ok()?;
+                        Some(without_bound(def, &binds))
                     }),
             })
             .collect()
@@ -507,5 +495,51 @@ impl ToolSource for RunToolSource<'_> {
 
     fn contains(&self, id: &str) -> bool {
         self.run.is_some_and(|r| r.synthetic.contains_key(id)) || self.inner.contains(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::tools::echo::Echo;
+    use crate::server::tools::{ToolContext, ToolRegistry};
+
+    /// A run whose `lookup` tool binds `message` from the route: `message`
+    /// is then a subject parameter, and `company_echo` declares it unbound.
+    fn run() -> AgentRun {
+        let spec = json!({ "main": { "tool_resources": {
+            "lookup": { "bind": { "message": "route.customer" } }
+        } } });
+        AgentRun {
+            name: "billing".into(),
+            instructions: String::new(),
+            conversation: None,
+            tools: vec!["company_echo".into()],
+            synthetic: BTreeMap::new(),
+            binds: ToolBinds::from_spec(&spec)
+                .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
+            schema: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_leaving_a_subject_parameter_unbound_is_neither_offered_nor_run() {
+        let registry = ToolRegistry::new().with(Echo);
+        let run = run();
+        let source = run.source(&registry);
+        assert!(source.defs_for(&["company_echo".into()]).is_empty());
+
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let err = source
+            .get("company_echo")
+            .expect("still resolvable, so the call is answered")
+            .run(ToolContext::for_test(db), json!({"message": "K-99999"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`message`"), "{err}");
+        assert!(err.contains("not available"), "{err}");
     }
 }

@@ -162,12 +162,27 @@ fn bound_slots(bind: &Value) -> Vec<String> {
         .into_iter()
         .flat_map(|m| m.values())
         .filter_map(Value::as_str)
+        .filter_map(|src| src.strip_prefix("state."))
         .filter_map(|path| path.split('.').next())
         .map(str::to_string)
         .collect();
     slots.sort();
     slots.dedup();
     slots
+}
+
+/// Every `route.<name>` a spec's tools bind.
+fn route_values_taken(spec: &Value) -> BTreeSet<String> {
+    spec.pointer("/main/tool_resources")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|tools| tools.values())
+        .filter_map(|r| r.get("bind").and_then(Value::as_object))
+        .flat_map(|bind| bind.values())
+        .filter_map(Value::as_str)
+        .filter_map(|src| src.strip_prefix("route."))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The agent ids a spec's routes dispatch to.
@@ -682,13 +697,15 @@ impl<'a> Check<'a> {
                 self.one_of(perm, &join(&p, "permission"), PERMISSIONS);
             }
             if let Some(bind) = r.get("bind") {
-                self.bind(bind, &join(&p, "bind"));
+                self.bind(bind, &join(&p, "bind"), true);
             }
         }
     }
 
-    /// `{arg: source}` where source is a non-`llm` slot path or `{"const": v}`.
-    fn bind(&mut self, v: &Value, path: &str) {
+    /// `{param: source}`. A source is `"state.<slot>[.<field>]"` (a slot the
+    /// model cannot write), `{"const": v}`, or — in `tool_resources` only —
+    /// `"route.<name>"`, a value the dispatching route passes.
+    fn bind(&mut self, v: &Value, path: &str, allow_route: bool) {
         let Value::Object(map) = v else {
             self.issue(
                 path,
@@ -701,16 +718,26 @@ impl<'a> Check<'a> {
         };
         for (arg, source) in map {
             let p = join(path, arg);
+            let forms = if allow_route {
+                "`state.<slot>` (`\"state.verified.customer_id\"`), `route.<name>` (a value \
+                 the dispatching route passes) or a fixed value (`{\"const\": …}`)"
+            } else {
+                "`state.<slot>` (`\"state.verified.customer_id\"`) or a fixed value \
+                 (`{\"const\": …}`) — a route passes values from its caller's state"
+            };
             match source {
-                Value::String(slot_path) => self.bind_slot(&p, slot_path),
+                Value::String(src) if src.starts_with("state.") => {
+                    self.bind_slot(&p, &src["state.".len()..])
+                }
+                Value::String(src)
+                    if allow_route && src.strip_prefix("route.").is_some_and(is_ident) => {}
                 Value::Object(lit) if lit.len() == 1 && lit.contains_key("const") => {}
+                Value::String(src) => {
+                    self.issue(&p, format!("`{src}` is not a bind source — write {forms}"))
+                }
                 other => self.issue(
                     &p,
-                    format!(
-                        "a bind source is a state slot (`\"verified\"`, `\"verified.customer_id\"`) \
-                         or a fixed value (`{{\"const\": …}}`), not {}",
-                        type_name(other)
-                    ),
+                    format!("a bind source is {forms}, not {}", type_name(other)),
                 ),
             }
         }
@@ -1002,7 +1029,10 @@ impl<'a> Check<'a> {
                     ),
                 }
                 if let Some(bind) = map.get("bind") {
-                    self.bind(bind, &join(path, "bind"));
+                    self.bind(bind, &join(path, "bind"), false);
+                }
+                if let Some(id) = agent.as_str() {
+                    self.route_contract(id, map.get("bind"), path);
                 }
             }
             (None, Some(human)) => {
@@ -1031,6 +1061,54 @@ impl<'a> Check<'a> {
                 path,
                 "a route needs a target — `agent` (a sub-agent's id) or `human`",
             ),
+        }
+    }
+
+    /// What a route and the live sub-agent it dispatches must agree on: the
+    /// route passes exactly the `route.<name>` values the sub-agent's tools
+    /// bind, and, to be published, the sub-agent says what it returns.
+    fn route_contract(&mut self, id: &str, bind: Option<&Value>, path: &str) {
+        let Some(sub) = self.ctx.live_specs.get(id) else {
+            return;
+        };
+        let passed: BTreeSet<&str> = bind
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|m| m.keys().map(String::as_str))
+            .collect();
+        let taken = route_values_taken(sub);
+        let lacking: Vec<String> = taken
+            .iter()
+            .filter(|n| !passed.contains(n.as_str()))
+            .map(|n| format!("`route.{n}`"))
+            .collect();
+        if !lacking.is_empty() {
+            self.issue(
+                &join(path, "bind"),
+                format!(
+                    "sub-agent `{id}` binds {}, which this route does not pass — add each name \
+                     to this route's `bind` with a `state.<slot>` source",
+                    lacking.join(", ")
+                ),
+            );
+        }
+        for name in passed.iter().filter(|n| !taken.contains(**n)) {
+            self.issue(
+                &join(&join(path, "bind"), name),
+                format!(
+                    "sub-agent `{id}` never binds `route.{name}`, so this value would reach no \
+                     tool — bind it in the sub-agent's `tool_resources` or remove it here"
+                ),
+            );
+        }
+        if self.stage == Stage::Publish && sub.pointer("/finish/schema").is_none() {
+            self.issue(
+                &join(path, "agent"),
+                format!(
+                    "sub-agent `{id}` declares no `finish` schema, and a routed sub-agent must \
+                     say what it returns — add `finish.schema` to it and publish it again"
+                ),
+            );
         }
     }
 
@@ -1367,7 +1445,7 @@ mod tests {
                 "tool_resources": {
                     "rag_search": { "bind": { "collection": { "const": "produktdoku" } } },
                     "mcp__erp__lookup": {
-                        "bind": { "customer_id": "verified.customer_id" },
+                        "bind": { "customer_id": "state.verified.customer_id" },
                         "permission": "always_ask"
                     }
                 },
@@ -1394,7 +1472,7 @@ mod tests {
                     ] },
                     "agent": BILLING,
                     "task": "Invoice question from {verified.customer_id}: {issue_summary}",
-                    "bind": { "customer_id": "verified.customer_id" }
+                    "bind": { "customer_id": "state.verified.customer_id" }
                 },
                 "human": {
                     "when": { "not": { "slot": "issue", "set": false } },
@@ -1518,7 +1596,10 @@ mod tests {
             })
         };
         assert_eq!(
-            check(spec(json!({ "a": "verified.customer_id" })), Stage::Draft),
+            check(
+                spec(json!({ "a": "state.verified.customer_id" })),
+                Stage::Draft
+            ),
             []
         );
         assert_eq!(
@@ -1526,11 +1607,25 @@ mod tests {
             []
         );
 
-        let unknown = check(spec(json!({ "a": "customer" })), Stage::Draft);
+        assert_eq!(
+            check(spec(json!({ "a": "route.customer_id" })), Stage::Draft),
+            [],
+            "a tool may take a value its dispatching route passes"
+        );
+
+        let bare = check(spec(json!({ "a": "verified.customer_id" })), Stage::Draft);
+        assert_eq!(paths(&bare), ["main.tool_resources.rag_search.bind.a"]);
+        assert!(
+            bare[0].message.contains("`state.<slot>`"),
+            "{}",
+            bare[0].message
+        );
+
+        let unknown = check(spec(json!({ "a": "state.customer" })), Stage::Draft);
         assert_eq!(paths(&unknown), ["main.tool_resources.rag_search.bind.a"]);
         assert!(unknown[0].message.contains("not a slot in `state`"));
 
-        let llm = check(spec(json!({ "a": "name" })), Stage::Draft);
+        let llm = check(spec(json!({ "a": "state.name" })), Stage::Draft);
         assert!(
             llm[0].message.contains("the model can set"),
             "{}",
@@ -1692,7 +1787,7 @@ mod tests {
 
     #[test]
     fn a_route_that_binds_from_state_must_require_a_trusted_provenance() {
-        let bind = Some(json!({ "customer_id": "verified.customer_id" }));
+        let bind = Some(json!({ "customer_id": "state.verified.customer_id" }));
         let trusted = json!({ "slot": "verified", "provenance": "verifier:otp" });
         let llm_only = json!({ "slot": "issue", "eq": "billing" });
 
@@ -1724,10 +1819,97 @@ mod tests {
     }
 
     #[test]
+    fn a_route_passes_values_from_its_callers_state_never_from_another_route() {
+        let issues = check(
+            gated(
+                json!({ "slot": "verified", "provenance": "verifier:otp" }),
+                Some(json!({ "customer_id": "route.customer_id" })),
+            ),
+            Stage::Draft,
+        );
+        assert_eq!(paths(&issues), ["routes.r.bind.customer_id"]);
+        assert!(
+            issues[0].message.contains("`state.<slot>`"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    fn invoices_agent(bind: Value) -> Value {
+        json!({ "main": {
+            "tools": ["mcp__erp__invoices", "mcp__erp__tickets"],
+            "tool_resources": { "mcp__erp__invoices": { "bind": bind } }
+        }, "finish": { "schema": { "type": "object" } } })
+    }
+
+    fn subject_route(bind: Value) -> Value {
+        let mut spec = gated(
+            json!({ "slot": "verified", "provenance": "verifier:otp" }),
+            Some(bind),
+        );
+        spec["routes"]["r"]["agent"] = json!(BILLING);
+        spec
+    }
+
+    #[test]
+    fn a_route_provides_exactly_the_values_its_sub_agent_binds() {
+        let billing = invoices_agent(json!({ "customer_id": "route.customer_id" }));
+        assert_eq!(
+            check_live(
+                subject_route(json!({ "customer_id": "state.verified.customer_id" })),
+                &[(BILLING, billing.clone())]
+            ),
+            []
+        );
+
+        let missing = check_live(subject_route(json!({})), &[(BILLING, billing.clone())]);
+        assert_eq!(paths(&missing), ["routes.r.bind"]);
+        assert!(
+            missing[0].message.contains("`route.customer_id`"),
+            "{}",
+            missing[0].message
+        );
+
+        let unused = check_live(
+            subject_route(json!({
+                "customer_id": "state.verified.customer_id",
+                "tier": "state.verified.tier"
+            })),
+            &[(BILLING, billing)],
+        );
+        assert_eq!(paths(&unused), ["routes.r.bind.tier"]);
+        assert!(
+            unused[0].message.contains("never binds"),
+            "{}",
+            unused[0].message
+        );
+    }
+
+    #[test]
+    fn a_routed_sub_agent_must_declare_its_finish_schema_to_be_published() {
+        let mut no_finish = invoices_agent(json!({ "customer_id": "route.customer_id" }));
+        no_finish.as_object_mut().unwrap().remove("finish");
+        let route = subject_route(json!({ "customer_id": "state.verified.customer_id" }));
+        assert_eq!(
+            check_live(route.clone(), &[(BILLING, no_finish.clone())]),
+            []
+        );
+        let issues = check_live_at(route, &[(BILLING, no_finish)], Stage::Publish);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path == "routes.r.agent" && i.message.contains("`finish`")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
     fn every_slot_a_route_binds_from_must_itself_be_gated_on_a_trusted_provenance() {
         let mut spec = gated(
             json!({ "slot": "verified", "provenance": "verifier:otp" }),
-            Some(json!({ "customer_id": "verified.customer_id", "account": "account" })),
+            Some(
+                json!({ "customer_id": "state.verified.customer_id", "account": "state.account" }),
+            ),
         );
         spec["state"]["account"] = json!({ "type": "subject", "set_by": ["host"] });
         let issues = check(spec.clone(), Stage::Draft);
@@ -1746,6 +1928,10 @@ mod tests {
     }
 
     fn check_live(spec: Value, live: &[(&str, Value)]) -> Vec<SpecIssue> {
+        check_live_at(spec, live, Stage::Draft)
+    }
+
+    fn check_live_at(spec: Value, live: &[(&str, Value)], stage: Stage) -> Vec<SpecIssue> {
         let grants = grants();
         let mut agents = agents();
         for (id, _) in live {
@@ -1763,7 +1949,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &live_specs,
             },
-            Stage::Draft,
+            stage,
         )
     }
 
