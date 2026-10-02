@@ -127,6 +127,12 @@ ALTER TABLE gateway_groups ADD COLUMN can_manage_agents INTEGER NOT NULL DEFAULT
   resource: `allowed_tools`, `resource_allowed` for pools, collections and
   connectors, `allowed_skills`. A refused grant returns an actionable error
   naming the resource. Grants are never re-derived later.
+- **Who manages a principal.** An agent's principal: whoever holds a share on
+  the agent (§2). Any other principal: its creator (`created_by`) and admins,
+  nobody else — another manager gets 404. Issuing a token takes the cap for
+  every grant at once: a non-admin must hold all of them right now
+  (`403 token_exceeds_manager`), because the token hands them all out. See
+  [`auth.md`](auth.md#management-api).
 - **Every grant change is audited** in `agent_audit` (§3). The table landed with
   #77 (migration `0077`), with one column more than §3 lists: `actor_id`, the
   user who made a management change, so "who" is queryable rather than buried in

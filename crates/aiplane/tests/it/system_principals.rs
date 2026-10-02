@@ -50,6 +50,8 @@ struct Fixture {
     personal_mcp_hits: Arc<AtomicUsize>,
     admin: String,
     manager: String,
+    /// A second manager with the same rights as `manager`.
+    other_manager: String,
     plain: String,
 }
 
@@ -120,12 +122,13 @@ impl Fixture {
         )
     }
 
-    /// A principal that may call the chat pool and nothing else.
+    /// A principal `manager` created that may call the chat pool and
+    /// nothing else.
     async fn principal_with_pool(&self, name: &str) -> (String, String) {
-        let id = self.create(&self.admin, name).await;
-        let (status, body) = self.grant(&self.admin, &id, "pool", "pool").await;
+        let id = self.create(&self.manager, name).await;
+        let (status, body) = self.grant(&self.manager, &id, "pool", "pool").await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
-        let (bearer, _) = self.token(&self.admin, &id).await;
+        let (bearer, _) = self.token(&self.manager, &id).await;
         (id, bearer)
     }
 
@@ -406,6 +409,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
 
     let admin = person(&state, "admin", &["admins"]).await;
     let manager = person(&state, "manager", &["managers"]).await;
+    let other_manager = person(&state, "other-manager", &["managers"]).await;
     let plain = person(&state, "plain", &[]).await;
     for (user, secret) in [("alice", "alice-secret"), ("bob", "bob-secret")] {
         person(&state, user, &[]).await;
@@ -438,6 +442,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
         personal_mcp_hits,
         admin,
         manager,
+        other_manager,
         plain,
     }
 }
@@ -688,7 +693,7 @@ async fn grants_survive_the_granting_manager_losing_rights_and_leaving() {
 #[tokio::test]
 async fn every_grant_change_is_audited_with_who_what_and_when() {
     let fx = fixture().await;
-    let id = fx.create(&fx.admin, "ci").await;
+    let id = fx.create(&fx.manager, "ci").await;
     fx.grant(&fx.manager, &id, "tool", TIME).await;
     let (status, _) = fx
         .post(
@@ -729,7 +734,7 @@ async fn every_grant_change_is_audited_with_who_what_and_when() {
         [
             (
                 "principal_created".into(),
-                "admin".into(),
+                "manager".into(),
                 json!({"name": "ci"})
             ),
             (
@@ -1003,7 +1008,7 @@ async fn names_are_slugs_and_unique() {
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, body) = fx.get(&fx.manager, "/api/v0/system-principals").await;
+    let (status, body) = fx.get(&fx.admin, "/api/v0/system-principals").await;
     assert_eq!(status, StatusCode::OK);
     let names: Vec<&str> = body["principals"]
         .as_array()
@@ -1212,4 +1217,121 @@ async fn only_an_admin_grants_an_external_a2a_agent_and_only_by_a_valid_card_url
         .unwrap()
         .unwrap();
     assert!(principal.grants.has(GrantKind::A2aAgent, CARD));
+}
+
+/// A principal that is not an agent belongs to whoever created it: another
+/// manager can neither see it nor change it, so the grant-time cap cannot be
+/// sidestepped by working on a principal someone with more rights set up.
+#[tokio::test]
+async fn only_the_creator_or_an_admin_manages_a_principal_that_is_not_an_agent() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    assert_eq!(
+        fx.grant(&fx.manager, &id, "pool", "pool").await.0,
+        StatusCode::CREATED
+    );
+    let (_, token_id) = fx.token(&fx.manager, &id).await;
+
+    let other = &fx.other_manager;
+    let (status, body) = fx
+        .get(other, &format!("/api/v0/system-principals/{id}"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("creator or an admin"), "{message}");
+    let (_, list) = fx.get(other, "/api/v0/system-principals").await;
+    assert!(list["principals"].as_array().unwrap().is_empty(), "{list}");
+    for (uri, body) in [
+        (
+            format!("/api/v0/system-principals/{id}/tokens"),
+            json!({"name": "x"}),
+        ),
+        (
+            format!("/api/v0/system-principals/{id}/grants"),
+            json!({"kind": "tool", "ref": TIME}),
+        ),
+        (
+            format!("/api/v0/system-principals/{id}/grants/revoke"),
+            json!({"kind": "pool", "ref": "pool"}),
+        ),
+        (
+            format!("/api/v0/system-principals/{id}/tokens/{token_id}/revoke"),
+            json!({}),
+        ),
+        (format!("/api/v0/system-principals/{id}/disable"), json!({})),
+    ] {
+        let (status, resp) = fx.post(other, &uri, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {resp}");
+    }
+    let (_, detail) = fx
+        .get(&fx.manager, &format!("/api/v0/system-principals/{id}"))
+        .await;
+    let p = &detail["principal"];
+    assert_eq!(p["grants"].as_array().unwrap().len(), 1, "{p}");
+    assert_eq!(p["tokens"].as_array().unwrap().len(), 1, "{p}");
+    assert_eq!(p["tokens"][0]["revoked"], false, "{p}");
+    assert!(p["disabled_at"].is_null(), "{p}");
+
+    // The creator and an admin can.
+    assert_eq!(
+        fx.grant(&fx.manager, &id, "tool", TIME).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        fx.grant(&fx.admin, &id, "skill", "brand").await.0,
+        StatusCode::CREATED
+    );
+    fx.token(&fx.admin, &id).await;
+    let (status, _) = fx
+        .post(
+            &fx.admin,
+            &format!("/api/v0/system-principals/{id}/tokens/{token_id}/revoke"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = fx.get(&fx.manager, "/api/v0/system-principals").await;
+    assert_eq!(list["principals"].as_array().unwrap().len(), 1, "{list}");
+}
+
+/// A token hands every grant of its principal to whoever holds it, so issuing
+/// one is granting all of them again, and takes the same cap.
+#[tokio::test]
+async fn issuing_a_token_needs_every_grant_the_principal_holds() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    for (kind, reference) in [("pool", "pool"), ("tool", TIME)] {
+        assert_eq!(
+            fx.grant(&fx.manager, &id, kind, reference).await.0,
+            StatusCode::CREATED
+        );
+    }
+    gateway_groups::set_tools_for_group(&fx.state.db, "everyone", &["read_skill".into()])
+        .await
+        .unwrap();
+    fx.state.reload_rbac().await;
+
+    let (status, body) = fx
+        .post(
+            &fx.manager,
+            &format!("/api/v0/system-principals/{id}/tokens"),
+            json!({"name": "pipeline"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "token_exceeds_manager");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("`{TIME}`")), "{message}");
+    assert!(message.contains("Ask an admin"), "{message}");
+
+    fx.token(&fx.admin, &id).await;
+    let (status, _) = fx
+        .post(
+            &fx.manager,
+            &format!("/api/v0/system-principals/{id}/grants/revoke"),
+            json!({"kind": "tool", "ref": TIME}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    fx.token(&fx.manager, &id).await;
 }
