@@ -598,8 +598,12 @@ pub async fn admin_connectors_save(State(state): State<Arc<RamaState>>, req: Req
     };
     let auth = db::mcp_catalog::AuthKind::parse(&parsed.auth_type);
     let scope = db::mcp_catalog::Scope::parse(&parsed.scope);
-    if scope == db::mcp_catalog::Scope::Global && auth == db::mcp_catalog::AuthKind::OAuth2 {
-        return bad_request("a global connector cannot use per-user OAuth");
+    if scope != db::mcp_catalog::Scope::PerUser && auth == db::mcp_catalog::AuthKind::OAuth2 {
+        return bad_request(format!(
+            "a {} connector has one shared identity and cannot use per-user OAuth — pick no \
+             authentication or a static bearer token",
+            scope.as_str()
+        ));
     }
     // Same gate as the pool and RAG saves: an unmatchable group name hides the
     // connector from everyone instead of restricting it to someone.

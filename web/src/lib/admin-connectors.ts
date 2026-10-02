@@ -1,7 +1,7 @@
 import { normalizeSelection } from './multi-select.ts';
 
 export type ConnectorAuth = 'oauth2' | 'static_bearer' | 'none';
-export type ConnectorScope = 'per_user' | 'global';
+export type ConnectorScope = 'per_user' | 'global' | 'agent';
 
 export interface AdminConnector {
 	key: string;
@@ -96,6 +96,7 @@ export function connectorBadges(connector: AdminConnector): string[] {
 	return [
 		connector.enabled ? 'enabled' : 'disabled',
 		connector.scope === 'global' ? 'global' : null,
+		connector.scope === 'agent' ? 'agent' : null,
 		connector.audit ? 'audited' : null,
 		connector.seeded ? 'default' : null,
 		connector.auth_type === 'oauth2' && connector.use_dcr ? 'dcr' : null,

@@ -101,11 +101,13 @@ connectors-add-connector-button = Add connector
 
 connectors-restore-defaults-confirm = Re-seed the built-in catalog entries?
 connectors-badge-global = Global
+connectors-badge-agent = Agents only
 connectors-badge-audited = Audited
 connectors-badge-needs-setup = Needs client id
 connectors-field-scope-label = Scope
 connectors-scope-per-user = Per-user (each user connects their own account)
 connectors-scope-global = Global (one shared identity for everyone)
+connectors-scope-agent = Agents only (shared identity, never shown to people)
 connectors-field-scope-help = Global connectors are shared by everyone allowed by their AIplane groups. They must use no authentication or a shared bearer token, not per-user OAuth.
 connectors-token-help-global = This shared connector sends one encrypted bearer token for every allowed user.
 connectors-token-help-user = Each user supplies their own API token under Integrations. No OAuth client is needed.

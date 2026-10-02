@@ -91,11 +91,13 @@ connectors-add-connector-button = 添加连接器
 
 connectors-restore-defaults-confirm = 重新写入内置目录条目吗？
 connectors-badge-global = 全局
+connectors-badge-agent = 仅限代理
 connectors-badge-audited = 已审计
 connectors-badge-needs-setup = 需要客户端 ID
 connectors-field-scope-label = 范围
 connectors-scope-per-user = 按用户（每位用户连接自己的账户）
 connectors-scope-global = 全局（所有人共享一个身份）
+connectors-scope-agent = 仅限代理（共享身份，从不向用户显示）
 connectors-field-scope-help = 全局连接器由 AIplane 组授权的所有人共享。它们必须使用无认证或共享 Bearer 令牌，不能使用按用户 OAuth。
 connectors-token-help-global = 此共享连接器为每位授权用户发送同一个加密的 Bearer 令牌。
 connectors-token-help-user = 每位用户在“集成”中提供自己的 API 令牌，无需 OAuth 客户端。

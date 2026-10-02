@@ -9,7 +9,7 @@
 		ondelete: () => void | Promise<void>;
 	}>();
 
-	const badgeClass: Record<string, string> = { enabled: 'badge-success', disabled: 'badge-ghost', global: 'badge-info', audited: 'badge-warning', default: 'badge-outline', dcr: 'badge-outline', needs_setup: 'badge-warning' };
+	const badgeClass: Record<string, string> = { enabled: 'badge-success', disabled: 'badge-ghost', global: 'badge-info', agent: 'badge-secondary', audited: 'badge-warning', default: 'badge-outline', dcr: 'badge-outline', needs_setup: 'badge-warning' };
 </script>
 
 <article class="card border border-base-300" data-testid={`connector-${connector.key}`}>

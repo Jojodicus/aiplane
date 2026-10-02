@@ -15,6 +15,11 @@ test('connector badges retain operational state and provenance', () => {
 	assert.deepEqual(connectorBadges(connector), ['enabled', 'global', 'audited', 'default']);
 });
 
+test('an agent-only connector is badged as such, not as global', () => {
+	const agent: AdminConnector = { ...connector, scope: 'agent', audit: false, seeded: false };
+	assert.deepEqual(connectorBadges(agent), ['enabled', 'agent']);
+});
+
 test('the edit form preserves every non-secret connector field', () => {
 	assert.deepEqual(connectorForm(connector), {
 		key: 'discord', title: 'Discord', description: 'Chat', icon: '', category: '',

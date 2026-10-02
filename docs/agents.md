@@ -178,9 +178,7 @@ That compile pass is the audit of every place identity matters.
 | Limits | subject `user`/`role`/`global` | subject `system`: the owner's budget for this agent (#92) |
 | Audit | `mcp_tool_audit.user_id` | plus `principal_kind` and `chain` columns |
 
-- **New connector scope `agent`** *(not yet built — #77 shipped grants of
-  `global` connectors only; a per-user connector is refused at grant time and
-  ignored at run time).* It sits next to `per_user` and `global` in
+- **New connector scope `agent`.** It sits next to `per_user` and `global` in
   `mcp_catalog`. Such a connector is invisible to every person and usable only
   by principals that were granted it. This is how an owner wires their own ERP
   or ticket MCP, with a static bearer, without exposing it to employees.

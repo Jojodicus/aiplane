@@ -91,11 +91,13 @@ connectors-add-connector-button = Добавить коннектор
 
 connectors-restore-defaults-confirm = Повторно добавить встроенные записи каталога?
 connectors-badge-global = Глобальный
+connectors-badge-agent = Только агенты
 connectors-badge-audited = Аудит включён
 connectors-badge-needs-setup = Нужен идентификатор клиента
 connectors-field-scope-label = Область действия
 connectors-scope-per-user = Для каждого пользователя (каждый подключает свой аккаунт)
 connectors-scope-global = Глобальный (одна общая учётная запись для всех)
+connectors-scope-agent = Только агенты (общая учётная запись, людям не показывается)
 connectors-field-scope-help = Глобальные коннекторы общие для всех, кому разрешают группы AIplane. Они должны работать без аутентификации или с общим Bearer-токеном, а не с OAuth каждого пользователя.
 connectors-token-help-global = Этот общий коннектор отправляет зашифрованный Bearer-токен для каждого разрешённого пользователя.
 connectors-token-help-user = Каждый пользователь вводит собственный API-токен в разделе интеграций. OAuth-клиент не нужен.
