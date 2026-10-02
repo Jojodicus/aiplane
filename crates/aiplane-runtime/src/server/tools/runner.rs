@@ -41,6 +41,7 @@ use std::sync::Arc;
 use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
+use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolSource};
 
 /// Streaming accumulator for one tool call, folded from its SSE delta
@@ -475,6 +476,7 @@ where
     obj.remove("stream_options");
 
     let mut rounds = 0u32;
+    let mut repeated_calls = RepeatedCallGuard::new();
     loop {
         let final_round = budget.is_final(rounds);
         let mut round_body = request_body.clone();
@@ -547,8 +549,30 @@ where
             .await;
         }
 
-        // Execute gateway-owned tool calls concurrently.
-        let tool_results = execute_tool_calls(tools, ctx, &split.gateway_owned).await;
+        let tool_results = match execute_tool_calls_guarded(
+            tools,
+            ctx,
+            &split.gateway_owned,
+            &mut repeated_calls,
+        )
+        .await
+        {
+            Ok(results) => results,
+            Err(stop) => {
+                let reason = stop.message();
+                tracing::warn!(tool = %stop.tool, tool_rounds = rounds, %reason, "stopping the turn");
+                let out = close_ignored_final_round(
+                    request_body,
+                    response,
+                    split,
+                    status,
+                    rounds,
+                    &upstream,
+                )
+                .await?;
+                return with_stop_reason(out, &reason);
+            }
+        };
 
         // Append the assistant's tool-call message + the tool results to the
         // request's messages for the next round.
@@ -937,6 +961,74 @@ pub async fn execute_tool_calls(
         }
     });
     rama::futures::future::join_all(futs).await
+}
+
+/// A turn the [`RepeatedCallGuard`] gave up on.
+#[derive(Debug)]
+pub struct RepeatedCallStop {
+    pub tool: String,
+}
+
+impl RepeatedCallStop {
+    pub fn message(&self) -> String {
+        stop_message(&self.tool)
+    }
+}
+
+/// [`execute_tool_calls`] behind the per-turn [`RepeatedCallGuard`]: a call
+/// the guard refuses is answered with an error the model can read instead of
+/// running, and one it gives up on ends the turn before anything runs.
+/// Results come back in call order.
+pub async fn execute_tool_calls_guarded(
+    tools: &dyn ToolSource,
+    ctx: &ToolContext,
+    calls: &[ToolCallRef],
+    guard: &mut RepeatedCallGuard,
+) -> Result<Vec<ToolResultRecord>, RepeatedCallStop> {
+    let verdicts: Vec<CallVerdict> = calls
+        .iter()
+        .map(|c| guard.observe(&c.name, &c.arguments_raw))
+        .collect();
+    if let Some(i) = verdicts.iter().position(|v| *v == CallVerdict::Stop) {
+        return Err(RepeatedCallStop {
+            tool: calls[i].name.clone(),
+        });
+    }
+    let runnable: Vec<ToolCallRef> = calls
+        .iter()
+        .zip(&verdicts)
+        .filter(|(_, v)| **v == CallVerdict::Run)
+        .map(|(c, _)| c.clone())
+        .collect();
+    let mut executed = execute_tool_calls(tools, ctx, &runnable).await.into_iter();
+    Ok(calls
+        .iter()
+        .zip(&verdicts)
+        .map(|(call, verdict)| match verdict {
+            CallVerdict::Run => executed.next().expect("one result per runnable call"),
+            _ => ToolResultRecord {
+                call_id: call.id.clone(),
+                body: error_to_tool_message(REFUSAL_MESSAGE),
+            },
+        })
+        .collect())
+}
+
+/// Name why the gateway cut the turn short, next to the budget signal that
+/// already says it did.
+fn with_stop_reason(mut out: LoopOutput, reason: &str) -> Result<LoopOutput, LoopError> {
+    let mut body: Value = serde_json::from_slice(&out.body)
+        .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?;
+    if let Some(signal) = body
+        .get_mut(BUDGET_SIGNAL_FIELD)
+        .and_then(Value::as_object_mut)
+    {
+        signal.insert("stop_reason".into(), json!(reason));
+    }
+    out.body = Bytes::from(
+        serde_json::to_vec(&body).map_err(|e| LoopError::MalformedUpstream(e.to_string()))?,
+    );
+    Ok(out)
 }
 
 /// Clip a raw-JSON args string for safe inclusion in a tracing line.
@@ -1605,6 +1697,17 @@ mod tests {
         })
     }
 
+    /// A tool call whose arguments differ every round, as a model making real
+    /// progress produces (and unlike [`tool_call_reply`], which the repeated-call
+    /// guard rightly stops).
+    fn progressing_call_reply(request: &Value) -> Value {
+        let mut reply = tool_call_reply(None);
+        let step = request["messages"].as_array().map_or(0, Vec::len);
+        reply["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+            json!(format!("{{\"message\":\"step {step}\"}}"));
+        reply
+    }
+
     fn answer_reply(text: &str) -> Value {
         json!({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
     }
@@ -1648,7 +1751,7 @@ mod tests {
             if body["tool_choice"] == "none" {
                 answer_reply("Here is what I found.")
             } else {
-                tool_call_reply(None)
+                progressing_call_reply(body)
             }
         });
         let out = run_with_tools(
@@ -1694,6 +1797,59 @@ mod tests {
                 .all(|b| b.get("tool_choice").is_none()),
             "only the last round is restricted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_model_repeating_one_call_is_refused_then_stopped_with_a_reason() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body.get("tools").is_none() {
+                answer_reply("I could not get further.")
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": [{"role": "user", "content": "go"}]}),
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
+
+        assert!(out.budget_exhausted);
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(
+            body["choices"][0]["message"]["content"],
+            "I could not get further."
+        );
+        let reason = body[BUDGET_SIGNAL_FIELD]["stop_reason"].as_str().unwrap();
+        assert!(
+            reason.contains("company_echo") && reason.contains("identical"),
+            "{reason}"
+        );
+
+        let seen = seen.lock().unwrap();
+        let rounds_taken = seen.len() as u32;
+        assert_eq!(
+            rounds_taken,
+            crate::repeated_calls::MAX_IDENTICAL_CALLS
+                + crate::repeated_calls::MAX_REFUSED_CALLS
+                + 2,
+            "three runs, two refusals, the stopping call, then the closing round"
+        );
+        let refusals = seen[1..]
+            .iter()
+            .flat_map(|b| b["messages"].as_array().unwrap())
+            .filter(|m| {
+                m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("already made this exact call"))
+            })
+            .count();
+        assert!(refusals >= 1, "the model is told it already has the result");
     }
 
     #[tokio::test]

@@ -416,6 +416,21 @@ client tool in one turn.
   closing round ends the turn with the "ran its tools but wrote no answer"
   notice. See
   [`gateway-api.md`](gateway-api.md#tool-round-budget).
+- **Repeated identical calls** — `repeated_calls::RepeatedCallGuard` counts
+  gateway-owned calls per turn by (tool id, canonical arguments: object keys
+  sorted, whitespace ignored, empty or unparseable arguments read as `{}`).
+  Any different call in between (calls within one round count in array order) resets the count, so edit, read, edit, read never trips. The first `MAX_IDENTICAL_CALLS` (3) in a row run. The next `MAX_REFUSED_CALLS` (2) do
+  not run; the model gets a tool error saying it already has that result and
+  should use it. The call after that stops the turn. The guard is wired through
+  `runner::execute_tool_calls_guarded` in all three loops (buffered `/v1`,
+  streaming `/v1`, chat driver). It catches what `LoopGuard` cannot: a model
+  that writes no repeated text, only the same well-formed call every round.
+  Buffered `/v1` ends like an exhausted round budget (one closing round without
+  tools, `aiplane.tool_budget_exhausted`) and adds `aiplane.stop_reason` naming
+  the tool. The streaming `/v1` loop ends the stream with an error chunk. The
+  chat UI aborts the turn with the same reason as its error text. Every stop
+  logs a `warn` with the tool and round. The reason is English-only, like
+  `LOOP_MESSAGE`, because it is written into the turn row at generation time.
 - **Per-tool timeout** — 30s, overridable per tool via `max_duration`.
 - **Concurrency** — tool calls within one round run concurrently, bounded by a
   per-request semaphore of 4.
