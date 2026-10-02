@@ -243,9 +243,15 @@ const SPEC_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 #[derive(Clone)]
 pub struct RefusalAudit {
     window: std::time::Duration,
-    open: Arc<Mutex<HashMap<(String, String, String), OpenRefusal>>>,
-    specs: Arc<Mutex<HashMap<String, (std::time::Instant, Option<Value>)>>>,
+    open: Arc<Mutex<HashMap<RefusalKey, OpenRefusal>>>,
+    specs: Arc<Mutex<HashMap<String, CachedSpec>>>,
 }
+
+/// `(agent, subject, limit kind)`: one open refusal window per triple.
+type RefusalKey = (String, String, String);
+
+/// A live spec and when it was read.
+type CachedSpec = (std::time::Instant, Option<Value>);
 
 struct OpenRefusal {
     audit_id: String,
@@ -335,12 +341,11 @@ impl RefusalAudit {
         tokio::spawn(async move {
             tokio::time::sleep(window).await;
             let closed = open.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-            if let Some(entry) = closed.filter(|e| e.count > 1) {
-                if let Err(err) =
+            if let Some(entry) = closed.filter(|e| e.count > 1)
+                && let Err(err) =
                     agent_audit::set_detail_count(&db, &entry.audit_id, entry.count).await
-                {
-                    tracing::warn!(error = %err, agent = %key.0, "counting refused visitor requests");
-                }
+            {
+                tracing::warn!(error = %err, agent = %key.0, "counting refused visitor requests");
             }
         });
     }
@@ -460,7 +465,7 @@ impl AgentTurnRunner for LiveAgentRunner {
 /// The runner, if this build has one, and the conversations with a turn
 /// running right now, each with the turn that holds it and the flag that
 /// stops it.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AgentTurns {
     runner: Option<Arc<dyn AgentTurnRunner>>,
     running: Arc<Mutex<HashMap<String, Held>>>,
@@ -468,16 +473,6 @@ pub struct AgentTurns {
 }
 
 type Waiters = Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<u64>>>>;
-
-impl Default for AgentTurns {
-    fn default() -> Self {
-        Self {
-            runner: None,
-            running: Arc::default(),
-            waiters: Arc::default(),
-        }
-    }
-}
 
 struct Held {
     turn_id: String,
