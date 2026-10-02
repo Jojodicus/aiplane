@@ -1500,7 +1500,8 @@ version and judged on more than the final answer.
 
 - **Migration `0089_agent_tests.sql`**: `agent_test_cases`, `agent_test_runs`,
   `agent_test_results`. `0087` and `0088` are claimed by the concurrent
-  branches (#96, #95); renumber if either lands under another number. Rows live
+  branches (#96, #95); renumber if either lands under another number, and the pinned line in
+  `aiplane-core/tests/migration-checksums.txt` with it. Rows live
   in `aiplane-core::server::db::agent_tests`; the logic in
   `aiplane-runtime::agents::eval` (and `eval_judge` for the rubric).
 - **Case.** `{name, script, expect, rubric?}`; the name is unique per agent. A
