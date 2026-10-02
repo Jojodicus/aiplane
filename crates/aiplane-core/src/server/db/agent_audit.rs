@@ -40,6 +40,8 @@ pub enum AuditKind {
     SubAgentDispatched,
     /// A sub-agent run ended, with its outcome.
     SubAgentFinished,
+    /// The output filter (#89) redacted or withheld a main agent's answer.
+    OutputBlocked,
     AgentCreated,
     AgentDraftUpdated,
     AgentPublished,
@@ -65,6 +67,7 @@ impl AuditKind {
             Self::RouteDecision => "route_decision",
             Self::SubAgentDispatched => "sub_agent_dispatched",
             Self::SubAgentFinished => "sub_agent_finished",
+            Self::OutputBlocked => "output_blocked",
             Self::AgentCreated => "agent_created",
             Self::AgentDraftUpdated => "agent_draft_updated",
             Self::AgentPublished => "agent_published",

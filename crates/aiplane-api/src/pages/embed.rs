@@ -31,6 +31,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use session_core::chat_json::{ChatEvent, SseTx, json_stream_response, sse_json};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
+use session_core::i18n::Lang;
 
 use super::{bad_request, internal, json_error, json_ok};
 use aiplane_core::server::auth::token;
@@ -352,9 +353,17 @@ async fn visitor_turns(
     state: &RamaState,
     session_id: &str,
 ) -> Result<Vec<TurnWithTools>, Response> {
-    let turns = chat::list_turns(&state.db, session_id)
+    let mut turns = chat::list_turns(&state.db, session_id)
         .await
         .map_err(internal)?;
+    if state.agent_turns.is_running(session_id)
+        && let Some(last) = turns.last_mut()
+        && last.turn.role == TurnRole::Assistant
+    {
+        // Terminal in the database, but the output filter has not ruled on
+        // the answer yet.
+        last.turn.status = TurnStatus::InProgress;
+    }
     Ok(turns.into_iter().map(visitor_turn).collect())
 }
 
@@ -363,10 +372,7 @@ async fn visitor_turns(
 pub async fn current_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let turns = or_return!(visitor_turns(&state, &v.session.session_id).await);
-    let live_turn_id = match chat::in_flight_turn(&state.db, &v.session.session_id).await {
-        Ok(t) => t.map(|t| t.id),
-        Err(err) => return internal(err),
-    };
+    let live_turn_id = live_turn_id(&turns);
     json_ok(
         StatusCode::OK,
         json!({
@@ -389,6 +395,7 @@ pub struct MessageBody {
 /// turn runs; the answer comes through `GET /api/v0/embed/events`.
 pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
+    let lang = Lang::from_request(req.headers());
     let body: MessageBody = or_return!(super::read_json(req.into_body(), "the message body").await);
     let text = body.text.trim();
     if text.is_empty() {
@@ -451,6 +458,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         session_id: session_id.clone(),
         turn_id: assistant_turn_id.clone(),
         visitor_id: Some(v.session.id.clone()),
+        lang,
     };
     let state_for_run = state.clone();
     let turn_id = assistant_turn_id.clone();
@@ -503,13 +511,10 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let v = or_return!(visitor(&state, &req).await);
     let session_id = v.session.session_id;
     let turns = or_return!(visitor_turns(&state, &session_id).await);
-    let live = match chat::in_flight_turn(&state.db, &session_id).await {
-        Ok(t) => t,
-        Err(err) => return internal(err),
-    };
+    let live = live_turn_id(&turns);
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let snapshot = ChatEvent::Snapshot {
-        live_turn_id: live.as_ref().map(|t| t.id.clone()),
+        live_turn_id: live.clone(),
         turns,
         waiting_turn_ids: Vec::new(),
     };
@@ -518,15 +523,23 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         None => {
             let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
         }
-        Some(turn) => {
-            let db = state.db.clone();
-            tokio::spawn(async move { tail_buffered(db, session_id, turn.id, tx).await });
+        Some(turn_id) => {
+            let state = state.clone();
+            tokio::spawn(async move { tail_buffered(state, session_id, turn_id, tx).await });
         }
     }
     json_stream_response(rx)
 }
 
-async fn tail_buffered(db: chat::Pool, session_id: String, turn_id: String, tx: SseTx) {
+fn live_turn_id(turns: &[TurnWithTools]) -> Option<String> {
+    turns
+        .iter()
+        .rev()
+        .find(|t| t.turn.status == TurnStatus::InProgress)
+        .map(|t| t.turn.id.clone())
+}
+
+async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: String, tx: SseTx) {
     let started = tokio::time::Instant::now();
     let mut last_sent = started;
     loop {
@@ -534,14 +547,14 @@ async fn tail_buffered(db: chat::Pool, session_id: String, turn_id: String, tx: 
         if tx.is_closed() {
             return;
         }
-        match chat::get_turn(&db, &session_id, &turn_id).await {
-            Ok(Some(t)) if is_terminal(t.status) => {
+        match chat::get_turn(&state.db, &session_id, &turn_id).await {
+            Ok(Some(t)) if is_terminal(t.status) && !state.agent_turns.is_running(&session_id) => {
                 for event in final_events(&t) {
                     let _ = tx.unbounded_send(Ok(sse_json(&event)));
                 }
                 return;
             }
-            Ok(Some(t)) if t.status == TurnStatus::InProgress => {}
+            Ok(Some(t)) if t.status == TurnStatus::InProgress || is_terminal(t.status) => {}
             Ok(_) => {
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use aiplane_core::server::db::{DbError, system_principals as sp};
 use aiplane_core::server::run_chain::{Frame, RunChain};
 use session_core::db as chat;
+use session_core::i18n::Lang;
 
+use super::output_filter::{Delivery, guard_answer};
 use super::profile::{AgentRunError, Role, RunOptions, RunProfile};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
@@ -95,6 +97,7 @@ pub async fn run_turn_with(
         session_id,
         turn_id,
         visitor_id: turn.visitor_id.map(str::to_string),
+        lang: options.lang,
     };
     drive_opened(state, &profile, &opened).await
 }
@@ -111,6 +114,8 @@ pub struct OpenedTurn {
     pub session_id: String,
     pub turn_id: String,
     pub visitor_id: Option<String>,
+    /// The language of text the gateway itself puts in the answer.
+    pub lang: Lang,
 }
 
 /// Drive an opened turn of `profile` to a terminal status and read it back.
@@ -126,17 +131,39 @@ pub async fn drive_opened(
     ));
     drive(
         state,
-        profile.drive_params(&turn.session_id, &turn.turn_id, chain),
+        profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone()),
     )
     .await;
     let done = chat::get_turn(&state.db, &turn.session_id, &turn.turn_id)
         .await
         .map_err(DbError::from)?;
+    let mut answer = done.as_ref().and_then(|t| t.content.clone());
+    if let Some(filter) = &profile.output_filter
+        && let Some(text) = answer.take()
+    {
+        let at = Delivery {
+            principal_id: &profile.principal.id,
+            session_id: &turn.session_id,
+            turn_id: &turn.turn_id,
+            chain: &chain,
+            lang: turn.lang,
+        };
+        answer = Some(
+            guard_answer(
+                state,
+                filter,
+                profile.run.state_schema().map(|s| &**s),
+                at,
+                text,
+            )
+            .await,
+        );
+    }
     Ok(AgentReply {
         status: done
             .as_ref()
             .map_or(chat::TurnStatus::Errored, |t| t.status),
-        answer: done.as_ref().and_then(|t| t.content.clone()),
+        answer,
         error: done.and_then(|t| t.error_message),
         session_id: turn.session_id.clone(),
         turn_id: turn.turn_id.clone(),

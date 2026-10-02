@@ -171,6 +171,27 @@ impl Embed {
         .await
     }
 
+    async fn say_in(&self, token: &str, text: &str, accept_language: &str) -> Reply {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v0/embed/messages")
+            .header(header::ORIGIN, SITE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::ACCEPT_LANGUAGE, accept_language)
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "text": text }).to_string()))
+            .unwrap();
+        let resp = common::app(self.fx.state.clone()).serve(req).await.unwrap();
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let bytes = common::read_body(resp).await;
+        Reply {
+            status,
+            headers,
+            body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        }
+    }
+
     async fn resume(&self, token: &str) -> Reply {
         self.send(
             Method::GET,
@@ -220,13 +241,13 @@ async fn embed_with(runner: Option<ScriptedRunner>, extra_spec: Option<Value>) -
 
 /// The same, served end to end: the production runner on a pool whose
 /// backend is `upstream`.
-async fn embed_live(upstream: &MockServer) -> Embed {
+async fn embed_live(upstream: &MockServer, extra_spec: Option<Value>) -> Embed {
     let mut fx = agents::fixture_on(Some(&upstream.uri())).await;
     fx.state = fx
         .state
         .clone()
         .with_agent_runner(Arc::new(LiveAgentRunner));
-    published(fx, Arc::default(), None).await
+    published(fx, Arc::default(), extra_spec).await
 }
 
 async fn published(fx: Fx, runner: Arc<ScriptedRunner>, extra_spec: Option<Value>) -> Embed {
@@ -1079,7 +1100,7 @@ async fn a_visitor_gets_the_main_agents_answer_from_the_real_runner() {
         .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
         .mount(&upstream)
         .await;
-    let e = embed_live(&upstream).await;
+    let e = embed_live(&upstream, None).await;
 
     let token = e.visitor().await;
     let r = e.say(&token, "where is my order?").await;
@@ -1139,4 +1160,61 @@ async fn a_visitor_gets_the_main_agents_answer_from_the_real_runner() {
         sent["messages"].as_array().unwrap().last().unwrap()["content"],
         "where is my order?"
     );
+}
+
+#[tokio::test]
+async fn the_public_path_withholds_an_unverified_identifier_in_the_visitors_language() {
+    let upstream = MockServer::start().await;
+    let sse = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices": [{"index": 0, "delta": {"content": "Your invoice RE-424242 is due."}}]})
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(&upstream)
+        .await;
+    let filter = json!({ "publish": {
+        "origins": [SITE],
+        "output_filter": { "patterns": { "invoice": "RE-\\d{6}" } }
+    } });
+    let e = embed_live(&upstream, Some(filter)).await;
+
+    let token = e.visitor().await;
+    let r = e.say_in(&token, "what do I owe?", "de").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    let resp = e
+        .raw(
+            Method::GET,
+            "/api/v0/embed/events",
+            Some(SITE),
+            Some(&token),
+            None,
+        )
+        .await;
+    let body = tokio::time::timeout(Duration::from_secs(20), common::read_body(resp))
+        .await
+        .expect("the stream ends once the answer is in");
+    let frames = frames(&body);
+    let delivered: String = frames
+        .iter()
+        .filter(|(n, _)| n == "turn_delta")
+        .map(|(_, d)| d["text_delta"].as_str().unwrap().to_string())
+        .chain(
+            frames
+                .iter()
+                .filter(|(n, _)| n == "snapshot")
+                .filter_map(|(_, d)| {
+                    d["turns"][1]["turn"]["content"]
+                        .as_str()
+                        .map(str::to_string)
+                }),
+        )
+        .collect();
+    let german = session_core::i18n::t(session_core::i18n::Lang::De, "agent-output-withheld");
+    assert_eq!(delivered, german, "{frames:?}");
+    let audit = aiplane_core::server::db::agent_audit::for_principal(&e.fx.state.db, &e.agent)
+        .await
+        .unwrap();
+    assert!(audit.iter().any(|a| a.kind == "output_blocked"));
 }

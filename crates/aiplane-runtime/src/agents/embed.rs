@@ -123,6 +123,14 @@ impl AgentTurns {
         self.runner.clone()
     }
 
+    /// Whether a turn of `session_id` is still being produced. Its row can
+    /// already be terminal while the output filter (#89) has yet to rule on
+    /// the answer, so the public endpoint treats it as unfinished.
+    pub fn is_running(&self, session_id: &str) -> bool {
+        let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        running.contains(session_id)
+    }
+
     /// Claim `session_id` for one turn. `None` when a turn already holds it;
     /// the claim ends when the returned guard drops.
     pub fn claim(&self, session_id: &str) -> Option<TurnClaim> {

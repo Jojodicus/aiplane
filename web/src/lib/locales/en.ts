@@ -236,6 +236,8 @@ export const en: Catalog = {
  "admin-users-you-badge": "you",
  "admin-value-default": "default",
  "admin-value-na": "n/a",
+ "agent-output-redacted": "[removed]",
+ "agent-output-withheld": "I cannot give that answer because it mentioned details I could not verify for you. Please rephrase your question or contact support.",
  "auto-route-add": "Add automatic route",
  "auto-route-alias": "Model alias",
  "auto-route-alias-help": "Clients use this value in the standard model field.",

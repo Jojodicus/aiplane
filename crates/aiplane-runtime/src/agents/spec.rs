@@ -143,7 +143,7 @@ const HUMAN_KEYS: &[&str] = &["notify", "inbox"];
 const FINISH_KEYS: &[&str] = &["schema"];
 const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
 const PUBLISH_KEYS: &[&str] = &["origins", "idle_ttl", "retention_days", "output_filter"];
-const OUTPUT_FILTER_KEYS: &[&str] = &["patterns"];
+const OUTPUT_FILTER_KEYS: &[&str] = &["patterns", "action"];
 pub(super) const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
 const MAX_IDENT_LEN: usize = 48;
 
@@ -1379,6 +1379,13 @@ impl<'a> Check<'a> {
             for (name, pattern) in self.named_map(patterns, "publish.output_filter.patterns") {
                 self.regex(pattern, &join("publish.output_filter.patterns", name));
             }
+            if let Some(action) = f.get("action") {
+                self.one_of(
+                    action,
+                    "publish.output_filter.action",
+                    super::output_filter::Action::NAMES,
+                );
+            }
         }
     }
 }
@@ -2137,7 +2144,7 @@ mod tests {
                     "origins": ["https://example.com/", "example.com", "https://ok.example:8443"],
                     "idle_ttl": "30",
                     "retention_days": 0,
-                    "output_filter": { "patterns": { "bad": "[" } }
+                    "output_filter": { "patterns": { "bad": "[" }, "action": "shrug" }
                 },
                 "router": { "kind": "classifier" }
             }),
@@ -2156,7 +2163,8 @@ mod tests {
                 "publish.origins[1]",
                 "publish.idle_ttl",
                 "publish.retention_days",
-                "publish.output_filter.patterns.bad"
+                "publish.output_filter.patterns.bad",
+                "publish.output_filter.action"
             ]
         );
         let over = check(
