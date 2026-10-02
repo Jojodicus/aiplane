@@ -9,6 +9,7 @@
  * judge: nothing here validates, it only keeps the validator's answers
  * attached to the field they are about (by `path`).
  */
+import type { AgentAnalytics } from './agent-analytics.ts';
 import { ApiError, request } from './api.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
@@ -195,6 +196,8 @@ export const agentsApi = {
 		call<{ live_version: number | null; versions: AgentVersion[] }>(`/api/v0/agents/${id}/versions`),
 	setLive: (id: string, version: number) =>
 		call<{ live_version: number }>(`/api/v0/agents/${id}/live`, json('POST', { version })),
+	analytics: (id: string, query: string) =>
+		call<AgentAnalytics>(`/api/v0/agents/${id}/analytics?${query}`),
 	remove: (id: string) => call<void>(`/api/v0/agents/${id}`, json('DELETE')),
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>

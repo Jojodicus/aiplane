@@ -31,7 +31,7 @@ use super::{bad_request, internal, json_error, json_ok, no_content, not_found, r
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
 use aiplane_core::server::db::{
-    agent_audit, embed_keys, gateway_groups, system_principals as sp_db, users,
+    agent_analytics, agent_audit, embed_keys, gateway_groups, system_principals as sp_db, users,
 };
 use aiplane_core::server::principal::GrantSet;
 use aiplane_runtime::agents::spec::{self, SpecContext, SpecIssue, Stage};
@@ -423,6 +423,89 @@ pub async fn versions(State(state): State<Arc<RamaState>>, req: Request) -> Resp
                 "versions": rows.iter().map(version_json).collect::<Vec<_>>(),
             }),
         ),
+        Err(err) => internal(err),
+    }
+}
+
+const MAX_ANALYTICS_DAYS: i64 = 366;
+
+/// An analytics bound: an RFC 3339 instant, or a `YYYY-MM-DD` day in UTC. A
+/// day as `to` means the end of that day, so `from=2026-10-01&to=2026-10-07`
+/// covers seven whole days.
+fn analytics_bound(name: &str, value: &str, end_of_day: bool) -> Result<jiff::Timestamp, Response> {
+    use jiff::ToSpan;
+    if let Ok(at) = value.parse::<jiff::Timestamp>() {
+        return Ok(at);
+    }
+    let day = value.parse::<jiff::civil::Date>().map_err(|_| {
+        bad_request(format!(
+            "`{name}` is `{value}`, which is neither an RFC 3339 time nor a YYYY-MM-DD day — \
+             write it like `2026-10-01` or `2026-10-01T00:00:00Z`"
+        ))
+    })?;
+    let start = day
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .map_err(|err| bad_request(format!("`{name}` is out of range: {err}")))?
+        .timestamp();
+    Ok(if end_of_day {
+        start + 24.hours()
+    } else {
+        start
+    })
+}
+
+/// GET /api/v0/agents/{id}/analytics?from=&to=&version= — counts of what the
+/// agent did in the range (default: the last 30 days), without any visitor
+/// content. `version` narrows to one published version; builder test
+/// conversations are never counted.
+pub async fn analytics(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    use jiff::ToSpan;
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
+    let query: std::collections::HashMap<String, String> =
+        serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default();
+    let to = match query.get("to") {
+        Some(v) => or_return!(analytics_bound("to", v, true)),
+        None => jiff::Timestamp::now(),
+    };
+    let from = match query.get("from") {
+        Some(v) => or_return!(analytics_bound("from", v, false)),
+        None => to - (30 * 24).hours(),
+    };
+    if from >= to {
+        return bad_request("`from` must be before `to` — swap them or widen the range");
+    }
+    if to.duration_since(from).as_secs() > MAX_ANALYTICS_DAYS * 86_400 {
+        return bad_request(format!(
+            "the range is longer than {MAX_ANALYTICS_DAYS} days — ask for a shorter one"
+        ));
+    }
+    let version = match query.get("version") {
+        None => None,
+        Some(v) => match v.parse::<i64>() {
+            Ok(n) if n >= 1 => Some(n),
+            _ => {
+                return bad_request(format!(
+                    "`version` is `{v}`; it must be a published version number, 1 or more — list \
+                     them with GET /api/v0/agents/{}/versions",
+                    agent.principal.id
+                ));
+            }
+        },
+    };
+    match agent_analytics::compute(
+        &state.db,
+        &agent.principal.id,
+        agent_analytics::Range { from, to },
+        version,
+    )
+    .await
+    {
+        Ok(a) => {
+            let mut body = serde_json::to_value(a).expect("analytics serialize");
+            body["currency"] = json!(state.config().usage.currency);
+            json_ok(StatusCode::OK, body)
+        }
         Err(err) => internal(err),
     }
 }
