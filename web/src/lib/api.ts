@@ -33,6 +33,8 @@ export interface Me {
 	 * an older gateway, which `featureEnabled` reads as "not gating".
 	 */
 	features?: string[];
+	/** May build agents; the Agents section is shown only when true. */
+	can_manage_agents?: boolean;
 }
 
 /** A canvas document belonging to a conversation. */

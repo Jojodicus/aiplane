@@ -5,6 +5,7 @@ user-settings-heading = Mes paramètres
 nav-memory = Mémoire
 nav-scheduled = Planifié
 nav-webhooks = Webhooks
+nav-agents = Agents
 nav-integrations = Intégrations
 nav-tools = Outils
 nav-usage = Utilisation

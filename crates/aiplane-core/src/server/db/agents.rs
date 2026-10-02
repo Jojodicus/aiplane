@@ -413,6 +413,11 @@ pub async fn version(pool: &Pool, id: &str, version: i64) -> Result<Option<Versi
     row.as_ref().map(map_version).transpose()
 }
 
+/// The version number an internal test chat records for a run of the draft.
+/// Published versions start at 1, so a session whose `agent_version` is 0 is a
+/// test conversation, and no published version can ever match it.
+pub const DRAFT_VERSION: i64 = 0;
+
 /// The live version of agent `id` and its spec; `None` when it was never
 /// published or does not exist.
 pub async fn live(pool: &Pool, id: &str) -> Result<Option<(i64, String)>, DbError> {

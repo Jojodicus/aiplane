@@ -392,6 +392,53 @@ An invalid spec is `422` with `error.code = "invalid_agent_spec"`. The
 ungranted reference says which grant to make, for example `POST
 /api/v0/system-principals/{id}/grants {"kind": "tool", "ref": "rag_search"}`.
 
+### What #90 built
+
+The builder UI (`/agents`, [`ui.md`](ui.md#agent-builder)) and the internal
+test chat behind it.
+
+- **`POST /api/v0/agents/{id}/test-turn`** (`write` share) `{message,
+  session_id?}`. It runs one message against the agent's **draft** through the
+  ordinary run path (`agents::run::run_turn_with`), as the agent's principal:
+  its grants, gates, binds and budgets apply and its tools really run. No
+  `session_id` starts a conversation; one continues it. The turn is synchronous
+  (the request returns when the turn ends; no SSE yet). Answer:
+  `{session_id, turn_id, status, answer, error, draft_version: 0, debug}`.
+  Failures: `404 unknown_session`, `422 agent_not_runnable` (bad spec),
+  `503 agent_no_model` (no healthy model in the pool the principal may use).
+- **`debug`** is for managers only and is built from the stored state and the
+  turn's `agent_audit` rows, never from anything a visitor can reach:
+  - `slots`: per declared slot `{slot, status: set|missing|invalid, value,
+    provenance, set_at, set_by, reason?}`. Unlike the model's view, `value` is
+    shown for verifier and host slots too.
+  - `routes`: per route `{route, description?, open, missing: [Unmet]}`,
+    judged on the state after the turn.
+  - `routing`: this turn's `route_decision` details (every gate, the route
+    picked).
+  - `sub_agents`: this turn's `sub_agent_dispatched` details, replaced by the
+    matching `sub_agent_finished` (with `outcome`) once it ended.
+  - `tool_calls`: this turn's `tool_call` decisions (`allowed`/`denied` and
+    the policy).
+- **How the draft is run.** `RunProfile::load_from(state, id, SpecSource,
+  role, options)` takes the spec explicitly: `Live`, `Pinned(version)` or
+  `Draft(spec)`. `load` and `load_version` are the first two, and only
+  `agents::run::draft::run_draft_turn`, called by the test-turn handler,
+  passes `Draft`. It opens the session itself and then uses the same
+  `drive_opened` as a visitor's turn, so nothing about what "live" means is
+  overridden and no other path can reach a draft. The draft is recorded as
+  version `0` (`DRAFT_VERSION`): a test session is never continued as a
+  visitor's (`MissingVersion`), nor a visitor's as a test (`unknown_session`).
+  A sub-agent the draft dispatches to loads its own live version. The
+  `embed` integration test publishes v1, edits the draft, and shows the test
+  chat running the draft while a visitor message gets v1.
+- **`GET /api/v0/agent-resources`** lists what the calling manager holds and
+  can therefore grant: `{pools, tools: [{id, name, description}], connectors:
+  [{key, name, tools}], skills, rag_collections: [{id, name}]}`. It applies the
+  same predicates as the grant route's cap, so the builder's pickers never
+  offer what `POST …/grants` would refuse with `grant_exceeds_manager`.
+- **`GET /api/v0/me`** gained `can_manage_agents`; the SPA shows the Agents
+  section only when it is true.
+
 ## 3. Run model
 
 ### Where runs live

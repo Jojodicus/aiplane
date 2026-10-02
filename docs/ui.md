@@ -407,6 +407,59 @@ built-in default.
 
 `chat-protocol.ts` is deliberately framework-free — no Svelte, no DOM — so the fold is unit-testable under `node --test` (`chat-protocol.test.ts`, run by `mise run test-web`) and `chat.svelte.ts` stays a thin reactive wrapper around it. Keep it that way: wire behaviour that can only be tested through a browser is wire behaviour nobody tests.
 
+## Agent builder
+
+`/agents` (sidebar: Workspace → Agents) is visible only when `GET /api/v0/me`
+reports `can_manage_agents`; everything behind it is the `/api/v0/agents/*`,
+`/api/v0/system-principals/*` and `/api/v0/agent-resources` surface described
+in [`agents.md`](agents.md#what-84-built). The data layer and the pure helpers
+are `web/src/lib/agents.ts` (unit-tested in `agents.test.ts`); the components
+are in `web/src/lib/components/agents/`.
+
+- **`/agents`**: the agents shared with the caller, and a dialog to create one.
+- **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
+  Save draft / Publish / Delete, and six tabs (`?tab=` keeps the choice in the
+  URL):
+  - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
+    response instructions, tools and skills from the agent's grants, per-tool
+    permission and `bind` rows, budget), **State slots**, **Routes and
+    sub-agents** (router, and per route: description, gate, sub-agent picker,
+    task, route binds) and **Settings** (profile, `finish` schema, tool
+    unavailability, publish settings). Gates use a recursive structured editor
+    (`CondEditor`: all / any / not / slot check with `set`, `eq`, `in`,
+    `provenance`, `max_age`). `finish.schema` is edited as JSON, and verifiers,
+    `human` routes and `subject` slot schemas only in the JSON tab.
+  - *JSON*: the whole spec; Apply replaces the builder's buffer.
+  - *Grants*: the principal's grants with revoke, and a grant form whose
+    suggestions come from `/api/v0/agent-resources`. The server's refusal
+    (`grant_exceeds_manager`, unknown resource) is shown verbatim.
+  - *Test chat*: see below.
+  - *Versions*: draft vs live, the publish blockers (`publish_issues`), every
+    snapshot with its JSON, and "make live" (rollback).
+  - *Sharing*: shares with access change and revoke; `share_needs_agent_manager`
+    and `last_writer` are shown verbatim. A `read` share sees everything
+    read-only (the editor is a disabled `fieldset`).
+- **Validation errors by path.** The 422 `invalid_agent_spec` carries
+  `{path, message}` issues (`main.tools[0]`, `routes.billing.when.all[1].slot`).
+  `FieldIssues` shows the messages for exactly its field's path under the
+  field, each section's badge counts the issues beneath it
+  (`issuesUnder`), and the header lists them all. Issues are those of the last
+  Save/Publish; the Versions tab separately lists what blocks publishing.
+- **Editing buffer.** The spec is a `$state` object bound by the inputs;
+  `ensureShape` gives every container a home and `cleanSpec` drops blanks
+  before a save (`when` and `schema` are treated as opaque). Both clone through
+  JSON because `structuredClone` refuses a Svelte proxy.
+- **Test chat** (`TestChat`, `DebugPanel`). Sends to `POST
+  /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
+  buffer is flagged with a Save button. Replies are plain (the turn is
+  synchronous); clicking a reply shows its debug: slots with value and
+  provenance, each route's gate with what keeps it closed, the routing decision,
+  sub-agent calls with outcome, and tool-call decisions. "New conversation"
+  drops the `session_id`.
+- **Not built yet.** Embed keys and the visitor widget (#91, #94), a `state`
+  or `gate` SSE event so the debug view could stream, and conversation
+  history for test sessions (they are stored with `agent_version = 0`).
+
 ## Reactive state
 
 Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as factories rather than classes — `$state` in a module closure is the documented universal-reactivity pattern, and the returned object's methods close over it directly.

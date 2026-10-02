@@ -170,5 +170,7 @@ pub async fn drive_opened(
     })
 }
 
+pub mod draft;
+
 #[cfg(test)]
 mod tests;
