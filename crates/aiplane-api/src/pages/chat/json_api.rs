@@ -17,7 +17,10 @@
 //! * `DELETE /api/v0/chat/sessions/{id}` — owner-only, sweeps attachments
 //! * `POST /api/v0/chat/sessions/{id}/pin` — toggle pin
 //! * `POST /api/v0/chat/sessions/{id}/messages` — submit `{model, message}`
-//! * `POST /api/v0/chat/sessions/{id}/cancel` — stop the live turn
+//! * `POST /api/v0/chat/sessions/{id}/cancel` — stop the live turn, or give
+//!   up on a suspended one
+//! * `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` — answer a
+//!   suspended turn's decision and continue it
 //! * `GET  /api/v0/chat/sessions/{id}/events` — the SSE event stream
 
 use std::sync::Arc;
@@ -626,8 +629,112 @@ pub async fn session_cancel(
     if !user_owns(&state, &user.id, &session_id).await {
         return not_found_conversation();
     }
-    let cancelled = session_core::chat_json::cancel_turn(&state.chats, &user.id, &session_id);
+    let mut cancelled = session_core::chat_json::cancel_turn(&state.chats, &user.id, &session_id);
+    // No worker, but a turn paused for a decision is the conversation's live
+    // turn all the same: stopping it is giving up on the decision.
+    if !cancelled {
+        cancelled = match chat::suspended_turn_in_session(&state.db, &session_id).await {
+            Ok(Some(turn_id)) => match chat::cancel_suspended_turn(&state.db, &turn_id).await {
+                Ok(done) => done,
+                Err(err) => return internal(err),
+            },
+            Ok(None) => false,
+            Err(err) => return internal(err),
+        };
+        if cancelled {
+            let state = state.clone();
+            let user_id = user.id.clone();
+            tokio::spawn(async move {
+                super::start_pending_turns(&state, &user_id).await;
+            });
+        }
+    }
     ok_json(StatusCode::OK, json!({ "cancelled": cancelled }))
+}
+
+/// What a resume carries: the decision's shape, its value when it has one,
+/// and optionally the request it answers.
+#[derive(Deserialize)]
+pub struct ResumeBody {
+    pub decision: chat::DecisionKind,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    /// The `request_id` of the `suspended` event being answered. Optional;
+    /// when present, an answer to an older pause of the same turn is refused.
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+impl ResumeBody {
+    fn decision(self) -> Result<chat::Decision, &'static str> {
+        match (self.decision, self.value) {
+            (chat::DecisionKind::AllowOnce, None) => Ok(chat::Decision::AllowOnce),
+            (chat::DecisionKind::Deny, None) => Ok(chat::Decision::Deny {
+                reason: chat::DenyReason::User,
+            }),
+            (chat::DecisionKind::Value, Some(value)) => Ok(chat::Decision::Value { value }),
+            (chat::DecisionKind::Value, None) => {
+                Err("a `value` decision needs a `value` field carrying it")
+            }
+            (_, Some(_)) => Err("only a `value` decision carries a `value` field"),
+        }
+    }
+}
+
+/// POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume — answer the
+/// decision a suspended turn waits for, and continue it.
+///
+/// Owner-only. `202` once the turn's worker is running again; the rest of
+/// the turn arrives on `GET …/events` like any other. `409` when the turn is
+/// not waiting (never paused, or already answered), when the answer is for an
+/// older pause, or when the conversation has no free slot right now.
+pub async fn turn_resume(
+    Path(TurnPath {
+        id: session_id,
+        turn_id,
+    }): Path<TurnPath>,
+    State(state): State<Arc<RamaState>>,
+    req: Request,
+) -> Response {
+    use aiplane_runtime::suspend::ResumeRefused;
+    let (_session, user) = require_session_json!(state, req);
+    let ctx = request_ctx(&state, &req, false);
+    let turn = match load_owned_turn(&state, &user, &session_id, &turn_id).await {
+        Ok(turn) => turn,
+        Err(resp) => return resp,
+    };
+    let (_, body) = req.into_parts();
+    let body: ResumeBody = match read_json(body, "the resume body").await {
+        Ok(body) => body,
+        Err(resp) => return resp,
+    };
+    let request_id = body.request_id.clone();
+    let decision = match body.decision() {
+        Ok(decision) => decision,
+        Err(msg) => return bad_request(msg),
+    };
+    match super::resume_turn(&state, &user, &turn, request_id.as_deref(), decision, ctx).await {
+        Ok(()) => ok_json(
+            StatusCode::ACCEPTED,
+            json!({ "assistant_turn_id": turn.id }),
+        ),
+        Err(super::ResumeTurnError::Busy) => json_error(
+            StatusCode::CONFLICT,
+            "turn_in_progress",
+            "another turn is running in this conversation or every parallel slot is in use —              answer again once it has finished",
+        ),
+        Err(super::ResumeTurnError::Refused(refused)) => match refused {
+            ResumeRefused::NotSuspended | ResumeRefused::StaleRequest { .. } => {
+                json_error(StatusCode::CONFLICT, "not_suspended", &refused.to_string())
+            }
+            ResumeRefused::NotOffered { .. } => json_error(
+                StatusCode::BAD_REQUEST,
+                "decision_not_offered",
+                &refused.to_string(),
+            ),
+            ResumeRefused::Storage(err) => internal(err),
+        },
+    }
 }
 
 /// The conversation's waiting user turns, for a snapshot.
@@ -1068,6 +1175,7 @@ async fn start_regeneration_json(
         &model,
         &worker,
         ctx,
+        None,
     )
     .await;
     Ok(serde_json::json!({

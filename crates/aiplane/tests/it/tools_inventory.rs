@@ -77,6 +77,8 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
     "aiplane-runtime/src/server/tools/mcp/manager.rs",
     // comfyui_<workflow>
     "aiplane-runtime/src/server/comfyui_tool.rs",
+    // AskFirst — delegates to the wrapped tool
+    "aiplane-runtime/src/server/tools/ask_first.rs",
 ];
 
 fn repo_root() -> PathBuf {

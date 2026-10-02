@@ -127,6 +127,9 @@ pub async fn drive_with_clock(
             model: Some(p.model.clone()),
             // Session path: access is exactly the user's group grant.
             pool_access: None,
+            // Nothing resumes a headless run yet; a tool needing a decision
+            // refuses instead of pausing.
+            suspendable: false,
         },
     );
     let driver = Box::new(crate::openai_driver::OpenAiDriver {
@@ -138,6 +141,7 @@ pub async fn drive_with_clock(
         finish: finish.clone(),
         budget: p.budget,
         clock,
+        resume: None,
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no

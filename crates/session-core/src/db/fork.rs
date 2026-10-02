@@ -97,12 +97,14 @@ pub async fn fork_session(
         });
 
         // Never copy an in-progress turn as live — no worker drives the
-        // fork, so it would spin forever. Stamp it errored + completed.
-        let (status, completed_at) = if turn.status == TurnStatus::InProgress {
-            (TurnStatus::Errored, Some(now))
-        } else {
-            (turn.status, turn.completed_at)
-        };
+        // fork, so it would spin forever. Stamp it errored + completed. A
+        // suspended one likewise: its decision belongs to the original.
+        let (status, completed_at) =
+            if matches!(turn.status, TurnStatus::InProgress | TurnStatus::Suspended) {
+                (TurnStatus::Errored, Some(now))
+            } else {
+                (turn.status, turn.completed_at)
+            };
 
         sqlx::query(
             r#"INSERT INTO chat_turns

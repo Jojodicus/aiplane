@@ -395,12 +395,15 @@ pub async fn list_turns(pool: &Pool, session_id: &str) -> Result<Vec<TurnWithToo
 
     // Same one-query-then-bucket treatment for mid-turn interjections.
     let mut steers_by_turn = crate::db::steers::list_steers_for_session(pool, session_id).await?;
+    let mut suspensions =
+        crate::db::suspensions::suspension_views_for_session(pool, session_id).await?;
 
     Ok(turns
         .into_iter()
         .map(|turn| TurnWithTools {
             tool_calls: by_turn.remove(&turn.id).unwrap_or_default(),
             steers: steers_by_turn.remove(&turn.id).unwrap_or_default(),
+            suspension: suspensions.remove(&turn.id),
             turn,
         })
         .collect())
@@ -483,10 +486,19 @@ pub async fn get_turn_with_tools(
         .map(map_tool_call)
         .collect::<Result<_, _>>()?;
     let steers: Vec<TurnSteer> = steers.iter().map(map_steer).collect::<Result<_, _>>()?;
+    // Only a paused turn has a row to read, so the hot streaming path skips it.
+    let suspension = if turn.status == TurnStatus::Suspended {
+        crate::db::suspensions::get_suspension(pool, turn_id)
+            .await?
+            .map(|s| s.view())
+    } else {
+        None
+    };
     Ok(Some(TurnWithTools {
         turn,
         tool_calls,
         steers,
+        suspension,
     }))
 }
 
@@ -560,7 +572,8 @@ pub async fn sweep_in_progress_at_startup(pool: &Pool) -> Result<u64, DbError> {
                output_json = COALESCE(output_json,
                                       'Tool call interrupted — the server restarted before it finished.'),
                completed_at = ?
-           WHERE status = 'running'"#,
+           WHERE status = 'running'
+             AND turn_id NOT IN (SELECT turn_id FROM chat_turn_suspensions)"#,
     )
     .bind(&now)
     .execute(pool)
@@ -633,6 +646,7 @@ pub async fn mark_orphaned_in_progress_as_errored(
                  AND turn_id IN (
                      SELECT id FROM chat_turns
                      WHERE session_id = ? AND role = 'assistant' AND id != ?
+                       AND status != 'suspended'
                  )"#,
         )
         .bind(tool_msg)
@@ -651,6 +665,7 @@ pub async fn mark_orphaned_in_progress_as_errored(
                  AND turn_id IN (
                      SELECT id FROM chat_turns
                      WHERE session_id = ? AND role = 'assistant'
+                       AND status != 'suspended'
                  )"#,
         )
         .bind(tool_msg)

@@ -473,6 +473,17 @@ CREATE TABLE chat_turn_suspensions (
 **Expiry**
 - A sweeper turns an expired suspension into `deny` with reason `timeout`.
 
+**As built (#82).** The table also carries `request_id` (so an answer to an
+earlier pause of the same turn cannot settle a later one), `message` (what the
+tool wants shown) and `on_timeout` (`deny` | `allow_once`, the configurable
+fallback; deny by default). `expires_at` is compared after parsing, not as a
+string. The resume route for the chat path is
+`POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume`, owner-only, with
+`{decision, value?, request_id?}`; the agent/public route comes with #91.
+`child_turn` exists but nothing sets it: ancestor suspension and
+innermost-first resume arrive with sub-agent dispatch (#88). Details in
+[`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
+
 ## 4. Gates and validation
 
 ### Chosen: a JSON condition tree, evaluated by a small hand-written evaluator

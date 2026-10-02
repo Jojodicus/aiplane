@@ -12,6 +12,8 @@
 //!   is why it sits above both `aiplane-core` and `aiplane-features`.
 //! - [`budget`] — what one run may spend: rounds, seconds, tokens.
 //! - [`finish`] — the completion contract a non-interactive run ends by.
+//! - [`suspend`] — durable pause and resume of a turn at a tool call that
+//!   waits for a decision.
 //! - [`openai_driver`] — the streaming chat-completion driver, plus the
 //!   background workers that need state: `scheduled`, `webhooks`, `compaction`,
 //!   `headless`.
@@ -27,6 +29,7 @@ pub mod openai_driver;
 pub mod rama_server;
 pub mod repeated_calls;
 pub mod server;
+pub mod suspend;
 
 pub use rama_server::state::RamaState;
 pub use server::state::AppState;

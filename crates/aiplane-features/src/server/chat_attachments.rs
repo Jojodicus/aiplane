@@ -953,6 +953,7 @@ mod tests {
             },
             tool_calls: vec![],
             steers: vec![],
+            suspension: None,
         }
     }
 

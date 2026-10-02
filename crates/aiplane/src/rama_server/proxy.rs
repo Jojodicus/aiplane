@@ -407,6 +407,8 @@ fn proxy_tool_ctx(
             .clone()
             .map(aiplane_runtime::server::tools::PushNotifier::new),
         model,
+        // A `/v1` request is answered in one go; there is no turn to resume.
+        suspend: aiplane_runtime::suspend::Suspend::Unavailable,
     }
 }
 

@@ -44,4 +44,5 @@ mod token_scope;
 mod tool_loop;
 mod tools_inventory;
 mod transcriptions;
+mod turn_suspension;
 mod typst_compile;
