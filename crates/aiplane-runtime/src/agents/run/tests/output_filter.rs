@@ -13,8 +13,9 @@ use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 const LOOKUP: &str = "lookup_invoice";
 const ECHO: &str = "company_echo";
 
-/// An invoice lookup that knows one invoice, and names the one it was asked
-/// for when it knows none.
+/// An invoice lookup that knows one invoice and one customer's invoices,
+/// formats a bare number as an invoice, names a void invoice's replacement
+/// in its error, and names the one it was asked for when it knows none.
 struct LookupInvoice;
 
 impl Tool for LookupInvoice {
@@ -26,18 +27,25 @@ impl Tool for LookupInvoice {
         ToolDef::function(
             LOOKUP,
             "Look up an invoice by its number.",
-            json!({ "type": "object", "required": ["id"],
-                    "properties": { "id": { "type": "string" } } }),
+            json!({ "type": "object",
+                    "properties": { "id": {}, "customer": { "type": "string" } } }),
         )
     }
 
     fn run<'a>(&'a self, _ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
-            let id = args["id"].as_str().unwrap_or_default().to_string();
-            if id == "RE-500" {
-                Ok(json!({ "invoice": "RE-500", "replaced_by": "RE-501" }))
-            } else {
-                Err(ToolError::Failed(format!("no invoice {id} found")))
+            if args["customer"] == "K-12345" {
+                return Ok(json!({ "customer": "K-12345", "invoices": ["RE-123456"] }));
+            }
+            if let Some(n) = args["id"].as_u64() {
+                return Ok(json!({ "invoice": format!("RE-{n}"), "status": "paid" }));
+            }
+            match args["id"].as_str().unwrap_or_default() {
+                "RE-500" => Ok(json!({ "invoice": "RE-500", "replaced_by": "RE-501" })),
+                "RE-404" => Err(ToolError::Failed(
+                    "invoice RE-404 is void; it was replaced by RE-405".into(),
+                )),
+                id => Err(ToolError::Failed(format!("no invoice {id} found"))),
             }
         })
     }
@@ -198,4 +206,50 @@ async fn a_sub_agent_finish_that_only_repeats_its_task_establishes_nothing() {
     )
     .await;
     assert_eq!(s.second.answer, Some(withheld()));
+}
+
+#[tokio::test]
+async fn an_identifier_only_a_failed_call_names_is_withheld() {
+    let reply = lookup_agent_says(
+        "withhold",
+        vec![
+            call("l1", LOOKUP, json!({"id": "RE-404"})),
+            text("Your invoice was replaced by RE-405."),
+        ],
+        "What happened to RE-404?",
+    )
+    .await;
+    assert_eq!(reply.answer, Some(withheld()), "{reply:?}");
+}
+
+#[tokio::test]
+async fn an_identifier_a_tool_formatted_from_a_numeric_argument_is_withheld() {
+    let reply = lookup_agent_says(
+        "withhold",
+        vec![
+            call("l1", LOOKUP, json!({"id": 999999})),
+            text("Your invoice RE-999999 is paid."),
+        ],
+        "Is my invoice 999999 paid?",
+    )
+    .await;
+    assert_eq!(reply.answer, Some(withheld()), "{reply:?}");
+}
+
+#[tokio::test]
+async fn an_invoice_a_lookup_by_customer_returned_passes() {
+    let reply = lookup_agent_says(
+        "withhold",
+        vec![
+            call("l1", LOOKUP, json!({"customer": "K-12345"})),
+            text("RE-123456 is your open invoice."),
+        ],
+        "Which of my invoices is open? I am K-12345.",
+    )
+    .await;
+    assert_eq!(
+        reply.answer.as_deref(),
+        Some("RE-123456 is your open invoice."),
+        "{reply:?}"
+    );
 }

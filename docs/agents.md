@@ -850,15 +850,32 @@ grants.
   - the conversation's slots not written by `llm`;
   - the outputs of the turn's **successful** tool calls. An errored call
     contributes nothing: its message is the tool talking about its input
-    ("no invoice RE-99999 found"). The `set_<slot>` calls are left out
-    because they echo model-written values.
+    ("no invoice RE-99999 found"). *Errored* is the call's real outcome: the
+    runner marks a result `failed` (`ToolResultRecord::failed`) when the tool
+    returned an error (an MCP `isError` included), rejected its arguments,
+    timed out, was unregistered, or never ran (refused as a repeat, over the
+    budget, a second suspend request in a round), and the driver stores
+    those rows as `errored` — which is also what the chat UI shows as a
+    failed call. The `set_<slot>` calls are left out because they echo
+    model-written values.
   - *Echo rule.* An identifier in a call's output does not vouch for itself
-    when one of that call's model-supplied argument values contains it: the
-    model chose it, the data did not. Otherwise the model could launder a
-    visitor's claim by passing it to a tool that repeats it. The stored
-    arguments are the model's own; a bound argument is filled in by the
-    gateway afterwards, so a tool repeating a bound value is not an echo (and
-    the value came from a verified slot, which is trusted on its own anyway).
+    when that call's model-supplied argument values could have supplied it:
+    the model chose it, the data did not. Otherwise the model could launder a
+    visitor's claim by passing it to a tool that repeats it. Both sides are
+    compared as lowercase letters and digits only, so reformatting does not
+    hide an echo (`{"invoice": 999999}`, `"re 999 999"` or `"RE-"` +
+    `"999999"` all supply `RE-999999`). An identifier with digit runs of at
+    least 4 digits is supplied when *every* such run occurs in some argument:
+    the runs tell one customer from another, a prefix is the pattern's. One
+    without such runs is supplied when its whole alphanumeric core occurs in
+    one argument. Shorter runs are ignored because they occur in almost any
+    argument by chance, so a lookup by `{"year": 2026}` still vouches for the
+    `RE-2026-0042` it returned. *Chosen over* a pattern's capture group: it
+    asks every spec author to mark the distinctive part, and a spec without
+    one would fall back to the weaker verbatim test. The stored arguments
+    are the model's own; a bound argument is filled in by the gateway
+    afterwards, so a tool repeating a bound value is not an echo (and the
+    value came from a verified slot, which is trusted on its own anyway).
   - *Sub-agents.* A `forward_request` result is not trusted text: a sub-agent
     repeats its task (which can carry an `llm` slot) as readily as a model
     repeats a visitor. Instead the successful tool calls of every sub-agent
@@ -894,9 +911,12 @@ grants.
   rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
   tool the agent calls that returns another customer's data makes that data
   trusted. Grant tools bound to the verified subject (#88) for that. The echo
-  rule is a containment test on whole argument values: a tool that assembles
-  an identifier from fragments of its arguments (`"RE-"` + `"99999"`) is not
-  recognized as echoing. A successful lookup by a number the visitor gave
+  rule errs towards withholding: a tool that returns an identifier whose
+  digit runs merely happen to occur in its arguments (an invoice numbered
+  like the customer) does not vouch for it. A tool that answers an error as
+  a successful result (`{"error": …}` without failing) is not recognised as
+  failed; the echo rule still catches the number the model passed it. A
+  successful lookup by a number the visitor gave
   does not confirm that number either, only what the lookup returned beside
   it. Only this turn's calls count: an identifier a tool returned in an
   earlier turn must be looked up again. An A2A route's remote answer is never
@@ -905,8 +925,11 @@ grants.
   another customer's invoice is withheld and audited; identifiers from the
   verified slot and the sub-agent's lookup pass; redaction; no patterns leaves
   the answer unchanged. `agents/run/tests/output_filter.rs` covers the echo
-  rule end to end: an errored lookup that names the visitor's number, an echo
-  tool, a lookup that vouches only for what it found, and a billing sub-agent
+  rule end to end: an errored lookup that names the visitor's number, a
+  failed lookup whose error names another invoice, a lookup that formats the
+  model's bare number as an invoice, a lookup by customer whose invoice
+  passes, an echo tool, a lookup that vouches only for what it found, and a
+  billing sub-agent
   whose looked-up invoice passes while the number it only read in its task is
   withheld. Pure cases are in `output_filter.rs`.
 
