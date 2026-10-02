@@ -534,10 +534,7 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
     // their own, already narrowed by the token's allowlist.
     let pool_access = pool_access.unwrap_or_else(|| state.pool_access_for(&roles));
     ToolContext {
-        principal: aiplane_core::server::principal::Principal::User {
-            id: user_id,
-            roles,
-        },
+        principal: aiplane_core::server::principal::Principal::User { id: user_id, roles },
         token_id: None,
         pool_access,
         db: state.db.clone(),

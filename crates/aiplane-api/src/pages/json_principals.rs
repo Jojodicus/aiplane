@@ -282,15 +282,23 @@ async fn manager_holds(
                 Ok(_) => return Err(missing(format!("enabled connector `{reference}`"))),
                 Err(err) => return Err(internal(err)),
             };
-            if !connector.is_global() {
+            if !connector.has_shared_identity() {
                 return Err(bad_request(format!(
                     "connector `{reference}` signs in as each person, so a system principal \
-                     cannot use it — only connectors with the `global` scope can be granted"
+                     cannot use it — only connectors with the `global` or `agent` scope can be \
+                     granted"
                 )));
             }
-            let key = format!("{MCP_TOOL_PREFIX}{reference}");
-            connector.allows(&role_ids, state.rbac.is_admin(&role_ids))
-                && state.mcp_grant_for(&manager.roles).allows(&key, &key)
+            let is_admin = state.rbac.is_admin(&role_ids);
+            if connector.is_agent() {
+                // No person uses an agent connector, so there is no personal
+                // access to cap by; its groups say who may hand it out.
+                connector.grantable_by(&role_ids, is_admin)
+            } else {
+                let key = format!("{MCP_TOOL_PREFIX}{reference}");
+                connector.allows(&role_ids, is_admin)
+                    && state.mcp_grant_for(&manager.roles).allows(&key, &key)
+            }
         }
         GrantKind::Skill => {
             let Some(store) = state.skills() else {

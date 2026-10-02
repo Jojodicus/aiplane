@@ -329,7 +329,7 @@ none of the above applies to it. It holds exactly the rows in
 | Grant kind | What it unlocks | What it does *not* get |
 |---|---|---|
 | `tool` | that registry tool (or loaded `comfyui_<id>` workflow) | default groups, `*`, the `enable_tools` bootstrap, anything `requires_chat_session` |
-| `connector` | every tool of that **global** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply |
+| `connector` | every tool of that **global** or **agent** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply (for an `agent` connector it decides who may grant it) |
 | `skill` | that global skill | anyone's private skills |
 | `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
 | `pool` | that upstream pool | open pools; `is_admin` bypass |
