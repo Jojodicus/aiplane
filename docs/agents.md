@@ -2186,6 +2186,11 @@ routes:
   fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
   reused: it allows private ranges on purpose (an admin curates the MCP
   catalog) and checks literal addresses only.
+- **One origin.** The endpoint and the OAuth token URL the card names must
+  share the granted card URL's origin (scheme, host, port), or the route ends
+  `incomplete` before anything is sent. The grant names the card URL, so a
+  card that points elsewhere — a compromised CDN, a stale host taken over —
+  must not collect the route's credential or the task's bound values.
 - **Size caps** (`guard::read_capped`). Every body read from outside — the
   card (256 KiB), the JSON-RPC answer (1 MiB), the OAuth token answer
   (64 KiB) — is refused when its `Content-Length` is over the cap, before a

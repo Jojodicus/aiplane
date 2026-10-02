@@ -518,6 +518,72 @@ async fn a_remote_slower_than_the_routes_budget_ends_incomplete() {
     );
 }
 
+/// A card that points its endpoint at another origin never receives the
+/// route's credential there: whoever can change the card must not be able
+/// to collect the gateway's secret.
+#[tokio::test]
+async fn a_card_naming_an_endpoint_on_another_origin_gets_no_credential() {
+    let main = llm(main_script("That is not available.")).await;
+    let foreign = MockServer::start().await;
+    let peer = Peer::start(
+        json!({
+            "securitySchemes": { "partner": { "httpAuthSecurityScheme": { "scheme": "Bearer" } } },
+            "securityRequirements": [{ "schemes": { "partner": { "list": [] } } }],
+            "supportedInterfaces": [{
+                "url": format!("{}/a2a", foreign.uri()),
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0"
+            }]
+        }),
+        vec![completed(json!({ "answer": "covered" }))],
+        Duration::ZERO,
+    )
+    .await;
+    let world = world(&main).await;
+    let agent = support(&world, &peer.card_url(), bearer_target(&peer.card_url())).await;
+
+    conversation(&world, &agent).await;
+    let outcome = forwarded(&main).await["outcome"].clone();
+    assert!(
+        incomplete_message(&outcome).contains("origin"),
+        "the route says why: {outcome}"
+    );
+    assert!(foreign.received_requests().await.unwrap().is_empty());
+}
+
+/// The same for an OAuth token endpoint on another origin: the client
+/// secret is never posted there.
+#[tokio::test]
+async fn a_token_url_on_another_origin_gets_no_client_secret() {
+    let main = llm(main_script("That is not available.")).await;
+    let foreign = MockServer::start().await;
+    let peer = Peer::start(
+        json!({
+            "securitySchemes": { "oauth": { "oauth2SecurityScheme": { "flows": {
+                "clientCredentials": { "tokenUrl": format!("{}/token", foreign.uri()),
+                                       "scopes": { "tasks": "t" } } } } } },
+            "securityRequirements": [{ "schemes": { "oauth": { "list": ["tasks"] } } }]
+        }),
+        vec![completed(json!({ "answer": "covered" }))],
+        Duration::ZERO,
+    )
+    .await;
+    let world = world(&main).await;
+    let target = json!({
+        "card_url": peer.card_url(),
+        "auth": { "kind": "oauth_client_credentials", "client_id": "gateway",
+                  "client_secret": "client-secret-abcdef", "scopes": ["tasks"] },
+        "finish": { "schema": finish_schema() }
+    });
+    let agent = support(&world, &peer.card_url(), target).await;
+
+    conversation(&world, &agent).await;
+    let outcome = forwarded(&main).await["outcome"].clone();
+    assert!(incomplete_message(&outcome).contains("origin"), "{outcome}");
+    assert!(foreign.received_requests().await.unwrap().is_empty());
+    assert!(peer.received("/a2a").await.is_empty());
+}
+
 #[tokio::test]
 async fn client_credentials_mint_one_token_and_the_card_is_fetched_once() {
     let main = llm(vec![

@@ -380,6 +380,22 @@ pub fn interpret(result: &Value, finish: &FinishContract) -> Step {
     }
 }
 
+/// Refuse a URL the card names on another origin than the granted card URL.
+/// The grant is for that origin: a card that points its endpoint or token
+/// URL elsewhere (a compromised CDN, a stale host taken over) would otherwise
+/// collect the route's credential and the task's bound values.
+fn same_origin(card_url: &str, other: &str, what: &str) -> Result<(), String> {
+    let origin = |raw: &str| reqwest::Url::parse(raw).ok().map(|u| u.origin());
+    match (origin(card_url), origin(other)) {
+        (Some(a), Some(b)) if a == b && a.is_tuple() => Ok(()),
+        _ => Err(format!(
+            "the agent card names its {what} `{other}` on another origin than the granted card \
+             `{card_url}`; the gateway only talks to the card's own origin, so ask the partner \
+             to serve both from one origin"
+        )),
+    }
+}
+
 /// What a cached client-credentials token was minted for. Every part is
 /// load-bearing: a route that differs in any of them — another secret (even
 /// a wrong one), other scopes, another agent — must sign in on its own rather
@@ -422,6 +438,8 @@ struct Remote<'a> {
     state: &'a RamaState,
     /// The agent whose route this is; it scopes the OAuth token cache.
     principal_id: &'a str,
+    /// The granted card URL; the card may not send credentials elsewhere.
+    card_url: String,
     card: AgentCard,
     header: Option<(String, String)>,
     allow_private: bool,
@@ -437,9 +455,11 @@ impl<'a> Remote<'a> {
     ) -> Result<Self, String> {
         let allow_private = state.config().agents.a2a_allow_private_networks;
         let card = card::fetch(&target.card_url, allow_private).await?;
+        same_origin(&target.card_url, &card.endpoint, "endpoint")?;
         let mut remote = Self {
             state,
             principal_id,
+            card_url: target.card_url.clone(),
             card,
             header: None,
             allow_private,
@@ -525,6 +545,7 @@ impl<'a> Remote<'a> {
                     .pointer("/flows/clientCredentials/tokenUrl")
                     .and_then(Value::as_str)
                     .ok_or("the agent card's OAuth scheme has no client-credentials flow")?;
+                same_origin(&self.card_url, token_url, "OAuth token URL")?;
                 let token = self.client_token(auth, token_url).await?;
                 Ok(Some(("authorization".into(), format!("Bearer {token}"))))
             }
