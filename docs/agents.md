@@ -340,9 +340,9 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
     checked for shape only.
   - *Publish*: everything above against the grants as they are now, plus
     `main.pool`, instructions, and every routed sub-agent having a live version.
-  - Still open: gate type checks (#86), cycle and depth checks of the sub-agent
-    graph (#88). Slot run-time semantics landed with #85
-    ([below](#what-85-built)).
+  - Still open: cycle and depth checks of the sub-agent graph (#88). Slot
+    run-time semantics landed with #85 ([below](#what-85-built)), gate type
+    checks with #86 ([§4](#what-86-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
   or `is_admin`. The caller must also hold the permission on every request.
@@ -637,6 +637,57 @@ They are ANDed together.
 
 **Optional LLM classifier per route.** It may add a denial ("off-topic"). It
 runs after the code gate passes and can only close the route.
+
+### What #86 built
+
+`aiplane-runtime::agents::gate`.
+
+- **Grammar as implemented** — exactly the tree above. A leaf is
+  `{slot, set?, eq?, in?, provenance?, max_age?}` with at least one check, and
+  its checks are ANDed. `eq` and `in` compare the slot's whole JSON value
+  (a `subject` compares as an object). `max_age` holds while
+  `now - set_at <= d`; a value stamped after `now` is not old. `Cond::parse`
+  reads a tree; the spec validator still reports shape problems with paths.
+- **Semantics.** A slot that is missing, `invalid` (§3) or not declared fails
+  every check on it, except a leaf that is only `set: false`, which holds.
+  `all` holds if every child does, `any` if one does, `not` if its child does
+  not. So `{not: …}` over a missing slot holds, as "missing = false" implies.
+- **`evaluate(cond, GateInput { schema, state, now }) -> Vec<Unmet>`** returns
+  every unmet leaf in document order; empty means open. For an `any` with no
+  holding child it returns every child's leaves. An `Unmet` is
+  `{path, slot?, kind, …, message}` with `kind` one of `missing`, `invalid`,
+  `must_be_unset`, `not_equal {expected}`, `not_in {expected}`,
+  `wrong_provenance {required, actual}`, `too_old {max_age}`, `excluded` (a
+  `not` whose child holds), `unknown_route`, `denied`. The `message` tells the
+  model what to do: `call set_email`, or `it is set by verifier:otp or host,
+  not by you`. It never contains a value the model did not write; `expected`
+  comes from the spec.
+- **`RouteGates::from_spec(spec)`** holds each route's gate.
+  `gate_status(route, input)` is `Open` or `Closed { missing }`; an unknown
+  route is closed with `unknown_route`. A route is invoked through an
+  `OpenRoute`, which only `open` and `open_reviewed` construct and only for an
+  open gate, so dispatch (#88) cannot be reached around a closed one.
+- **Classifier seam.** `DenyClassifier::review(route, &[SlotView]) ->
+  Result<Verdict, String>` gets the model's view of the state, never trusted
+  values. `open_reviewed` consults it only after the code gate opened.
+  `Verdict::Deny` and an `Err` both close the route (`denied`); nothing it
+  returns can open a closed gate. There is no LLM implementation yet, only a
+  test double.
+- **Spec type checks.** On save and publish, each leaf must be able to hold:
+  every `eq` and `in` value must pass the slot's own validator, and
+  `provenance` must be in the slot's `set_by`. A route with a `bind` must have a
+  gate that `requires_trusted_provenance`: a non-`llm` `provenance` leaf on
+  every way through it (any child of an `all`, every child of an `any`, never
+  under a `not`).
+- **Deviations.**
+  - The subject-bound check covers a route's own `bind`. Whether the routed
+    sub-agent reaches a tool with a `bind` needs the sub-agent graph, so that
+    half of the rule lands with #88.
+  - No slot-to-slot comparison (`{slot: a, eq_slot: b}`): §4 has none and no
+    route needs one yet.
+- **Not wired yet.** `forward_request` (#87) is what calls `RouteGates` and
+  returns `Closed.missing` to the model; there is no `gate` SSE event or
+  `agent_audit` row for a gate decision until a run exists to record.
 
 ### Value validation without a JSON-Schema crate
 

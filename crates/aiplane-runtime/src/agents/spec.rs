@@ -28,8 +28,14 @@
 //!   slot's `schema` must be one the run-time validator enforces, and the
 //!   model may not write a `subject`. Run-time meaning is [`super::state`].
 //!
-//! What it does not: type-check gate values against slots (#86) or check the
-//! sub-agent graph for cycles and depth (#88).
+//! - **Gates.** Beyond their shape, every leaf must be able to hold: an `eq`
+//!   or `in` value the slot would accept, a `provenance` its `set_by` lists
+//!   ([`Cond::type_check`]). A route that binds arguments from state needs a
+//!   gate that cannot open without a verifier- or host-written slot
+//!   ([`Cond::requires_trusted_provenance`]).
+//!
+//! What it does not: check the sub-agent graph for cycles and depth, or
+//! whether a sub-agent reaches a tool with a `bind` (#88).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -38,6 +44,8 @@ use aiplane_core::server::reasoning::HARD_ROUND_CAP;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use super::gate::Cond;
+use super::state::StateSchema;
 use crate::finish::FinishContract;
 use crate::server::tools::mcp::MCP_ID_PREFIX;
 
@@ -131,7 +139,7 @@ const FINISH_KEYS: &[&str] = &["schema"];
 const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
 const PUBLISH_KEYS: &[&str] = &["origins", "idle_ttl", "retention_days", "output_filter"];
 const OUTPUT_FILTER_KEYS: &[&str] = &["patterns"];
-const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
+pub(super) const LEAF_KEYS: &[&str] = &["slot", "set", "eq", "in", "provenance", "max_age"];
 const MAX_IDENT_LEN: usize = 48;
 
 /// Every problem with `spec`, in document order. Empty means valid.
@@ -142,6 +150,7 @@ pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIs
         issues: Vec::new(),
         slots: HashMap::new(),
         verifiers: BTreeSet::new(),
+        schema: None,
     };
     check.spec(spec);
     check.issues
@@ -154,9 +163,12 @@ struct Check<'a> {
     /// Slot name → whether the model may write it.
     slots: HashMap<String, bool>,
     verifiers: BTreeSet<String>,
+    /// The typed slots, for checking gates against them; `None` when `state`
+    /// is too malformed to read, which is reported already.
+    schema: Option<StateSchema>,
 }
 
-fn join(path: &str, key: &str) -> String {
+pub(super) fn join(path: &str, key: &str) -> String {
     if path.is_empty() {
         key.to_string()
     } else {
@@ -164,7 +176,7 @@ fn join(path: &str, key: &str) -> String {
     }
 }
 
-fn index(path: &str, i: usize) -> String {
+pub(super) fn index(path: &str, i: usize) -> String {
     format!("{path}[{i}]")
 }
 
@@ -175,16 +187,29 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// `30s`, `15m`, `2h`, `30d` — a positive count and one unit.
-fn is_duration(s: &str) -> bool {
-    let Some(unit) = s.chars().last() else {
-        return false;
-    };
+/// `30s`, `15m`, `2h`, `30d` — a positive count and one unit. A day is 24
+/// hours: these are ages and timeouts, not calendar dates.
+pub fn parse_duration(s: &str) -> Option<jiff::SignedDuration> {
+    let unit = s.chars().last()?;
     let digits = &s[..s.len() - unit.len_utf8()];
-    matches!(unit, 's' | 'm' | 'h' | 'd')
-        && !digits.is_empty()
-        && digits.chars().all(|c| c.is_ascii_digit())
-        && digits.parse::<u64>().is_ok_and(|n| n > 0)
+    let per_unit: i64 = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        _ => return None,
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let count: i64 = digits.parse().ok().filter(|n| *n > 0)?;
+    count
+        .checked_mul(per_unit)
+        .map(jiff::SignedDuration::from_secs)
+}
+
+fn is_duration(s: &str) -> bool {
+    parse_duration(s).is_some()
 }
 
 /// Exactly `scheme://host[:port]`, the form a browser sends in `Origin`.
@@ -397,6 +422,7 @@ impl<'a> Check<'a> {
         if let Some(v) = top.get("state") {
             self.state(v);
         }
+        self.schema = StateSchema::from_spec(spec).ok();
         if let Some(v) = top.get("profile") {
             self.profile(v);
         }
@@ -837,7 +863,14 @@ impl<'a> Check<'a> {
             self.string(d, &join(path, "description"));
         }
         match map.get("when") {
-            Some(when) => self.cond(when, &join(path, "when")),
+            Some(when) => {
+                let at = join(path, "when");
+                let before = self.issues.len();
+                self.cond(when, &at);
+                if self.issues.len() == before {
+                    self.gate_semantics(when, &at, map.contains_key("bind"));
+                }
+            }
             None => self.issue(
                 &join(path, "when"),
                 "a route needs a `when` gate — use `{\"slot\": …, \"set\": true}` for the \
@@ -1028,6 +1061,31 @@ impl<'a> Check<'a> {
         }
         if let Some(x) = map.get("max_age") {
             self.duration(x, &join(path, "max_age"));
+        }
+    }
+
+    /// A well-shaped gate, checked against the slots: no leaf that can never
+    /// hold, and — on a route that binds arguments from state — a gate that
+    /// cannot open on model-written slots alone (§4 "Type-checked").
+    fn gate_semantics(&mut self, when: &Value, path: &str, binds: bool) {
+        let Ok(cond) = Cond::parse(when) else {
+            return;
+        };
+        let problems = self
+            .schema
+            .as_ref()
+            .map(|schema| cond.type_check(schema))
+            .unwrap_or_default();
+        for (at, message) in problems {
+            self.issue(&join(path, &at), message);
+        }
+        if binds && !cond.requires_trusted_provenance() {
+            self.issue(
+                path,
+                "this route binds arguments from state, so its gate must require a slot set by a \
+                 verifier or the host — add a leaf such as {\"slot\": \"verified\", \
+                 \"provenance\": \"verifier:<id>\"} that every way through the gate has to pass",
+            );
         }
     }
 
@@ -1419,6 +1477,85 @@ mod tests {
                 "state.d.set_by[0]"
             ]
         );
+    }
+
+    fn gated(when: Value, bind: Option<Value>) -> Value {
+        let mut route = json!({ "when": when, "agent": BILLING, "task": "t" });
+        if let Some(bind) = bind {
+            route["bind"] = bind;
+        }
+        json!({
+            "verifiers": { "otp": { "kind": "mcp_code" } },
+            "state": {
+                "issue": { "type": "enum", "values": ["billing", "technical"], "set_by": ["llm"] },
+                "seats": { "type": "integer", "set_by": ["llm"] },
+                "verified": { "type": "subject", "set_by": ["verifier:otp"] }
+            },
+            "routes": { "r": route }
+        })
+    }
+
+    #[test]
+    fn gates_are_type_checked_against_the_slots_they_name() {
+        let issues = check(
+            gated(
+                json!({ "all": [
+                    { "slot": "issue", "eq": "sales" },
+                    { "slot": "seats", "in": [1, "two"] },
+                    { "slot": "issue", "provenance": "host" },
+                    { "slot": "verified", "provenance": "verifier:otp", "max_age": "15m" },
+                    { "not": { "slot": "issue", "eq": "billing" } }
+                ] }),
+                None,
+            ),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "routes.r.when.all[0].eq",
+                "routes.r.when.all[1].in[1]",
+                "routes.r.when.all[2].provenance"
+            ]
+        );
+        assert!(
+            issues[0].message.contains("can never hold"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    #[test]
+    fn a_route_that_binds_from_state_must_require_a_trusted_provenance() {
+        let bind = Some(json!({ "customer_id": "verified.customer_id" }));
+        let trusted = json!({ "slot": "verified", "provenance": "verifier:otp" });
+        let llm_only = json!({ "slot": "issue", "eq": "billing" });
+
+        assert_eq!(
+            check(
+                gated(
+                    json!({ "all": [llm_only.clone(), trusted.clone()] }),
+                    bind.clone()
+                ),
+                Stage::Draft
+            ),
+            []
+        );
+        for weak in [
+            llm_only.clone(),
+            json!({ "any": [llm_only.clone(), trusted.clone()] }),
+            json!({ "not": { "slot": "verified", "set": false } }),
+            json!({ "slot": "issue", "provenance": "llm" }),
+        ] {
+            let issues = check(gated(weak.clone(), bind.clone()), Stage::Draft);
+            assert_eq!(paths(&issues), ["routes.r.when"], "{weak}");
+            assert!(
+                issues[0].message.contains("verifier or the host"),
+                "{}",
+                issues[0].message
+            );
+        }
+        assert_eq!(check(gated(llm_only, None), Stage::Draft), []);
     }
 
     #[test]
