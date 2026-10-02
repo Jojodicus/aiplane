@@ -879,19 +879,6 @@ pub(crate) fn normalize_assistant_tool_call_args(message: &mut Value) {
     }
 }
 
-tokio::task_local! {
-    // Per call, not per turn, so it cannot ride in `ToolContext`, which is
-    // built once per turn and constructed in dozens of places.
-    static CURRENT_CALL_ID: String;
-}
-
-/// The id of the tool call the current [`Tool::run`] is answering, when it
-/// runs through [`execute_tool_calls`]. A sub-agent dispatch records it as the
-/// call site of the run it starts.
-pub fn current_call_id() -> Option<String> {
-    CURRENT_CALL_ID.try_with(Clone::clone).ok()
-}
-
 /// Run one round's calls, phase by phase ([`ToolPhase`]): the calls of the
 /// concurrent phase run in parallel, the others one at a time. Results come
 /// back in call order whatever order the calls ran in.
@@ -939,7 +926,10 @@ async fn execute_tool_call(
     scan: &InjectionScan,
 ) -> ToolResultRecord {
     let call = call.clone();
-    let ctx = ctx.clone();
+    let ctx = ToolContext {
+        call_id: Some(call.id.clone()),
+        ..ctx.clone()
+    };
     let Some(tool) = tools.get(&call.name) else {
         return ToolResultRecord::failure(
             call.id,
@@ -973,11 +963,7 @@ async fn execute_tool_call(
     // family) declare a longer ceiling via `max_duration`.
     let (principal, db, chain) = (ctx.principal.clone(), ctx.db.clone(), ctx.run.clone());
     let tool_timeout = tool.max_duration().unwrap_or(TOOL_TIMEOUT);
-    let outcome = tokio::time::timeout(
-        tool_timeout,
-        CURRENT_CALL_ID.scope(call.id.clone(), tool.run(ctx, args)),
-    )
-    .await;
+    let outcome = tokio::time::timeout(tool_timeout, tool.run(ctx, args)).await;
     let elapsed_ms = started.elapsed().as_millis();
     let failed = !matches!(outcome, Ok(Ok(_)));
     let body = match outcome {

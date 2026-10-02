@@ -46,7 +46,6 @@ pub use guard::check_card_url;
 
 use crate::finish::{FinishContract, IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
-use crate::server::tools::runner::current_call_id;
 use crate::server::tools::{ToolContext, ToolError};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
@@ -752,10 +751,11 @@ impl Dispatch<'_> {
     /// Continue the task call `ctx`'s waiting call left at `input-required`,
     /// if it left one; `None` when it waits on nothing remote.
     pub async fn resume_pending(ctx: &ToolContext) -> Result<Option<PendingTask>, ToolError> {
-        let (Some(turn), Some(call)) = (ctx.assistant_turn_id.as_deref(), current_call_id()) else {
+        let (Some(turn), Some(call)) = (ctx.assistant_turn_id.as_deref(), ctx.call_id.as_deref())
+        else {
             return Ok(None);
         };
-        agent_a2a_tasks::take(&ctx.db, turn, &call)
+        agent_a2a_tasks::take(&ctx.db, turn, call)
             .await
             .map_err(|e| ToolError::Failed(format!("reading the waiting A2A task: {e}")))
     }
@@ -837,7 +837,7 @@ impl Dispatch<'_> {
                     context_id,
                 };
                 let turn = self.ctx.assistant_turn_id.clone().unwrap_or_default();
-                let call = current_call_id().unwrap_or_default();
+                let call = self.ctx.call_id.clone().unwrap_or_default();
                 agent_a2a_tasks::put(&self.ctx.db, &turn, &call, &pending)
                     .await
                     .map_err(|e| ToolError::Failed(format!("recording the A2A task: {e}")))?;

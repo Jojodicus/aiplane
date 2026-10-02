@@ -46,7 +46,6 @@ use super::state::{AgentState, SlotView, StateSchema, StateSnapshot};
 use crate::finish::{IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
-use crate::server::tools::runner::current_call_id;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{ChildPause, Suspend, SuspendRequest, tool_suspend};
 use session_core::db::{Decision, TurnRole};
@@ -430,7 +429,7 @@ impl ForwardRequest {
         };
         let site = CallSite {
             turn_id: ctx.assistant_turn_id.clone().unwrap_or_default(),
-            tool_call_id: current_call_id().unwrap_or_default(),
+            tool_call_id: ctx.call_id.clone().unwrap_or_default(),
         };
         let chain = parent
             .enter(

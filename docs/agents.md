@@ -778,8 +778,8 @@ grants.
      placeholder that cannot be filled answers `task_incomplete`.
   2. Resolve the route's `bind` against the state.
   3. Load the sub-agent's profile with those values and enter the chain
-     (`CallSite { turn_id, tool_call_id }`; the call id comes from
-     `runner::current_call_id`, a task-local set around every `Tool::run`).
+     (`CallSite { turn_id, tool_call_id }`; the call id is
+     `ToolContext::call_id`, which the runner sets on each call's context).
   4. Open a child session owned by the sub-agent's principal
      (`parent_turn_id` = the main turn) and `drive` it with its own budget,
      contract, grants and injection policy.

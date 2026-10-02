@@ -175,6 +175,10 @@ pub struct ToolContext {
     /// for a person's chat, a scheduled action or a `/v1` request. Its
     /// running frame is `principal`; see [`Self::agent_active`].
     pub run: Option<std::sync::Arc<aiplane_core::server::run_chain::RunChain>>,
+    /// The id of the tool call this run answers. The runner sets it on the
+    /// copy of the context it hands each call; `None` outside a call. A
+    /// sub-agent dispatch records it as the call site of the run it starts.
+    pub call_id: Option<String>,
 }
 
 /// Test-support constructor. Not `#[cfg(test)]`-gated because the tool
@@ -214,6 +218,7 @@ impl ToolContext {
             suspend: crate::suspend::Suspend::Unavailable,
             granted_tools: None,
             run: None,
+            call_id: None,
         }
     }
 

@@ -564,6 +564,7 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
     ToolContext {
         principal,
         run,
+        call_id: None,
         token_id: None,
         pool_access,
         db: state.db.clone(),
