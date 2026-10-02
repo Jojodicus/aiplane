@@ -217,15 +217,16 @@ pub async fn event_times(
 }
 
 /// Accept host identity token `jti_hash` for this agent once. `false` means
-/// it was accepted before and has not expired yet: a replay.
+/// it was accepted before and has not expired yet: a replay. Runs on `tx`,
+/// the caller's transaction, so the `jti` is spent only if what the token
+/// was accepted for is stored too.
 pub async fn use_jti(
-    pool: &Pool,
+    tx: &mut sqlx::SqliteConnection,
     principal_id: &str,
     jti_hash: &str,
     expires_at: Timestamp,
     now: Timestamp,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM agent_identity_jtis WHERE principal_id = ? AND expires_at < ?")
         .bind(principal_id)
         .bind(now.to_string())
@@ -241,7 +242,6 @@ pub async fn use_jti(
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    tx.commit().await?;
     Ok(inserted == 1)
 }
 
@@ -366,15 +366,29 @@ mod tests {
         let pool = fresh().await;
         let now = at("2026-10-02T10:00:00Z");
         let exp = at("2026-10-02T10:05:00Z");
-        assert!(use_jti(&pool, "a1", "j1", exp, now).await.unwrap());
-        assert!(!use_jti(&pool, "a1", "j1", exp, now).await.unwrap());
-        assert!(use_jti(&pool, "a1", "j2", exp, now).await.unwrap());
+        let mut conn = pool.acquire().await.unwrap();
+        assert!(use_jti(&mut conn, "a1", "j1", exp, now).await.unwrap());
+        assert!(!use_jti(&mut conn, "a1", "j1", exp, now).await.unwrap());
+        assert!(use_jti(&mut conn, "a1", "j2", exp, now).await.unwrap());
         let later = at("2026-10-02T10:06:00Z");
         assert!(
-            use_jti(&pool, "a1", "j1", at("2026-10-02T10:11:00Z"), later)
+            use_jti(&mut conn, "a1", "j1", at("2026-10-02T10:11:00Z"), later)
                 .await
                 .unwrap(),
             "an expired entry no longer blocks; the token itself is expired by then"
         );
+    }
+
+    #[tokio::test]
+    async fn a_jti_spent_in_a_rolled_back_transaction_is_still_unspent() {
+        let pool = fresh().await;
+        let now = at("2026-10-02T10:00:00Z");
+        let exp = at("2026-10-02T10:05:00Z");
+        let mut tx = pool.begin().await.unwrap();
+        assert!(use_jti(&mut tx, "a1", "j1", exp, now).await.unwrap());
+        tx.rollback().await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        assert!(use_jti(&mut tx, "a1", "j1", exp, now).await.unwrap());
+        tx.commit().await.unwrap();
     }
 }

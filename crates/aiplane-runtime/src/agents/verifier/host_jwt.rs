@@ -33,7 +33,7 @@ use serde_json::{Map, Value, json};
 
 use super::{JwtAlgorithm, LIFETIME_DEFAULT, MAX_LIFETIME_CAP, duration};
 use crate::agents::a2a_client::guard;
-use crate::agents::state::{StateSchema, TrustedWriter, write_trusted};
+use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 
 const LEEWAY_SECS: u64 = 30;
@@ -506,6 +506,11 @@ async fn accept_inner(
     let schema = StateSchema::from_spec(spec).map_err(|i| IdentityError::Storage(i.message))?;
     let claims = verified_claims(state, &cfg, token.trim(), now).await?;
     let values = slot_values(&cfg, &schema, &claims).map_err(IdentityError::Invalid)?;
+    let storage = |e: &dyn std::fmt::Display| IdentityError::Storage(e.to_string());
+    // One transaction: the `jti` is spent only together with every slot, so
+    // a failed write neither leaves half an identity behind nor burns the
+    // token the website will retry with.
+    let mut tx = state.db.begin().await.map_err(|e| storage(&e))?;
     if let Some(jti) = claims.get("jti").and_then(Value::as_str) {
         let exp = claims
             .get("exp")
@@ -513,27 +518,23 @@ async fn accept_inner(
             .and_then(|s| Timestamp::from_second(s).ok())
             .unwrap_or(now);
         let first =
-            agent_verifiers::use_jti(&state.db, agent_id, &sha256_hex(jti.as_bytes()), exp, now)
+            agent_verifiers::use_jti(&mut tx, agent_id, &sha256_hex(jti.as_bytes()), exp, now)
                 .await
-                .map_err(|e| IdentityError::Storage(e.to_string()))?;
+                .map_err(|e| storage(&e))?;
         if !first {
             return Err(IdentityError::Replayed);
         }
     }
-    let mut written = Vec::new();
-    for (slot, value) in values {
-        write_trusted(
-            &state.db,
-            &schema,
-            session_id,
-            &slot,
-            value,
-            TrustedWriter::Host,
-            now,
-        )
-        .await
-        .map_err(|e| IdentityError::Storage(e.to_string()))?;
-        written.push(slot);
-    }
-    Ok(written)
+    write_trusted_all(
+        &mut tx,
+        &schema,
+        session_id,
+        &values,
+        TrustedWriter::Host,
+        now,
+    )
+    .await
+    .map_err(|e| storage(&e))?;
+    tx.commit().await.map_err(|e| storage(&e))?;
+    Ok(values.into_iter().map(|(slot, _)| slot).collect())
 }

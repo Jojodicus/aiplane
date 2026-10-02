@@ -996,3 +996,98 @@ async fn a_failing_jwks_endpoint_tells_the_visitor_nothing_about_it() {
     let err = present(&world, &spec, &es256_token()).await.unwrap_err();
     assert_generic(&err, &url, &["JWKS document", "expected", "line"]);
 }
+
+/// Two host slots, written in name order: `a_verified`, then `b_plan`.
+fn two_slot_spec(world: &World, b_set_by: &str) -> Value {
+    let mut spec = json!({
+        "state": {
+            "a_verified": { "type": "subject", "set_by": ["host"] },
+            "b_plan": { "type": "string", "max_length": 20, "set_by": [b_set_by] }
+        },
+        "verifiers": { "site": {
+            "kind": "host_jwt", "issuer": ISSUER, "audience": AUDIENCE,
+            "algorithm": "HS256", "secret": SECRET,
+            "claims": { "a_verified": { "customer_id": "sub" }, "b_plan": "plan" }
+        } }
+    });
+    host_jwt::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    spec
+}
+
+fn once_token() -> String {
+    let mut once = claims(300);
+    once["jti"] = json!("token-once");
+    signed(&once, SECRET)
+}
+
+/// Accepting a token is all or nothing: when the second slot cannot be
+/// stored, the first is not either and the `jti` is not spent, so the
+/// website's retry with the same token goes through.
+#[tokio::test]
+async fn a_failed_slot_write_stores_nothing_and_leaves_the_jti_unspent() {
+    let world = World::new(&[], None).await;
+    let spec = two_slot_spec(&world, "host");
+    let token = once_token();
+    let (agent, session) = conversation(&world).await;
+    sqlx::query(
+        "CREATE TRIGGER refuse_b_plan BEFORE INSERT ON agent_state WHEN NEW.slot = 'b_plan'
+         BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+    )
+    .execute(world.db())
+    .await
+    .unwrap();
+    let now = jiff::Timestamp::now();
+
+    let failed = host_jwt::accept(&world.state, &agent, &session, &spec, &token, now).await;
+    assert!(
+        matches!(failed, Err(IdentityError::Storage(_))),
+        "{failed:?}"
+    );
+    assert!(
+        slot_rows(&world, &session).await.is_empty(),
+        "a partial write"
+    );
+
+    sqlx::query("DROP TRIGGER refuse_b_plan")
+        .execute(world.db())
+        .await
+        .unwrap();
+    let retried = host_jwt::accept(&world.state, &agent, &session, &spec, &token, now).await;
+    assert_eq!(retried.unwrap(), ["a_verified", "b_plan"]);
+    assert_eq!(slot_rows(&world, &session).await.len(), 2);
+}
+
+/// A slot the host may not write is found before anything is stored.
+#[tokio::test]
+async fn a_slot_the_host_may_not_write_stores_nothing_and_leaves_the_jti_unspent() {
+    let world = World::new(&[], None).await;
+    let token = once_token();
+    let (agent, session) = conversation(&world).await;
+    let now = jiff::Timestamp::now();
+
+    let refused = host_jwt::accept(
+        &world.state,
+        &agent,
+        &session,
+        &two_slot_spec(&world, "llm"),
+        &token,
+        now,
+    )
+    .await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        slot_rows(&world, &session).await.is_empty(),
+        "a partial write"
+    );
+
+    let retried = host_jwt::accept(
+        &world.state,
+        &agent,
+        &session,
+        &two_slot_spec(&world, "host"),
+        &token,
+        now,
+    )
+    .await;
+    assert_eq!(retried.unwrap(), ["a_verified", "b_plan"]);
+}

@@ -24,9 +24,10 @@ pub struct StoredSlot {
     pub set_at: Timestamp,
 }
 
-/// Insert or replace one slot of `session_id`.
-pub async fn put(
-    pool: &Pool,
+/// Insert or replace one slot of `session_id`, on the pool or inside a
+/// caller's transaction.
+pub async fn put<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
     session_id: &str,
     slot: &str,
     value: &Value,
@@ -46,7 +47,7 @@ pub async fn put(
     .bind(value.to_string())
     .bind(provenance)
     .bind(set_at.to_string())
-    .execute(pool)
+    .execute(db)
     .await?;
     Ok(())
 }

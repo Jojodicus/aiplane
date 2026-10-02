@@ -670,15 +670,41 @@ pub(crate) async fn write_from_model(
     write(pool, schema, session_id, slot, value, Provenance::Llm, now).await
 }
 
-async fn write(
-    pool: &Pool,
+/// [`write_trusted`] for several slots at once, all or none, on `conn` —
+/// the caller's transaction, so what it records alongside (a spent `jti`)
+/// commits or rolls back with the slots. Every value is checked before the
+/// first is stored.
+pub async fn write_trusted_all(
+    conn: &mut sqlx::SqliteConnection,
     schema: &StateSchema,
     session_id: &str,
-    slot: &str,
-    value: Value,
-    provenance: Provenance,
+    values: &[(String, Value)],
+    writer: TrustedWriter,
     now: Timestamp,
-) -> Result<SlotEntry, StateWriteError> {
+) -> Result<(), StateWriteError> {
+    let provenance: Provenance = writer.into();
+    for (slot, value) in values {
+        check_write(schema, slot, value, &provenance)?;
+    }
+    let stamp = provenance.to_string();
+    for (slot, value) in values {
+        agent_state::put(&mut *conn, session_id, slot, value, &stamp, now)
+            .await
+            .map_err(|source| StateWriteError::Db {
+                slot: slot.clone(),
+                source,
+            })?;
+    }
+    Ok(())
+}
+
+/// Whether `provenance` may store `value` in `slot`.
+fn check_write(
+    schema: &StateSchema,
+    slot: &str,
+    value: &Value,
+    provenance: &Provenance,
+) -> Result<(), StateWriteError> {
     let Some(def) = schema.slot(slot) else {
         let known: Vec<&str> = schema.slots().map(|d| d.name.as_str()).collect();
         return Err(StateWriteError::UnknownSlot {
@@ -688,18 +714,30 @@ async fn write(
     };
     // The writer is checked before the value, so a refused writer learns
     // nothing about what the slot would have accepted.
-    if !def.writable_by(&provenance) {
+    if !def.writable_by(provenance) {
         return Err(StateWriteError::NotWritable {
             slot: slot.to_string(),
-            writer: provenance,
+            writer: provenance.clone(),
             allowed: writers(&def.set_by),
         });
     }
-    def.check(&value)
+    def.check(value)
         .map_err(|message| StateWriteError::Invalid {
             slot: slot.to_string(),
             message,
-        })?;
+        })
+}
+
+async fn write(
+    pool: &Pool,
+    schema: &StateSchema,
+    session_id: &str,
+    slot: &str,
+    value: Value,
+    provenance: Provenance,
+    now: Timestamp,
+) -> Result<SlotEntry, StateWriteError> {
+    check_write(schema, slot, &value, &provenance)?;
     agent_state::put(pool, session_id, slot, &value, &provenance.to_string(), now)
         .await
         .map_err(|source| StateWriteError::Db {

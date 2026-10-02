@@ -1675,7 +1675,10 @@ verifiers:
   code or parse error, so the endpoint is no probe into the gateway's
   network; the reason goes to the log and to the `host_identity` audit row
   (`jwks_url`, `error`), where the owner sees it. A refused token writes
-  nothing.
+  nothing. An accepted one is stored in one transaction: every mapped slot
+  is checked first, then the `jti` is spent and all slots are written
+  together (`state::write_trusted_all`), so a failed write leaves no slot
+  behind and the `jti` unspent — the website can retry with the same token.
 - **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
   `secret` (at least 32 characters) and then replace it with `secret_sealed`
   (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.
