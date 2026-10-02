@@ -94,6 +94,9 @@ const TOOL_OUTPUT_KEEP_FULL: usize = 3;
 /// preview size so a small `{preview, full_output_ref}` result is never
 /// stubbed (which would drop the ref it carries).
 const TOOL_OUTPUT_STUB_THRESHOLD: usize = 8192;
+/// How much of a stubbed result's head stays in the prompt. Enough for the
+/// model to recognise which call it was and whether it is worth re-running.
+const TOOL_STUB_PREVIEW_CHARS: usize = 300;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopError {
@@ -1191,9 +1194,15 @@ pub(crate) fn stub_old_tool_results(
             .and_then(|c| c.as_str())
             .map(output_ref_hint)
             .unwrap_or_default();
+        let head: String = messages[i]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(TOOL_STUB_PREVIEW_CHARS)
+            .collect();
         messages[i]["content"] = Value::String(format!(
-            "[earlier tool output cleared to save context ({len} chars). Re-run the tool to \
-             regenerate it{ref_hint}.]"
+            "[earlier tool output cleared to save context ({len} bytes). Re-run the tool to \
+             regenerate it{ref_hint}. Started with: {head}]"
         ));
         freed += len.saturating_sub(content_len(&messages[i]));
     }
@@ -2271,6 +2280,111 @@ mod tests {
         for id in ["b", "c", "d"] {
             assert_eq!(tool(id)["content"], json!(big), "{id} kept verbatim");
         }
+    }
+
+    #[test]
+    fn a_stub_keeps_the_head_of_the_result_it_replaced() {
+        let big = format!("HEAD-MARKER{}", "x".repeat(10_000));
+        let mut messages = body_with_tool_results(&[
+            ("a", big.clone()),
+            ("b", big.clone()),
+            ("c", big.clone()),
+            ("d", big),
+        ])["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        stub_old_tool_results(&mut messages, 4096, 3, 4096);
+        let stub = messages
+            .iter()
+            .find(|m| m["tool_call_id"] == json!("a"))
+            .unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert!(stub.contains("HEAD-MARKER"), "{stub}");
+        assert!(stub.len() < 700, "the stub stays short: {}", stub.len());
+    }
+
+    #[test]
+    fn stubbing_twice_changes_nothing_the_second_time() {
+        let big = "x".repeat(10_000);
+        let mut messages = body_with_tool_results(&[
+            ("a", big.clone()),
+            ("b", big.clone()),
+            ("c", big.clone()),
+            ("d", big.clone()),
+            ("e", big),
+        ])["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(stub_old_tool_results(&mut messages, 4096, 3, 1024) > 0);
+        let once = messages.clone();
+        assert_eq!(stub_old_tool_results(&mut messages, 4096, 3, 1024), 0);
+        assert_eq!(messages, once);
+    }
+
+    struct BigResult;
+
+    impl crate::server::tools::Tool for BigResult {
+        fn id(&self) -> &str {
+            "big_result"
+        }
+        fn schema(&self) -> shared::api::ToolDef {
+            shared::api::ToolDef::function(
+                self.id(),
+                "Returns a large payload.",
+                json!({"type": "object", "properties": {"n": {"type": "integer"}}}),
+            )
+        }
+        fn run<'a>(
+            &'a self,
+            _ctx: ToolContext,
+            args: Value,
+        ) -> crate::server::tools::ToolFuture<'a> {
+            Box::pin(async move { Ok(json!({"n": args["n"], "blob": "x".repeat(60_000)})) })
+        }
+    }
+
+    #[tokio::test]
+    async fn many_large_tool_results_keep_the_replayed_request_bounded() {
+        let sizes = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (sz, ca) = (sizes.clone(), calls.clone());
+        let out = run_with_tools(
+            &ToolRegistry::new().with(BigResult),
+            &[],
+            &ctx().await,
+            json!({"model": "x", "messages": [{"role": "user", "content": "go"}]}),
+            RoundBudget::default(),
+            move |body: Value| {
+                let (sz, ca) = (sz.clone(), ca.clone());
+                async move {
+                    sz.lock().unwrap().push(body.to_string().len());
+                    let n = ca.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let msg = if n < 10 {
+                        json!({"role": "assistant", "content": null, "tool_calls": [{
+                            "id": format!("call{n}"), "type": "function",
+                            "function": {"name": "big_result", "arguments": format!("{{\"n\":{n}}}")}
+                        }]})
+                    } else {
+                        json!({"role": "assistant", "content": "done"})
+                    };
+                    let resp = json!({"choices": [{"message": msg}]});
+                    Ok::<_, LoopError>((200u16, Bytes::from(serde_json::to_vec(&resp).unwrap())))
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.rounds, 10, "the run still completes");
+        let sizes = sizes.lock().unwrap();
+        let unbounded = 10 * 60_000;
+        let peak = *sizes.iter().max().unwrap();
+        assert!(
+            peak < unbounded / 2,
+            "request grew to {peak} bytes; 10 verbatim results would be over {unbounded}"
+        );
     }
 
     #[test]

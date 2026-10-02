@@ -435,10 +435,16 @@ client tool in one turn.
 - **Concurrency** — tool calls within one round run concurrently, bounded by a
   per-request semaphore of 4.
 - **Tool-result context budget** — once cumulative `role:"tool"` content passes
-  128 KB, older large results are replaced by re-callable stubs while the last
-  few stay verbatim. It triggers on size only, so short conversations keep the
-  full history and the prompt cache intact (clearing would invalidate the
-  cached prefix).
+  128 KB (`/v1` loop) or the turn's allowance derived from the model's context
+  window (chat driver), older large results are replaced by re-callable stubs
+  while the last three stay verbatim. Both loops call the one
+  `stub_old_tool_results`. A stub keeps the first 300 characters of the result
+  and its `full_output_ref`, so the model can tell what it was and re-run it.
+  Every `tool_call_id` stays answered, only the content shrinks, and a stub is
+  below the stubbing threshold so a second pass changes nothing. It triggers on
+  size only, so short conversations keep the full history and the prompt cache
+  intact (clearing would invalidate the cached prefix). Only the replayed
+  messages shrink; the stored turn keeps the full results.
 
 ### Streaming
 
