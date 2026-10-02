@@ -219,3 +219,12 @@ agents-debug-running = pas de résultat
 agents-debug-no-subagents = Aucun sous-agent n'a tourné ce tour.
 agents-debug-tools = Appels d'outils
 agents-debug-no-tools = Aucun outil appelé ce tour.
+
+agents-test-waiting-secure-input = L’agent demande au visiteur une valeur que lui seul peut saisir. Dans le chat de test, vous la saisissez à sa place : elle va à l’outil et nulle part ailleurs.
+agents-test-waiting-approval = L’agent attend que l’équipe approuve un appel à { $tool }.
+agents-test-waiting-human = L’agent attend la réponse d’une personne.
+agents-test-value-label = Valeur
+agents-test-answer = Envoyer à l’outil
+agents-test-approve = Approuver une fois
+agents-test-deny = Refuser
+agents-test-expires = Expire { $at }

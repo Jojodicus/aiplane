@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use session_core::db::{Decision, TimeoutFallback};
+use session_core::db::Decision;
 use shared::api::ToolDef;
 
 use super::{Tool, ToolContext, ToolError, ToolFuture};
@@ -25,23 +25,16 @@ use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 pub struct AskFirst {
     inner: Arc<dyn Tool>,
     timeout: Duration,
-    on_timeout: TimeoutFallback,
 }
 
 impl AskFirst {
     /// Gate `inner` behind an approval that expires after `timeout`, as a
-    /// denial unless [`Self::on_timeout`] says otherwise.
+    /// denial: an approval nobody gives is never one.
     pub fn new(inner: impl Tool, timeout: Duration) -> Self {
         Self {
             inner: Arc::new(inner),
             timeout,
-            on_timeout: TimeoutFallback::Deny,
         }
-    }
-
-    pub fn on_timeout(mut self, fallback: TimeoutFallback) -> Self {
-        self.on_timeout = fallback;
-        self
     }
 }
 
@@ -66,10 +59,7 @@ impl Tool for AskFirst {
                 Box::pin(async move { Err(ToolError::Failed(refusal)) })
             }
             Suspend::Available => {
-                let request = SuspendRequest {
-                    on_timeout: self.on_timeout,
-                    ..SuspendRequest::approval(self.timeout)
-                };
+                let request = SuspendRequest::approval(self.timeout);
                 Box::pin(async move { Ok(tool_suspend(request)) })
             }
             Suspend::Unavailable => {
@@ -98,7 +88,7 @@ mod tests {
     use crate::server::tools::echo::Echo;
     use crate::suspend::extract_suspend;
     use serde_json::json;
-    use session_core::db::{DenyReason, SuspensionKind};
+    use session_core::db::{DenyReason, SuspensionKind, TimeoutFallback};
 
     async fn ctx(suspend: Suspend) -> ToolContext {
         let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
@@ -111,7 +101,7 @@ mod tests {
     }
 
     fn gated() -> AskFirst {
-        AskFirst::new(Echo, Duration::from_secs(90)).on_timeout(TimeoutFallback::AllowOnce)
+        AskFirst::new(Echo, Duration::from_secs(90))
     }
 
     #[test]
@@ -129,7 +119,7 @@ mod tests {
         let request = extract_suspend(&body).expect("a suspend request");
         assert_eq!(request.kind, SuspensionKind::Approval);
         assert_eq!(request.timeout_secs, 90);
-        assert_eq!(request.on_timeout, TimeoutFallback::AllowOnce);
+        assert_eq!(request.on_timeout, TimeoutFallback::Deny);
     }
 
     #[tokio::test]

@@ -260,6 +260,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/test-turn",
             pages::json_agent_test::test_turn,
         )
+        .with_post(
+            "/api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume",
+            pages::json_agent_test::resume_turn,
+        )
         .with_get("/api/v0/agents/{id}/versions", pages::json_agents::versions)
         .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
         .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)
@@ -287,6 +291,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_get("/api/v0/embed/session", pages::embed::current_session)
         .with_post("/api/v0/embed/messages", pages::embed::send_message)
         .with_get("/api/v0/embed/events", pages::embed::events)
+        .with_post("/api/v0/embed/resume", pages::embed::resume)
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)

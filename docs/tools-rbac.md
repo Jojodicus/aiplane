@@ -97,9 +97,10 @@ dependency doesn't change the trait signature:
   browser reply — `get_user_location` asks for a position, `ask_user` asks a
   question; one hub per reply shape, so the two endpoints can't un-park each
   other's tool), `push` (Web Push, for `notify_user`).
-- **Pausing** — `suspend`: `Available` on the interactive chat path, where a
-  tool may pause the turn for a decision; `Decided(…)` when the call runs again
-  after one; `Unavailable` everywhere else. See
+- **Pausing** — `suspend`: `Available` on the interactive chat path and on
+  agent runs, where a tool may pause the turn for a decision; `Decided(…)`
+  when the call runs again after one; `Unavailable` everywhere else (`/v1`,
+  scheduled and webhook runs). See
   [Suspend and resume](#suspend-and-resume).
 - **The grant** — `granted_tools`, the tool ids the principal may run, set by
   the chat driver once per turn. `enable_tools` refuses keys outside it; `None`
@@ -716,8 +717,10 @@ call only while the turn lives in memory; this pause is durable.
   `suspended` (see [`ui.md`](ui.md#chat-streaming-the-json-event-protocol)).
   One decision at a time: a second suspend request in the same round is
   answered with an error. Where the run cannot pause (`ToolContext::suspend`
-  is `Unavailable`: `/v1`, headless runs), the envelope is answered with an
-  error too, and a well-behaved tool refuses on its own first.
+  is `Unavailable`: `/v1`, scheduled and webhook runs), the envelope is
+  answered with an error too, and a well-behaved tool refuses on its own
+  first. The timeout fallback is the kind's (`SuspensionKind::timeout_fallback`),
+  whatever the tool asked: an approval always falls back to deny.
 - **Resuming.** `suspend::claim_for_resume` checks the decision against the
   kind's options (`approval`: allow once / deny; `secure_input`,
   `human_answer`: value / deny) and the optional `request_id`, then deletes the
@@ -734,7 +737,9 @@ call only while the turn lives in memory; this pause is durable.
     result. Asking again re-suspends the turn.
 - **Expiry.** `pages::chat::spawn_suspension_sweeper` looks every 30 s (and at
   boot) for suspensions past `expires_at` and resumes them with their
-  `on_timeout` fallback — deny unless the tool asked for `allow_once`.
+  `on_timeout` fallback, which is deny for every kind today (see
+  `SuspensionKind::timeout_fallback`). Agent conversations are swept by
+  `agents::resume::resume_expired` from the same loop.
 - **Restart.** Nothing is held in memory: the startup sweep leaves suspended
   turns and their waiting call alone, and the resume runs on whichever
   process gets it.
@@ -750,9 +755,11 @@ pausing is impossible. Nothing in the shipped registry is wrapped yet — the
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which
 suspends every ancestor turn and resumes innermost first
-([`agents.md`](agents.md#suspend-and-resume-82)). Nothing sets it yet: agent
-runs, sub-agents included, are headless and refuse to pause, so the
-propagation comes with human-in-the-loop (#96).
+([`agents.md`](agents.md#what-agent-run-suspend-built)). `forward_request`
+sets it: a paused sub-agent run pauses its caller on the same request, and
+one decision resumes the child first, then each caller with the child's
+result (`ResumeFrom.child_result`). Agent runs pause and resume through
+`agents::resume`, not the chat path's route.
 
 ### Streaming
 

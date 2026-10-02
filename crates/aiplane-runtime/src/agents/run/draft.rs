@@ -51,6 +51,7 @@ pub async fn run_draft_turn(
                 session: session.to_string(),
             });
         }
+        super::refuse_if_waiting(state, session).await?;
     }
     let profile = RunProfile::load_from(
         state,

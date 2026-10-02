@@ -218,3 +218,13 @@ agents-debug-running = no result
 agents-debug-no-subagents = No sub-agent ran this turn.
 agents-debug-tools = Tool calls
 agents-debug-no-tools = No tool was called this turn.
+
+# The test chat when a turn waits for a decision (agent-run suspend/resume).
+agents-test-waiting-secure-input = The agent asks the visitor for a value only they may type. In the test chat you type it for them: it goes to the tool and nowhere else.
+agents-test-waiting-approval = The agent waits for staff to approve a call to { $tool }.
+agents-test-waiting-human = The agent waits for a person's answer.
+agents-test-value-label = Value
+agents-test-answer = Send to the tool
+agents-test-approve = Approve once
+agents-test-deny = Deny
+agents-test-expires = Expires { $at }

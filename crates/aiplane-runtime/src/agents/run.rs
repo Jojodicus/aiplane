@@ -15,7 +15,8 @@ use session_core::i18n::Lang;
 use super::output_filter::{Delivery, guard_answer};
 use super::profile::{AgentRunError, Role, RunOptions, RunProfile};
 use crate::rama_server::state::RamaState;
-use crate::server::headless::{OpenParams, Owner, drive, open_session};
+use crate::server::headless::{OpenParams, Owner, drive, drive_resumed, open_session};
+use crate::suspend::ResumeFrom;
 
 /// One visitor message to an agent.
 pub struct AgentTurn<'a> {
@@ -34,8 +35,31 @@ pub struct AgentReply {
     pub session_id: String,
     pub turn_id: String,
     pub status: chat::TurnStatus,
+    /// `None` while the turn is suspended: nothing is final yet.
     pub answer: Option<String>,
     pub error: Option<String>,
+    /// What the turn waits for, when it is suspended. The full view; a
+    /// visitor gets [`chat::SuspensionView::for_participant`] of it.
+    pub suspension: Option<chat::SuspensionView>,
+}
+
+/// Refuse a new message into a conversation that waits for a decision. The
+/// public endpoint queues the message instead (`docs/agents.md`); the
+/// synchronous entry points cannot.
+pub(crate) async fn refuse_if_waiting(
+    state: &RamaState,
+    session_id: &str,
+) -> Result<(), AgentRunError> {
+    match chat::suspended_turn_in_session(&state.db, session_id)
+        .await
+        .map_err(DbError::from)?
+    {
+        Some(turn) => Err(AgentRunError::DecisionPending {
+            session: session_id.to_string(),
+            turn,
+        }),
+        None => Ok(()),
+    }
 }
 
 pub async fn run_turn(
@@ -71,6 +95,7 @@ pub async fn run_turn_with(
                     session: session.to_string(),
                 });
             };
+            refuse_if_waiting(state, session).await?;
             run.agent_version
         }
     };
@@ -118,25 +143,60 @@ pub struct OpenedTurn {
     pub lang: Lang,
 }
 
-/// Drive an opened turn of `profile` to a terminal status and read it back.
+/// The call chain of a main agent's turn: the conversation is its root.
+pub fn root_chain(profile: &RunProfile, turn: &OpenedTurn) -> Arc<RunChain> {
+    Arc::new(RunChain::root(
+        &turn.session_id,
+        turn.visitor_id.clone(),
+        Frame::for_principal(&profile.principal, Some(profile.version)),
+    ))
+}
+
+/// Drive an opened turn of `profile` until it is terminal or suspended, and
+/// read it back.
 pub async fn drive_opened(
     state: &Arc<RamaState>,
     profile: &RunProfile,
     turn: &OpenedTurn,
 ) -> Result<AgentReply, AgentRunError> {
-    let chain = Arc::new(RunChain::root(
-        &turn.session_id,
-        turn.visitor_id.clone(),
-        Frame::for_principal(&profile.principal, Some(profile.version)),
-    ));
-    drive(
-        state,
-        profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone()),
-    )
-    .await;
+    drive_opened_from(state, profile, turn, None).await
+}
+
+/// [`drive_opened`], continuing the turn from `resume` when it was suspended.
+/// Both paths end the same way: a suspended turn reports what it waits for,
+/// a terminal one has its answer checked by the output filter.
+pub async fn drive_opened_from(
+    state: &Arc<RamaState>,
+    profile: &RunProfile,
+    turn: &OpenedTurn,
+    resume: Option<ResumeFrom>,
+) -> Result<AgentReply, AgentRunError> {
+    let chain = root_chain(profile, turn);
+    let params = profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone());
+    match resume {
+        Some(resume) => drive_resumed(state, params, resume).await,
+        None => drive(state, params).await,
+    };
     let done = chat::get_turn(&state.db, &turn.session_id, &turn.turn_id)
         .await
         .map_err(DbError::from)?;
+    if done
+        .as_ref()
+        .is_some_and(|t| t.status == chat::TurnStatus::Suspended)
+    {
+        let suspension = chat::get_suspension(&state.db, &turn.turn_id)
+            .await
+            .map_err(DbError::from)?
+            .map(|s| s.view());
+        return Ok(AgentReply {
+            session_id: turn.session_id.clone(),
+            turn_id: turn.turn_id.clone(),
+            status: chat::TurnStatus::Suspended,
+            answer: None,
+            error: None,
+            suspension,
+        });
+    }
     let mut answer = done.as_ref().and_then(|t| t.content.clone());
     if let Some(filter) = &profile.output_filter
         && let Some(text) = answer.take()
@@ -167,6 +227,7 @@ pub async fn drive_opened(
         error: done.and_then(|t| t.error_message),
         session_id: turn.session_id.clone(),
         turn_id: turn.turn_id.clone(),
+        suspension: None,
     })
 }
 
