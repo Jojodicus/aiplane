@@ -13,7 +13,11 @@
 //!
 //! An agent's principal (`docs/agents.md` §2) is also reachable here, so for
 //! one of those the caller additionally needs a share on the agent — `read`
-//! to see it, `write` to change it — exactly as on `/api/v0/agents`.
+//! to see it, `write` to change it — exactly as on `/api/v0/agents`. Any
+//! other principal is reachable only by its creator and by admins.
+//!
+//! A token carries every grant of its principal, so issuing one is held to
+//! the grant-time cap for all of them at once.
 
 use std::sync::Arc;
 
@@ -23,7 +27,7 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::json_agents::guard_agent_principal;
+use super::json_agents::guard_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, Access};
@@ -96,8 +100,7 @@ fn token_json(t: &sp_db::SystemToken) -> Value {
 }
 
 /// The principal named by the path segment `from_end` back, or the 404 —
-/// and, when it is an agent's, the 404/403 unless `manager` holds `need` on
-/// that agent.
+/// also when `manager` may not reach it ([`guard_principal`]).
 async fn principal_at(
     state: &RamaState,
     req: &Request,
@@ -113,7 +116,7 @@ async fn principal_at(
         Ok(None) => return Err(not_found(format!("there is no system principal `{id}`"))),
         Err(err) => return Err(internal(err)),
     };
-    guard_agent_principal(state, manager, &p.id, need).await?;
+    guard_principal(state, manager, &p, need).await?;
     Ok(p)
 }
 
@@ -126,7 +129,7 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
     };
     let mut out = Vec::with_capacity(rows.len());
     for p in &rows {
-        if guard_agent_principal(&state, &manager, &p.id, Access::Read)
+        if guard_principal(&state, &manager, p, Access::Read)
             .await
             .is_err()
         {
@@ -274,15 +277,15 @@ fn parse_grant(body: &GrantBody) -> Result<(GrantKind, &str), Response> {
     Ok((kind, reference))
 }
 
-/// Why `manager` cannot grant `(kind, reference)`, or `Ok` when they hold it
-/// right now. The check is the one that decides the manager's own access to
-/// that resource.
+/// Whether `manager` holds `(kind, reference)` right now, or the response
+/// for a grant that cannot be made at all (unknown resource, wrong kind). The
+/// check is the one that decides the manager's own access to that resource.
 async fn manager_holds(
     state: &RamaState,
     manager: &users::User,
     kind: GrantKind,
     reference: &str,
-) -> Result<(), Response> {
+) -> Result<bool, Response> {
     let role_ids = state.rbac.role_ids_for(&manager.roles);
     let missing = |what: String| not_found(format!("there is no {what} on this gateway"));
     let held = match kind {
@@ -368,12 +371,12 @@ async fn manager_holds(
         GrantKind::A2aCaller => {
             // Letting another platform call an agent is a change to that
             // agent, so it takes what changing it takes: a `write` share.
-            match agents_db::get(&state.db, reference).await {
-                Ok(Some(_)) => {}
+            let agent = match agents_db::get(&state.db, reference).await {
+                Ok(Some(agent)) => agent,
                 Ok(None) => return Err(missing(format!("agent `{reference}`"))),
                 Err(err) => return Err(internal(err)),
-            }
-            guard_agent_principal(state, manager, reference, Access::Write).await?;
+            };
+            guard_principal(state, manager, &agent.principal, Access::Write).await?;
             true
         }
         GrantKind::A2aAgent => {
@@ -399,19 +402,48 @@ async fn manager_holds(
             true
         }
     };
-    if held {
+    Ok(held)
+}
+
+/// `Ok` when `manager` may hand out a token for `principal`: an admin always,
+/// anyone else only while they hold every grant it has. A grant that could
+/// not be made today (its resource is gone) counts as not held.
+async fn manager_holds_every_grant(
+    state: &RamaState,
+    manager: &users::User,
+    principal: &sp_db::PrincipalRow,
+) -> Result<(), Response> {
+    if state
+        .rbac
+        .is_admin(&state.rbac.role_ids_for(&manager.roles))
+    {
         return Ok(());
     }
-    Err(json_error(
-        StatusCode::FORBIDDEN,
-        "grant_exceeds_manager",
-        &format!(
-            "cannot grant {} `{reference}`: you do not hold it yourself, and a manager can only \
-             grant what they hold. Ask an admin to grant it to one of your groups, or have \
-             someone who holds it make this grant.",
-            kind_label(kind)
-        ),
-    ))
+    let grants = sp_db::grants(&state.db, &principal.id)
+        .await
+        .map_err(internal)?;
+    for g in &grants {
+        let held = match manager_holds(state, manager, g.kind, &g.reference).await {
+            Ok(held) => held,
+            Err(resp) if resp.status() == StatusCode::INTERNAL_SERVER_ERROR => return Err(resp),
+            Err(_) => false,
+        };
+        if !held {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "token_exceeds_manager",
+                &format!(
+                    "cannot issue a token for `{}`: it holds {} `{}`, which you do not hold \
+                     yourself, and a token would hand it to whoever has the token. Ask an admin \
+                     to issue the token, or revoke that grant first.",
+                    principal.name,
+                    kind_label(g.kind),
+                    g.reference
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn kind_label(kind: GrantKind) -> &'static str {
@@ -442,8 +474,21 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    if let Err(resp) = manager_holds(&state, &manager, kind, reference).await {
-        return resp;
+    match manager_holds(&state, &manager, kind, reference).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "grant_exceeds_manager",
+                &format!(
+                    "cannot grant {} `{reference}`: you do not hold it yourself, and a manager \
+                     can only grant what they hold. Ask an admin to grant it to one of your \
+                     groups, or have someone who holds it make this grant.",
+                    kind_label(kind)
+                ),
+            );
+        }
+        Err(resp) => return resp,
     }
     let added = match sp_db::add_grant(&state.db, &p.id, kind, reference, &manager.id).await {
         Ok(added) => added,
@@ -493,8 +538,9 @@ pub struct TokenBody {
     pub ttl_days: Option<i64>,
 }
 
-/// POST /api/v0/system-principals/{id}/tokens — issue a `gws_` token. The
-/// plaintext is in this response and nowhere else, ever.
+/// POST /api/v0/system-principals/{id}/tokens — issue a `gws_` token, capped
+/// like a grant ([`manager_holds_every_grant`]). The plaintext is in this
+/// response and nowhere else, ever.
 pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
     let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
@@ -510,6 +556,9 @@ pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> R
                 p.name
             ),
         );
+    }
+    if let Err(resp) = manager_holds_every_grant(&state, &manager, &p).await {
+        return resp;
     }
     let body: TokenBody = match super::read_json(req.into_body(), "the token body").await {
         Ok(b) => b,

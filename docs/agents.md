@@ -127,6 +127,12 @@ ALTER TABLE gateway_groups ADD COLUMN can_manage_agents INTEGER NOT NULL DEFAULT
   resource: `allowed_tools`, `resource_allowed` for pools, collections and
   connectors, `allowed_skills`. A refused grant returns an actionable error
   naming the resource. Grants are never re-derived later.
+- **Who manages a principal.** An agent's principal: whoever holds a share on
+  the agent (§2). Any other principal: its creator (`created_by`) and admins,
+  nobody else — another manager gets 404. Issuing a token takes the cap for
+  every grant at once: a non-admin must hold all of them right now
+  (`403 token_exceeds_manager`), because the token hands them all out. See
+  [`auth.md`](auth.md#management-api).
 - **Every grant change is audited** in `agent_audit` (§3). The table landed with
   #77 (migration `0077`), with one column more than §3 lists: `actor_id`, the
   user who made a management change, so "who" is queryable rather than buried in
@@ -1688,11 +1694,24 @@ verifiers:
   `exp`/`nbf`/`iss`/`aud` (30 s leeway, `exp`, `iat`, `iss`, `aud`
   required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
   agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
-  five minutes per URL and refetched for an unknown `kid`; only `https://`
-  (or `http://` to localhost) is fetched. Answers: `200 {slots}`, `401
+  five minutes per URL and refetched for an unknown `kid`. The JWKS URL is
+  chosen by the agent's owner, so it is fetched through the A2A client's SSRF
+  guard (`a2a_client::guard`, [below](#what-101-built)): resolved and pinned,
+  no redirects, at most 64 KiB, link-local always refused, and loopback,
+  private addresses and plain `http` only under
+  `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`. The switch kept its name: it
+  governs every URL an agent's owner points the gateway at, the JWKS one
+  included. Answers: `200 {slots}`, `401
   identity_token_invalid` (the message says what is wrong, never a claim
   value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
-  identity_keys_unavailable`. A refused token writes nothing.
+  identity_keys_unavailable`. The `503` message is generic — no URL, status
+  code or parse error, so the endpoint is no probe into the gateway's
+  network; the reason goes to the log and to the `host_identity` audit row
+  (`jwks_url`, `error`), where the owner sees it. A refused token writes
+  nothing. An accepted one is stored in one transaction: every mapped slot
+  is checked first, then the `jti` is spent and all slots are written
+  together (`state::write_trusted_all`), so a failed write leaves no slot
+  behind and the `jti` unspent — the website can retry with the same token.
 - **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
   `secret` (at least 32 characters) and then replace it with `secret_sealed`
   (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.
@@ -2105,8 +2124,11 @@ routes:
   `apiKeySecurityScheme` in a header (a query or cookie key is refused, so a
   secret never sits in a URL); `oauth_client_credentials` →
   `oauth2SecurityScheme.flows.clientCredentials.tokenUrl`, a
-  `client_credentials` form post, the token cached per token URL and client
-  until 30 s before it expires. `token` and `client_secret` are sealed on
+  `client_credentials` form post, the token cached until 30 s before it
+  expires. The cache key is the token URL, the client id, the SHA-256 of the
+  secret, the sorted scopes and the agent's principal id, so a route with
+  another secret (a wrong one included), other scopes or of another agent
+  signs in itself and never rides on a token it did not earn. `token` and `client_secret` are sealed on
   every save (`a2a_client::seal_secrets`, next to the host-JWT secret) and
   stored as `token_sealed` / `client_secret_sealed`; a GET → PUT round trip
   keeps them. A card that requires auth when the route brings none, or offers
@@ -2138,6 +2160,12 @@ routes:
   fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
   reused: it allows private ranges on purpose (an admin curates the MCP
   catalog) and checks literal addresses only.
+- **Size caps** (`guard::read_capped`). Every body read from outside — the
+  card (256 KiB), the JSON-RPC answer (1 MiB), the OAuth token answer
+  (64 KiB) — is refused when its `Content-Length` is over the cap, before a
+  byte is read, and otherwise read chunk by chunk and dropped the moment the
+  running total passes it. A chunked body without a length therefore cannot
+  make the gateway buffer more than the cap.
 - **The result** is the first `data` object among the completed task's
   artifact parts (then its status message), else the first text part that
   parses as a JSON object (a fenced block too); a direct `message` answer is

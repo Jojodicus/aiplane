@@ -173,8 +173,8 @@ the field leaves it unchanged.
 | GET  | `/api/v0/system-principals/{id}` | Principal, grants, tokens (never a hash or plaintext), audit trail |
 | POST | `/api/v0/system-principals/{id}/disable` | Disable and revoke every token |
 | POST | `/api/v0/system-principals/{id}/grants` | Grant `{kind, ref}` — 403 `grant_exceeds_manager` when you don't hold it |
-| POST | `/api/v0/system-principals/{id}/grants/revoke` | Remove `{kind, ref}` — any manager may narrow |
-| POST | `/api/v0/system-principals/{id}/tokens` | Issue `{name, ttl_days?}`; the plaintext is in this response only |
+| POST | `/api/v0/system-principals/{id}/grants/revoke` | Remove `{kind, ref}` — anyone who may change the principal may narrow it |
+| POST | `/api/v0/system-principals/{id}/tokens` | Issue `{name, ttl_days?}` — 403 `token_exceeds_manager` unless you hold every grant; the plaintext is in this response only |
 | POST | `/api/v0/system-principals/{id}/tokens/{token_id}/revoke` | Revoke one token |
 
 An agent's principal (created by `POST /api/v0/agents`, see
@@ -182,6 +182,20 @@ An agent's principal (created by `POST /api/v0/agents`, see
 those, the caller also needs a share on the agent: `read` for `GET`, `write`
 for every change. Without one it answers 404 and is left out of the list.
 Admins need no share: they hold `write` on every agent.
+
+Any other principal belongs to the manager who created it
+(`system_principals.created_by`): only that user and admins see or change it.
+For everyone else it answers 404 and is left out of the list. Without this,
+a second manager could mint a token for, or keep changing, a principal that
+someone with more rights had granted — the grant-time cap would mean nothing.
+
+**Issuing a token is granting again.** A `gws_` token hands every grant of
+its principal to whoever holds it. So a non-admin may issue one only while
+they hold every grant the principal has, checked the same way as a new grant
+(a grant whose resource is gone counts as not held). Otherwise `403
+token_exceeds_manager` names the first missing grant. Admins are not capped.
+Grants still survive the granting manager losing rights. Existing tokens keep
+working; only new tokens are refused.
 
 There is no SPA screen for this yet; it is API-only.
 

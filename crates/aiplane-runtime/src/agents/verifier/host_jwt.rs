@@ -32,7 +32,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::{Map, Value, json};
 
 use super::{JwtAlgorithm, LIFETIME_DEFAULT, MAX_LIFETIME_CAP, duration};
-use crate::agents::state::{StateSchema, TrustedWriter, write_trusted};
+use crate::agents::a2a_client::guard;
+use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 
 const LEEWAY_SECS: u64 = 30;
@@ -40,6 +41,7 @@ const JWKS_TTL: Duration = Duration::from_secs(300);
 /// The soonest a key set is fetched again for a `kid` it does not know.
 const JWKS_REFETCH: Duration = Duration::from_secs(60);
 const JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_JWKS_BYTES: usize = 64 * 1024;
 
 impl JwtAlgorithm {
     fn jwt(self) -> Algorithm {
@@ -142,9 +144,12 @@ pub enum IdentityError {
          `jti`) for each conversation"
     )]
     Replayed,
+    /// `url` and `reason` are for the agent's owner (log and audit trail);
+    /// the message a visitor sees names neither, so the endpoint cannot be
+    /// used to probe what the gateway reaches.
     #[error(
-        "the website's signing keys could not be fetched from `{url}` ({reason}); try again \
-         shortly — the website owner should check that address"
+        "the website's signing keys could not be fetched; try again shortly — the agent's owner \
+         finds the reason in the agent's audit trail"
     )]
     KeysUnavailable { url: String, reason: String },
     #[error("storing the verified identity failed: {0}")]
@@ -269,24 +274,35 @@ pub fn seal_secrets(
 type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;
 static JWKS: LazyLock<JwksCache> = LazyLock::new(Default::default);
 
+/// The key set at `url`, fetched through the A2A client's guard: the URL is
+/// chosen by an agent's owner, so it gets the same resolve-and-pin, no
+/// redirects and private-network rule as an A2A route.
 async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityError> {
-    let unavailable = |reason: String| IdentityError::KeysUnavailable {
-        url: url.to_string(),
-        reason,
+    let unavailable = |reason: String| {
+        tracing::warn!(url, reason = %reason, "fetching a host_jwt JWKS failed");
+        IdentityError::KeysUnavailable {
+            url: url.to_string(),
+            reason,
+        }
     };
-    let resp = state
-        .http
-        .get(url)
-        .timeout(JWKS_TIMEOUT)
+    let allow_private = state.config().agents.a2a_allow_private_networks;
+    let pinned = guard::pin(url, allow_private, JWKS_TIMEOUT)
+        .await
+        .map_err(unavailable)?;
+    let resp = pinned
+        .client
+        .get(pinned.url)
+        .header("accept", "application/json")
         .send()
         .await
-        .map_err(|e| unavailable(e.to_string()))?;
+        .map_err(|e| unavailable(format!("the request failed: {e}")))?;
     if !resp.status().is_success() {
         return Err(unavailable(format!("it answered {}", resp.status())));
     }
-    let set: JwkSet = resp
-        .json()
+    let bytes = guard::read_capped(resp, MAX_JWKS_BYTES, "the JWKS document")
         .await
+        .map_err(unavailable)?;
+    let set: JwkSet = serde_json::from_slice(&bytes)
         .map_err(|e| unavailable(format!("not a JWKS document: {e}")))?;
     JWKS.lock()
         .expect("jwks cache")
@@ -457,6 +473,10 @@ pub async fn accept(
         Err(IdentityError::Invalid(r)) => {
             json!({ "session_id": session_id, "outcome": "refused", "reason": r.as_str() })
         }
+        Err(e @ IdentityError::KeysUnavailable { url, reason }) => json!({
+            "session_id": session_id, "outcome": "refused", "reason": e.code(),
+            "jwks_url": url, "error": reason,
+        }),
         Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
     };
     if !matches!(outcome, Err(IdentityError::NotConfigured))
@@ -486,6 +506,11 @@ async fn accept_inner(
     let schema = StateSchema::from_spec(spec).map_err(|i| IdentityError::Storage(i.message))?;
     let claims = verified_claims(state, &cfg, token.trim(), now).await?;
     let values = slot_values(&cfg, &schema, &claims).map_err(IdentityError::Invalid)?;
+    let storage = |e: &dyn std::fmt::Display| IdentityError::Storage(e.to_string());
+    // One transaction: the `jti` is spent only together with every slot, so
+    // a failed write neither leaves half an identity behind nor burns the
+    // token the website will retry with.
+    let mut tx = state.db.begin().await.map_err(|e| storage(&e))?;
     if let Some(jti) = claims.get("jti").and_then(Value::as_str) {
         let exp = claims
             .get("exp")
@@ -493,27 +518,23 @@ async fn accept_inner(
             .and_then(|s| Timestamp::from_second(s).ok())
             .unwrap_or(now);
         let first =
-            agent_verifiers::use_jti(&state.db, agent_id, &sha256_hex(jti.as_bytes()), exp, now)
+            agent_verifiers::use_jti(&mut tx, agent_id, &sha256_hex(jti.as_bytes()), exp, now)
                 .await
-                .map_err(|e| IdentityError::Storage(e.to_string()))?;
+                .map_err(|e| storage(&e))?;
         if !first {
             return Err(IdentityError::Replayed);
         }
     }
-    let mut written = Vec::new();
-    for (slot, value) in values {
-        write_trusted(
-            &state.db,
-            &schema,
-            session_id,
-            &slot,
-            value,
-            TrustedWriter::Host,
-            now,
-        )
-        .await
-        .map_err(|e| IdentityError::Storage(e.to_string()))?;
-        written.push(slot);
-    }
-    Ok(written)
+    write_trusted_all(
+        &mut tx,
+        &schema,
+        session_id,
+        &values,
+        TrustedWriter::Host,
+        now,
+    )
+    .await
+    .map_err(|e| storage(&e))?;
+    tx.commit().await.map_err(|e| storage(&e))?;
+    Ok(values.into_iter().map(|(slot, _)| slot).collect())
 }

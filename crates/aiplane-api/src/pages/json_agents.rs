@@ -14,7 +14,7 @@
 //!
 //! The agent's grants are its principal's, managed through
 //! `/api/v0/system-principals/{id}/grants` with the grant-time cap from #77;
-//! those routes check the share here too ([`guard_agent_principal`]).
+//! those routes check the share here too ([`guard_principal`]).
 //!
 //! Embed keys (`/embed-keys`) follow the same share rules: `read` lists them,
 //! `write` creates and revokes them. The public side is `pages::embed`.
@@ -101,23 +101,30 @@ pub(super) async fn agent_at(
     Ok((agent, held.unwrap_or(need)))
 }
 
-/// For the `/api/v0/system-principals` routes: when the principal is an
-/// agent, the caller needs a share on it as well as the permission. A
-/// principal that is not an agent passes.
-pub(crate) async fn guard_agent_principal(
+/// For the `/api/v0/system-principals` routes. An agent's principal needs a
+/// share on the agent, as on `/api/v0/agents`. Any other principal belongs to
+/// whoever created it: only they or an admin may see or change it, so one
+/// manager can never work with what another manager granted.
+pub(crate) async fn guard_principal(
     state: &RamaState,
     user: &users::User,
-    principal_id: &str,
+    principal: &sp_db::PrincipalRow,
     need: Access,
 ) -> Result<(), Response> {
-    if agents_db::get(&state.db, principal_id)
+    if agents_db::get(&state.db, &principal.id)
         .await
         .map_err(internal)?
-        .is_none()
+        .is_some()
     {
+        return access(state, user, &principal.id, need).await.map(|_| ());
+    }
+    if principal.created_by == user.id || state.rbac.is_admin(&group_ids(state, user)) {
         return Ok(());
     }
-    access(state, user, principal_id, need).await.map(|_| ())
+    Err(not_found(format!(
+        "there is no system principal `{}` you manage — only its creator or an admin can see          or change it",
+        principal.id
+    )))
 }
 
 pub(super) fn parse_spec(text: &str) -> Value {

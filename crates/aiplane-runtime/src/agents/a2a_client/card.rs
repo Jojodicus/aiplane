@@ -124,16 +124,7 @@ pub async fn fetch(card_url: &str, allow_private: bool) -> Result<AgentCard, Str
     if !status.is_success() {
         return Err(format!("the agent card answered {status}"));
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("reading the agent card failed: {e}"))?;
-    if bytes.len() > MAX_CARD_BYTES {
-        return Err(format!(
-            "the agent card is larger than {} KiB",
-            MAX_CARD_BYTES / 1024
-        ));
-    }
+    let bytes = guard::read_capped(resp, MAX_CARD_BYTES, "the agent card").await?;
     let doc: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("the agent card is not JSON ({e})"))?;
     let card = AgentCard::parse(&doc).map_err(|why| format!("the agent card is invalid: {why}"))?;
@@ -165,6 +156,26 @@ mod tests {
             "defaultOutputModes": ["application/json"],
             "skills": []
         })
+    }
+
+    #[tokio::test]
+    async fn an_oversized_card_is_refused() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(" ".repeat(MAX_CARD_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+        let why = fetch(&format!("{}/big-card.json", server.uri()), true)
+            .await
+            .unwrap_err();
+        assert!(
+            why.contains("the agent card is larger than 256 KiB"),
+            "{why}"
+        );
     }
 
     #[test]

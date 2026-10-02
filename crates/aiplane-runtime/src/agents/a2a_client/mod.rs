@@ -60,6 +60,7 @@ pub const INPUT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const REQUEST_SLACK: Duration = Duration::from_secs(5);
 const POLL_EVERY: Duration = Duration::from_millis(500);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
 
 /// How the gateway signs in at the remote agent: one of the card's
 /// `securitySchemes`, with a credential the spec holds sealed.
@@ -379,12 +380,48 @@ pub fn interpret(result: &Value, finish: &FinishContract) -> Step {
     }
 }
 
-type TokenCache = Mutex<HashMap<(String, String), (Instant, String)>>;
+/// What a cached client-credentials token was minted for. Every part is
+/// load-bearing: a route that differs in any of them — another secret (even
+/// a wrong one), other scopes, another agent — must sign in on its own rather
+/// than ride on a token it never earned.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TokenKey {
+    token_url: String,
+    client_id: String,
+    secret_sha256: String,
+    scopes: Vec<String>,
+    principal_id: String,
+}
+
+impl TokenKey {
+    fn new(
+        principal_id: &str,
+        token_url: &str,
+        client_id: &str,
+        secret: &str,
+        scopes: &[String],
+    ) -> Self {
+        let mut scopes = scopes.to_vec();
+        scopes.sort();
+        scopes.dedup();
+        Self {
+            token_url: token_url.to_string(),
+            client_id: client_id.to_string(),
+            secret_sha256: aiplane_core::server::crypto::sha256_hex(secret.as_bytes()),
+            scopes,
+            principal_id: principal_id.to_string(),
+        }
+    }
+}
+
+type TokenCache = Mutex<HashMap<TokenKey, (Instant, String)>>;
 static TOKENS: LazyLock<TokenCache> = LazyLock::new(Default::default);
 
 /// One exchange with the remote agent, over pinned connections.
 struct Remote<'a> {
     state: &'a RamaState,
+    /// The agent whose route this is; it scopes the OAuth token cache.
+    principal_id: &'a str,
     card: AgentCard,
     header: Option<(String, String)>,
     allow_private: bool,
@@ -394,6 +431,7 @@ struct Remote<'a> {
 impl<'a> Remote<'a> {
     async fn connect(
         state: &'a RamaState,
+        principal_id: &'a str,
         target: &A2aTarget,
         timeout: Duration,
     ) -> Result<Self, String> {
@@ -401,6 +439,7 @@ impl<'a> Remote<'a> {
         let card = card::fetch(&target.card_url, allow_private).await?;
         let mut remote = Self {
             state,
+            principal_id,
             card,
             header: None,
             allow_private,
@@ -497,14 +536,20 @@ impl<'a> Remote<'a> {
             .client_id
             .clone()
             .ok_or("`a2a.auth.client_id` is missing")?;
-        let key = (token_url.to_string(), client_id.clone());
+        let secret = self.unseal(auth)?;
+        let key = TokenKey::new(
+            self.principal_id,
+            token_url,
+            &client_id,
+            &secret,
+            &auth.scopes,
+        );
         if let Some((until, token)) = TOKENS.lock().ok().and_then(|c| c.get(&key).cloned())
             && Instant::now() < until
         {
             return Ok(token);
         }
         let pinned = guard::pin(token_url, self.allow_private, self.timeout).await?;
-        let secret = self.unseal(auth)?;
         let mut form = vec![
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id),
@@ -525,9 +570,8 @@ impl<'a> Remote<'a> {
         if !status.is_success() {
             return Err(format!("the OAuth token endpoint answered {status}"));
         }
-        let body: Value = resp
-            .json()
-            .await
+        let bytes = guard::read_capped(resp, MAX_TOKEN_BYTES, "the OAuth token answer").await?;
+        let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the OAuth token answer is not JSON ({e})"))?;
         let token = body
             .get("access_token")
@@ -575,19 +619,11 @@ impl<'a> Remote<'a> {
             .await
             .map_err(|e| format!("calling the external agent failed: {e}"))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("reading the external agent's answer failed: {e}"))?;
         if !status.is_success() {
             return Err(format!("the external agent answered {status}"));
         }
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(format!(
-                "the external agent's answer is larger than {} KiB",
-                MAX_RESPONSE_BYTES / 1024
-            ));
-        }
+        let bytes =
+            guard::read_capped(resp, MAX_RESPONSE_BYTES, "the external agent's answer").await?;
         let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the external agent's answer is not JSON ({e})"))?;
         if let Some(error) = body.get("error") {
@@ -745,7 +781,13 @@ impl Dispatch<'_> {
         let work = async {
             // Each request may take a little longer than the whole budget, so
             // the budget's own timeout below is what ends a slow exchange.
-            let remote = Remote::connect(self.state, &target, budget + REQUEST_SLACK).await?;
+            let remote = Remote::connect(
+                self.state,
+                &self.principal.id,
+                &target,
+                budget + REQUEST_SLACK,
+            )
+            .await?;
             let step = remote.exchange(message, &target.finish).await?;
             Ok::<_, String>((remote.card.name, step))
         };

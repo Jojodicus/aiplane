@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Where an A2A route may connect (`docs/agents.md` "What #101 built").
+//! Where an agent may connect (`docs/agents.md` "What #101 built"): an A2A
+//! route's card, endpoint and OAuth token URL, and a `host_jwt` verifier's
+//! JWKS address.
 //!
-//! A spec names the card URL, and the card names the endpoint, so both come
-//! from outside the gateway's own configuration. Before every connection the
+//! A spec names the card URL and the JWKS URL, and the card names the
+//! endpoint, so all come from outside the gateway's own configuration. Before every connection the
 //! host is resolved here, every address it resolves to is checked, and the
 //! HTTP client is pinned to exactly those addresses, so a second lookup
 //! (DNS rebinding) cannot swap a private address in between the check and
-//! the request. Redirects are never followed.
+//! the request. Redirects are never followed. What comes back is read
+//! through [`read_capped`], so no peer decides how much the gateway buffers.
 //!
 //! Always refused: unspecified, link-local (the cloud metadata address
 //! `169.254.169.254` among them), broadcast and multicast addresses. Refused
@@ -101,7 +104,7 @@ pub fn check_ip(ip: IpAddr, allow_private: bool) -> Result<(), String> {
     }
     if !allow_private && let Some(why) = private(ip) {
         return Err(format!(
-            "{ip} is {why}; an A2A route reaches public hosts only unless the operator sets \
+            "{ip} is {why}; an agent reaches public hosts only unless the operator sets \
              `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`"
         ));
     }
@@ -114,8 +117,8 @@ fn check_scheme(url: &Url, allow_private: bool) -> Result<(), String> {
         "https" => Ok(()),
         "http" if allow_private => Ok(()),
         "http" => Err(format!(
-            "{url} is plain http; an A2A agent must be reached over https (plain http only \
-             where the operator sets `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`)"
+            "{url} is plain http; an agent reaches other hosts over https only (plain http \
+             only where the operator sets `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`)"
         )),
         other => Err(format!("{url} uses `{other}`; only https is allowed")),
     }
@@ -154,6 +157,35 @@ pub async fn pin(raw: &str, allow_private: bool, timeout: Duration) -> Result<Pi
         .build()
         .map_err(|e| format!("building the HTTP client failed: {e}"))?;
     Ok(Pinned { url, client })
+}
+
+/// The body of `resp`, refused once it is longer than `max` bytes: a
+/// declared `Content-Length` over the cap is refused before anything is read,
+/// and a body without one is read chunk by chunk and dropped the moment the
+/// running total passes the cap, so a hostile peer cannot make the gateway
+/// buffer more than `max`. `what` names the body in the error (`the agent
+/// card`).
+pub async fn read_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    let too_large = || format!("{what} is larger than {} KiB", max / 1024);
+    if resp.content_length().is_some_and(|len| len > max as u64) {
+        return Err(too_large());
+    }
+    let mut body = Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("reading {what} failed: {e}"))?
+    {
+        if body.len() + chunk.len() > max {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// The shape a card URL needs before anything is fetched: an absolute
@@ -261,6 +293,68 @@ mod tests {
         assert!(meta.contains("link-local"), "{meta}");
         assert!(pin("http://127.0.0.1:9/a2a", true, t).await.is_ok());
         assert!(pin("ftp://example.com/x", true, t).await.is_err());
+    }
+
+    /// A peer that answers with a chunked body and no `Content-Length`, one
+    /// 64 KiB chunk after another until the client hangs up. A raw socket
+    /// because wiremock always sends a length.
+    async fn endless_chunked_peer() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                        transfer-encoding: chunked\r\n\r\n";
+            if sock.write_all(head.as_bytes()).await.is_err() {
+                return;
+            }
+            let chunk = format!("10000\r\n{}\r\n", " ".repeat(0x10000));
+            while sock.write_all(chunk.as_bytes()).await.is_ok() {}
+        });
+        format!("http://{addr}/")
+    }
+
+    async fn get(url: &str) -> reqwest::Response {
+        let pinned = pin(url, true, Duration::from_secs(30)).await.unwrap();
+        pinned.client.get(pinned.url).send().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_length_is_cut_off_at_the_cap() {
+        let url = endless_chunked_peer().await;
+        let read = tokio::time::timeout(
+            Duration::from_secs(10),
+            read_capped(get(&url).await, 256 * 1024, "the agent card"),
+        )
+        .await
+        .expect("reading stopped at the cap instead of draining the stream");
+        let why = read.unwrap_err();
+        assert!(
+            why.contains("the agent card is larger than 256 KiB"),
+            "{why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_cap_is_refused_and_one_within_is_read() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("x".repeat(2048)))
+            .mount(&server)
+            .await;
+        let why = read_capped(get(&server.uri()).await, 1024, "the answer")
+            .await
+            .unwrap_err();
+        assert!(why.contains("the answer is larger than 1 KiB"), "{why}");
+        let body = read_capped(get(&server.uri()).await, 2048, "the answer")
+            .await
+            .unwrap();
+        assert_eq!(body.len(), 2048);
     }
 
     #[test]
