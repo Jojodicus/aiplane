@@ -26,7 +26,6 @@
 //! [`OpenAiDriver`]: crate::openai_driver::OpenAiDriver
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use session_core::db as chat;
 use uuid::Uuid;
@@ -207,6 +206,13 @@ async fn drive_inner(
         });
     }
     let finish = p.finish.map(FinishRun::new);
+    // An agent run stops when its conversation's turn is cancelled (A2A
+    // `CancelTask`); a sub-agent run shares its root conversation's flag.
+    let cancel = p
+        .run
+        .as_ref()
+        .and_then(|run| state.agent_turns.cancel_flag(&run.root_session))
+        .unwrap_or_default();
     let session_id = p.session_id.clone();
     let person = p.principal.user_id().map(str::to_string);
     let persons_run = person.is_some();
@@ -247,15 +253,15 @@ async fn drive_inner(
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no
-    // live viewer to tail or cancel it. The DB is the source of truth, so
-    // dropping every frame is fine.
+    // live viewer to tail it. The DB is the source of truth, so dropping every
+    // frame is fine.
     let (broadcast, _rx) = tokio::sync::broadcast::channel(16);
     let ctx = session_core::driver::SessionContext {
         user_id: person,
         session_id: p.session_id,
         assistant_turn_id: p.assistant_turn_id,
         model: p.model,
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel,
         broadcast,
         // Nobody can interject into a scheduled run: there is no composer
         // attached to it. An always-empty inbox is the honest expression of

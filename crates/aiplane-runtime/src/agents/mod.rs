@@ -12,6 +12,7 @@
 //! loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
 //! `inbox` (who answers what, and the notification).
 
+pub mod a2a;
 pub mod approval;
 pub mod bind;
 pub mod embed;

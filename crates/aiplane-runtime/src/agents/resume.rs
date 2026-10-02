@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use aiplane_core::server::db::agent_audit::{self, AuditKind};
-use aiplane_core::server::db::{DbError, agents as agents_db};
+use aiplane_core::server::db::{DbError, a2a_contexts, agents as agents_db};
 use aiplane_core::server::run_chain::{CallSite, Frame, MAX_DEPTH, RunChain};
 use serde_json::{Value, json};
 use session_core::db::{
@@ -301,6 +301,9 @@ async fn rebuild(
                     session_id: root.session.id.clone(),
                     turn_id: root.suspension.turn_id.clone(),
                     visitor_id: root.session.visitor_id.clone(),
+                    caller: a2a_contexts::get(&state.db, &root.session.id)
+                        .await?
+                        .map(|c| c.caller()),
                     lang,
                 };
                 let chain = root_chain(&profile, &turn);

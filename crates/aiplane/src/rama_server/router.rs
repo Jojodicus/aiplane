@@ -348,6 +348,11 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_get("/api/v0/embed/events", pages::embed::events)
         .with_post("/api/v0/embed/resume", pages::embed::resume)
         .with_post("/api/v0/embed/identity", pages::embed::identity)
+        // Agents served over A2A (docs/agents.md "What #102 built"): the
+        // public agent card of an opted-in agent, and its JSON-RPC endpoint
+        // for `gws_` callers granted `a2a_caller` on it.
+        .with_get("/a2a/agents/{id}/agent-card.json", pages::a2a::card)
+        .with_post("/a2a/agents/{id}", pages::a2a::rpc)
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)

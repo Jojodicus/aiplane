@@ -10,7 +10,8 @@
 //! agent's principal is [`AgentTurnRunner`]'s job, so the endpoint never
 //! touches the loop, grants or gates.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aiplane_core::server::db::agent_audit::{self, AuditKind};
@@ -132,6 +133,8 @@ pub fn owner_budget(spec: &Value) -> Vec<EffectiveLimit> {
 #[derive(Debug, Clone, Copy)]
 pub struct Admission<'a> {
     pub visitor_id: Option<&'a str>,
+    /// The A2A context asking, which counts like a visitor session.
+    pub a2a_context: Option<&'a str>,
     pub ip: Option<&'a str>,
 }
 
@@ -203,6 +206,7 @@ pub async fn admit(
     let key = VisitorKey {
         principal_id: agent_id,
         visitor_id: who.visitor_id,
+        a2a_context: who.a2a_context,
         ip: who.ip,
     };
     let refused = match state
@@ -346,11 +350,11 @@ impl AgentTurnRunner for LiveAgentRunner {
 }
 
 /// The runner, if this build has one, and the conversations with a turn
-/// running right now.
+/// running right now, each with the flag that stops it.
 #[derive(Clone, Default)]
 pub struct AgentTurns {
     runner: Option<Arc<dyn AgentTurnRunner>>,
-    running: Arc<Mutex<HashSet<String>>>,
+    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl AgentTurns {
@@ -365,31 +369,53 @@ impl AgentTurns {
         self.runner.clone()
     }
 
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+        self.running.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Whether a turn of `session_id` is still being produced. Its row can
     /// already be terminal while the output filter (#89) has yet to rule on
     /// the answer, so the public endpoint treats it as unfinished.
     pub fn is_running(&self, session_id: &str) -> bool {
-        let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        running.contains(session_id)
+        self.lock().contains_key(session_id)
     }
 
     /// Claim `session_id` for one turn. `None` when a turn already holds it;
     /// the claim ends when the returned guard drops.
     pub fn claim(&self, session_id: &str) -> Option<TurnClaim> {
-        let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        if !running.insert(session_id.to_string()) {
+        let mut running = self.lock();
+        if running.contains_key(session_id) {
             return None;
         }
+        running.insert(session_id.to_string(), Arc::default());
         Some(TurnClaim {
             running: self.running.clone(),
             session_id: session_id.to_string(),
         })
     }
+
+    /// The stop flag of the turn holding `session_id`, which the driver of
+    /// that conversation's runs reads between rounds (`headless::drive`).
+    pub fn cancel_flag(&self, session_id: &str) -> Option<Arc<AtomicBool>> {
+        self.lock().get(session_id).cloned()
+    }
+
+    /// Ask the turn holding `session_id` to stop at its next check; it then
+    /// ends `cancelled`. False when no turn holds the conversation.
+    pub fn cancel(&self, session_id: &str) -> bool {
+        match self.lock().get(session_id) {
+            Some(flag) => {
+                flag.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// See [`AgentTurns::claim`].
 pub struct TurnClaim {
-    running: Arc<Mutex<HashSet<String>>>,
+    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     session_id: String,
 }
 
@@ -490,5 +516,24 @@ mod tests {
         assert!(turns.claim("s2").is_some(), "other conversations are free");
         drop(first);
         assert!(turns.claim("s1").is_some(), "released on drop");
+    }
+
+    #[test]
+    fn a_claimed_turn_can_be_asked_to_stop_and_an_unclaimed_one_cannot() {
+        let turns = AgentTurns::default();
+        assert!(!turns.cancel("s1"), "nothing runs");
+        let claim = turns.claim("s1").expect("free");
+        let flag = turns.cancel_flag("s1").expect("a running turn has a flag");
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(turns.cancel("s1"));
+        assert!(flag.load(Ordering::SeqCst), "the driver sees the request");
+        drop(claim);
+        assert!(turns.cancel_flag("s1").is_none());
+        let again = turns.claim("s1").expect("free again");
+        assert!(
+            !turns.cancel_flag("s1").unwrap().load(Ordering::SeqCst),
+            "a new turn starts with a fresh flag"
+        );
+        drop(again);
     }
 }

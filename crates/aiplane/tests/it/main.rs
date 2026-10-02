@@ -7,6 +7,7 @@
 //! nextest still runs each #[test] in its own process, so tests that touch
 //! process-global state (env vars) stay isolated.
 
+mod a2a;
 mod admin_json_api;
 mod agent_analytics;
 mod agent_evaluation;

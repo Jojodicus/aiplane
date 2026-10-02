@@ -296,6 +296,7 @@ publish:
     patterns: { invoice: "RE-\\d{6}", customer: "K-\\d{5}" }
     action: withhold                    # withhold (default) | redact
   require_passing_tests: false          # true: publish needs a green test run of this draft (#99)
+  a2a: { enabled: true }                # serve over A2A (#102); skills: [{id, name, description}] optional
 ```
 
 A sub-agent's spec uses the same layout. It has no `state`, `routes` or
@@ -1873,6 +1874,156 @@ version and judged on more than the final answer.
   share rules, and analytics unchanged by a run. Parsing and judging are unit
   tests in `eval.rs`.
 
+### What #102 built
+
+A published agent served to other agent platforms over **A2A**, following
+the Linux Foundation's *Agent2Agent (A2A) Protocol Specification v1.0.0*
+(`a2a-protocol.org`, `specification/a2a.proto`, package `lf.a2a.v1`), JSON-RPC
+binding (§9). Migration `0090_a2a.sql`. The handlers are
+`aiplane-api::pages::a2a`; the spec section, the card and the state mapping
+are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
+
+- **Opt-in.** `publish.a2a: { enabled: true, skills?: [{id, name,
+  description, tags?, examples?}] }`, validated on save: `enabled` is a
+  required boolean, at most 20 skills, ids are slugs and unique. It is read
+  from the agent's **live** version, like the limits: publishing a version
+  without it stops serving at once. Without `skills` the card derives them:
+  one for the agent as a whole (its principal's description, tagged with the
+  route names) and one per route that has a `description`; a route without one
+  is internal and not advertised.
+- **Agent card** — `GET /a2a/agents/{id}/agent-card.json`, public, `404`
+  unless the agent is enabled, published and opted in. `name` is
+  `profile.display` (else the principal's display), `version` the live
+  version, `supportedInterfaces` one `JSONRPC` interface at
+  `{public_url}/a2a/agents/{id}` with `protocolVersion: "1.0"`,
+  `capabilities: {streaming: true, pushNotifications: false,
+  extendedAgentCard: false}`, `defaultInputModes`/`defaultOutputModes`
+  `text/plain`, `securitySchemes: {aiplaneSystemToken:
+  {httpAuthSecurityScheme: {scheme: "Bearer", bearerFormat: "gws_"}}}` with a
+  matching `securityRequirements` entry. `Cache-Control: max-age=300` and an
+  `ETag` of id and version.
+  - *Discovery.* One gateway serves many agents, so there is no
+    `/.well-known/agent-card.json`: the per-agent card URL is the one to
+    configure in a client or a registry.
+  - *Deferred: card signing* (`signatures`, JWS per §8.4). It needs a
+    gateway signing key, its publication (a JWKS) and canonicalisation
+    (RFC 8785); not trivial, so the card is unsigned and served over TLS.
+- **Callers** (`docs/auth.md`). A caller is a system principal with a `gws_`
+  token whose principal holds the new grant kind **`a2a_caller`** with the
+  agent's id as `ref`. Default deny: a token without that grant, or with one
+  for another agent, gets `403 PERMISSION_DENIED`; no token or a bad one
+  `401` with `WWW-Authenticate: Bearer`; a person's `gwk_` token `403`.
+  Granting `a2a_caller` follows #77's grant-time cap: the manager needs a
+  `write` share on that agent (admins hold one), since letting another
+  platform call the agent changes the agent. The caller gets nothing of the
+  agent's: the task runs as the agent's principal, with its grants.
+- **Version.** Every request must carry `A2A-Version: 1.0` (header, or the
+  `A2A-Version` query parameter). A missing header means 0.3 per §3.6.2, so it
+  is refused like any other version with `-32009 VersionNotSupportedError`.
+  The 0.3 wire (`message/send`, lowercase states, `kind` fields) is not
+  spoken; `message/send` answers `-32601`.
+- **Mapping.**
+
+  | A2A | AIplane |
+  |---|---|
+  | context (`contextId`) | a root conversation owned by the agent's principal (`chat_sessions.id`), with an `a2a_contexts` row naming the caller, its token and client IP. Only that caller finds it; anyone else gets "not found". Pinned to the version live when it was opened, like a visitor's |
+  | task (`id`) | one assistant turn of that conversation, and the user turn before it |
+  | `SendMessage` without `taskId` | a new turn: in a new context, or in the caller's `contextId` |
+  | `SendMessage` with `taskId` of an `INPUT_REQUIRED` task | the answer to a `secure_input` pause, through the same `agents::resume::claim` / runner `resume` as `POST /api/v0/embed/resume` (`ResumedBy::Participant`), so a verifier's code goes to the tool and nowhere else (not the transcript, the task, the model) |
+  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled) |
+  | `TASK_STATE_COMPLETED` | `completed`; the answer is the artifact `answer` and the last `history` message |
+  | `TASK_STATE_FAILED` | `errored`; `status.message` is the generic `embed-error-generic` text, never the upstream's |
+  | `TASK_STATE_CANCELED` | `cancelled` |
+  | `TASK_STATE_INPUT_REQUIRED` | `suspended`, any kind. `metadata.aiplane` says `{kind, answeredBy: caller \| staff, requestId, expiresAt}`; `status.message` is the tool's message, or `agent-embed-decision-for-staff` for an approval or a handoff |
+  | `CancelTask` | running: the conversation's stop flag (below), then the turn ends `cancelled`; paused: every level of the pause is cancelled (`cancel_suspended_turn`); terminal: `-32002` |
+  | `GetTask` / `historyLength` | the task built from the turns; `0` omits `history`, `n` keeps the last `n` |
+
+  Blocking is the default (§3.2.2): `SendMessage` returns once the task is
+  terminal or `INPUT_REQUIRED`; `returnImmediately: true` returns the
+  `WORKING` task at once. The run is spawned either way, so a caller that
+  hangs up does not stop its task.
+- **Streaming maps cleanly onto buffered answers.** `SendStreamingMessage`
+  and `SubscribeToTask` answer `text/event-stream`, one JSON-RPC response per
+  `data:` frame: the `task` first, then — once the task is no longer working —
+  its whole answer as one `artifactUpdate` (`lastChunk: true`) and a
+  `statusUpdate` with the final state; a paused, failed or cancelled task gets
+  the `statusUpdate` alone. `: working` comment lines every 15 s; the stream
+  closes after 10 minutes, and the caller re-subscribes or polls.
+- **Exactly like an embed visitor** — one path, not a fork:
+  - the turn is opened like `/api/v0/embed/messages` and run by the installed
+    `AgentTurnRunner` (`LiveAgentRunner`), so grants, gates, binds, budgets,
+    suspend/resume, the output filter (#89) and the inbox (#96) apply as they
+    do there;
+  - **admission** is `agents::embed::admit` with `Admission { a2a_context, ip
+    }`: the live spec's `publish.rate_limits.visitor` counts the messages of
+    one context (`a2a_contexts::message_times`), `…ip` counts the contexts a
+    client IP opened plus their messages, added to the embed IP's events, and
+    the owner budget and operator `system` limits apply. A refusal is a
+    JSON-RPC error `-32000` with `RATE_LIMITED` or `AGENT_UNAVAILABLE`, a
+    `Retry-After` header and the Fluent message, audited as `limit_refused`;
+    nothing is stored and nothing runs;
+  - **retention** sweeps the conversation, and `a2a_contexts` goes with it.
+- **The caller in the call chain.** `RunChain` gained `caller:
+  Option<RemoteCaller {protocol: "a2a", principal_id, name, token_id}>`
+  (serialized only when set, so a visitor's chain reads as before), carried
+  into sub-agent chains. `OpenedTurn.caller` sets it; `agents::resume`
+  rebuilds it from `a2a_contexts`, so a resumed task names its caller too.
+  Every `tool_call`, `run_suspended`, `run_resumed`, `output_blocked`, usage
+  and `mcp_tool_audit` row of the task therefore names the caller. Each
+  started, answered or cancelled task is also an `agent_audit` row
+  `a2a_task` on the agent: `{action: message | input | cancel, context_id,
+  task_id, caller_id, caller_name, token_id}`, never the text.
+- **Stopping a running agent turn.** `AgentTurns` keeps a stop flag per
+  claimed conversation (`cancel`, `cancel_flag`), and `headless::drive` hands
+  an agent run its root conversation's flag, so a cancel reaches sub-agent
+  runs too. Only `CancelTask` sets it today.
+- **Errors.** JSON-RPC 2.0 envelopes (§9.5): `error.data` is one
+  `google.rpc.ErrorInfo` whose `reason` names the error. A2A's codes where
+  they apply (`-32001` task not found, `-32002` not cancelable, `-32003` push
+  notifications, `-32004` unsupported — `ListTasks`, `GetExtendedAgentCard`,
+  a message to a terminal task —, `-32005` a non-text part or output mode,
+  `-32009` version); the standard ones for parse, envelope, method and params;
+  and `-32000` (implementation-defined, unassigned by A2A) for AIplane's own:
+  `UNAUTHENTICATED`, `PERMISSION_DENIED`, `AGENT_NOT_SERVED`,
+  `RATE_LIMITED`, `AGENT_UNAVAILABLE`, `TASK_IN_PROGRESS`, `CONTEXT_WAITING`
+  (a new message while the context waits on a task), `DECISION_FOR_STAFF`
+  (the caller tried to answer an approval or handoff), `NOT_WAITING`.
+  Authentication errors are HTTP 401/403, an unserved agent 404; every other
+  error is HTTP 200, as JSON-RPC over HTTP expects.
+- **Deviations and not built.**
+  - Only text parts in and out (`ContentTypeNotSupportedError` otherwise); no
+    files or structured data.
+  - No push notifications, no `ListTasks`, no extended card; the card says
+    so in `capabilities`.
+  - A message into a context that waits on a task is refused
+    (`CONTEXT_WAITING`) rather than queued as the widget's is: an A2A message
+    without a `taskId` is a new task, and that task would have no id until the
+    pause is settled.
+  - The client's `messageId` is not stored; `history` messages carry the turn
+    ids. `referenceTaskIds`, `extensions` and `metadata` are accepted and
+    ignored.
+  - A `CancelTask` of a running task waits up to 15 s for the run to notice
+    the flag (between rounds or upstream chunks) and returns the task as it is
+    then.
+- **Tests.** `crates/aiplane/tests/it/a2a.rs` on wiremock upstreams: the card
+  only for an opted-in, published agent (and not for an opted-in draft);
+  missing, bogus, unscoped and other-agent tokens refused with nothing run;
+  the `a2a_caller` grant cap; version and envelope errors; a completed task
+  with the agent's answer, its context a principal-owned conversation and the
+  `a2a_task` audit row; a second task in the same context that replays the
+  first; context/task mismatch and a message to a finished task; `GetTask`
+  and `historyLength`, refused to another caller; cancelling a running and a
+  paused task, and refusing a finished one; the output filter withholding an
+  identifier, with the caller in the row's chain; a rate and a budget refusal
+  as JSON-RPC errors; a secure input answered on the task (the code nowhere in
+  the task or the model's input; the caller in `run_resumed`'s chain); an
+  approval the caller cannot give; the streamed task, answer and status. Unit
+  tests: `agents/a2a.rs` (opt-in, card, derived skills, state mapping),
+  `agents/spec/a2a.rs` (validation), `pages/a2a.rs` (parts, configuration,
+  versions, error shape), `db/a2a_contexts.rs`, `run_chain.rs`,
+  `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
+  `principal_grants` rebuild keeps every grant).
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -1880,13 +2031,14 @@ upward.
 
 | Piece | Crate | Why there |
 |---|---|---|
-| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
+| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
+| The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
 
@@ -1920,6 +2072,7 @@ use `regex`, and hashing uses the token helpers.
 | #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; responders instead of a share for support staff; Slack and Discord incoming webhooks; answers in the inbox only |
 | #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
+| #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred
