@@ -236,6 +236,8 @@ export const zh: Catalog = {
  "admin-users-you-badge": "你",
  "admin-value-default": "默认",
  "admin-value-na": "不适用",
+ "agent-output-redacted": "[已移除]",
+ "agent-output-withheld": "我无法提供该回答，因为其中提到了我无法为您核实的信息。请换一种方式提问，或联系支持人员。",
  "agents-back": "返回智能体列表",
  "agents-bind-add": "绑定参数",
  "agents-bind-field": "字段（可选）",

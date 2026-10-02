@@ -236,6 +236,8 @@ export const fr: Catalog = {
  "admin-users-you-badge": "vous",
  "admin-value-default": "défaut",
  "admin-value-na": "s/o",
+ "agent-output-redacted": "[supprimé]",
+ "agent-output-withheld": "Je ne peux pas donner cette réponse, car elle mentionnait des informations que je n’ai pas pu vérifier pour vous. Veuillez reformuler votre question ou contacter l’assistance.",
  "agents-back": "Retour aux agents",
  "agents-bind-add": "Lier un paramètre",
  "agents-bind-field": "Champ (facultatif)",

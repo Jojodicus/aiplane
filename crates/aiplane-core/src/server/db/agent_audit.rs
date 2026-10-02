@@ -40,6 +40,8 @@ pub enum AuditKind {
     SubAgentDispatched,
     /// A sub-agent run ended, with its outcome.
     SubAgentFinished,
+    /// The output filter (#89) redacted or withheld a main agent's answer.
+    OutputBlocked,
     AgentCreated,
     AgentDraftUpdated,
     AgentPublished,
@@ -47,6 +49,8 @@ pub enum AuditKind {
     AgentShareSet,
     AgentShareRemoved,
     AgentDeleted,
+    EmbedKeyCreated,
+    EmbedKeyRevoked,
 }
 
 impl AuditKind {
@@ -63,6 +67,7 @@ impl AuditKind {
             Self::RouteDecision => "route_decision",
             Self::SubAgentDispatched => "sub_agent_dispatched",
             Self::SubAgentFinished => "sub_agent_finished",
+            Self::OutputBlocked => "output_blocked",
             Self::AgentCreated => "agent_created",
             Self::AgentDraftUpdated => "agent_draft_updated",
             Self::AgentPublished => "agent_published",
@@ -70,6 +75,8 @@ impl AuditKind {
             Self::AgentShareSet => "agent_share_set",
             Self::AgentShareRemoved => "agent_share_removed",
             Self::AgentDeleted => "agent_deleted",
+            Self::EmbedKeyCreated => "embed_key_created",
+            Self::EmbedKeyRevoked => "embed_key_revoked",
         }
     }
 }

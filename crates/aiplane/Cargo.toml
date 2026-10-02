@@ -77,6 +77,9 @@ reqwest = { workspace = true }
 # The mailing-list RAG test serves what HyperKitty serves: a gzipped mbox.
 # Same crate the provider decompresses it with.
 flate2 = "1.1"
+# The embed tests implement the `AgentTurnRunner` seam with a test double;
+# the trait is declared with `async_trait`.
+async-trait = { workspace = true }
 
 [lints]
 workspace = true

@@ -236,6 +236,8 @@ export const de: Catalog = {
  "admin-users-you-badge": "du",
  "admin-value-default": "Standard",
  "admin-value-na": "n/v",
+ "agent-output-redacted": "[entfernt]",
+ "agent-output-withheld": "Diese Antwort kann ich nicht geben, weil sie Angaben enthielt, die ich für Sie nicht bestätigen konnte. Bitte formulieren Sie Ihre Frage um oder wenden Sie sich an den Support.",
  "agents-back": "Zurück zu den Agenten",
  "agents-bind-add": "Parameter binden",
  "agents-bind-field": "Feld (optional)",

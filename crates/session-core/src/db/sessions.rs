@@ -39,11 +39,15 @@ pub struct RunSession {
 }
 
 /// Open a conversation owned by a system principal. Fails when the principal
-/// does not exist (foreign key).
-pub async fn create_principal_session(
-    pool: &Pool,
+/// does not exist (foreign key). Takes any executor so a caller can open it
+/// inside its own transaction (a visitor session links to it atomically).
+pub async fn create_principal_session<'e, E>(
+    exec: E,
     new: &NewRunSession<'_>,
-) -> Result<RunSession, DbError> {
+) -> Result<RunSession, DbError>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let now = Timestamp::now();
     let s = RunSession {
         id: Uuid::new_v4().to_string(),
@@ -66,7 +70,7 @@ pub async fn create_principal_session(
     .bind(s.title.as_deref())
     .bind(s.created_at.to_string())
     .bind(s.updated_at.to_string())
-    .execute(pool)
+    .execute(exec)
     .await?;
     Ok(s)
 }

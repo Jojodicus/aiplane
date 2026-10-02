@@ -236,6 +236,8 @@ export const en: Catalog = {
  "admin-users-you-badge": "you",
  "admin-value-default": "default",
  "admin-value-na": "n/a",
+ "agent-output-redacted": "[removed]",
+ "agent-output-withheld": "I cannot give that answer because it mentioned details I could not verify for you. Please rephrase your question or contact support.",
  "agents-back": "Back to agents",
  "agents-bind-add": "Bind a parameter",
  "agents-bind-field": "Field (optional)",

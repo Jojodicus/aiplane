@@ -603,8 +603,11 @@ async fn main() -> anyhow::Result<()> {
     feat::rag::worker::spawn(indexer.clone());
     state = state.with_indexer(indexer);
 
-    let state =
-        Arc::new(aiplane::rama_server::RamaState::new(state, sessions, usage).with_ocr(ocr));
+    let state = Arc::new(
+        aiplane::rama_server::RamaState::new(state, sessions, usage)
+            .with_ocr(ocr)
+            .with_agent_runner(Arc::new(aiplane_runtime::agents::embed::LiveAgentRunner)),
+    );
 
     // Messages that were accepted but never got a worker — the process went
     // down between "sent" and "answered". They are rows precisely so they
