@@ -390,6 +390,32 @@ mod tests {
             .to_vec()
     }
 
+    /// The embed widget is one unhashed file at a stable URL that owners paste
+    /// into their pages: it must be served as JavaScript and must never be
+    /// `immutable`, or a fixed widget could not reach sites that cached it.
+    #[tokio::test]
+    async fn serves_the_embed_widget_as_revalidating_javascript() {
+        let (_d, root) = spa_tempdir();
+        std::fs::write(root.join("embed.js"), "(()=>{})()").unwrap();
+        let resp = serve(&root, &get("/embed.js")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let cc = resp.headers()[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with("text/javascript"), "got {ct}");
+        assert!(
+            !cc.contains("immutable"),
+            "embed.js must stay revalidatable, got {cc}"
+        );
+        assert_eq!(drain(resp).await, b"(()=>{})()");
+    }
+
     #[tokio::test]
     async fn serves_a_hashed_asset_with_immutable_cache_and_correct_type() {
         let (_d, root) = spa_tempdir();

@@ -293,10 +293,10 @@ npm --prefix web run prepare
 """
 
 [tasks.build-web]
-description = "Build the SvelteKit SPA (adapter-static) into target/frontend/build/. The Dockerfile COPYs that directory into the image; the gateway serves it from the root when AIPLANE_STATIC_DIR points there."
+description = "Build the SvelteKit SPA (adapter-static) and the standalone embed widget (web/embed -> embed.js) into target/frontend/build/. The Dockerfile COPYs that directory into the image; the gateway serves it from the root when AIPLANE_STATIC_DIR points there."
 depends = ["web-install"]
-sources = ["web/src/**/*", "web/static/**/*", "web/vite.config.ts", "web/package.json"]
-outputs = ["target/frontend/build/index.html"]
+sources = ["web/src/**/*", "web/static/**/*", "web/embed/**/*", "web/vite.config.ts", "web/vite.embed.config.ts", "web/package.json"]
+outputs = ["target/frontend/build/index.html", "target/frontend/build/embed.js"]
 run = """
 set -eu
 # Start from a clean output tree. A `vite build` over a previous one can leave
@@ -320,6 +320,11 @@ fi
 rm -rf target/frontend
 mkdir -p target/frontend
 cp -r web/build target/frontend/build
+
+# The embed widget is its own bundle (own entry, own CSS) so a host page never
+# downloads the app; it lands beside index.html and is served at /embed.js.
+npm --prefix web run build:embed
+test -s target/frontend/build/embed.js
 """
 
 [tasks.check-web]
@@ -333,7 +338,7 @@ description = "svelte-check (typescript + a11y + Svelte diagnostics) across web/
 # would otherwise ship an app that loads to a blank page. Intermittent by
 # nature — it went unnoticed until a CI run lost the race.
 depends = ["build-web"]
-sources = ["web/src/**/*", "web/vite.config.ts"]
+sources = ["web/src/**/*", "web/embed/**/*", "web/vite.config.ts"]
 run = "npm --prefix web run check"
 
 [tasks.dev-ui]
@@ -374,9 +379,9 @@ description = "Unit-test the SvelteKit SPA's TypeScript (node --test, Node's own
 # CI checkout, and the tests fail with ERR_MODULE_NOT_FOUND against a
 # half-installed tree while passing locally where node_modules already exists.
 depends = ["web-install"]
-sources = ["web/src/lib/**/*.ts", "web/package-lock.json"]
+sources = ["web/src/lib/**/*.ts", "web/embed/**/*.ts", "web/package-lock.json"]
 dir = "{{ config_root }}"
-run = "node --test 'web/src/lib/**/*.test.ts'"
+run = "node --test 'web/src/lib/**/*.test.ts' 'web/embed/**/*.test.ts'"
 
 [tasks.package-extension]
 description = "Zip the Chrome extension for upload, stamped with this commit's version. `manifest.json` carries a committed placeholder (0.0.0) exactly like the Helm chart's Chart.yaml: the number that ships comes from `scripts/derive-version.sh`, the same resolver the images and the chart use, so an extension build can never disagree with the gateway it talks to. Writes target/aiplane-browser-control-<version>.zip."
