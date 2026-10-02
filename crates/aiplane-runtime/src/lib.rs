@@ -23,6 +23,7 @@ pub mod finish;
 pub mod loop_guard;
 pub mod openai_driver;
 pub mod rama_server;
+pub mod repeated_calls;
 pub mod server;
 
 pub use rama_server::state::RamaState;

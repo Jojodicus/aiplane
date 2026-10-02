@@ -274,7 +274,9 @@ mod tests {
             config,
             db.clone(),
             registry,
-            Arc::new(crate::server::tools::ToolRegistry::new()),
+            Arc::new(
+                crate::server::tools::ToolRegistry::new().with(crate::server::tools::echo::Echo),
+            ),
             Arc::new(aiplane_core::server::rbac::Resolver::empty()),
         );
         let sessions = aiplane_core::rama_server::SessionStore::new(db, [7u8; 32]);
@@ -538,6 +540,27 @@ mod tests {
                 .unwrap()
                 .contains("call it on its own"),
             "{refusal}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repeated_call_stop_ends_the_run_incomplete() {
+        let echo = json!({"tool_calls": [{"index": 0, "id": "", "type": "function",
+            "function": {"name": "company_echo", "arguments": r#"{"message":"hi"}"#}}]});
+        let r = run(vec![echo], Some(contract()), "standard").await;
+        let Some(RunOutcome::Incomplete {
+            reason: IncompleteReason::RepeatedToolCall { tool },
+            summary,
+        }) = r.outcome
+        else {
+            panic!("expected a repeated-call outcome, got {:?}", r.outcome);
+        };
+        assert_eq!(tool, "company_echo");
+        assert!(summary.contains("identical"), "{summary}");
+        assert!(
+            r.requests.len()
+                < aiplane_core::server::reasoning::Effort::Standard.max_rounds() as usize,
+            "the guard, not the budget, ended the run"
         );
     }
 

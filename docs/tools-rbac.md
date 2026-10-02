@@ -416,6 +416,21 @@ client tool in one turn.
   closing round ends the turn with the "ran its tools but wrote no answer"
   notice. See
   [`gateway-api.md`](gateway-api.md#tool-round-budget).
+- **Repeated identical calls** — `repeated_calls::RepeatedCallGuard` counts
+  gateway-owned calls per turn by (tool id, canonical arguments: object keys
+  sorted, whitespace ignored, empty or unparseable arguments read as `{}`).
+  Any different call in between (calls within one round count in array order) resets the count, so edit, read, edit, read never trips. The first `MAX_IDENTICAL_CALLS` (3) in a row run. The next `MAX_REFUSED_CALLS` (2) do
+  not run; the model gets a tool error saying it already has that result and
+  should use it. The call after that stops the turn. The guard is wired through
+  `runner::execute_tool_calls_guarded` in all three loops (buffered `/v1`,
+  streaming `/v1`, chat driver). It catches what `LoopGuard` cannot: a model
+  that writes no repeated text, only the same well-formed call every round.
+  Buffered `/v1` ends like an exhausted round budget (one closing round without
+  tools, `aiplane.tool_budget_exhausted`) and adds `aiplane.stop_reason` naming
+  the tool. The streaming `/v1` loop ends the stream with an error chunk. The
+  chat UI aborts the turn with the same reason as its error text. Every stop
+  logs a `warn` with the tool and round. The reason is English-only, like
+  `LOOP_MESSAGE`, because it is written into the turn row at generation time.
 - **Per-tool timeout** — 30s, overridable per tool via `max_duration`.
 - **Concurrency** — tool calls within one round run concurrently, bounded by a
   per-request semaphore of 4.
@@ -456,6 +471,8 @@ Inside the chat driver, with a contract:
   `Incomplete { reason: round_budget_exhausted { rounds } }`, with the model's
   last text as `summary`, or a gateway-written account of the rounds and tools
   when it wrote none. No closing round follows. The turn carries a notice.
+- A contracted run still passes through the repeated-call guard. A guard stop
+  settles as `repeated_tool_call { tool }`, with the stop message as `summary`.
 - An output-token cutoff settles as `output_truncated`. A cancel, an upstream
   error, or a crash leaves the slot empty, and `drive` reads the turn row:
   `cancelled` or `failed { message }`.
@@ -512,8 +529,8 @@ success/failure.
 
 - **User-defined tools.** All tools are code-defined and reviewed.
 - **Tool result caching.** Tools run every time they are called.
-- **Sub-agent delegation / multi-agent orchestration.** AIplane is a tool
-  runtime behind an OpenAI-compatible API; a client that needs agent
-  orchestration builds it on its own side. Adding it here would complicate
-  round bounding, cost attribution, RBAC scoping, and usage accounting, with no
-  benefit to a plain `/v1/chat/completions` caller.
+- **Model-driven agent orchestration on `/v1`.** A `/v1/chat/completions`
+  caller still gets one tool loop and builds any orchestration of its own on
+  its side. Gateway-defined agents and sub-agents are a separate surface, built
+  on the headless runtime and the [finish contract](#finish-contract); their
+  design is in [`agents.md`](agents.md).

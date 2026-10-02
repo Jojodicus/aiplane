@@ -90,6 +90,9 @@ pub enum RunOutcome {
 pub enum IncompleteReason {
     /// Every round the budget allows was spent.
     RoundBudgetExhausted { rounds: u32 },
+    /// The repeated-call guard stopped the run: the model kept making one
+    /// identical call to `tool`.
+    RepeatedToolCall { tool: String },
     /// The model hit its output-token ceiling mid-reply.
     OutputTruncated,
     /// Someone cancelled the run.
@@ -632,6 +635,12 @@ mod tests {
             },
             RunOutcome::Incomplete {
                 reason: IncompleteReason::OutputTruncated,
+                summary: String::new(),
+            },
+            RunOutcome::Incomplete {
+                reason: IncompleteReason::RepeatedToolCall {
+                    tool: "search".into(),
+                },
                 summary: String::new(),
             },
         ] {

@@ -1139,6 +1139,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // Set once the model ignored its final round: the one request past the
     // budget is the closing round (`runner::prepare_closing_round`).
     let mut closing = false;
+    let mut repeated_calls = crate::repeated_calls::RepeatedCallGuard::new();
 
     // Names of the tools that ran this turn, for the gateway's own account of
     // a contracted run that stops without the model giving one.
@@ -1840,7 +1841,46 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             return Ok(TurnOutcome::default());
         }
 
-        let results = runner::execute_tool_calls(&tool_source, &d.tool_ctx, &call_refs).await;
+        let results = match runner::execute_tool_calls_guarded(
+            &tool_source,
+            &d.tool_ctx,
+            &call_refs,
+            &mut repeated_calls,
+        )
+        .await
+        {
+            Ok(results) => results,
+            Err(stop) => {
+                let message = stop.message();
+                tracing::warn!(
+                    model = %ctx.model,
+                    tool = %stop.tool,
+                    tool_rounds_done = round,
+                    "repeated identical tool call; stopping the turn"
+                );
+                for call in &call_refs {
+                    chat::complete_tool_call(
+                        &d.state.db,
+                        &ctx.assistant_turn_id,
+                        &call.id,
+                        &message,
+                        ToolCallStatus::Errored,
+                    )
+                    .await
+                    .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
+                }
+                let _ = ctx.broadcast.send(TurnUpdate::Tick);
+                if let Some(run) = d.finish.as_ref() {
+                    run.settle(RunOutcome::Incomplete {
+                        reason: IncompleteReason::RepeatedToolCall {
+                            tool: stop.tool.clone(),
+                        },
+                        summary: message.clone(),
+                    });
+                }
+                return Err(TurnError::Aborted { message });
+            }
+        };
         tools_run.extend(call_refs.iter().map(|call| call.name.clone()));
         messages.push(serde_json::json!({
             "role": "assistant",
