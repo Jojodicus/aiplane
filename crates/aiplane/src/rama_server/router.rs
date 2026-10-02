@@ -272,7 +272,33 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume",
             pages::json_agent_test::resume_turn,
         )
+        .with_get("/api/v0/agents/{id}/tests", pages::json_agent_tests::list)
+        .with_post("/api/v0/agents/{id}/tests", pages::json_agent_tests::create)
+        .with_post(
+            "/api/v0/agents/{id}/tests/run",
+            pages::json_agent_tests::run,
+        )
+        .with_put(
+            "/api/v0/agents/{id}/tests/{case}",
+            pages::json_agent_tests::update,
+        )
+        .with_delete(
+            "/api/v0/agents/{id}/tests/{case}",
+            pages::json_agent_tests::delete,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test-runs",
+            pages::json_agent_tests::runs,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test-runs/{run}",
+            pages::json_agent_tests::run_detail,
+        )
         .with_get("/api/v0/agents/{id}/versions", pages::json_agents::versions)
+        .with_get(
+            "/api/v0/agents/{id}/analytics",
+            pages::json_agents::analytics,
+        )
         .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
         .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)
         .with_post("/api/v0/agents/{id}/shares", pages::json_agents::share)

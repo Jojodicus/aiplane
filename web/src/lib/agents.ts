@@ -9,6 +9,8 @@
  * judge: nothing here validates, it only keeps the validator's answers
  * attached to the field they are about (by `path`).
  */
+import type { AgentAnalytics } from './agent-analytics.ts';
+import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request } from './api.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
@@ -241,6 +243,16 @@ export const agentsApi = {
 		call<{ live_version: number | null; versions: AgentVersion[] }>(`/api/v0/agents/${id}/versions`),
 	setLive: (id: string, version: number) =>
 		call<{ live_version: number }>(`/api/v0/agents/${id}/live`, json('POST', { version })),
+	analytics: (id: string, query: string) =>
+		call<AgentAnalytics>(`/api/v0/agents/${id}/analytics?${query}`),
+	tests: (id: string) => call<TestsListing>(`/api/v0/agents/${id}/tests`),
+	createTest: (id: string, body: CaseBody) => call<{ case: TestCase }>(`/api/v0/agents/${id}/tests`, json('POST', body)),
+	updateTest: (id: string, caseId: string, body: CaseBody) =>
+		call<{ case: TestCase }>(`/api/v0/agents/${id}/tests/${caseId}`, json('PUT', body)),
+	deleteTest: (id: string, caseId: string) => call<void>(`/api/v0/agents/${id}/tests/${caseId}`, json('DELETE')),
+	runTests: (id: string, source: string) => call<TestRun>(`/api/v0/agents/${id}/tests/run`, json('POST', { source })),
+	testRuns: (id: string) => call<{ runs: TestRun[] }>(`/api/v0/agents/${id}/test-runs`),
+	testRun: (id: string, runId: string) => call<TestRun>(`/api/v0/agents/${id}/test-runs/${runId}`),
 	remove: (id: string) => call<void>(`/api/v0/agents/${id}`, json('DELETE')),
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>

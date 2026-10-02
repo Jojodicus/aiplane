@@ -12,11 +12,13 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 
+pub mod agent_analytics;
 pub mod agent_audit;
 pub mod agent_channels;
 pub mod agent_responders;
 pub mod agent_retention;
 pub mod agent_state;
+pub mod agent_tests;
 pub mod agents;
 pub mod app_settings;
 pub mod audit;
