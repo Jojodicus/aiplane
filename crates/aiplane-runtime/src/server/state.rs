@@ -1153,21 +1153,35 @@ impl AppState {
         Vec<String>,
         crate::server::tools::mcp::manager::UserMcpLayer,
     ) {
-        let mut allowed = self.allowed_tools_for_principal(principal).await;
         let layer = self
             .mcp_layer_for(
                 principal,
                 crate::server::tools::mcp::manager::AskContext::Chat,
             )
             .await;
-        self.union_mcp_tool_ids(
-            &mut allowed,
-            &layer,
-            &self.mcp_grant_for_principal(principal),
-        );
+        let mut allowed = self.granted_tool_ids(principal, &layer).await;
         allowed.retain(|id| !crate::server::tools::catalog::requires_chat_session(id));
         allowed.retain(|id| id != crate::server::tools::catalog::BOOTSTRAP_TOOL_ID);
         (allowed, Vec::new(), layer)
+    }
+
+    /// Every tool id `principal` may run, however it was offered: its RBAC
+    /// grant (registry and ComfyUI, minus what a person switched off) plus the
+    /// granted tools of its MCP overlay. Per-conversation enablement and token
+    /// states only narrow what is *offered* out of this set; nothing outside
+    /// it runs, whatever name the model calls.
+    pub async fn granted_tool_ids(
+        &self,
+        principal: &Principal,
+        layer: &crate::server::tools::mcp::manager::UserMcpLayer,
+    ) -> Vec<String> {
+        let mut granted = self.allowed_tools_for_principal(principal).await;
+        self.union_mcp_tool_ids(
+            &mut granted,
+            layer,
+            &self.mcp_grant_for_principal(principal),
+        );
+        granted
     }
 
     pub fn union_mcp_tool_ids(

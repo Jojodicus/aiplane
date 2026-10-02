@@ -345,6 +345,7 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            granted_tools: None,
         };
         let err = ImportFile
             .run(ctx, json!({"id": "t1/deck.typ"}))

@@ -1275,6 +1275,7 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            granted_tools: None,
         };
         let audited = AuditedTool {
             inner: Arc::new(Echo) as Arc<dyn Tool>,

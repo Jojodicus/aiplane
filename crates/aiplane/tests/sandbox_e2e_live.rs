@@ -139,6 +139,7 @@ fn ctx(pool: db::Pool, asst_turn: &str) -> ToolContext {
         push: None,
         model: None,
         suspend: Default::default(),
+        granted_tools: None,
     }
 }
 

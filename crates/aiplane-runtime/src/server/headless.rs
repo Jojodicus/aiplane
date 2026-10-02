@@ -311,7 +311,7 @@ mod tests {
             Arc::new(
                 crate::server::tools::ToolRegistry::new().with(crate::server::tools::echo::Echo),
             ),
-            Arc::new(aiplane_core::server::rbac::Resolver::empty()),
+            Arc::new(crate::server::tools::echo::granted_to_everyone()),
         );
         let sessions = aiplane_core::rama_server::SessionStore::new(db, [7u8; 32]);
         Arc::new(RamaState::new(

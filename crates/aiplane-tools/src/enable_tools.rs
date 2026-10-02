@@ -13,7 +13,7 @@
 //! group stays enabled for the rest of the conversation.
 //!
 //! Belt-and-braces: the chat driver also auto-enables on a direct
-//! tool_call (`source = "auto-call"`), so a model that calls `fetch_url`
+//! tool_call to a granted tool (`source = "auto-call"`), so a model that calls `fetch_url`
 //! without going through `enable_tools` first still works — it just pays
 //! the same one-round retry cost if the hallucinated args don't match
 //! the real schema. See `openai_driver::run_one_turn`.
@@ -187,8 +187,8 @@ impl Tool for EnableTools {
         // (they're resolved per request), and a guided-decoding backend would
         // reject any key outside an enum — so the model could never enable a
         // connected integration. Validation happens at runtime in `run`
-        // instead: unknown keys are skipped, and enabling a key that surfaces
-        // no tools is harmless (the MCP layer is the authoritative gate).
+        // instead: unknown keys and keys outside the principal's grant are
+        // skipped.
         ToolDef::function(
             self.id(),
             description,
@@ -227,6 +227,12 @@ impl Tool for EnableTools {
             let catalog = self.full_catalog();
             let known: std::collections::HashSet<&str> =
                 catalog.iter().map(|t| t.key.as_str()).collect();
+            let granted_keys: std::collections::HashSet<&str> = ctx
+                .granted_tools
+                .iter()
+                .flat_map(|ids| ids.iter())
+                .map(|id| entry_key_for(id))
+                .collect();
             // Keys the user explicitly switched **off** in the composer menu.
             // The user's choice is authoritative: refuse to re-enable these,
             // so an Off toggle genuinely hides the tool from the model rather
@@ -251,12 +257,19 @@ impl Tool for EnableTools {
                 }
                 // Accept the static catalog keys, plus any `mcp__*` connector
                 // key (the user's connected integrations aren't in the static
-                // snapshot — they're advertised in the system context). An
-                // `mcp__*` key that doesn't match a connected connector just
-                // surfaces no tools; the MCP layer is the real gate, so writing
-                // the row is harmless.
+                // snapshot — they're advertised in the system context). Either
+                // way the key must then cover a tool the principal is granted:
+                // a row for anything else would report as on a tool that never
+                // appears, and would stand ready the moment a grant changed.
                 if !known.contains(key.as_str()) && !key.starts_with(MCP_ID_PREFIX) {
                     skipped.push(json!({ "key": key, "reason": "unknown key" }));
+                    continue;
+                }
+                if !granted_keys.contains(key.as_str()) {
+                    skipped.push(json!({
+                        "key": key,
+                        "reason": "not granted to this user — an admin would have to grant it",
+                    }));
                     continue;
                 }
                 if let Err(err) = aiplane_core::server::db::chat_session_tools::set(
@@ -463,7 +476,17 @@ mod tests {
         }
     }
 
+    /// A context whose principal is granted the fixture tools: both web
+    /// tools and one tool of a `gitlab` MCP connector.
     async fn ctx(pool: db::Pool, session_id: Option<String>) -> ToolContext {
+        ctx_granting(
+            pool,
+            session_id,
+            &["fetch_url", "search_web", "mcp__gitlab__search_issues"],
+        )
+    }
+
+    fn ctx_granting(pool: db::Pool, session_id: Option<String>, granted: &[&str]) -> ToolContext {
         ToolContext {
             token_id: None,
             principal: aiplane_core::server::principal::Principal::User {
@@ -488,6 +511,9 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            granted_tools: Some(std::sync::Arc::new(
+                granted.iter().map(|id| id.to_string()).collect(),
+            )),
         }
     }
 
@@ -725,6 +751,50 @@ mod tests {
         let skipped = out["skipped"].as_array().unwrap();
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0]["key"], "bogus");
+    }
+
+    #[tokio::test]
+    async fn a_key_outside_the_principals_grant_is_skipped_and_never_written() {
+        let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+        seed_session(&pool, "s1").await;
+        let reg = ToolRegistry::new().with(FetchUrl).with(SearchWeb);
+        let et = EnableTools::from_registry(&reg);
+        let out = et
+            .run(
+                ctx_granting(pool.clone(), Some("s1".into()), &["search_web"]),
+                json!({"keys": ["fetch_url", "search_web", "mcp__gitlab"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["enabled"], json!(["search_web"]));
+        let skipped: Vec<&str> = out["skipped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(skipped, vec!["fetch_url", "mcp__gitlab"]);
+        let on =
+            aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(&pool, "s1")
+                .await
+                .unwrap();
+        assert!(
+            !on.contains("fetch_url") && !on.contains("mcp__gitlab"),
+            "{on:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_grant_enables_nothing() {
+        let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+        seed_session(&pool, "s1").await;
+        let et = EnableTools::from_registry(&ToolRegistry::new().with(FetchUrl));
+        let ctx = ToolContext {
+            granted_tools: None,
+            ..ctx(pool, Some("s1".into())).await
+        };
+        let out = et.run(ctx, json!({"keys": ["fetch_url"]})).await.unwrap();
+        assert_eq!(out["enabled"], json!([]));
     }
 
     #[test]

@@ -199,6 +199,7 @@ mod tests {
             push: None,
             model: None,
             suspend: Default::default(),
+            granted_tools: None,
         }
     }
 

@@ -143,6 +143,7 @@ pub(super) async fn resume_into(
     d: &OpenAiDriver,
     ctx: &SessionContext,
     tools: &dyn ToolSource,
+    tool_ctx: &ToolContext,
     resume: &ResumeFrom,
     messages: &mut Vec<Value>,
     budget: &mut ToolResultBudget,
@@ -164,7 +165,7 @@ pub(super) async fn resume_into(
         decided => {
             let tool_ctx = ToolContext {
                 suspend: Suspend::Decided(decided.clone()),
-                ..d.tool_ctx.clone()
+                ..tool_ctx.clone()
             };
             let body = runner::execute_tool_calls(
                 tools,
@@ -369,7 +370,7 @@ mod tests {
             db.clone(),
             registry,
             Arc::new(tools),
-            Arc::new(aiplane_core::server::rbac::Resolver::empty()),
+            Arc::new(crate::server::tools::echo::granted_to_everyone()),
         );
         let sessions = aiplane_core::rama_server::SessionStore::new(db, [7u8; 32]);
         Arc::new(RamaState::new(

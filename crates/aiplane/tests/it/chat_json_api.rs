@@ -2740,3 +2740,204 @@ async fn a_chat_turn_repeating_one_identical_call_is_stopped_with_a_reason() {
         "stopped long before the round budget: {upstream_calls}"
     );
 }
+
+/// A chat model that calls one tool by name on its first round and answers on
+/// the next. Title generation shares the mock; it is the non-streamed request.
+struct CallsByName {
+    tool: &'static str,
+    rounds: std::sync::atomic::AtomicUsize,
+}
+
+impl CallsByName {
+    fn new(tool: &'static str) -> Self {
+        Self {
+            tool,
+            rounds: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl wiremock::Respond for CallsByName {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        if body["stream"] != true {
+            return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": "Title"}}]
+            }));
+        }
+        let round = self
+            .rounds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let delta = if round == 0 {
+            serde_json::json!({"tool_calls": [{"index": 0, "id": "call-1", "type": "function",
+                "function": {"name": self.tool, "arguments": "{\"message\":\"leaked\"}"}}]})
+        } else {
+            serde_json::json!({"content": "done"})
+        };
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices": [{"index": 0, "delta": delta}]})
+        );
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    }
+}
+
+/// Echo and the timestamp tool are registered; alice's group grants only the
+/// timestamp tool.
+async fn setup_granting_only_the_timestamp(upstream_uri: &str) -> (Arc<RamaState>, String) {
+    use aiplane_runtime::server::tools::{echo::Echo, time::CurrentTimestamp};
+    let tools = Arc::new(ToolRegistry::new().with(Echo).with(CurrentTimestamp));
+    let rbac = Arc::new(
+        Resolver::build(
+            RbacConfig {
+                default_role: Some("member".into()),
+                mappings: vec![],
+            },
+            vec![RoleConfig {
+                id: "member".into(),
+                admin: false,
+                models: vec![],
+                tools: vec!["get_current_timestamp".into()],
+                skills: vec![],
+            }],
+        )
+        .unwrap(),
+    );
+    let state = state_with_chat_access(upstream_uri, tools, rbac).await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    (Arc::new(state), cookie)
+}
+
+struct CalledTurn {
+    state: Arc<RamaState>,
+    session_id: String,
+    calls: Vec<chat::ToolCall>,
+    rounds: Vec<serde_json::Value>,
+}
+
+/// Submit one message to a fresh conversation (after `seed` has prepared it)
+/// whose model calls `tool` by name, and wait for the turn to settle.
+async fn run_turn_calling(
+    tool: &'static str,
+    seed: impl AsyncFnOnce(&RamaState, &str),
+) -> CalledTurn {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(CallsByName::new(tool))
+        .mount(&upstream)
+        .await;
+    let (state, cookie) = setup_granting_only_the_timestamp(&upstream.uri()).await;
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+    seed(&state, &session.id).await;
+    let resp = router(state.clone())
+        .serve(json_req(
+            Method::POST,
+            format!("/api/v0/chat/sessions/{}/messages", session.id),
+            &cookie,
+            Some(r#"{"model":"model-a","message":"call it"}"#.into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    wait_for_idle(&state, "alice").await;
+    let turns = chat::list_turns(&state.db, &session.id).await.unwrap();
+    let calls = turns.last().unwrap().tool_calls.clone();
+    let rounds = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap())
+        .filter(|b| b["stream"] == true)
+        .collect();
+    CalledTurn {
+        state,
+        session_id: session.id,
+        calls,
+        rounds,
+    }
+}
+
+fn offered_names(round: &serde_json::Value) -> Vec<String> {
+    round["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_message(round: &serde_json::Value) -> String {
+    round["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+async fn enabled_keys(state: &RamaState, session_id: &str) -> std::collections::HashSet<String> {
+    db::chat_session_tools::enabled_keys_for_session(&state.db, session_id)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_chat_model_naming_an_ungranted_tool_is_refused_and_does_not_enable_it() {
+    let turn = run_turn_calling("company_echo", async |_, _| {}).await;
+
+    assert_eq!(turn.calls.len(), 1);
+    assert_eq!(turn.calls[0].status, chat::ToolCallStatus::Errored);
+    let output = turn.calls[0].output_json.clone().unwrap_or_default();
+    assert!(output.contains("No tool named `company_echo`"), "{output}");
+    let answered = tool_message(&turn.rounds[1]);
+    assert!(
+        answered.contains("No tool named `company_echo`"),
+        "{answered}"
+    );
+    assert!(
+        !enabled_keys(&turn.state, &turn.session_id)
+            .await
+            .contains("company_echo")
+    );
+}
+
+#[tokio::test]
+async fn a_granted_tool_the_round_did_not_offer_is_enabled_and_run() {
+    let turn = run_turn_calling("get_current_timestamp", async |_, _| {}).await;
+
+    assert_eq!(turn.calls.len(), 1);
+    assert_eq!(turn.calls[0].status, chat::ToolCallStatus::Completed);
+    assert!(
+        enabled_keys(&turn.state, &turn.session_id)
+            .await
+            .contains("get_current_timestamp")
+    );
+    assert!(!offered_names(&turn.rounds[0]).contains(&"get_current_timestamp".to_string()));
+    assert!(offered_names(&turn.rounds[1]).contains(&"get_current_timestamp".to_string()));
+}
+
+#[tokio::test]
+async fn a_stale_enablement_for_a_revoked_grant_is_neither_offered_nor_runnable() {
+    let turn = run_turn_calling("company_echo", async |state, session_id| {
+        db::chat_session_tools::set(&state.db, session_id, "company_echo", true, "model")
+            .await
+            .unwrap();
+    })
+    .await;
+
+    assert!(!offered_names(&turn.rounds[0]).contains(&"company_echo".to_string()));
+    assert_eq!(turn.calls.len(), 1);
+    assert_eq!(turn.calls[0].status, chat::ToolCallStatus::Errored);
+    let answered = tool_message(&turn.rounds[1]);
+    assert!(
+        answered.contains("No tool named `company_echo`"),
+        "{answered}"
+    );
+}
