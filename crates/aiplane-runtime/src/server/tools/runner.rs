@@ -911,6 +911,9 @@ pub async fn execute_tool_calls(
         if phase.is_sequential() {
             for (i, call) in due {
                 results[i] = Some(execute_tool_call(tools, ctx, call, scan).await);
+                if phase == ToolPhase::WritesState {
+                    tools.state_written();
+                }
             }
         } else {
             let sem = &sem;

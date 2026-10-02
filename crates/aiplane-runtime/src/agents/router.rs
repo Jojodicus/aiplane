@@ -42,7 +42,7 @@ use super::bind::{BindSource, render_task};
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
 use super::human::{answered, hand_off, human_routes};
 use super::profile::{Role, RunOptions, RunProfile, pool_model};
-use super::state::{AgentState, SlotView, StateSchema};
+use super::state::{AgentState, SlotView, StateSchema, StateSnapshot};
 use crate::finish::{IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
@@ -84,6 +84,7 @@ pub struct RouterSpec {
     pub routes: Value,
     pub router: Option<Value>,
     pub main_pool: String,
+    pub snapshot: Arc<StateSnapshot>,
 }
 
 pub struct ForwardRequest {
@@ -204,7 +205,10 @@ impl ForwardRequest {
                     .into(),
             ));
         };
-        let state = AgentState::load(&ctx.db, &self.spec.schema, session_id)
+        let state = self
+            .spec
+            .snapshot
+            .get(&ctx.db, &self.spec.schema, session_id)
             .await
             .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
         let input = GateInput {
@@ -362,7 +366,7 @@ impl ForwardRequest {
                 ctx,
                 &human,
                 &question,
-                &self.spec.schema,
+                &self.spec,
                 self.options.lang,
                 FORWARD_TOOL_NAME,
             )

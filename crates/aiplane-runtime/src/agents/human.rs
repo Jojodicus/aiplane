@@ -36,7 +36,7 @@ use super::gate::{GateInput, GateStatus};
 use super::profile::RunOptions;
 use super::router::RouterSpec;
 use super::spec::parse_duration;
-use super::state::{AgentState, SlotStatus, StateSchema};
+use super::state::SlotStatus;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
@@ -127,11 +127,14 @@ async fn context(
     ctx: &ToolContext,
     route: &HumanRoute,
     question: &str,
-    schema: &StateSchema,
+    spec: &RouterSpec,
     lang: Lang,
 ) -> Result<Value, ToolError> {
+    let schema = &*spec.schema;
     let session = ctx.session_id.as_deref().unwrap_or_default();
-    let state = AgentState::load(&ctx.db, schema, session)
+    let state = spec
+        .snapshot
+        .get(&ctx.db, schema, session)
         .await
         .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
     let slots: Vec<Value> = state
@@ -190,7 +193,7 @@ pub async fn hand_off(
     ctx: &ToolContext,
     route: &HumanRoute,
     question: &str,
-    schema: &StateSchema,
+    spec: &RouterSpec,
     lang: Lang,
     via: &str,
 ) -> Result<Value, ToolError> {
@@ -207,7 +210,7 @@ pub async fn hand_off(
         )),
         Suspend::Available => {
             let question = session_core::text::truncate_chars(question.trim(), MAX_QUESTION_CHARS);
-            let handoff = context(ctx, route, &question, schema, lang).await?;
+            let handoff = context(ctx, route, &question, spec, lang).await?;
             if let Err(err) = agent_audit::record_run_event(
                 &ctx.db,
                 AuditKind::HumanHandoff,
@@ -259,7 +262,10 @@ impl RequestHuman {
                 "request_human only works inside an agent conversation. Do not retry.".into(),
             )
         })?;
-        let state = AgentState::load(&ctx.db, &self.spec.schema, session)
+        let state = self
+            .spec
+            .snapshot
+            .get(&ctx.db, &self.spec.schema, session)
             .await
             .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
         let input = GateInput {
@@ -309,7 +315,7 @@ impl RequestHuman {
             ctx,
             route,
             question,
-            &self.spec.schema,
+            &self.spec,
             self.options.lang,
             REQUEST_HUMAN,
         )

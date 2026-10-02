@@ -38,7 +38,7 @@ use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
 use super::spec_cache::CompiledSpec;
-use super::state::{self, AgentState, StateSchema, render_view};
+use super::state::{self, StateSchema, StateSnapshot, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
 use crate::budget::{Budget, SpendMeter};
 use crate::finish::FinishContract;
@@ -262,6 +262,7 @@ impl RunProfile {
                 add(tool, ToolPhase::WritesState);
             }
         }
+        let snapshot = Arc::new(StateSnapshot::default());
         let routes = spec.get("routes").cloned().unwrap_or_else(|| json!({}));
         let conversation = (!schema.is_empty() || !gates.is_empty()).then(|| Conversation {
             schema: schema.clone(),
@@ -277,6 +278,7 @@ impl RunProfile {
                 routes,
                 router: spec.get("router").cloned(),
                 main_pool: pool,
+                snapshot: snapshot.clone(),
             });
             if matches!(role, Role::Main)
                 && let Some(human) = RequestHuman::new(router.clone(), options.clone())
@@ -306,6 +308,7 @@ impl RunProfile {
             binds,
             permissions: Permissions::from_spec(spec),
             schema: (!schema.is_empty()).then_some(schema),
+            snapshot,
             pools,
             spend: options.spend.clone(),
         };
@@ -410,6 +413,8 @@ pub struct AgentRun {
     binds: ToolBinds,
     permissions: Permissions,
     schema: Option<Arc<StateSchema>>,
+    /// This turn's read of the conversation state; see [`StateSnapshot`].
+    snapshot: Arc<StateSnapshot>,
     pools: PoolAccess,
     spend: Option<Arc<SpendMeter>>,
 }
@@ -434,6 +439,10 @@ impl AgentRun {
     /// granted (`granted`), then the synthetic ones.
     pub fn state_schema(&self) -> Option<&Arc<StateSchema>> {
         self.schema.as_ref()
+    }
+
+    pub fn state_snapshot(&self) -> &StateSnapshot {
+        &self.snapshot
     }
 
     pub fn offered(&self, granted: &[String]) -> Vec<String> {
@@ -465,11 +474,13 @@ impl AgentRun {
             parts.push(self.instructions.clone());
         }
         if let Some(c) = &self.conversation {
-            let state = AgentState::load(db, &c.schema, session_id)
+            let state = self
+                .snapshot
+                .get(db, &c.schema, session_id)
                 .await
                 .unwrap_or_else(|err| {
                     tracing::warn!(error = %err, session_id, "agent state unreadable; shown as empty");
-                    AgentState::default()
+                    Arc::default()
                 });
             let view = render_view(&state.view(&c.schema));
             if !view.is_empty() {
@@ -556,7 +567,12 @@ impl<'a> RunToolSource<'a> {
     fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
         let bound: Arc<dyn Tool> = match run.binds.for_tool(tool.id(), &tool.schema()) {
             Ok(binds) if binds.is_empty() => tool,
-            Ok(binds) => Arc::new(BoundTool::new(tool, binds, run.schema.clone())),
+            Ok(binds) => Arc::new(BoundTool::new(
+                tool,
+                binds,
+                run.schema.clone(),
+                run.snapshot.clone(),
+            )),
             Err(unbound) => return Arc::new(WithheldTool::new(tool, unbound)),
         };
         run.permissions.gate(bound)
@@ -612,6 +628,12 @@ impl ToolSource for RunToolSource<'_> {
             .and_then(|r| r.synthetic.get(id))
             .map_or(ToolPhase::Concurrent, |s| s.phase)
     }
+
+    fn state_written(&self) {
+        if let Some(run) = self.run {
+            run.snapshot.written();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -636,6 +658,7 @@ mod tests {
                 .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
             permissions: Permissions::default(),
             schema: None,
+            snapshot: Arc::default(),
             pools: PoolAccess::all(),
             spend: None,
         }

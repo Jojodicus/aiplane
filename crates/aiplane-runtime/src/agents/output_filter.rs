@@ -25,8 +25,9 @@ use session_core::db as chat;
 use session_core::i18n::{Lang, t};
 
 use super::human::REQUEST_HUMAN;
+use super::profile::AgentRun;
 use super::router::FORWARD_TOOL_NAME;
-use super::state::{AgentState, Provenance, StateSchema};
+use super::state::{Provenance, StateSchema};
 use crate::rama_server::state::RamaState;
 
 /// What to do with an answer that names an untraceable identifier.
@@ -295,13 +296,17 @@ async fn child_turns(
 /// value came from a verified slot, which is trusted on its own anyway.
 async fn trusted_text(
     state: &RamaState,
-    schema: Option<&StateSchema>,
+    run: &AgentRun,
     session_id: &str,
     turn_id: &str,
 ) -> Result<Vec<Evidence>, aiplane_core::server::db::DbError> {
     let mut trusted = Vec::new();
+    let schema = run.state_schema().map(|s| &**s);
     if let Some(schema) = schema {
-        let slots = AgentState::load(&state.db, schema, session_id).await?;
+        let slots = run
+            .state_snapshot()
+            .get(&state.db, schema, session_id)
+            .await?;
         for def in schema.slots() {
             if let Some(entry) = slots.valid(&def.name)
                 && entry.provenance != Provenance::Llm
@@ -350,11 +355,11 @@ pub struct Delivery<'a> {
 pub async fn guard_answer(
     state: &RamaState,
     filter: &OutputFilter,
-    schema: Option<&StateSchema>,
+    run: &AgentRun,
     at: Delivery<'_>,
     answer: String,
 ) -> String {
-    let trusted = trusted_text(state, schema, at.session_id, at.turn_id).await;
+    let trusted = trusted_text(state, run, at.session_id, at.turn_id).await;
     let verdict = match &trusted {
         Ok(trusted) => filter.check(&answer, trusted, &t(at.lang, "agent-output-redacted")),
         Err(_) => Verdict::Withheld { hits: Vec::new() },

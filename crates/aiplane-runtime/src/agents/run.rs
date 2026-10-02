@@ -224,16 +224,7 @@ pub async fn drive_opened_from(
             chain: &chain,
             lang: turn.lang,
         };
-        answer = Some(
-            guard_answer(
-                state,
-                filter,
-                profile.run.state_schema().map(|s| &**s),
-                at,
-                text,
-            )
-            .await,
-        );
+        answer = Some(guard_answer(state, filter, &profile.run, at, text).await);
     }
     Ok(AgentReply {
         status: done
