@@ -19,7 +19,12 @@
 	 * principal. A conversation is the server's `session_id`; "new
 	 * conversation" simply forgets it.
 	 */
-	let { agentId, dirty, onsave }: { agentId: string; dirty: boolean; onsave: () => Promise<void> } = $props();
+	let { agentId, dirty, onsave, onturn }: {
+		agentId: string;
+		dirty: boolean;
+		onsave: () => Promise<void>;
+		onturn?: (debug: TestDebug | null) => void;
+	} = $props();
 
 	type Message = {
 		role: 'visitor' | 'agent';
@@ -79,6 +84,11 @@
 			: ([...messages].reverse().find((m) => m.debug)?.debug ?? null)
 	);
 
+	$effect(() => {
+		const latest = [...messages].reverse().find((m) => m.debug)?.debug;
+		if (latest) onturn?.(latest);
+	});
+
 	async function send() {
 		const text = draft.trim();
 		if (!text || busy) return;
@@ -98,6 +108,7 @@
 		}
 	}
 	function reset() {
+		onturn?.(null);
 		messages = [];
 		sessionId = null;
 		selected = null;

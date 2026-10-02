@@ -418,7 +418,7 @@ are in `web/src/lib/components/agents/`.
 
 - **`/agents`**: the agents shared with the caller, and a dialog to create one.
 - **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
-  Save draft / Publish / Delete, and eight tabs (`?tab=` keeps the choice in the
+  Save draft / Publish / Delete, and nine tabs (`?tab=` keeps the choice in the
   URL):
   - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
@@ -429,6 +429,39 @@ are in `web/src/lib/components/agents/`.
     (`CondEditor`: all / any / not / slot check with `set`, `eq`, `in`,
     `provenance`, `max_age`). `finish.schema` is edited as JSON, and verifiers,
     `human` routes and `subject` slot schemas only in the JSON tab.
+  - *Canvas*: the agent's fixed topology drawn from the spec
+    (`AgentCanvas`; the layout, path mapping and test-path logic are the pure
+    `web/src/lib/agent-canvas.ts`, unit-tested in `agent-canvas.test.ts`).
+    Columns are main agent, one gate per route, the route, and its target
+    (sub-agent, `human`, or any other kind key such as `a2a` or `loop`, drawn
+    generically by that key); rows follow route order. The main agent node also lists the spec's `verifiers` as badges (id and kind, any kind). It is not a free-form
+    graph: nodes cannot be moved or wired, and nothing is stored but the spec.
+    Nodes are HTML buttons (daisyUI `card`, `badge`) over an inline SVG of
+    edges, laid out by `layoutCanvas` with fixed sizes, so the same spec always
+    draws the same way. The canvas scrolls horizontally inside its own box.
+    - *Editing.* Selecting a node opens a side panel (below the canvas on
+      narrow screens) with the form editors for that part: the main agent node
+      the main agent form, state slots and router; a gate node the structured
+      gate editor; a route node its name and description; a target node the
+      sub-agent picker, task and binds (`RouteEditor` with `part`, the same
+      component the Builder tab renders whole). "Add route" and "Remove route"
+      use `addRoute` / `removeRoute` / `renameRoute` from `agents.ts`, the
+      same helpers the Builder uses, and the canvas binds the same `spec`
+      buffer as the Builder and JSON tabs, so an edit in one shows in the
+      others and the unit tests pin canvas edit == form edit.
+    - *Validation.* `issuesByNode` maps each 422 issue `path` to a node
+      (`main`/`state`/`router`/`verifiers` to the main node,
+      `routes.<r>.when…` to the gate, `.agent`/`.human`/`.task`/`.bind` to the
+      target, the rest of `routes.<r>` to the route). Nodes with issues get an
+      error border and count; the panel lists the node's issues. Paths no node
+      shows (`profile`, `finish`, `publish`) stay in the header list.
+    - *Last test turn.* The Test chat reports its latest debug view to the
+      workbench, and the canvas shows each gate open or closed, the picked
+      route (green ring and edges), and the sub-agents that ran. Nothing shows
+      until a turn happened in this page visit.
+    - *Accessibility.* Every node is a focusable button (Enter or Space opens
+      the panel, which takes focus), Escape closes it and returns focus to the
+      node, and transitions are off under `prefers-reduced-motion`.
   - *JSON*: the whole spec; Apply replaces the builder's buffer.
   - *Grants*: the principal's grants with revoke, and a grant form whose
     suggestions come from `/api/v0/agent-resources`. The server's refusal
