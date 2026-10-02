@@ -408,6 +408,8 @@ test chat behind it.
   `session_id` starts a conversation; one continues it. The turn is synchronous
   (the request returns when the turn ends; no SSE yet). Answer:
   `{session_id, turn_id, status, answer, error, draft_version: 0, debug}`.
+  A turn that paused also carries `suspension`
+  ([agent-run suspend](#what-agent-run-suspend-built)).
   Failures: `404 unknown_session`, `422 agent_not_runnable` (bad spec),
   `503 agent_no_model` (no healthy model in the pool the principal may use).
 - **`debug`** is for managers only and is built from the stored state and the
@@ -478,8 +480,8 @@ when the parent turn is gone. `session_core::db` gains `SessionOwner`,
 `create_principal_session` (`NewRunSession`), `get_principal_session` and
 `session_owner`; every person-facing query is unchanged and simply never
 matches a row whose `user_id` is `NULL`. The chat sweeper for expired
-suspensions skips principal-owned runs; the agent path resumes those (#88,
-#91). Because seven tables cascade from `chat_sessions`, migrations now run
+suspensions skips principal-owned runs; the agent path resumes those
+([agent-run suspend](#what-agent-run-suspend-built)). Because seven tables cascade from `chat_sessions`, migrations now run
 with foreign keys off — see `crates/aiplane-core/migrations/README.md`.
 
 ### State
@@ -884,11 +886,130 @@ tool wants shown) and `on_timeout` (`deny` | `allow_once`, the configurable
 fallback; deny by default). `expires_at` is compared after parsing, not as a
 string. The resume route for the chat path is
 `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume`, owner-only, with
-`{decision, value?, request_id?}`. #91 built the public endpoint without a
-resume route; resuming a visitor's suspended turn comes with #95/#96.
-`child_turn` exists but nothing sets it: ancestor suspension and
-innermost-first resume arrive with sub-agent dispatch (#88). Details in
+`{decision, value?, request_id?}`. Agent runs got their own resume path
+afterwards ([below](#what-agent-run-suspend-built)). Details in
 [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
+
+### What agent-run suspend built
+
+The shared prerequisite of #95 (secure input) and #96 (human in the loop):
+agent runs pause and resume durably, sub-agent runs included.
+
+- **Kinds.** `session_core::db::SuspensionKind` is the registry: `approval`,
+  `secure_input`, `human_answer`. Each kind says which decisions it offers
+  (`options()`), who answers it in an agent conversation (`answered_by()`:
+  `Participant` for `secure_input`, `Staff` for the other two) and what its
+  timeout falls back to (`timeout_fallback()`). The driver applies that
+  fallback when it pauses, whatever the tool asked: an approval only ever
+  times out to `deny` (#96's decision), and a value kind cannot time out to
+  `allow_once`, which it does not offer. So every expiry today is a deny.
+  `SuspendRequest::approval(timeout)` and `SuspendRequest::secure_input(message,
+  timeout)` build the requests; #95/#96 need no new kind.
+- **Which runs pause.** `ToolContext.suspend` is `Available` on the chat path
+  and on every agent run (`headless::drive` turns it on when `DriveParams.agent`
+  is set), in both `drive_opened` entry points: the public endpoint's runner
+  and the test chat. Scheduled and webhook runs still refuse.
+- **The main agent's turn.** `drive_opened` (and `drive_opened_from`, the
+  same with a resume) returns `AgentReply { status: suspended, answer: None,
+  suspension: Some(view) }` when the turn paused. The output filter runs only
+  on a terminal answer. The pause is audited as `run_suspended` (`{session_id,
+  turn_id, request_id, kind, tool, child_turn, expires_at}`) on the running
+  principal with its chain.
+- **Nested propagation.** A tool inside a sub-agent run pauses the child turn
+  as usual. `forward_request` sees the child's row once its drive returns,
+  records the dispatch's `run_context` on it (`{route, route_binds}`, migration
+  `0085`: the bound values exist nowhere else) and answers with a suspend
+  envelope whose `child` names the child turn and its `expires_at`. The
+  parent's driver checks that the child is a paused run of *this* turn
+  (`parent_turn_id`), then pauses the parent with the child's kind, message and
+  deadline and `child_turn` set. Every level up to the conversation's turn
+  does the same, so the conversation's turn mirrors the innermost request.
+  Each row has its own `request_id` (the column is unique); the one a client
+  sees and answers is the conversation's.
+- **One decision, innermost first** (`agents::resume`). `claim` walks
+  `child_turn` from the conversation's turn down (at most `RunChain`'s
+  `MAX_DEPTH` levels, each level's session must name the level above as its
+  parent), checks `request_id` against the conversation's row, the decision
+  against the innermost kind's options and the answerer against
+  `answered_by()`, then claims the innermost row (the race two answers run) and
+  every ancestor. `run_claimed` rebuilds each level from its session (owner,
+  pinned version; a test conversation's draft) and its parent's pause (the
+  chain is `RunChain::root` plus one `enter` per level, `CallSite` = the
+  parent's turn and waiting call), resumes the innermost run with the
+  decision, turns its outcome into the `forward_request` result exactly as a
+  first dispatch would (`router::dispatch_result`, which also writes
+  `sub_agent_finished`), and resumes each parent with that result
+  (`ResumeFrom.child_result`: the waiting call is answered, not run again).
+  A child that asks again pauses every level again on the new request. The
+  resume is audited as `run_resumed` (`{session_id, turn_id, request_id, kind,
+  decision, answered_by, waiting_turn}`, with `actor_id` for staff). A level
+  that cannot be rebuilt (agent disabled since) errors every claimed turn.
+- **Secure values.** A `value` goes to the requesting tool through
+  `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
+  `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's
+  shape only; for a `secure_input` the driver replaces every repetition of the
+  value in the tool's result with `[secure input withheld]` before the result
+  is stored or reaches the model, so a careless tool cannot leak it either. The
+  stored turn holds the tool's (scrubbed) result as the waiting call's output.
+  *For #95:* an MCP-backed `check_code` passes the code as an MCP argument, and
+  `mcp_tool_audit` records arguments — the verifier must keep it out of there.
+- **Visitor route** — `POST /api/v0/embed/resume` `{request_id, decision,
+  value?}` (unknown fields refused), visitor token, admitted like a message
+  (#92's rates and budget). `202 {turn_id}`; the rest arrives on the event
+  stream. Only `secure_input` (`Answerer::Participant`): an approval answers
+  `403 decision_for_staff`. Also `409 not_suspended` (nothing waiting, or a
+  stale `request_id`), `400 decision_not_offered`, `409 turn_in_progress`.
+  The refusals a visitor can act on are Fluent strings
+  (`agent-embed-decision-for-staff`, `agent-embed-not-waiting`).
+- **Staff route** — `POST
+  /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume`
+  `{decision, value?, request_id?}`, `can_manage_agents` plus a `write` share
+  (or admin). Answers approvals and human answers in any of the agent's
+  conversations; a `secure_input` only in a test conversation (version 0),
+  where the manager plays the visitor (`403 decision_for_visitor` otherwise).
+  Synchronous like the test chat: `200 {session_id, turn_id, status, answer,
+  error, suspension}` once the resumed turn ended or paused again. It holds
+  the conversation's `AgentTurns` claim meanwhile, so the visitor's stream
+  shows the turn running. This is the backend #96's inbox calls.
+- **What a visitor sees.** A suspended turn keeps `suspension` in the
+  snapshot and `GET /api/v0/embed/session`, as
+  `SuspensionView::for_participant`: `{request_id, kind, message?, options,
+  expires_at}`, no `tool` and no `tool_call_id`; `options` is empty for a
+  request staff answer. The event stream ends with a `suspended` frame of the
+  same shape (instead of `idle`) when the conversation waits, or when the
+  running turn pauses.
+- **Messages behind a decision** (#96's decision: queued, not cancelling).
+  `POST /api/v0/embed/messages` into a waiting conversation stores the user
+  turn and answers `202 {turn_id: null, user_turn_id, placement: "queued"}`
+  (`"started"` otherwise); a second one is `409 turn_in_progress`. The snapshot
+  lists it in `waiting_turn_ids`. Once the resumed turn is terminal,
+  `run_claimed` runs it as the next turn. The synchronous entry points
+  (`run_turn`, the test chat) refuse instead: `AgentRunError::DecisionPending`,
+  `409 decision_pending`.
+- **Expiry.** `chat::expired_run_suspensions` lists the conversations' own
+  rows (principal-owned, no `parent_turn_id`) past their deadline;
+  `agents::resume::resume_expired`, called by the existing 30-second sweeper,
+  resumes each with its stored fallback, answered by `timeout`, skipping a
+  conversation whose claim is held.
+- **Restart.** Nothing waits in memory: every level is rebuilt from the rows
+  on whichever process gets the decision.
+- **Retention.** The #92 sweep keeps a conversation with a pending suspension,
+  however idle; it goes on a later sweep once the decision or the expiry
+  settled it.
+- **Test chat.** `test-turn` answers carry `suspension` (the full view, tool
+  included) and `status: suspended`; the SPA shows what the turn waits for
+  with a value field or approve/deny, and answers through the staff route.
+- **Tests.** `agents/run/tests/suspend.rs` (secure input to the tool and
+  nowhere in the database; a paused sub-agent pausing its caller and one
+  staff decision resuming both; an expired approval denied; restart
+  survival; a refused second message) and `tests/it/embed/suspend.rs` (the
+  HTTP surface, with every table and every log line checked for the code).
+- **For #95/#96.** A verifier returns `tool_suspend(SuspendRequest::
+  secure_input(…))` and checks `Decided(Value)`; the widget renders the
+  `suspended` frame's field and posts `/api/v0/embed/resume`. `permission:
+  always_ask` wraps the tool in `AskFirst`; the inbox lists suspended agent
+  turns and answers through the staff route; the push notification on pause
+  and the scheduled/webhook resume path are still #96's.
 
 ## 4. Gates and validation
 
@@ -1058,9 +1179,10 @@ embedding the agent, not abuse. The protection against abuse is:
 The doc says this plainly so nobody mistakes the key for a secret.
 
 **Secure input** (verifier codes). The widget renders a dedicated field and
-posts it to `POST /api/v0/embed/secure-input/{request_id}`. That resolves a
-`secure_input` suspension (§3) directly. The code never enters model context or
-the stored transcript.
+posts it to `POST /api/v0/embed/resume` with the `request_id` of the
+`suspended` frame. That resolves a `secure_input` suspension (§3) directly. The
+code never enters model context or the stored transcript
+([built](#what-agent-run-suspend-built)).
 
 **Output policy.** A public main agent uses `OutputPolicy::Buffered`. Each
 answer is held until it passes the output filter (#89), then sent as one block,
@@ -1114,7 +1236,8 @@ untrusted audiences.
   |---|---|---|
   | POST | `/api/v0/embed/sessions` | Start a visitor conversation `{key}` |
   | GET | `/api/v0/embed/session` | The conversation: `{expires_at, idle_ttl_secs, agent, live_turn_id, turns}` |
-  | POST | `/api/v0/embed/messages` | `{text}` (≤ 8000 characters, no other field); `202 {turn_id, user_turn_id}` |
+  | POST | `/api/v0/embed/messages` | `{text}` (≤ 8000 characters, no other field); `202 {turn_id, user_turn_id, placement}` (`queued`, with `turn_id: null`, behind a pending decision) |
+  | POST | `/api/v0/embed/resume` | `{request_id, decision, value?}`: answer a `secure_input` ([§3](#what-agent-run-suspend-built)); `202 {turn_id}` |
   | GET | `/api/v0/embed/events` | `chat_json` frames for `fetch` streaming |
   | GET | `/api/v0/agents/{id}/embed-keys` | Keys of the agent (`read` share); never the key |
   | POST | `/api/v0/agents/{id}/embed-keys` | `{name, origins}` (`write` share); `201 {embed_key, key}` |
@@ -1172,10 +1295,10 @@ untrusted audiences.
   preflight answer, and the handler then refuses it.
 - **Rate limits** were a stub here (`pages::embed::admit`, always admitting);
   #92 replaced it ([below](#what-92-built)).
-- **Not built here.** Secure input (`/api/v0/embed/secure-input/{request_id}`,
-  #95) and resuming a suspended visitor turn (#96): the visitor view drops
-  `suspension`, and a suspended turn ends the event stream with `idle`. The
-  output filter itself is #89. The widget is #94 (below). User-visible text is in
+- **Not built here.** Resuming a suspended visitor turn, which came later
+  ([What agent-run suspend built](#what-agent-run-suspend-built)): until then
+  the visitor view dropped `suspension`, and a suspended turn ended the event
+  stream with `idle`. The output filter itself is #89. The widget is #94 (below). User-visible text is in
   the error envelope's English `message` with a stable `code`; the widget is
   expected to show its own Fluent strings per `code`.
 
@@ -1290,10 +1413,12 @@ pool rule, and retention.
   sweep that deleted something writes `conversations_swept` with
   `{retention_days, conversations, sub_agent_runs}` — counts only.
 - **Deviations and limits of this.**
-  - The per-IP bucket trusts the client IP the gateway derives
-    (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`, then the peer), like
-    GeoIP does. Behind no proxy, a client can set those headers; the
-    per-visitor limit and the budget still hold.
+  - The per-IP bucket uses the client IP the gateway derives (#98): the TCP
+    peer, or — only when the peer is in `$AIPLANE_TRUSTED_PROXIES` — the
+    rightmost `X-Forwarded-For` hop that is not itself a trusted proxy, the
+    same resolution GeoIP uses. With nothing trusted a forged header changes
+    nothing; behind a reverse proxy that is *not* listed, every visitor
+    shares the proxy's bucket.
   - A refusal storm writes one audit row per refused request.
   - The compaction summary call is still not metered, for agents or people.
   - The admin limits page in the SPA does not offer subject `system` yet; the
@@ -1397,7 +1522,7 @@ helpers.
 | #79 budgets | §3 | `Budget` in `RunProfile`; chat derives it from `Effort` |
 | #80 trim tool results | §3 | as described |
 | #81 repeated calls | §3 | 3 identical calls warn, the 4th ends the run as `incomplete` |
-| #82 suspend/resume | §3 | `chat_turn_suspensions` in session-core; `suspended` event; nested suspensions |
+| #82 suspend/resume | §3 | `chat_turn_suspensions` in session-core; `suspended` event; nested suspensions (built for agent runs afterwards: visitor and staff resume routes) |
 | #83 run identity, call chain | §1, §3 | `ToolContext.principal` replaces `user_id`/`roles`; `RunChain`; `chat_sessions` owner becomes user **or** principal (table rebuild); `agent_audit` |
 | #84 agent definition | §2 | `agents` keyed by principal; `draft_spec` plus immutable `agent_versions`; shares: every share needs the permission |
 | #85 typed state | §3 State | `agent_state` table; `set_by` list per slot; `subject` slot type |

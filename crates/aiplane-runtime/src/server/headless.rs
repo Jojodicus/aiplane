@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::budget::{Budget, Clock};
 use crate::finish::{FinishContract, FinishRun, IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
+use crate::suspend::ResumeFrom;
 use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::{DbError, Pool};
 use aiplane_core::server::principal::Principal;
@@ -154,11 +155,31 @@ pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome>
     drive_with_clock(state, p, crate::budget::system_clock()).await
 }
 
+/// Continue a suspended agent run: `resume` holds its claimed suspension and
+/// the decision (or the resumed sub-agent's result) that settles the
+/// waiting call. Only an agent run (`p.agent`) can have paused.
+pub async fn drive_resumed(
+    state: &Arc<RamaState>,
+    p: DriveParams,
+    resume: ResumeFrom,
+) -> Option<RunOutcome> {
+    drive_inner(state, p, crate::budget::system_clock(), Some(resume)).await
+}
+
 /// [`drive`] with the run's clock supplied, so a `seconds` budget is testable.
 pub async fn drive_with_clock(
     state: &Arc<RamaState>,
     p: DriveParams,
     clock: Clock,
+) -> Option<RunOutcome> {
+    drive_inner(state, p, clock, None).await
+}
+
+async fn drive_inner(
+    state: &Arc<RamaState>,
+    p: DriveParams,
+    clock: Clock,
+    resume: Option<ResumeFrom>,
 ) -> Option<RunOutcome> {
     if let Some(run) = &p.run
         && run.current().principal_id != p.principal.subject_id()
@@ -203,9 +224,10 @@ pub async fn drive_with_clock(
             model: Some(p.model.clone()),
             // Session path: access is exactly the user's group grant.
             pool_access: None,
-            // Nothing resumes a headless run yet; a tool needing a decision
-            // refuses instead of pausing.
-            suspendable: false,
+            // An agent run pauses and is resumed through `agents::resume`.
+            // Nothing resumes a scheduled or webhook run yet, so a tool
+            // needing a decision refuses there instead of pausing.
+            suspendable: p.agent.is_some(),
         },
     );
     let driver = Box::new(crate::openai_driver::OpenAiDriver {
@@ -218,7 +240,7 @@ pub async fn drive_with_clock(
         budget: p.budget,
         injection: p.injection,
         clock,
-        resume: None,
+        resume,
         agent: p.agent,
     });
 

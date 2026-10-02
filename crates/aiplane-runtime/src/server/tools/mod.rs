@@ -22,6 +22,7 @@ use thiserror::Error;
 
 pub mod ask_first;
 pub mod catalog;
+pub mod check_code;
 pub mod discovery;
 pub mod echo;
 pub mod feedback;
@@ -82,7 +83,7 @@ pub struct ToolContext {
     /// Required by `enable_tools` to write per-conversation rows; tools
     /// that don't need it ignore the field.
     pub session_id: Option<String>,
-    /// The caller's source IP (from `X-Forwarded-For` / `X-Real-IP`),
+    /// The caller's source IP (the TCP peer, or the forwarded client when the peer is a trusted proxy),
     /// when the request carried one. Used by `get_user_location` to
     /// resolve a coarse location via [`geoip`]. `None` for callers we
     /// can't attribute an IP to.

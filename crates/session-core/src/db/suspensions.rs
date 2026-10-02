@@ -53,6 +53,41 @@ impl SuspensionKind {
             Self::SecureInput | Self::HumanAnswer => &[DecisionKind::Value, DecisionKind::Deny],
         }
     }
+
+    /// Who may answer this kind in a conversation that is not the
+    /// participant's own run: an agent's, where the participant is an
+    /// anonymous visitor. In a person's own chat the owner is both.
+    pub fn answered_by(self) -> Answerer {
+        match self {
+            Self::SecureInput => Answerer::Participant,
+            Self::Approval | Self::HumanAnswer => Answerer::Staff,
+        }
+    }
+
+    /// The fallback an expired request of this kind takes, given the one the
+    /// tool asked for. Only a decision this kind offers can stand in for
+    /// silence, and an approval always falls back to deny: nobody approving
+    /// is not an approval.
+    pub fn timeout_fallback(self, asked: TimeoutFallback) -> TimeoutFallback {
+        let offered = self.options().contains(&asked.decision().kind());
+        if self == Self::Approval || !offered {
+            TimeoutFallback::Deny
+        } else {
+            asked
+        }
+    }
+}
+
+/// Who answers a suspension in an agent conversation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answerer {
+    /// The one chatting: the visitor of an agent conversation. A secure
+    /// input is theirs, and goes nowhere but the tool that asked for it.
+    Participant,
+    /// Someone acting for the agent's owner: a manager with a share, or an
+    /// admin. Approvals and human answers are theirs, never a visitor's.
+    Staff,
 }
 
 /// The shape of a decision, without its payload — what a client is offered.
@@ -74,12 +109,25 @@ pub enum DenyReason {
 }
 
 /// What a resume carries into the waiting call.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// `Debug` never prints a value: a `secure_input` value must not reach a log
+/// line through `{:?}`.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum Decision {
     AllowOnce,
     Deny { reason: DenyReason },
     Value { value: serde_json::Value },
+}
+
+impl std::fmt::Debug for Decision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AllowOnce => f.write_str("AllowOnce"),
+            Self::Deny { reason } => f.debug_struct("Deny").field("reason", reason).finish(),
+            Self::Value { .. } => f.write_str("Value { value: <redacted> }"),
+        }
+    }
 }
 
 impl Decision {
@@ -171,6 +219,9 @@ pub struct TurnSuspension {
     pub on_timeout: TimeoutFallback,
     pub expires_at: Timestamp,
     pub created_at: Timestamp,
+    /// What the run needs to be rebuilt on resume beyond its session and call
+    /// chain, opaque here: a sub-agent's route-bound values.
+    pub run_context: Option<serde_json::Value>,
 }
 
 impl TurnSuspension {
@@ -181,8 +232,8 @@ impl TurnSuspension {
             request_id: self.request_id.clone(),
             kind: self.kind,
             message: self.message.clone(),
-            tool_call_id: self.tool_call.id.clone(),
-            tool: self.tool_call.name.clone(),
+            tool_call_id: Some(self.tool_call.id.clone()),
+            tool: Some(self.tool_call.name.clone()),
             options: self.kind.options().to_vec(),
             expires_at: self.expires_at,
         }
@@ -197,10 +248,33 @@ pub struct SuspensionView {
     pub kind: SuspensionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    pub tool_call_id: String,
-    pub tool: String,
+    /// The waiting call. Absent from a visitor's view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The decisions the viewer may send; empty when someone else answers.
     pub options: Vec<DecisionKind>,
     pub expires_at: Timestamp,
+}
+
+impl SuspensionView {
+    /// What the participant of an agent conversation, a visitor, may see:
+    /// no tool, and only the decisions they may make. A request staff answer
+    /// offers them none; they can only wait for it.
+    pub fn for_participant(&self) -> SuspensionView {
+        let theirs = self.kind.answered_by() == Answerer::Participant;
+        SuspensionView {
+            tool_call_id: None,
+            tool: None,
+            options: if theirs {
+                self.options.clone()
+            } else {
+                Vec::new()
+            },
+            ..self.clone()
+        }
+    }
 }
 
 /// A suspension past its deadline, with the owner a resume runs as.
@@ -212,10 +286,19 @@ pub struct ExpiredSuspension {
     pub on_timeout: TimeoutFallback,
 }
 
-const SELECT_SUSPENSION: &str = r#"SELECT turn_id, request_id, kind, message, tool_call, tail,
-                                           budget_used, child_turn, on_timeout, expires_at,
-                                           created_at
-                                    FROM chat_turn_suspensions"#;
+/// The top-level suspension of an agent conversation past its deadline.
+/// A pause inside a sub-agent run is settled through it, never on its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpiredRunSuspension {
+    pub turn_id: String,
+    pub session_id: String,
+    pub principal_id: String,
+    pub on_timeout: TimeoutFallback,
+}
+
+const SUSPENSION_COLUMNS: &str = "turn_id, request_id, kind, message, tool_call, tail, \
+                                  budget_used, child_turn, on_timeout, expires_at, created_at, \
+                                  run_context";
 
 fn json_column<T: serde::de::DeserializeOwned>(
     row: &SqliteRow,
@@ -243,6 +326,15 @@ fn map_suspension(row: &SqliteRow) -> Result<TurnSuspension, DbError> {
         on_timeout: TimeoutFallback::parse(&on_timeout)?,
         expires_at: parse_ts(row.try_get("expires_at")?, "expires_at")?,
         created_at: parse_ts(row.try_get("created_at")?, "created_at")?,
+        run_context: row
+            .try_get::<Option<String>, _>("run_context")?
+            .map(|raw| {
+                serde_json::from_str(&raw).map_err(|e| DbError::Decode {
+                    column: "run_context",
+                    source: e.into(),
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -270,8 +362,8 @@ pub async fn suspend_turn(pool: &Pool, suspension: &TurnSuspension) -> Result<bo
     sqlx::query(
         r#"INSERT INTO chat_turn_suspensions
               (turn_id, request_id, kind, message, tool_call, tail, budget_used,
-               child_turn, on_timeout, expires_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               child_turn, on_timeout, expires_at, created_at, run_context)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&suspension.turn_id)
     .bind(&suspension.request_id)
@@ -284,6 +376,7 @@ pub async fn suspend_turn(pool: &Pool, suspension: &TurnSuspension) -> Result<bo
     .bind(suspension.on_timeout.as_str())
     .bind(suspension.expires_at.to_string())
     .bind(suspension.created_at.to_string())
+    .bind(suspension.run_context.as_ref().map(to_json))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -292,11 +385,30 @@ pub async fn suspend_turn(pool: &Pool, suspension: &TurnSuspension) -> Result<bo
 
 /// The suspension a turn is paused on, if any.
 pub async fn get_suspension(pool: &Pool, turn_id: &str) -> Result<Option<TurnSuspension>, DbError> {
-    let row = sqlx::query(&format!("{SELECT_SUSPENSION} WHERE turn_id = ?"))
-        .bind(turn_id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(&format!(
+        "SELECT {SUSPENSION_COLUMNS} FROM chat_turn_suspensions WHERE turn_id = ?"
+    ))
+    .bind(turn_id)
+    .fetch_optional(pool)
+    .await?;
     row.as_ref().map(map_suspension).transpose()
+}
+
+/// Attach `context` to a turn's current suspension. Returns whether the turn
+/// was suspended. The sub-agent dispatcher records here what only it knows
+/// and the resume needs: the values its route bound.
+pub async fn set_suspension_run_context(
+    pool: &Pool,
+    turn_id: &str,
+    context: &serde_json::Value,
+) -> Result<bool, DbError> {
+    let updated = sqlx::query("UPDATE chat_turn_suspensions SET run_context = ? WHERE turn_id = ?")
+        .bind(to_json(context))
+        .bind(turn_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(updated > 0)
 }
 
 /// Take a turn's suspension for resuming: delete the row and flip the turn
@@ -307,11 +419,9 @@ pub async fn claim_suspension(
     turn_id: &str,
 ) -> Result<Option<TurnSuspension>, DbError> {
     let mut tx = pool.begin().await?;
-    let row = sqlx::query(
-        "DELETE FROM chat_turn_suspensions WHERE turn_id = ? \
-         RETURNING turn_id, request_id, kind, message, tool_call, tail, budget_used, \
-                   child_turn, on_timeout, expires_at, created_at",
-    )
+    let row = sqlx::query(&format!(
+        "DELETE FROM chat_turn_suspensions WHERE turn_id = ? RETURNING {SUSPENSION_COLUMNS}"
+    ))
     .bind(turn_id)
     .fetch_optional(&mut *tx)
     .await?;
@@ -429,6 +539,43 @@ pub async fn expired_suspensions(
     Ok(expired.into_iter().map(|(_, s)| s).collect())
 }
 
+/// Every top-level suspension of an agent conversation whose deadline has
+/// passed at `now`, oldest deadline first. A sub-agent run's own pause is
+/// left out: its parent mirrors it, and is settled through the parent.
+pub async fn expired_run_suspensions(
+    pool: &Pool,
+    now: Timestamp,
+) -> Result<Vec<ExpiredRunSuspension>, DbError> {
+    let rows = sqlx::query(
+        r#"SELECT s.turn_id, s.on_timeout, s.expires_at, t.session_id, cs.principal_id
+           FROM chat_turn_suspensions s
+           JOIN chat_turns t ON t.id = s.turn_id
+           JOIN chat_sessions cs ON cs.id = t.session_id
+           WHERE cs.principal_id IS NOT NULL AND cs.parent_turn_id IS NULL"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut expired = Vec::new();
+    for row in &rows {
+        let expires_at = parse_ts(row.try_get("expires_at")?, "expires_at")?;
+        if expires_at > now {
+            continue;
+        }
+        let on_timeout: String = row.try_get("on_timeout")?;
+        expired.push((
+            expires_at,
+            ExpiredRunSuspension {
+                turn_id: row.try_get("turn_id")?,
+                session_id: row.try_get("session_id")?,
+                principal_id: row.try_get("principal_id")?,
+                on_timeout: TimeoutFallback::parse(&on_timeout)?,
+            },
+        ));
+    }
+    expired.sort_by_key(|(at, _)| *at);
+    Ok(expired.into_iter().map(|(_, s)| s).collect())
+}
+
 /// The client views of every suspension in a session, by turn id — the
 /// one-query-then-bucket read `list_turns` does for its side tables.
 pub(crate) async fn suspension_views_for_session(
@@ -436,7 +583,8 @@ pub(crate) async fn suspension_views_for_session(
     session_id: &str,
 ) -> Result<std::collections::HashMap<String, SuspensionView>, DbError> {
     let rows = sqlx::query(&format!(
-        "{SELECT_SUSPENSION} WHERE turn_id IN (SELECT id FROM chat_turns WHERE session_id = ?)"
+        "SELECT {SUSPENSION_COLUMNS} FROM chat_turn_suspensions \
+         WHERE turn_id IN (SELECT id FROM chat_turns WHERE session_id = ?)"
     ))
     .bind(session_id)
     .fetch_all(pool)
@@ -472,7 +620,155 @@ mod tests {
             on_timeout: TimeoutFallback::Deny,
             expires_at,
             created_at: Timestamp::now(),
+            run_context: None,
         }
+    }
+
+    async fn running_run_turn(pool: &Pool, turn_id: &str, parent_turn_id: Option<&str>) -> String {
+        let run = create_principal_session(
+            pool,
+            &NewRunSession {
+                principal_id: "p1",
+                title: None,
+                parent_turn_id,
+                agent_version: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+        create_user_turn(pool, &run.id, &format!("{turn_id}-u"), "hi")
+            .await
+            .unwrap();
+        create_assistant_turn_in_progress(pool, &run.id, turn_id, "m")
+            .await
+            .unwrap();
+        insert_running_tool_call(pool, turn_id, "call-1", "company_echo", "{}")
+            .await
+            .unwrap();
+        run.id
+    }
+
+    #[test]
+    fn a_visitor_answers_only_a_secure_input_and_an_approval_only_ever_times_out_to_deny() {
+        assert_eq!(
+            SuspensionKind::SecureInput.answered_by(),
+            Answerer::Participant
+        );
+        assert_eq!(SuspensionKind::Approval.answered_by(), Answerer::Staff);
+        assert_eq!(SuspensionKind::HumanAnswer.answered_by(), Answerer::Staff);
+        for kind in [
+            SuspensionKind::Approval,
+            SuspensionKind::SecureInput,
+            SuspensionKind::HumanAnswer,
+        ] {
+            assert_eq!(
+                kind.timeout_fallback(TimeoutFallback::AllowOnce),
+                TimeoutFallback::Deny,
+                "{kind:?}: silence never stands in for a yes or a value"
+            );
+            assert_eq!(
+                kind.timeout_fallback(TimeoutFallback::Deny),
+                TimeoutFallback::Deny
+            );
+        }
+    }
+
+    #[test]
+    fn a_visitor_sees_no_tool_and_no_decision_that_is_not_theirs() {
+        let mut row = suspension("a1", in_an_hour());
+        row.message = Some("Enter the code".into());
+        let approval = row.view().for_participant();
+        assert_eq!(approval.tool, None);
+        assert_eq!(approval.tool_call_id, None);
+        assert!(approval.options.is_empty(), "staff answer an approval");
+        let json = serde_json::to_value(&approval).unwrap();
+        assert!(json.get("tool").is_none() && json.get("tool_call_id").is_none());
+        assert_eq!(json["kind"], "approval");
+        assert_eq!(json["request_id"], "req-a1");
+
+        row.kind = SuspensionKind::SecureInput;
+        let secure = row.view().for_participant();
+        assert_eq!(secure.options, [DecisionKind::Value, DecisionKind::Deny]);
+        assert_eq!(secure.message.as_deref(), Some("Enter the code"));
+        assert_eq!(secure.expires_at, row.expires_at);
+    }
+
+    #[test]
+    fn a_value_never_shows_in_debug_output() {
+        let decision = Decision::Value {
+            value: serde_json::json!("481516"),
+        };
+        let printed = format!("{decision:?}");
+        assert!(!printed.contains("481516"), "{printed}");
+        assert!(printed.contains("redacted"), "{printed}");
+    }
+
+    #[tokio::test]
+    async fn a_run_context_rides_with_the_pause_it_belongs_to() {
+        let pool = pool().await;
+        running_turn(&pool, "a1").await;
+        assert!(
+            !set_suspension_run_context(&pool, "a1", &serde_json::json!({}))
+                .await
+                .unwrap(),
+            "nothing to attach it to before the pause"
+        );
+        suspend_turn(&pool, &suspension("a1", in_an_hour()))
+            .await
+            .unwrap();
+        let context = serde_json::json!({"route": "billing", "route_binds": {"customer": "K-1"}});
+        assert!(
+            set_suspension_run_context(&pool, "a1", &context)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get_suspension(&pool, "a1")
+                .await
+                .unwrap()
+                .unwrap()
+                .run_context,
+            Some(context.clone())
+        );
+        assert_eq!(
+            claim_suspension(&pool, "a1")
+                .await
+                .unwrap()
+                .unwrap()
+                .run_context,
+            Some(context)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_agent_sweep_sees_only_the_top_of_an_agent_conversation() {
+        let pool = pool().await;
+        let past = Timestamp::now() - jiff::SignedDuration::from_secs(5);
+        running_turn(&pool, "chat").await;
+        let root_session = running_run_turn(&pool, "root", None).await;
+        running_run_turn(&pool, "child", Some("root")).await;
+        running_run_turn(&pool, "later", None).await;
+        for (turn, at) in [
+            ("chat", past),
+            ("root", past),
+            ("child", past),
+            ("later", in_an_hour()),
+        ] {
+            suspend_turn(&pool, &suspension(turn, at)).await.unwrap();
+        }
+
+        let expired = expired_run_suspensions(&pool, Timestamp::now())
+            .await
+            .unwrap();
+        assert_eq!(
+            expired,
+            [ExpiredRunSuspension {
+                turn_id: "root".into(),
+                session_id: root_session,
+                principal_id: "p1".into(),
+                on_timeout: TimeoutFallback::Deny,
+            }]
+        );
     }
 
     fn in_an_hour() -> Timestamp {

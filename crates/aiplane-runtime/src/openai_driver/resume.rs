@@ -10,9 +10,11 @@
 
 use std::time::Instant;
 
+use aiplane_core::server::db::agent_audit::{self, AuditKind};
 use serde_json::{Value, json};
 use session_core::db::{
-    self as chat, BudgetUsed, Decision, DenyReason, PendingCall, ToolCallStatus, TurnSuspension,
+    self as chat, BudgetUsed, Decision, DenyReason, PendingCall, SuspensionKind, ToolCallStatus,
+    TurnSuspension,
 };
 use session_core::driver::{SessionContext, TurnError};
 use session_core::workers::TurnUpdate;
@@ -20,7 +22,12 @@ use session_core::workers::TurnUpdate;
 use super::{OpenAiDriver, ToolResultBudget, cap_tool_result, persist_err};
 use crate::server::tools::runner::{self, ToolCallRef, ToolResultRecord};
 use crate::server::tools::{ToolContext, ToolSource, extract_content_parts};
-use crate::suspend::{ResumeFrom, Suspend, SuspendRequest, extract_suspend};
+use crate::suspend::{ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend};
+
+/// What stands in a tool's result wherever it repeated a secure input: the
+/// value goes to the tool that asked, never to the model, the stored
+/// transcript or a log.
+const SECURE_INPUT_WITHHELD: &str = "[secure input withheld]";
 
 /// The answer to a second suspend request in the same round. A turn waits
 /// for one decision at a time; the model can ask again once it has the first.
@@ -93,6 +100,13 @@ pub(super) async fn pause(
         return Ok(());
     }
     let now = jiff::Timestamp::now();
+    let expires_at = match &request.child {
+        Some(child) => {
+            check_child(d, ctx, child).await?;
+            child.expires_at
+        }
+        None => now + jiff::SignedDuration::from_secs(request.timeout_secs as i64),
+    };
     let suspension = TurnSuspension {
         turn_id: ctx.assistant_turn_id.clone(),
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -105,10 +119,11 @@ pub(super) async fn pause(
         },
         tail: tail.to_vec(),
         budget_used,
-        child_turn: None,
-        on_timeout: request.on_timeout,
-        expires_at: now + jiff::SignedDuration::from_secs(request.timeout_secs as i64),
+        child_turn: request.child.map(|c| c.turn_id),
+        on_timeout: request.kind.timeout_fallback(request.on_timeout),
+        expires_at,
         created_at: now,
+        run_context: None,
     };
     let paused = chat::suspend_turn(&d.state.db, &suspension)
         .await
@@ -121,9 +136,71 @@ pub(super) async fn pause(
             rounds = budget_used.rounds,
             "turn suspended for a decision"
         );
+        if d.tool_ctx.run.is_some() {
+            record_run_event(
+                d,
+                AuditKind::RunSuspended,
+                json!({
+                    "session_id": ctx.session_id,
+                    "turn_id": suspension.turn_id,
+                    "request_id": suspension.request_id,
+                    "kind": suspension.kind,
+                    "tool": suspension.tool_call.name,
+                    "child_turn": suspension.child_turn,
+                    "expires_at": suspension.expires_at,
+                }),
+            )
+            .await;
+        }
     }
     let _ = ctx.broadcast.send(TurnUpdate::Tick);
     Ok(())
+}
+
+/// A call may only wait on a sub-agent run this turn dispatched, and only
+/// while that run is paused. Anything else is not a pause the resume could
+/// settle, so the turn fails instead of waiting forever.
+async fn check_child(
+    d: &OpenAiDriver,
+    ctx: &SessionContext,
+    child: &ChildPause,
+) -> Result<(), TurnError> {
+    let session = chat::run_session_of_turn(&d.state.db, &child.turn_id)
+        .await
+        .map_err(persist_err("run_session_of_turn", &ctx.assistant_turn_id))?;
+    let ours = session
+        .is_some_and(|s| s.parent_turn_id.as_deref() == Some(ctx.assistant_turn_id.as_str()));
+    let paused = chat::get_suspension(&d.state.db, &child.turn_id)
+        .await
+        .map_err(persist_err("get_suspension", &ctx.assistant_turn_id))?
+        .is_some();
+    if ours && paused {
+        return Ok(());
+    }
+    tracing::error!(
+        turn = %ctx.assistant_turn_id,
+        child = %child.turn_id,
+        "a tool asked to wait on a sub-agent run that is not this turn's paused child"
+    );
+    Err(TurnError::Aborted {
+        message: "a tool asked this turn to wait on a sub-agent run that this turn did not \
+                  start or that is not waiting; the turn was stopped"
+            .into(),
+    })
+}
+
+async fn record_run_event(d: &OpenAiDriver, kind: AuditKind, detail: Value) {
+    if let Err(err) = agent_audit::record_run_event(
+        &d.state.db,
+        kind,
+        d.tool_ctx.principal.subject_id(),
+        d.tool_ctx.run.as_deref(),
+        detail,
+    )
+    .await
+    {
+        tracing::warn!(error = %err, kind = kind.as_str(), "recording a suspend event");
+    }
 }
 
 /// How a resume left the turn.
@@ -156,27 +233,38 @@ pub(super) async fn resume_into(
         arguments_raw: suspension.tool_call.arguments.clone(),
     };
 
-    let content = match &resume.decision {
-        Decision::Deny { reason } => {
+    let content = match (&resume.child_result, &resume.decision) {
+        (None, Decision::Deny { reason }) => {
             let refusal = denial(*reason, &call.name);
             settle_call(d, ctx, &call.id, &refusal, ToolCallStatus::Errored).await?;
             Value::String(refusal)
         }
-        decided => {
-            let tool_ctx = ToolContext {
-                suspend: Suspend::Decided(decided.clone()),
-                ..tool_ctx.clone()
+        (child_result, decided) => {
+            let body = match child_result {
+                Some(body) => body.clone(),
+                None => {
+                    let tool_ctx = ToolContext {
+                        suspend: Suspend::Decided(decided.clone()),
+                        ..tool_ctx.clone()
+                    };
+                    let body = runner::execute_tool_calls(
+                        tools,
+                        &tool_ctx,
+                        std::slice::from_ref(&call),
+                        &d.injection,
+                    )
+                    .await
+                    .pop()
+                    .map(|record| record.body)
+                    .unwrap_or_else(|| json!({ "error": "the tool produced no result" }));
+                    match (suspension.kind, decided) {
+                        (SuspensionKind::SecureInput, Decision::Value { value }) => {
+                            withhold_secret(body, value)
+                        }
+                        _ => body,
+                    }
+                }
             };
-            let body = runner::execute_tool_calls(
-                tools,
-                &tool_ctx,
-                std::slice::from_ref(&call),
-                &d.injection,
-            )
-            .await
-            .pop()
-            .map(|record| record.body)
-            .unwrap_or_else(|| json!({ "error": "the tool produced no result" }));
             if let Some(request) = extract_suspend(&body) {
                 pause(
                     d,
@@ -219,6 +307,40 @@ pub(super) fn tool_call_ids(messages: &[Value]) -> impl Iterator<Item = String> 
         .filter_map(|m| m["tool_calls"].as_array())
         .flatten()
         .filter_map(|call| call["id"].as_str().map(str::to_string))
+}
+
+/// `body` with every repetition of the secure input `value` replaced by
+/// [`SECURE_INPUT_WITHHELD`]. A well-behaved tool never repeats the value;
+/// this makes sure a careless one cannot hand it to the model or the
+/// transcript either.
+fn withhold_secret(body: Value, value: &Value) -> Value {
+    let secret = match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    if secret.is_empty() {
+        return body;
+    }
+    fn walk(v: Value, secret: &str) -> Value {
+        match v {
+            Value::String(s) if s.contains(secret) => {
+                Value::String(s.replace(secret, SECURE_INPUT_WITHHELD))
+            }
+            Value::Number(n) if n.to_string() == secret => {
+                Value::String(SECURE_INPUT_WITHHELD.into())
+            }
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|i| walk(i, secret)).collect())
+            }
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k.replace(secret, SECURE_INPUT_WITHHELD), walk(v, secret)))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+    walk(body, &secret)
 }
 
 /// What the model reads in place of a denied call's result.
@@ -604,6 +726,21 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_that_repeats_a_secure_input_has_it_withheld() {
+        use super::SECURE_INPUT_WITHHELD as W;
+        let body = json!({"echo": "you typed 481516", "n": 481516, "ok": true});
+        assert_eq!(
+            super::withhold_secret(body.clone(), &json!("481516")),
+            json!({"echo": format!("you typed {W}"), "n": W, "ok": true})
+        );
+        assert_eq!(
+            super::withhold_secret(body.clone(), &json!("")),
+            body,
+            "an empty value matches nothing"
+        );
+    }
+
+    #[test]
     fn a_resumed_run_counts_the_seconds_spent_before_the_pause() {
         let now = std::time::Instant::now();
         assert_eq!(super::started_at(now, None), now);
@@ -628,8 +765,10 @@ mod tests {
                 on_timeout: chat::TimeoutFallback::Deny,
                 expires_at: jiff::Timestamp::now(),
                 created_at: jiff::Timestamp::now(),
+                run_context: None,
             },
             decision: Decision::AllowOnce,
+            child_result: None,
         };
         assert_eq!(
             now.duration_since(super::started_at(now, Some(&resume))),

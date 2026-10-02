@@ -27,6 +27,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use aiplane_core::server::trusted_proxies::TrustedProxies;
 use ip2location::{DB, Record};
 use rama::http::HeaderMap;
 use serde::Serialize;
@@ -316,53 +317,19 @@ pub fn transport_is_secure(headers: &HeaderMap, public_url: &str) -> bool {
     public_url.starts_with("https://")
 }
 
-/// Pull the caller's source IP from proxy headers: the left-most
-/// `X-Forwarded-For` entry (the original client) wins, then `X-Real-IP`;
-/// `CF-Connecting-IP` is honoured first for Cloudflare-fronted setups.
-/// Header-only — pair with [`peer_ip`] for the direct-socket fallback
-/// (`client_ip(headers).or_else(|| peer_ip(req))`). Trusts the front-most
-/// proxy not to spoof these (the standard assumption behind a trusted
-/// load balancer); best-effort, not a security control.
-pub fn client_ip(headers: &HeaderMap) -> Option<String> {
-    fn valid(s: &str) -> Option<String> {
-        let s = s.trim();
-        s.parse::<IpAddr>().ok().map(|_| s.to_string())
-    }
-    if let Some(ip) = headers
-        .get("cf-connecting-ip")
-        .and_then(|v| v.to_str().ok())
-        .and_then(valid)
-    {
-        return Some(ip);
-    }
-    if let Some(ip) = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|list| list.split(',').next())
-        .and_then(valid)
-    {
-        return Some(ip);
-    }
-    headers
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-        .and_then(valid)
-}
-
-/// The directly-connected client's IP, read from the TCP socket — rama
-/// stashes it in the request extensions as `SocketInfo`. This is the
-/// fallback when no proxy header is present (a gateway with no load
-/// balancer in front): it yields the real peer for remote clients, or
-/// `127.0.0.1` for a localhost connection. So between [`client_ip`] and
-/// this, the source IP is *always* known.
-pub fn peer_ip(req: &rama::http::Request) -> Option<String> {
-    // `extensions()` is rama's `ExtensionsRef` trait method; `SocketInfo`
-    // is what the TCP listener stashes there (see rama's own
-    // `set_forwarded` layer, which reads it the same way).
+/// The caller's IP, as decided by [`TrustedProxies::client_ip`] from the TCP
+/// peer rama stashes in the request extensions as `SocketInfo` and, only when
+/// that peer is a trusted proxy, the forwarded headers. The one resolution
+/// every consumer shares.
+pub fn client_ip(req: &rama::http::Request, trusted: &TrustedProxies) -> Option<String> {
     use rama::extensions::ExtensionsRef;
-    req.extensions()
+    let peer = req
+        .extensions()
         .get_ref::<rama::net::stream::SocketInfo>()
-        .map(|s| s.peer_addr().ip_addr.to_string())
+        .map(|s| s.peer_addr().ip_addr);
+    trusted
+        .client_ip(peer, req.headers())
+        .map(|ip| ip.to_string())
 }
 
 #[cfg(test)]
@@ -420,26 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn client_ip_prefers_xff_then_real_ip() {
-        let mut h = HeaderMap::new();
-        assert_eq!(client_ip(&h), None);
-
-        h.insert("x-real-ip", "203.0.113.9".parse().unwrap());
-        assert_eq!(client_ip(&h), Some("203.0.113.9".into()));
-
-        h.insert(
-            "x-forwarded-for",
-            "198.51.100.7, 10.0.0.1, 203.0.113.1".parse().unwrap(),
-        );
-        // Left-most XFF (the original client) wins over X-Real-IP.
-        assert_eq!(client_ip(&h), Some("198.51.100.7".into()));
-
-        h.insert("cf-connecting-ip", "192.0.2.44".parse().unwrap());
-        // Cloudflare header takes precedence when present.
-        assert_eq!(client_ip(&h), Some("192.0.2.44".into()));
-    }
-
-    #[test]
     fn transport_secure_detects_https_localhost_and_public_url() {
         let http = "http://aiplane.example.com";
         let https = "https://aiplane.example.com";
@@ -469,10 +416,40 @@ mod tests {
         assert!(!transport_is_secure(&HeaderMap::new(), http));
     }
 
+    fn request_from(peer: &str, xff: &str) -> rama::http::Request {
+        use rama::extensions::ExtensionsRef;
+        use rama::net::address::SocketAddress;
+        use rama::net::stream::SocketInfo;
+        let req = rama::http::Request::builder()
+            .header("x-forwarded-for", xff)
+            .body(rama::http::Body::empty())
+            .unwrap();
+        let peer = SocketAddress::new(peer.parse::<IpAddr>().unwrap(), 4000);
+        req.extensions().insert(SocketInfo::new(None, peer));
+        req
+    }
+
     #[test]
-    fn client_ip_rejects_garbage() {
-        let mut h = HeaderMap::new();
-        h.insert("x-forwarded-for", "garbage, 1.2.3.4".parse().unwrap());
-        assert_eq!(client_ip(&h), None);
+    fn client_ip_reads_the_socket_peer_and_ignores_headers_by_default() {
+        let req = request_from("198.51.100.9", "1.2.3.4");
+        assert_eq!(
+            client_ip(&req, &TrustedProxies::default()),
+            Some("198.51.100.9".into())
+        );
+    }
+
+    #[test]
+    fn client_ip_follows_the_forwarded_chain_from_a_trusted_peer() {
+        let req = request_from("10.0.0.2", "203.0.113.5");
+        let trusted = TrustedProxies::parse("10.0.0.0/8").unwrap();
+        assert_eq!(client_ip(&req, &trusted), Some("203.0.113.5".into()));
+    }
+
+    #[test]
+    fn client_ip_is_unknown_without_a_socket() {
+        let req = rama::http::Request::builder()
+            .body(rama::http::Body::empty())
+            .unwrap();
+        assert_eq!(client_ip(&req, &TrustedProxies::default()), None);
     }
 }

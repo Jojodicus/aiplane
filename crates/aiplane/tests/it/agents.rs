@@ -68,6 +68,21 @@ pub(crate) async fn fixture() -> Fx {
 /// The fixture with `pool` served by `upstream`, a chat backend that
 /// serves model `m`, when one is given.
 pub(crate) async fn fixture_on(upstream: Option<&str>) -> Fx {
+    fixture_with(
+        upstream,
+        ToolRegistry::new().with(CurrentTimestamp),
+        &[TIME],
+    )
+    .await
+}
+
+/// The fixture with its own tool registry, every tool of `everyone` granted to
+/// the default group, so each manager holds them and can grant them on.
+pub(crate) async fn fixture_with(
+    upstream: Option<&str>,
+    tools: ToolRegistry,
+    everyone: &[&str],
+) -> Fx {
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
     pools.insert(
@@ -98,7 +113,7 @@ pub(crate) async fn fixture_on(upstream: Option<&str>) -> Fx {
         common::test_config(),
         pool.clone(),
         registry,
-        Arc::new(ToolRegistry::new().with(CurrentTimestamp)),
+        Arc::new(tools),
         Arc::new(Resolver::empty()),
     );
     let state = RamaState::new(
@@ -110,7 +125,8 @@ pub(crate) async fn fixture_on(upstream: Option<&str>) -> Fx {
     gateway_groups::upsert_group(&pool, "everyone", "", false, true)
         .await
         .unwrap();
-    gateway_groups::set_tools_for_group(&pool, "everyone", &[TIME.into()])
+    let everyone: Vec<String> = everyone.iter().map(|t| t.to_string()).collect();
+    gateway_groups::set_tools_for_group(&pool, "everyone", &everyone)
         .await
         .unwrap();
     gateway_groups::upsert_group(&pool, "managers", "", false, false)

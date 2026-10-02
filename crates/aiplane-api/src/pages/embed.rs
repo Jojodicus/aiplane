@@ -39,7 +39,11 @@ use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
 use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal};
+use aiplane_runtime::agents::resume::{
+    AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
+};
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::suspend::ResumeRefused;
 
 macro_rules! or_return {
     ($e:expr) => {
@@ -202,11 +206,6 @@ async fn live_agent(
     })
 }
 
-fn client_ip(req: &Request) -> Option<String> {
-    aiplane_features::server::geoip::client_ip(req.headers())
-        .or_else(|| aiplane_features::server::geoip::peer_ip(req))
-}
-
 /// Gate a request that makes the agent work — a new conversation or a
 /// message — on the agent's visitor rates and budget (`docs/agents.md` §5,
 /// "What #92 built"). Reads cost the agent nothing and are not gated: the
@@ -264,7 +263,7 @@ pub struct StartBody {
 
 /// POST /api/v0/embed/sessions — start a visitor conversation.
 pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let ip = client_ip(&req);
+    let ip = state.client_ip(&req);
     let headers = req.headers().clone();
     let body: StartBody = or_return!(super::read_json(req.into_body(), "the session body").await);
     let Some(key_hash) = token::hash_embed_key(body.key.trim()) else {
@@ -359,11 +358,15 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
 }
 
 /// A turn as a visitor may see it: the text of the exchange, and nothing of
-/// how it was produced.
+/// how it was produced. A suspended turn keeps what it waits for, without
+/// the tool, and offers the visitor only the decisions that are theirs.
 fn visitor_turn(mut t: TurnWithTools) -> TurnWithTools {
     t.tool_calls.clear();
     t.steers.clear();
-    t.suspension = None;
+    t.suspension = t
+        .suspension
+        .filter(|_| t.turn.status == TurnStatus::Suspended)
+        .map(|s| s.for_participant());
     let turn = &mut t.turn;
     turn.model = None;
     turn.reasoning = None;
@@ -434,7 +437,7 @@ pub struct MessageBody {
 pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
-    let ip = client_ip(&req);
+    let ip = state.client_ip(&req);
     let body: MessageBody = or_return!(super::read_json(req.into_body(), "the message body").await);
     let text = body.text.trim();
     if text.is_empty() {
@@ -481,6 +484,11 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(None) => {}
         Err(err) => return internal(err),
     }
+    match chat::suspended_turn_in_session(&state.db, &session_id).await {
+        Ok(Some(_)) => return queue_behind_decision(&state, &session_id, text, lang).await,
+        Ok(None) => {}
+        Err(err) => return internal(err),
+    }
 
     let user_turn_id = uuid::Uuid::new_v4().to_string();
     let assistant_turn_id = uuid::Uuid::new_v4().to_string();
@@ -522,8 +530,170 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
 
     json_ok(
         StatusCode::ACCEPTED,
-        json!({ "turn_id": assistant_turn_id, "user_turn_id": user_turn_id }),
+        json!({
+            "turn_id": assistant_turn_id,
+            "user_turn_id": user_turn_id,
+            "placement": "started",
+        }),
     )
+}
+
+/// The user turn waiting behind the conversation's pending decision, if the
+/// visitor already sent one. It runs once the decision is settled.
+async fn queued_message(state: &RamaState, session_id: &str) -> Result<Option<String>, Response> {
+    let turns = chat::list_turns(&state.db, session_id)
+        .await
+        .map_err(internal)?;
+    Ok(turns
+        .last()
+        .filter(|t| t.turn.role == TurnRole::User)
+        .filter(|_| turns.iter().any(|t| t.turn.status == TurnStatus::Suspended))
+        .map(|t| t.turn.id.clone()))
+}
+
+/// A message sent while the conversation waits for a decision is stored and
+/// runs after the decision, as the #96 decision on suspend/resume says — it
+/// neither cancels the pending request nor answers it. One message waits at
+/// a time.
+async fn queue_behind_decision(
+    state: &RamaState,
+    session_id: &str,
+    text: &str,
+    lang: Lang,
+) -> Response {
+    match queued_message(state, session_id).await {
+        Ok(Some(_)) => {
+            return refuse(
+                StatusCode::CONFLICT,
+                "turn_in_progress",
+                &t(lang, "agent-embed-message-waiting"),
+            );
+        }
+        Ok(None) => {}
+        Err(resp) => return resp,
+    }
+    let user_turn_id = uuid::Uuid::new_v4().to_string();
+    if let Err(err) = chat::create_user_turn(&state.db, session_id, &user_turn_id, text).await {
+        return internal(err);
+    }
+    json_ok(
+        StatusCode::ACCEPTED,
+        json!({ "turn_id": null, "user_turn_id": user_turn_id, "placement": "queued" }),
+    )
+}
+
+fn not_waiting(lang: Lang) -> Response {
+    refuse(
+        StatusCode::CONFLICT,
+        "not_suspended",
+        &t(lang, "agent-embed-not-waiting"),
+    )
+}
+
+/// A refused visitor answer, in the visitor's language where they can act on
+/// it; the rest names the same codes as the staff route.
+fn visitor_resume_refused(err: AgentResumeError, lang: Lang) -> Response {
+    match err {
+        AgentResumeError::StaffOnly { .. } => refuse(
+            StatusCode::FORBIDDEN,
+            "decision_for_staff",
+            &t(lang, "agent-embed-decision-for-staff"),
+        ),
+        AgentResumeError::Refused(ResumeRefused::NotSuspended)
+        | AgentResumeError::Refused(ResumeRefused::StaleRequest { .. }) => not_waiting(lang),
+        other => super::json_agent_test::resume_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeBody {
+    pub request_id: String,
+    pub decision: chat::DecisionKind,
+    #[serde(default)]
+    pub value: Option<Value>,
+}
+
+/// POST /api/v0/embed/resume — the visitor answers what the conversation
+/// waits for: a secure input (a verification code), never an approval,
+/// which is staff's (`POST /api/v0/agents/{id}/conversations/…/resume`).
+/// 202 once the turn runs again; the rest arrives on
+/// `GET /api/v0/embed/events`.
+///
+/// A `value` goes to the tool that asked for it and nowhere else: not into
+/// the transcript, the model's context, a log line or the audit trail.
+pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let v = or_return!(visitor(&state, &req).await);
+    let lang = Lang::from_request(req.headers());
+    let ip = state.client_ip(&req);
+    let body: ResumeBody = or_return!(super::read_json(req.into_body(), "the resume body").await);
+    let decision = match super::chat::json_api::decision_from(body.decision, body.value) {
+        Ok(decision) => decision,
+        Err(msg) => return bad_request(msg),
+    };
+    or_return!(
+        admit(
+            &state,
+            &v.session.principal_id,
+            Some(&v.session.id),
+            ip.as_deref(),
+            lang,
+        )
+        .await
+    );
+    let Some(runner) = state.agent_turns.runner() else {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "agent_runtime_unavailable",
+            "this gateway cannot run agent conversations yet — try again after the gateway has \
+             been updated",
+        );
+    };
+    let session_id = v.session.session_id.clone();
+    let Some(hold) = state.agent_turns.claim(&session_id) else {
+        return refuse(
+            StatusCode::CONFLICT,
+            "turn_in_progress",
+            "the assistant is busy with this conversation right now — wait for it on \
+             GET /api/v0/embed/events, then answer again",
+        );
+    };
+    let turn_id = match chat::suspended_turn_in_session(&state.db, &session_id).await {
+        Ok(Some(turn)) => turn,
+        Ok(None) => {
+            return not_waiting(lang);
+        }
+        Err(err) => return internal(err),
+    };
+    let claimed = match claim_resume(
+        &state,
+        AgentResume {
+            agent_id: &v.session.principal_id,
+            session_id: &session_id,
+            turn_id: &turn_id,
+            request_id: Some(&body.request_id),
+            decision,
+            by: ResumedBy::Participant,
+        },
+    )
+    .await
+    {
+        Ok(claimed) => claimed,
+        Err(err) => return visitor_resume_refused(err, lang),
+    };
+    let resumed = turn_id.clone();
+    tokio::spawn(async move {
+        let _hold = hold;
+        let run = tokio::spawn({
+            let state = state.clone();
+            async move { runner.resume(state, claimed, lang).await }
+        });
+        if let Err(err) = run.await {
+            tracing::error!(error = %err, turn = %resumed, "agent resume panicked");
+        }
+        settle_unfinished(&state, &session_id, &resumed).await;
+    });
+    json_ok(StatusCode::ACCEPTED, json!({ "turn_id": turn_id }))
 }
 
 /// The runner contract says the turn is terminal when `run` returns; a
@@ -555,24 +725,31 @@ async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
 ///
 /// A `snapshot` first. Then, if a turn is running, nothing but keep-alive
 /// comments until it is terminal, and its answer as one `turn_delta`
-/// (`full: true`) plus `turn_finalized`. Otherwise `idle`.
+/// (`full: true`) plus `turn_finalized`; or, when it paused for a decision,
+/// `suspended` with what it waits for. Without a running turn, `suspended`
+/// when the conversation waits for a decision, otherwise `idle`.
 pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let session_id = v.session.session_id;
     let turns = or_return!(visitor_turns(&state, &session_id).await);
     let live = live_turn_id(&turns);
+    let waiting = suspended_frame(&turns);
+    let queued = or_return!(queued_message(&state, &session_id).await);
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let snapshot = ChatEvent::Snapshot {
         live_turn_id: live.clone(),
         turns,
-        waiting_turn_ids: Vec::new(),
+        waiting_turn_ids: queued.into_iter().collect(),
     };
     let _ = tx.unbounded_send(Ok(sse_json(&snapshot)));
-    match live {
-        None => {
+    match (live, waiting) {
+        (None, Some(frame)) => {
+            let _ = tx.unbounded_send(Ok(sse_json(&frame)));
+        }
+        (None, None) => {
             let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
         }
-        Some(turn_id) => {
+        (Some(turn_id), _) => {
             let state = state.clone();
             tokio::spawn(async move { tail_buffered(state, session_id, turn_id, tx).await });
         }
@@ -586,6 +763,17 @@ fn live_turn_id(turns: &[TurnWithTools]) -> Option<String> {
         .rev()
         .find(|t| t.turn.status == TurnStatus::InProgress)
         .map(|t| t.turn.id.clone())
+}
+
+/// The `suspended` frame of the conversation's paused turn, from turns
+/// already in the visitor's view (see [`visitor_turn`]).
+fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
+    turns.iter().rev().find_map(|t| {
+        Some(ChatEvent::Suspended {
+            turn_id: t.turn.id.clone(),
+            suspension: t.suspension.clone()?,
+        })
+    })
 }
 
 async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: String, tx: SseTx) {
@@ -603,7 +791,23 @@ async fn tail_buffered(state: Arc<RamaState>, session_id: String, turn_id: Strin
                 }
                 return;
             }
-            Ok(Some(t)) if t.status == TurnStatus::InProgress || is_terminal(t.status) => {}
+            Ok(Some(t))
+                if t.status == TurnStatus::Suspended
+                    && !state.agent_turns.is_running(&session_id) =>
+            {
+                let frame = match chat::get_suspension(&state.db, &turn_id).await {
+                    Ok(Some(s)) => ChatEvent::Suspended {
+                        turn_id: turn_id.clone(),
+                        suspension: s.view().for_participant(),
+                    },
+                    _ => ChatEvent::Idle,
+                };
+                let _ = tx.unbounded_send(Ok(sse_json(&frame)));
+                return;
+            }
+            Ok(Some(t))
+                if matches!(t.status, TurnStatus::InProgress | TurnStatus::Suspended)
+                    || is_terminal(t.status) => {}
             Ok(_) => {
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;
@@ -697,6 +901,32 @@ mod tests {
         assert_eq!(t.turn.reasoning_started_at, None);
         assert_eq!(t.turn.model, None);
         assert_eq!(t.turn.content.as_deref(), Some("half an ans"));
+    }
+
+    #[test]
+    fn a_paused_turn_shows_the_visitor_what_it_waits_for_and_nothing_of_the_tool() {
+        let view = chat::SuspensionView {
+            request_id: "req-1".into(),
+            kind: chat::SuspensionKind::Approval,
+            message: None,
+            tool_call_id: Some("c".into()),
+            tool: Some("erp_refund".into()),
+            options: vec![chat::DecisionKind::AllowOnce, chat::DecisionKind::Deny],
+            expires_at: Timestamp::now(),
+        };
+        let mut paused = assistant(TurnStatus::Suspended);
+        paused.suspension = Some(view.clone());
+        let seen = visitor_turn(paused);
+        let shown = seen.suspension.expect("the visitor sees the pause");
+        assert_eq!(shown.request_id, "req-1");
+        assert_eq!(shown.tool, None);
+        assert_eq!(shown.tool_call_id, None);
+        assert!(shown.options.is_empty(), "an approval is staff's");
+        assert_eq!(seen.turn.content, None, "no half answer");
+
+        let mut done = assistant(TurnStatus::Completed);
+        done.suspension = Some(view);
+        assert_eq!(visitor_turn(done).suspension, None);
     }
 
     #[test]

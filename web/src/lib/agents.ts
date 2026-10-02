@@ -121,15 +121,30 @@ export interface TestDebug {
 	tool_calls: { tool: string; decision: string; policy: string }[];
 }
 
+/** What a suspended turn waits for, as a manager sees it. */
+export interface Suspension {
+	request_id: string;
+	kind: 'approval' | 'secure_input' | 'human_answer';
+	message?: string;
+	tool_call_id?: string;
+	tool?: string;
+	options: ('allow_once' | 'deny' | 'value')[];
+	expires_at: string;
+}
+
 export interface TestTurn {
 	session_id: string;
 	turn_id: string;
 	status: string;
 	answer: string | null;
 	error: string | null;
-	draft_version: number;
-	debug: TestDebug;
+	suspension: Suspension | null;
+	draft_version?: number;
+	debug?: TestDebug;
 }
+
+/** The answer to a suspension: the decision, and the value only `value` carries. */
+export type ResumeDecision = { decision: 'allow_once' } | { decision: 'deny' } | { decision: 'value'; value: string };
 
 /* ---- errors --------------------------------------------------------- */
 
@@ -211,6 +226,11 @@ export const agentsApi = {
 		call<TestTurn>(
 			`/api/v0/agents/${id}/test-turn`,
 			json('POST', sessionId ? { message, session_id: sessionId } : { message })
+		),
+	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: ResumeDecision) =>
+		call<TestTurn>(
+			`/api/v0/agents/${id}/conversations/${sessionId}/turns/${turnId}/resume`,
+			json('POST', { ...answer, request_id: requestId })
 		)
 };
 
@@ -346,6 +366,18 @@ export function describeBindSource(source: unknown): string {
 }
 
 /* ---- the test chat -------------------------------------------------- */
+
+/** The Fluent key that says what a suspended test turn waits for. */
+export function suspensionLabel(kind: Suspension['kind']): string {
+	switch (kind) {
+		case 'secure_input':
+			return 'agents-test-waiting-secure-input';
+		case 'approval':
+			return 'agents-test-waiting-approval';
+		default:
+			return 'agents-test-waiting-human';
+	}
+}
 
 export function testTurnLabel(status: string): string {
 	switch (status) {

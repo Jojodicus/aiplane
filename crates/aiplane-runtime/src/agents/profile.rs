@@ -73,6 +73,11 @@ pub enum AgentRunError {
     NoModel { agent: String, pool: String },
     #[error("agent `{agent}` has no conversation `{session}`; start a new one instead")]
     UnknownSession { agent: String, session: String },
+    #[error(
+        "conversation `{session}` is waiting for a decision on turn `{turn}`; answer it through \
+         that turn's resume route (or let it expire) before sending the next message"
+    )]
+    DecisionPending { session: String, turn: String },
     #[error("reading or writing the agent run failed: {0}")]
     Db(#[from] DbError),
 }

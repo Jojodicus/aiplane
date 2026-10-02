@@ -390,6 +390,7 @@ pub(crate) mod tests {
                 principal_id   TEXT REFERENCES system_principals(id) ON DELETE CASCADE,
                 parent_turn_id TEXT,
                 agent_version  INTEGER,
+                visitor_id     TEXT,
                 title          TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL,
@@ -465,7 +466,8 @@ pub(crate) mod tests {
                 child_turn   TEXT,
                 on_timeout   TEXT NOT NULL,
                 expires_at   TEXT NOT NULL,
-                created_at   TEXT NOT NULL
+                created_at   TEXT NOT NULL,
+                run_context  TEXT
             ) STRICT"#,
             // FTS5 table for search (matches migration 0031). Keyed on the
             // implicit integer `rowid` because `chat_turns.id` is a TEXT UUID

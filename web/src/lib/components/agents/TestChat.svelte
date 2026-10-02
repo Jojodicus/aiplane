@@ -1,5 +1,14 @@
 <script lang="ts">
-	import { agentsApi, testTurnLabel, type AgentError, type TestDebug } from '$lib/agents';
+	import {
+		agentsApi,
+		suspensionLabel,
+		testTurnLabel,
+		type AgentError,
+		type ResumeDecision,
+		type Suspension,
+		type TestDebug,
+		type TestTurn
+	} from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 	import DebugPanel from './DebugPanel.svelte';
 
@@ -12,10 +21,54 @@
 	 */
 	let { agentId, dirty, onsave }: { agentId: string; dirty: boolean; onsave: () => Promise<void> } = $props();
 
-	type Message = { role: 'visitor' | 'agent'; text: string; status?: string; error?: string | null; debug?: TestDebug };
+	type Message = {
+		role: 'visitor' | 'agent';
+		text: string;
+		status?: string;
+		error?: string | null;
+		debug?: TestDebug;
+		turnId?: string;
+		suspension?: Suspension | null;
+	};
 	let messages = $state<Message[]>([]);
 	let sessionId = $state<string | null>(null);
 	let draft = $state('');
+	let secret = $state('');
+
+	function agentMessage(turn: TestTurn, debug?: TestDebug): Message {
+		return {
+			role: 'agent',
+			text: turn.answer ?? '',
+			status: turn.status,
+			error: turn.error,
+			debug,
+			turnId: turn.turn_id,
+			suspension: turn.suspension
+		};
+	}
+
+	/** Answer the pause of message `i`; the reply replaces it, as the same turn continued. */
+	async function answer(i: number, decision: ResumeDecision) {
+		const waiting = messages[i];
+		if (busy || !sessionId || !waiting?.turnId || !waiting.suspension) return;
+		busy = true;
+		error = null;
+		try {
+			const turn = await agentsApi.resumeTurn(
+				agentId,
+				sessionId,
+				waiting.turnId,
+				waiting.suspension.request_id,
+				decision
+			);
+			messages[i] = agentMessage(turn, waiting.debug);
+			secret = '';
+		} catch (err) {
+			error = (err as AgentError).message;
+		} finally {
+			busy = false;
+		}
+	}
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let selected = $state<number | null>(null);
@@ -37,7 +90,7 @@
 		try {
 			const turn = await agentsApi.testTurn(agentId, text, sessionId);
 			sessionId = turn.session_id;
-			messages.push({ role: 'agent', text: turn.answer ?? '', status: turn.status, error: turn.error, debug: turn.debug });
+			messages.push(agentMessage(turn, turn.debug));
 		} catch (err) {
 			error = (err as AgentError).message;
 		} finally {
@@ -81,6 +134,46 @@
 							>{message.text || (message.error ? '' : '…')}{#if message.error}{message.error}{/if}</button>
 							{#if message.status && message.status !== 'completed'}
 								<div class="chat-footer text-xs opacity-70">{t(testTurnLabel(message.status))}</div>
+							{/if}
+							{#if message.status === 'suspended' && message.suspension}
+								{@const waiting = message.suspension}
+								<div class="card card-border bg-base-200 mt-1 w-full max-w-md">
+									<div class="card-body gap-2 p-3 text-sm">
+										<p>{t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}</p>
+										{#if waiting.message}<p class="text-base-content/70">{waiting.message}</p>{/if}
+										<p class="text-xs text-base-content/60">
+											{t('agents-test-expires', { at: new Date(waiting.expires_at).toLocaleString() })}
+										</p>
+										{#if waiting.options.includes('value')}
+											<form
+												class="join w-full"
+												onsubmit={(e) => { e.preventDefault(); void answer(i, { decision: 'value', value: secret }); }}
+											>
+												<input
+													class="input input-sm join-item w-full"
+													type="password"
+													autocomplete="off"
+													bind:value={secret}
+													aria-label={t('agents-test-value-label')}
+													placeholder={t('agents-test-value-label')}
+												/>
+												<button class="btn btn-sm btn-primary join-item" type="submit" disabled={busy || !secret}>
+													{t('agents-test-answer')}
+												</button>
+											</form>
+										{/if}
+										<div class="card-actions justify-end">
+											{#if waiting.options.includes('allow_once')}
+												<button class="btn btn-sm btn-primary" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'allow_once' })}>
+													{t('agents-test-approve')}
+												</button>
+											{/if}
+											<button class="btn btn-sm btn-ghost" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'deny' })}>
+												{t('agents-test-deny')}
+											</button>
+										</div>
+									</div>
+								</div>
 							{/if}
 						{:else}
 							<div class="chat-bubble whitespace-pre-wrap">{message.text}</div>

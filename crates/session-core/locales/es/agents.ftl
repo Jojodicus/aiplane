@@ -7,3 +7,7 @@ agent-output-redacted = [eliminado]
 # request (#92): the agent's budget is spent, or a rate limit was hit.
 agent-embed-unavailable = Este asistente no está disponible temporalmente. Inténtelo de nuevo más tarde o utilice las demás opciones de contacto del sitio web.
 agent-embed-rate-limited = Está enviando mensajes más rápido de lo que este asistente los acepta. Espere { $seconds } segundos y vuelva a intentarlo.
+
+agent-embed-decision-for-staff = Esta solicitud está esperando a un miembro de nuestro equipo. Verá la respuesta aquí en cuanto haya decidido.
+agent-embed-not-waiting = El asistente no está esperando una respuesta suya en este momento. Vuelva a cargar la conversación.
+agent-embed-message-waiting = Su mensaje anterior todavía está esperando al asistente. Espere su respuesta antes de enviar otro.

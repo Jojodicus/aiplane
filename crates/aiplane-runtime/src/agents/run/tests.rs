@@ -197,25 +197,37 @@ struct World {
     state: Arc<RamaState>,
 }
 
+fn base_tools() -> crate::server::tools::ToolRegistry {
+    crate::server::tools::ToolRegistry::new()
+        .with(crate::server::tools::echo::Echo)
+        .with(crate::server::tools::time::CurrentTimestamp)
+}
+
 impl World {
     /// `pools`: `(pool, model, upstream)`.
     async fn new(pools: &[(&str, &str, &MockServer)], erp: Option<&MockServer>) -> Self {
-        Self::build(pools, erp, false).await
+        Self::build(pools, erp, false, base_tools(), None).await
     }
 
     /// [`Self::new`] with usage metrics on, so the run's usage rows land.
     async fn metered(pools: &[(&str, &str, &MockServer)]) -> Self {
-        Self::build(pools, None, true).await
+        Self::build(pools, None, true, base_tools(), None).await
     }
 
+    /// `tools` is the registry before the ERP's tools join it; `db_path`
+    /// a database file to open (and reopen, after a simulated restart)
+    /// instead of an in-memory one.
     async fn build(
         pools: &[(&str, &str, &MockServer)],
         erp: Option<&MockServer>,
         metered: bool,
+        tools: crate::server::tools::ToolRegistry,
+        db_path: Option<&std::path::Path>,
     ) -> Self {
-        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
-            .await
-            .unwrap();
+        let db =
+            aiplane_core::server::db::open(db_path.unwrap_or(std::path::Path::new(":memory:")))
+                .await
+                .unwrap();
         let mut configs = HashMap::new();
         for (name, _, upstream) in pools {
             configs.insert(
@@ -251,9 +263,7 @@ impl World {
             let model = pools.iter().find(|p| p.0 == pool.name).unwrap().1;
             pool.backends[0].set_models([model.to_string()].into());
         }
-        let mut tools = crate::server::tools::ToolRegistry::new()
-            .with(crate::server::tools::echo::Echo)
-            .with(crate::server::tools::time::CurrentTimestamp);
+        let mut tools = tools;
         if let Some(erp) = erp {
             let connected = crate::server::tools::mcp::connect_http_server("erp", &erp.uri(), None)
                 .await
@@ -1359,3 +1369,5 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
         "a granted pool the spec does not name is never used"
     );
 }
+
+mod suspend;

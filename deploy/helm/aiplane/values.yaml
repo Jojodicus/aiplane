@@ -94,6 +94,17 @@ publicUrl: ""
 # it here is only useful for an unattended re-install against an existing IdP.
 bootstrapAdminGroups: ""
 
+# -- Comma-separated addresses / CIDR networks of the reverse proxies in front of
+# AIplane, e.g. your ingress controller's pod network ("10.42.0.0/16"). Sets
+# AIPLANE_TRUSTED_PROXIES. Only a connection from one of these may say, via
+# X-Forwarded-For / X-Real-IP, who the real client is; from anyone else those
+# headers are ignored. Empty trusts nothing, so every client appears as the
+# ingress controller's address — which makes the public agent's per-IP rate
+# limit and GeoIP see one visitor. Set it when you serve visitors through an
+# ingress, and make the controller itself append to (or overwrite)
+# X-Forwarded-For.
+trustedProxies: ""
+
 # -- RUST_LOG override. Empty keeps the image's own sensible default.
 logLevel: ""
 

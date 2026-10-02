@@ -31,6 +31,11 @@ impl Swept {
 /// Delete agent `principal_id`'s conversations whose last activity
 /// (`updated_at`) is before `idle_before`, with their sub-agent runs, in one
 /// transaction.
+///
+/// A conversation still waiting for a decision is kept, however idle: its
+/// pause is settled by a resume or by the expiry sweep (every 30 s), and only
+/// then may it go. Deleting it first would take the request a visitor or a
+/// member of staff is about to answer.
 pub async fn delete_idle_conversations(
     pool: &Pool,
     principal_id: &str,
@@ -39,7 +44,10 @@ pub async fn delete_idle_conversations(
     let mut tx = pool.begin().await?;
     let candidates: Vec<(String, String)> = sqlx::query_as(
         "SELECT id, updated_at FROM chat_sessions
-         WHERE principal_id = ? AND user_id IS NULL AND parent_turn_id IS NULL",
+         WHERE principal_id = ? AND user_id IS NULL AND parent_turn_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM chat_turn_suspensions s
+                           JOIN chat_turns t ON t.id = s.turn_id
+                           WHERE t.session_id = chat_sessions.id)",
     )
     .bind(principal_id)
     .fetch_all(&mut *tx)
@@ -233,6 +241,48 @@ mod tests {
             1,
             "only the fresh conversation's visitor remains"
         );
+    }
+
+    #[tokio::test]
+    async fn a_conversation_waiting_for_a_decision_is_kept_until_it_is_settled() {
+        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let support = agent(&pool, "support").await;
+        let waiting = visitor_conversation_without_key(&pool, &support).await;
+        chat::create_assistant_turn_in_progress(&pool, &waiting, "paused", "m")
+            .await
+            .unwrap();
+        let suspension = chat::TurnSuspension {
+            turn_id: "paused".into(),
+            request_id: "req-1".into(),
+            kind: chat::SuspensionKind::Approval,
+            message: None,
+            tool_call: chat::PendingCall {
+                id: "call-1".into(),
+                name: "refund".into(),
+                arguments: "{}".into(),
+            },
+            tail: Vec::new(),
+            budget_used: chat::BudgetUsed::default(),
+            child_turn: None,
+            on_timeout: chat::TimeoutFallback::Deny,
+            expires_at: t0() + 90 * DAY,
+            created_at: t0(),
+            run_context: None,
+        };
+        assert!(chat::suspend_turn(&pool, &suspension).await.unwrap());
+        last_active(&pool, &waiting, t0()).await;
+
+        let swept = delete_idle_conversations(&pool, &support, t0() + 60 * DAY)
+            .await
+            .unwrap();
+        assert_eq!(swept, Swept::default(), "a pending request keeps it");
+
+        chat::cancel_suspended_turn(&pool, "paused").await.unwrap();
+        last_active(&pool, &waiting, t0()).await;
+        let swept = delete_idle_conversations(&pool, &support, t0() + 60 * DAY)
+            .await
+            .unwrap();
+        assert_eq!(swept.conversations, 1, "settled, it goes like any other");
     }
 
     async fn visitor_conversation_without_key(pool: &Pool, agent: &str) -> String {

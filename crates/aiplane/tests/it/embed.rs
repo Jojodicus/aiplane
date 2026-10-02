@@ -34,6 +34,8 @@ const PARTIAL: &str = "Let me check the ord";
 
 // Visitor limits, owner budget and retention (#92).
 mod limits;
+// Suspended agent runs: secure input, approvals, resume.
+mod suspend;
 
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive
@@ -239,6 +241,9 @@ async fn embed_with(runner: Option<ScriptedRunner>, extra_spec: Option<Value>) -
     if installed {
         fx.state = fx.state.clone().with_agent_runner(runner.clone());
     }
+    fx.state = fx.state.clone().with_trusted_proxies(
+        aiplane_core::server::trusted_proxies::TrustedProxies::parse("10.0.0.0/8").unwrap(),
+    );
     published(fx, runner, extra_spec).await
 }
 
