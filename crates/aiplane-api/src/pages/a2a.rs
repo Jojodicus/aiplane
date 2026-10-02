@@ -1201,7 +1201,7 @@ fn sse_frame(id: &Value, result: Value) -> rama::bytes::Bytes {
 /// was cancelled or waits for input. The answer is buffered behind the
 /// output filter, so there is nothing to stream token by token.
 async fn stream(call: &Call, session_id: &str, task_id: &str) -> Result<Response, RpcError> {
-    let releases = call.state.agent_turns.releases();
+    let releases = call.state.agent_turns.releases(session_id);
     let first = task_view(&call.state, call.lang, session_id, task_id, None).await?;
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let _ = tx.unbounded_send(Ok(sse_frame(&call.id, json!({ "task": first.task }))));
@@ -1240,7 +1240,7 @@ impl Tail {
         .await
     }
 
-    async fn run(self, mut releases: tokio::sync::watch::Receiver<u64>, tx: SseTx) {
+    async fn run(self, mut releases: aiplane_runtime::agents::embed::ReleaseWatch, tx: SseTx) {
         let started = tokio::time::Instant::now();
         let mut last_sent = started;
         loop {

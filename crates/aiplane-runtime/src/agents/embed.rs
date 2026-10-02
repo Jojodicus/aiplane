@@ -356,15 +356,17 @@ impl AgentTurnRunner for LiveAgentRunner {
 pub struct AgentTurns {
     runner: Option<Arc<dyn AgentTurnRunner>>,
     running: Arc<Mutex<HashMap<String, Held>>>,
-    released: Arc<tokio::sync::watch::Sender<u64>>,
+    waiters: Waiters,
 }
+
+type Waiters = Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<u64>>>>;
 
 impl Default for AgentTurns {
     fn default() -> Self {
         Self {
             runner: None,
             running: Arc::default(),
-            released: Arc::new(tokio::sync::watch::Sender::new(0)),
+            waiters: Arc::default(),
         }
     }
 }
@@ -421,17 +423,28 @@ impl AgentTurns {
         );
         Some(TurnClaim {
             running: self.running.clone(),
-            released: self.released.clone(),
+            waiters: self.waiters.clone(),
             session_id: session_id.to_string(),
         })
     }
 
-    /// Changes whenever a claim — of any conversation — is released: the
-    /// moment a held turn's answer becomes final or its pause visible. A
-    /// stream waiting on one turn wakes on it instead of polling the
-    /// database; it re-reads its own turn and waits again if that was not it.
-    pub fn releases(&self) -> tokio::sync::watch::Receiver<u64> {
-        self.released.subscribe()
+    /// Wakes when the claim of `session_id` — this conversation only — is
+    /// released: the moment a held turn's answer becomes final or its pause
+    /// visible. A stream waiting on one turn wakes on it instead of polling
+    /// the database. The registration ends when the watch drops.
+    pub fn releases(&self, session_id: &str) -> ReleaseWatch {
+        let rx = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(session_id.to_string())
+            .or_insert_with(|| tokio::sync::watch::Sender::new(0))
+            .subscribe();
+        ReleaseWatch {
+            rx: Some(rx),
+            waiters: self.waiters.clone(),
+            session_id: session_id.to_string(),
+        }
     }
 
     /// Pass the claim of `session_id` from turn `from` to `to`, the next turn
@@ -469,8 +482,39 @@ impl AgentTurns {
 /// See [`AgentTurns::claim`].
 pub struct TurnClaim {
     running: Arc<Mutex<HashMap<String, Held>>>,
-    released: Arc<tokio::sync::watch::Sender<u64>>,
+    waiters: Waiters,
     session_id: String,
+}
+
+/// See [`AgentTurns::releases`].
+pub struct ReleaseWatch {
+    rx: Option<tokio::sync::watch::Receiver<u64>>,
+    waiters: Waiters,
+    session_id: String,
+}
+
+impl ReleaseWatch {
+    /// Resolves on a release of the conversation. The registry entry lives
+    /// as long as this watch, so the sender never closes under it.
+    pub async fn changed(&mut self) -> Result<(), tokio::sync::watch::error::RecvError> {
+        match self.rx.as_mut() {
+            Some(rx) => rx.changed().await,
+            None => std::future::pending().await,
+        }
+    }
+}
+
+impl Drop for ReleaseWatch {
+    fn drop(&mut self) {
+        let mut waiters = self.waiters.lock().unwrap_or_else(|p| p.into_inner());
+        self.rx = None;
+        if waiters
+            .get(&self.session_id)
+            .is_some_and(|tx| tx.receiver_count() == 0)
+        {
+            waiters.remove(&self.session_id);
+        }
+    }
 }
 
 impl Drop for TurnClaim {
@@ -479,7 +523,14 @@ impl Drop for TurnClaim {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&self.session_id);
-        self.released.send_modify(|n| *n = n.wrapping_add(1));
+        if let Some(tx) = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&self.session_id)
+        {
+            tx.send_modify(|n| *n = n.wrapping_add(1));
+        }
     }
 }
 
@@ -600,7 +651,7 @@ mod tests {
     async fn releasing_a_claim_wakes_whoever_waits_for_one() {
         let turns = AgentTurns::default();
         let claim = turns.claim("s1", "t1").expect("free");
-        let mut releases = turns.releases();
+        let mut releases = turns.releases("s1");
         let waiter = tokio::spawn(async move { releases.changed().await.is_ok() });
         tokio::task::yield_now().await;
         assert!(!waiter.is_finished(), "nothing was released yet");
@@ -610,6 +661,28 @@ mod tests {
             .expect("the release wakes the waiter")
             .unwrap();
         assert!(woke);
+    }
+
+    #[tokio::test]
+    async fn releasing_one_conversation_does_not_wake_another_and_leaves_no_entry() {
+        let turns = AgentTurns::default();
+        let a = turns.claim("a", "t1").expect("free");
+        let _b = turns.claim("b", "t2").expect("free");
+        let mut wa = turns.releases("a");
+        let mut wb = turns.releases("b");
+        drop(a);
+        tokio::time::timeout(std::time::Duration::from_secs(5), wa.changed())
+            .await
+            .expect("a's waiter wakes at once")
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), wb.changed())
+                .await
+                .is_err(),
+            "b's claim is still held"
+        );
+        drop((wa, wb));
+        assert!(turns.waiters.lock().unwrap().is_empty());
     }
 
     #[test]
