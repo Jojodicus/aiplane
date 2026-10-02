@@ -51,6 +51,28 @@ impl Tool for Echo {
     }
 }
 
+/// An RBAC resolver whose default group grants [`Echo`], so a person with no
+/// group claims may run it — what a driver test needs once the driver refuses
+/// every ungranted call.
+#[cfg(test)]
+pub(crate) fn granted_to_everyone() -> aiplane_core::server::rbac::Resolver {
+    use aiplane_core::server::rbac::config::{RbacConfig, RoleConfig};
+    aiplane_core::server::rbac::Resolver::build(
+        RbacConfig {
+            default_role: Some("member".into()),
+            mappings: vec![],
+        },
+        vec![RoleConfig {
+            id: "member".into(),
+            admin: false,
+            models: vec!["*".into()],
+            tools: vec!["company_echo".into()],
+            skills: vec![],
+        }],
+    )
+    .expect("a one-group resolver builds")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

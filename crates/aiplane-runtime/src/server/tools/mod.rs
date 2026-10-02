@@ -32,7 +32,7 @@ pub mod runner;
 pub mod sandbox;
 pub mod time;
 
-pub use registry::{ToolRegistry, ToolSource};
+pub use registry::{GrantedToolSource, ToolRegistry, ToolSource};
 
 /// Carried into each `Tool::run` invocation. Lets a tool read the
 /// caller's identity + roles and reach the gateway's datastore
@@ -164,6 +164,12 @@ pub struct ToolContext {
     /// model, or what was decided if it is running again after one. Only the
     /// interactive chat path can pause. See [`crate::suspend`].
     pub suspend: crate::suspend::Suspend,
+    /// The tool ids the acting principal is granted, resolved once per chat
+    /// turn by the driver. `enable_tools` refuses a key that none of them
+    /// belongs to, so a conversation never records an ungranted tool as on.
+    /// `None` where nothing resolved it (the `/v1` paths, tests) and reads as
+    /// nothing granted.
+    pub granted_tools: Option<std::sync::Arc<std::collections::HashSet<String>>>,
     /// The agent call chain when this call runs inside an agent run, `None`
     /// for a person's chat, a scheduled action or a `/v1` request. Its
     /// running frame is `principal`; see [`Self::agent_active`].
@@ -205,6 +211,7 @@ impl ToolContext {
             push: None,
             model: None,
             suspend: crate::suspend::Suspend::Unavailable,
+            granted_tools: None,
             run: None,
         }
     }

@@ -26,19 +26,30 @@ pub(super) enum CallPolicy {
     NotGranted,
     /// The person switched the tool off for this conversation.
     DisabledInConversation,
-    /// No tool of that name exists for this caller.
+    /// No tool of that name exists for this caller. A person calling a tool
+    /// outside their grant lands here too: to them it does not exist.
     UnknownTool,
 }
 
 impl CallPolicy {
+    /// `known`: some source of the turn has the tool, granted or not.
+    /// `granted`: the principal's grant-narrowed source has it, the only
+    /// source a call ever runs from.
     pub(super) fn decide(
         principal: &Principal,
         known: bool,
+        granted: bool,
         disabled_in_conversation: bool,
         offered: bool,
     ) -> Self {
         if !known {
             Self::UnknownTool
+        } else if !granted {
+            if principal.system().is_some() {
+                Self::NotGranted
+            } else {
+                Self::UnknownTool
+            }
         } else if disabled_in_conversation {
             Self::DisabledInConversation
         } else if offered {
@@ -125,7 +136,7 @@ mod tests {
     fn an_offered_tool_is_granted_for_anyone() {
         for who in [person(), agent()] {
             assert_eq!(
-                CallPolicy::decide(&who, true, false, true),
+                CallPolicy::decide(&who, true, true, false, true),
                 CallPolicy::Granted
             );
         }
@@ -134,10 +145,10 @@ mod tests {
     #[test]
     fn only_a_person_gets_an_unoffered_tool_auto_enabled() {
         assert_eq!(
-            CallPolicy::decide(&person(), true, false, false),
+            CallPolicy::decide(&person(), true, true, false, false),
             CallPolicy::AutoEnabled
         );
-        let refused = CallPolicy::decide(&agent(), true, false, false);
+        let refused = CallPolicy::decide(&agent(), true, true, false, false);
         assert_eq!(refused, CallPolicy::NotGranted);
         assert!(!refused.allows());
     }
@@ -146,16 +157,28 @@ mod tests {
     fn unknown_and_disabled_tools_never_run() {
         for who in [person(), agent()] {
             assert_eq!(
-                CallPolicy::decide(&who, false, false, true),
+                CallPolicy::decide(&who, false, false, false, true),
                 CallPolicy::UnknownTool
             );
             assert_eq!(
-                CallPolicy::decide(&who, true, true, true),
+                CallPolicy::decide(&who, true, true, true, true),
                 CallPolicy::DisabledInConversation
             );
         }
         assert!(!CallPolicy::UnknownTool.allows());
         assert!(!CallPolicy::DisabledInConversation.allows());
+    }
+
+    #[test]
+    fn a_tool_outside_the_grant_never_runs_even_when_offered() {
+        assert_eq!(
+            CallPolicy::decide(&agent(), true, false, false, true),
+            CallPolicy::NotGranted
+        );
+        assert_eq!(
+            CallPolicy::decide(&person(), true, false, false, true),
+            CallPolicy::UnknownTool
+        );
     }
 
     #[test]

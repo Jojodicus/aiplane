@@ -28,6 +28,7 @@ use std::time::Duration;
 use aiplane::rama_server::{RamaState, SessionStore, router::router};
 use aiplane_core::server::db;
 use aiplane_core::server::rbac::Resolver;
+use aiplane_core::server::rbac::config::{RbacConfig, RoleConfig};
 use aiplane_core::server::upstreams::{
     self,
     config::{PickerStrategy, PoolKind, UpstreamPoolConfig},
@@ -108,12 +109,26 @@ async fn boot(db_path: &Path, upstream_url: &str, approval_timeout: Duration) ->
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "pool", 0, &["model-a"]);
     let tools = ToolRegistry::new().with(AskFirst::new(Echo, approval_timeout));
+    let rbac = Resolver::build(
+        RbacConfig {
+            default_role: Some("member".into()),
+            mappings: vec![],
+        },
+        vec![RoleConfig {
+            id: "member".into(),
+            admin: false,
+            models: vec!["*".into()],
+            tools: vec!["company_echo".into()],
+            skills: vec![],
+        }],
+    )
+    .unwrap();
     let app = AppState::new(
         common::test_config(),
         pool.clone(),
         registry,
         Arc::new(tools),
-        Arc::new(Resolver::empty()),
+        Arc::new(rbac),
     );
     let sessions = SessionStore::new(pool, common::TEST_SECRET);
     Arc::new(RamaState::new(

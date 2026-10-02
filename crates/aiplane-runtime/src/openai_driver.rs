@@ -621,6 +621,9 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
         } else {
             crate::suspend::Suspend::Unavailable
         },
+        // Resolved per turn in `run_one_turn`, next to the MCP overlay it
+        // depends on.
+        granted_tools: None,
     }
 }
 
@@ -789,7 +792,8 @@ async fn close_contracted_run(
 async fn classify_and_dispatch_tool_calls(
     d: &OpenAiDriver,
     ctx: &SessionContext,
-    tool_source: &crate::server::tools::mcp::manager::CompositeToolSource<'_>,
+    tool_source: &dyn crate::server::tools::ToolSource,
+    every_tool: &dyn crate::server::tools::ToolSource,
     collected: &[ToolCallAcc],
     allowed_tools: &[String],
     disabled_keys: &std::collections::HashSet<String>,
@@ -823,22 +827,25 @@ async fn classify_and_dispatch_tool_calls(
         let _ = ctx.broadcast.send(TurnUpdate::Tick);
 
         assistant_tool_calls.push(assistant_tool_call(acc));
-        let known = crate::server::tools::ToolSource::contains(tool_source, &acc.name);
+        let granted = crate::server::tools::ToolSource::contains(tool_source, &acc.name);
+        let known = granted || crate::server::tools::ToolSource::contains(every_tool, &acc.name);
         let key = crate::server::tools::catalog::entry_key_for(&acc.name);
         let policy = CallPolicy::decide(
             &d.tool_ctx.principal,
             known,
-            known && disabled_keys.contains(key),
+            granted,
+            granted && disabled_keys.contains(key),
             allowed_tools.contains(&acc.name),
         );
         call_policy::audit(&d.tool_ctx, &acc.id, &acc.name, policy).await;
         let refusal = match policy {
             CallPolicy::Granted => None,
-            // Implicit miss-recovery: the model called a tool whose
-            // schema wasn't in this round's tools array — it's
+            // Implicit miss-recovery: the model called a granted tool
+            // whose schema wasn't in this round's tools array — it's
             // guessing from training (`fetch_url(url=...)` is the
-            // common case). Write a sticky enablement row so the
-            // schema appears in the next round's tools array; the
+            // common case). `tool_source` holds only the principal's
+            // grant, so an ungranted name never reaches this branch.
+            // Write a sticky enablement row so the schema appears in the next round's tools array; the
             // call itself still runs with whatever args the model
             // produced (often correct for well-known tools; if not,
             // the InvalidArgs reply now has a real schema to retry
@@ -951,9 +958,19 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // Bound, not chained: `tools()` hands back an owned snapshot, and the
     // composite source borrows from it for the rest of the turn.
     let tools = d.state.tools();
-    let tool_source =
+    let every_tool =
         crate::server::tools::mcp::manager::CompositeToolSource::new(tools.as_ref(), &user_mcp)
             .with_comfyui(comfyui.as_ref());
+    let granted = d
+        .state
+        .granted_tool_ids(&d.tool_ctx.principal, &user_mcp)
+        .await;
+    let tool_source =
+        crate::server::tools::GrantedToolSource::new(&every_tool, granted.iter().cloned());
+    let tool_ctx = ToolContext {
+        granted_tools: Some(Arc::new(granted.into_iter().collect())),
+        ..d.tool_ctx.clone()
+    };
 
     let access = d.state.pool_access_for_principal(&d.tool_ctx.principal);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
@@ -1196,8 +1213,16 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     let prefix_len = messages.len();
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {
-        match resume::resume_into(d, &ctx, &tool_source, from, &mut messages, &mut tool_budget)
-            .await?
+        match resume::resume_into(
+            d,
+            &ctx,
+            &tool_source,
+            &tool_ctx,
+            from,
+            &mut messages,
+            &mut tool_budget,
+        )
+        .await?
         {
             resume::Resumed::Paused => return Ok(TurnOutcome::default()),
             resume::Resumed::Continue { start_round: next } => start_round = next,
@@ -1900,6 +1925,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             d,
             &ctx,
             &tool_source,
+            &every_tool,
             &collected,
             &allowed_tools,
             &disabled_keys,
@@ -1915,7 +1941,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
 
         let mut results = match runner::execute_tool_calls_guarded(
             &tool_source,
-            &d.tool_ctx,
+            &tool_ctx,
             &call_refs,
             &mut repeated_calls,
             &d.injection,

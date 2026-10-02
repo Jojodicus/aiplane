@@ -1254,3 +1254,78 @@ async fn a_model_repeating_one_identical_call_is_stopped_with_a_reason() {
         "stopped long before the round budget"
     );
 }
+
+/// A token pinned On for `company_echo`, which alice's group does not grant,
+/// next to the granted timestamp tool so the gateway loop is engaged at all.
+async fn bearer_with_an_ungranted_tool_pinned_on(state: &RamaState) -> String {
+    let bearer = seed_engineer_with_bearer(state).await;
+    let token_id = tokens::list_for_user(&state.db, "alice").await.unwrap()[0]
+        .id
+        .clone();
+    db::token_tool_prefs::set(&state.db, &token_id, "get_current_timestamp", true)
+        .await
+        .unwrap();
+    bearer
+}
+
+fn completion_request(bearer: &str, stream: bool) -> Request {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "model-a", "stream": stream,
+                "messages": [{"role": "user", "content": "call company_echo"}]})
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_v1_model_naming_an_ungranted_gateway_tool_does_not_run_it() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ToolLoopResponder::default())
+        .mount(&upstream)
+        .await;
+    let state = state_with_tool_grants(&upstream.uri(), vec!["get_current_timestamp".into()]).await;
+    let bearer = bearer_with_an_ungranted_tool_pinned_on(&state).await;
+
+    let resp = router(Arc::new(state))
+        .serve(completion_request(&bearer, false))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "company_echo",
+        "the call is handed back to the client, not run: {body}"
+    );
+    assert_eq!(chat_calls(&upstream).await, 1);
+}
+
+#[tokio::test]
+async fn a_streaming_v1_model_naming_an_ungranted_gateway_tool_does_not_run_it() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(StreamingToolResponder::default())
+        .mount(&upstream)
+        .await;
+    let state = state_with_tool_grants(&upstream.uri(), vec!["get_current_timestamp".into()]).await;
+    let bearer = bearer_with_an_ungranted_tool_pinned_on(&state).await;
+
+    let resp = router(Arc::new(state))
+        .serve(completion_request(&bearer, true))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("company_echo"), "{body}");
+    assert!(!body.contains("hello echoed"), "{body}");
+    assert_eq!(chat_calls(&upstream).await, 1);
+}

@@ -177,6 +177,56 @@ impl ToolSource for ToolRegistry {
     }
 }
 
+/// A source narrowed to the tools the acting principal is granted. The chat
+/// driver resolves and runs every call through one, so a tool outside the
+/// grant does not exist for the turn — not to offer, not to auto-enable, not to
+/// run — whatever name the model calls.
+///
+/// It narrows the *grantable* tools only. A run-scoped synthetic tool an agent
+/// run brings along (`finish`, an `agents::slot_tools::SlotTools` `set_<slot>`)
+/// is nobody's grant: its existence is the run's permission, so it is composed
+/// over this source, never wrapped by it.
+pub struct GrantedToolSource<'a> {
+    source: &'a dyn ToolSource,
+    granted: std::collections::HashSet<String>,
+}
+
+impl<'a> GrantedToolSource<'a> {
+    pub fn new(source: &'a dyn ToolSource, granted: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            source,
+            granted: granted.into_iter().collect(),
+        }
+    }
+}
+
+impl ToolSource for GrantedToolSource<'_> {
+    fn get(&self, id: &str) -> Option<Arc<dyn Tool>> {
+        if self.granted.contains(id) {
+            self.source.get(id)
+        } else {
+            None
+        }
+    }
+
+    fn defs_for(&self, allowed: &[String]) -> Vec<ToolDef> {
+        let allowed: Vec<String> = allowed
+            .iter()
+            .filter(|id| self.granted.contains(*id))
+            .cloned()
+            .collect();
+        self.source.defs_for(&allowed)
+    }
+
+    fn ids(&self) -> Vec<String> {
+        self.source
+            .ids()
+            .into_iter()
+            .filter(|id| self.granted.contains(id))
+            .collect()
+    }
+}
+
 /// The character class OpenAI allows in a function name (and thus a tool
 /// id): ASCII alphanumerics, `_`, `-`. Shared with the MCP id sanitizer
 /// (`tools::mcp::sanitize_tool_id`) so a sanitized id can never fail the
@@ -209,6 +259,20 @@ mod tests {
     use super::*;
     use crate::server::tools::echo::Echo;
     use crate::server::tools::time::CurrentTimestamp;
+
+    #[test]
+    fn a_granted_source_hides_every_tool_outside_the_grant() {
+        let r = ToolRegistry::new().with(Echo).with(CurrentTimestamp);
+        let granted = GrantedToolSource::new(&r, ["get_current_timestamp".to_string()]);
+
+        assert!(granted.contains("get_current_timestamp"));
+        assert!(!granted.contains("company_echo"));
+        assert!(granted.get("company_echo").is_none());
+        assert_eq!(granted.ids(), vec!["get_current_timestamp".to_string()]);
+        let defs = granted.defs_for(&["company_echo".into(), "get_current_timestamp".into()]);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].function.name, "get_current_timestamp");
+    }
 
     #[test]
     fn empty_registry() {
