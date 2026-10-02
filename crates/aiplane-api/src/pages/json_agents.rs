@@ -76,7 +76,7 @@ async fn access(
 
 /// The agent named by the path segment `from_end` back, if the caller holds
 /// `need` on it.
-async fn agent_at(
+pub(super) async fn agent_at(
     state: &RamaState,
     req: &Request,
     user: &users::User,
@@ -114,7 +114,7 @@ pub(crate) async fn guard_agent_principal(
     access(state, user, principal_id, need).await.map(|_| ())
 }
 
-fn parse_spec(text: &str) -> Value {
+pub(super) fn parse_spec(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or(Value::Null)
 }
 

@@ -96,5 +96,7 @@ pub async fn run_turn_with(
     })
 }
 
+pub mod draft;
+
 #[cfg(test)]
 mod tests;

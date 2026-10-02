@@ -413,9 +413,35 @@ pub async fn version(pool: &Pool, id: &str, version: i64) -> Result<Option<Versi
     row.as_ref().map(map_version).transpose()
 }
 
+/// The version number [`live`] reports for a draft run by
+/// [`with_draft_as_live`]. Published versions start at 1, so a session whose
+/// `agent_version` is 0 is an internal test chat.
+pub const DRAFT_VERSION: i64 = 0;
+
+tokio::task_local! {
+    static DRAFT_AS_LIVE: (String, String);
+}
+
+/// Run `fut` with agent `id`'s [`live`] answering `spec` as version
+/// [`DRAFT_VERSION`]. The internal test chat (#90) uses it to run a draft
+/// through the exact path a visitor's turn takes. Scoped to that one agent:
+/// a sub-agent it dispatches to still loads its own published version.
+pub async fn with_draft_as_live<F: std::future::Future>(
+    id: &str,
+    spec: String,
+    fut: F,
+) -> F::Output {
+    DRAFT_AS_LIVE.scope((id.to_string(), spec), fut).await
+}
+
 /// The live version of agent `id` and its spec; `None` when it was never
 /// published or does not exist.
 pub async fn live(pool: &Pool, id: &str) -> Result<Option<(i64, String)>, DbError> {
+    if let Ok(Some(spec)) =
+        DRAFT_AS_LIVE.try_with(|(draft_id, spec)| (draft_id == id).then(|| spec.clone()))
+    {
+        return Ok(Some((DRAFT_VERSION, spec)));
+    }
     let row = sqlx::query(
         "SELECT v.version, v.spec FROM agents a
            JOIN agent_versions v ON v.principal_id = a.principal_id AND v.version = a.live_version
@@ -664,6 +690,29 @@ mod tests {
 
     fn audit_kinds(events: &[agent_audit::AuditEvent]) -> Vec<&str> {
         events.iter().rev().map(|e| e.kind.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_draft_stands_in_for_the_live_version_of_its_agent_only_within_its_scope() {
+        let pool = pool().await;
+        let a = agent(&pool, "a", "u1").await;
+        let b = agent(&pool, "b", "u1").await;
+        publish(&pool, &b.principal.id, r#"{"main":{"pool":"b"}}"#, "u1")
+            .await
+            .unwrap();
+        assert_eq!(live(&pool, &a.principal.id).await.unwrap(), None);
+
+        let seen = with_draft_as_live(&a.principal.id, r#"{"draft":true}"#.into(), async {
+            (
+                live(&pool, &a.principal.id).await.unwrap(),
+                live(&pool, &b.principal.id).await.unwrap(),
+            )
+        })
+        .await;
+
+        assert_eq!(seen.0, Some((DRAFT_VERSION, r#"{"draft":true}"#.into())));
+        assert_eq!(seen.1, Some((1, r#"{"main":{"pool":"b"}}"#.into())));
+        assert_eq!(live(&pool, &a.principal.id).await.unwrap(), None);
     }
 
     #[test]

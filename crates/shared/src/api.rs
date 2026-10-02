@@ -30,6 +30,10 @@ pub struct Me {
     /// and answers its URL with "not enabled" rather than an error page.
     #[serde(default)]
     pub features: Vec<String>,
+    /// Whether the user may build agents (`docs/agents.md`). The web UI shows
+    /// the Agents section only when this is true.
+    #[serde(default)]
+    pub can_manage_agents: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
