@@ -185,6 +185,40 @@ Admins need no share: they hold `write` on every agent.
 
 There is no SPA screen for this yet; it is API-only.
 
+## Embed keys (`gwe_`) and visitor tokens (`gwv_`)
+
+The public agent endpoint `/api/v0/embed/*` serves anonymous visitors of a
+website that embeds an agent. Design: [`agents.md`](agents.md#5-visitor-sessions-and-embedding);
+what was built: [`agents.md`](agents.md#what-91-built).
+
+- **Embed key** `gwe_<64 hex>`, one per website, created by a manager with a
+  `write` share under `/api/v0/agents/{id}/embed-keys` with a list of exact
+  origins. It ships in the website's page source, so it is **not a secret**.
+  It is still stored only as SHA-256 (`agent_embed_keys.key_hash`) and shown
+  once. Revoking it ends every conversation started with it at the next
+  request.
+- **Origin allowlist.** Every embed request must carry an `Origin` the key
+  lists. This keeps other websites from embedding the agent; it does not stop
+  abuse, since a non-browser client sets any `Origin` it likes. Abuse is
+  bounded by the agent's default-deny grants, its gates and (with #92)
+  per-visitor and per-IP limits.
+- **Visitor token** `gwv_<64 hex>`, minted by `POST /api/v0/embed/sessions`
+  and stored as SHA-256 (`visitor_sessions.token_hash`). The widget keeps it
+  in `sessionStorage` and sends it as `Authorization: Bearer`. No cookie is
+  involved, so third-party cookie blocking does not matter and there is no
+  CSRF surface.
+- **Scope.** A visitor token names one conversation of one agent and is read
+  only by the `/api/v0/embed/*` handlers. Everywhere else it fails: `/api/v0`
+  reads only the session cookie, and `require_bearer` on `/v1/*` routes by
+  prefix and knows no `gwv_`. A visitor is not a principal; the agent's turn
+  runs as the agent's principal.
+- **Expiry.** Each accepted request slides the session's expiry by the live
+  spec's `publish.idle_ttl` (default 30 min), up to an absolute 24 h. An
+  expired token gets `401 visitor_session_expired`; the widget then starts a
+  new session. A request refused for another reason does not slide it.
+- **CORS** is answered only on `/api/v0/embed/*`, and only for an origin some
+  live key of an enabled agent lists. Credentials mode stays off.
+
 ## What's intentionally out of scope (for now)
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.

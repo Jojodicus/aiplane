@@ -41,6 +41,8 @@ pub enum AuditKind {
     AgentShareSet,
     AgentShareRemoved,
     AgentDeleted,
+    EmbedKeyCreated,
+    EmbedKeyRevoked,
 }
 
 impl AuditKind {
@@ -61,6 +63,8 @@ impl AuditKind {
             Self::AgentShareSet => "agent_share_set",
             Self::AgentShareRemoved => "agent_share_removed",
             Self::AgentDeleted => "agent_deleted",
+            Self::EmbedKeyCreated => "embed_key_created",
+            Self::EmbedKeyRevoked => "embed_key_revoked",
         }
     }
 }

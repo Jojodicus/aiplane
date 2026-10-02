@@ -30,14 +30,14 @@ use aiplane_runtime::server::AppState;
 use aiplane_runtime::server::tools::ToolRegistry;
 use aiplane_runtime::server::tools::time::CurrentTimestamp;
 
-const TIME: &str = "get_current_timestamp";
+pub(crate) const TIME: &str = "get_current_timestamp";
 
-struct Fx {
-    state: RamaState,
-    root: String,
-    alice: String,
-    bob: String,
-    plain: String,
+pub(crate) struct Fx {
+    pub(crate) state: RamaState,
+    pub(crate) root: String,
+    pub(crate) alice: String,
+    pub(crate) bob: String,
+    pub(crate) plain: String,
 }
 
 async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
@@ -61,7 +61,7 @@ async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
     state.sessions.sign(&session.id)
 }
 
-async fn fixture() -> Fx {
+pub(crate) async fn fixture() -> Fx {
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
     pools.insert(
@@ -133,7 +133,7 @@ async fn fixture() -> Fx {
 }
 
 impl Fx {
-    async fn send(
+    pub(crate) async fn send(
         &self,
         cookie: Option<&str>,
         method: Method,
@@ -160,15 +160,20 @@ impl Fx {
         )
     }
 
-    async fn get(&self, cookie: &str, uri: &str) -> (StatusCode, Value) {
+    pub(crate) async fn get(&self, cookie: &str, uri: &str) -> (StatusCode, Value) {
         self.send(Some(cookie), Method::GET, uri, None).await
     }
 
-    async fn post(&self, cookie: &str, uri: &str, body: Value) -> (StatusCode, Value) {
+    pub(crate) async fn post(&self, cookie: &str, uri: &str, body: Value) -> (StatusCode, Value) {
         self.send(Some(cookie), Method::POST, uri, Some(body)).await
     }
 
-    async fn put_draft(&self, cookie: &str, id: &str, spec: Value) -> (StatusCode, Value) {
+    pub(crate) async fn put_draft(
+        &self,
+        cookie: &str,
+        id: &str,
+        spec: Value,
+    ) -> (StatusCode, Value) {
         self.send(
             Some(cookie),
             Method::PUT,
@@ -178,7 +183,7 @@ impl Fx {
         .await
     }
 
-    async fn create(&self, cookie: &str, name: &str) -> String {
+    pub(crate) async fn create(&self, cookie: &str, name: &str) -> String {
         let (status, body) = self
             .post(cookie, "/api/v0/agents", json!({ "name": name }))
             .await;
@@ -186,7 +191,7 @@ impl Fx {
         body["agent"]["id"].as_str().unwrap().to_string()
     }
 
-    async fn grant(&self, cookie: &str, id: &str, kind: &str, r: &str) -> StatusCode {
+    pub(crate) async fn grant(&self, cookie: &str, id: &str, kind: &str, r: &str) -> StatusCode {
         self.post(
             cookie,
             &format!("/api/v0/system-principals/{id}/grants"),
@@ -196,12 +201,12 @@ impl Fx {
         .0
     }
 
-    async fn publish(&self, cookie: &str, id: &str) -> (StatusCode, Value) {
+    pub(crate) async fn publish(&self, cookie: &str, id: &str) -> (StatusCode, Value) {
         self.post(cookie, &format!("/api/v0/agents/{id}/publish"), json!({}))
             .await
     }
 
-    async fn share(
+    pub(crate) async fn share(
         &self,
         cookie: &str,
         id: &str,
@@ -219,7 +224,7 @@ impl Fx {
 
     /// An agent with the pool and the time tool granted and a publishable
     /// draft that uses both.
-    async fn runnable(&self, name: &str) -> String {
+    pub(crate) async fn runnable(&self, name: &str) -> String {
         let id = self.create(&self.alice, name).await;
         assert_eq!(
             self.grant(&self.alice, &id, "pool", "pool").await,
@@ -234,7 +239,7 @@ impl Fx {
         id
     }
 
-    async fn audit_kinds(&self, id: &str) -> Vec<String> {
+    pub(crate) async fn audit_kinds(&self, id: &str) -> Vec<String> {
         agent_audit::for_principal(&self.state.db, id)
             .await
             .unwrap()
@@ -245,7 +250,7 @@ impl Fx {
     }
 }
 
-fn spec(orchestration: &str) -> Value {
+pub(crate) fn spec(orchestration: &str) -> Value {
     json!({
         "main": {
             "pool": "pool",

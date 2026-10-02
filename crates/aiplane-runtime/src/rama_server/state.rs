@@ -75,6 +75,10 @@ pub struct RamaState {
     /// sticky "N unapplied changes" bar. Not persisted: after a restart the
     /// registry is rebuilt from the DB, so a fresh 0 is correct.
     topology_dirty: Arc<AtomicU32>,
+    /// The public agent endpoint's runner and its per-conversation claims.
+    /// No runner until one is installed with [`Self::with_agent_runner`]; the
+    /// endpoint then refuses messages instead of accepting turns nothing runs.
+    pub agent_turns: crate::agents::embed::AgentTurns,
     /// Test-only override of `[gateway] upstream_wait_secs`. See
     /// [`Self::with_upstream_wait`].
     upstream_wait_override: Option<std::time::Duration>,
@@ -98,8 +102,18 @@ impl RamaState {
             ocr,
             enforcer,
             topology_dirty: Arc::new(AtomicU32::new(0)),
+            agent_turns: Default::default(),
             upstream_wait_override: None,
         }
+    }
+
+    /// Install what runs a visitor's turn on the public agent endpoint.
+    pub fn with_agent_runner(
+        mut self,
+        runner: Arc<dyn crate::agents::embed::AgentTurnRunner>,
+    ) -> Self {
+        self.agent_turns = crate::agents::embed::AgentTurns::new(runner);
+        self
     }
 
     /// How long a request may be parked waiting for its pool to come back

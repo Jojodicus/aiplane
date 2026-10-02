@@ -401,8 +401,8 @@ chat_sessions:
   linked through `parent_turn_id`. They are not chats of the owner, as decided.
 
 **As built (#83, migration `0081`).** The rebuild is as above without
-`visitor_id`: `visitor_sessions` does not exist yet, so #91 adds that column
-together with its table. A second CHECK, `principal_id IS NULL OR shared = 0`,
+`visitor_id`: `visitor_sessions` did not exist yet, so #91 added that column
+together with its table (migration `0083`, [§5](#what-91-built)). A second CHECK, `principal_id IS NULL OR shared = 0`,
 keeps an agent conversation out of the "anyone with the link" read path.
 `parent_turn_id` has no foreign key: the child run stays an auditable record
 when the parent turn is gone. `session_core::db` gains `SessionOwner`,
@@ -643,7 +643,8 @@ tool wants shown) and `on_timeout` (`deny` | `allow_once`, the configurable
 fallback; deny by default). `expires_at` is compared after parsing, not as a
 string. The resume route for the chat path is
 `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume`, owner-only, with
-`{decision, value?, request_id?}`; the agent/public route comes with #91.
+`{decision, value?, request_id?}`. #91 built the public endpoint without a
+resume route; resuming a visitor's suspended turn comes with #95/#96.
 `child_turn` exists but nothing sets it: ancestor suspension and
 innermost-first resume arrive with sub-agent dispatch (#88). Details in
 [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
@@ -824,6 +825,111 @@ answer is held until it passes the output filter (#89), then sent as one block,
 while `status` events keep the widget alive. Token-by-token streaming and a
 filter that sees the whole answer cannot both hold, and the filter wins for
 untrusted audiences.
+
+### What #91 built
+
+- **Migration `0083_visitor_sessions.sql`** creates both tables, with three
+  changes from the sketch above:
+  - `agent_embed_keys.key` is **`key_hash`**, the SHA-256 of the `gwe_` key,
+    like every other credential. The key is public anyway, but storing it in
+    clear would make the table a list of working keys. The plaintext is in
+    the create response only. The table also records `created_by`.
+  - `visitor_sessions` gains `idle_ttl_secs` (the idle TTL the session started
+    with, so sliding needs no spec parse) and `max_expires_at` (the absolute
+    cap). `session_id` has a foreign key with `ON DELETE CASCADE`: a
+    conversation removed by retention (#92) ends its visitor session.
+  - `chat_sessions.visitor_id` is a plain `ADD COLUMN … REFERENCES
+    visitor_sessions(id) ON DELETE SET NULL`. A new column with a `NULL`
+    default may carry a foreign key, so no rebuild was needed and no row
+    moves.
+- **Rows** live in `aiplane-core::server::db::{embed_keys, visitor_sessions}`.
+  Creating and revoking a key writes `embed_key_created` /
+  `embed_key_revoked` audit rows. `visitor_sessions::start` opens the
+  principal-owned conversation (`agent_version` = the live version), the
+  visitor row and the back link in one transaction (`create_principal_session`
+  now takes any executor for that). `lookup` resolves a token without
+  touching it; `slide` counts an accepted request. Both take `now`.
+- **Lifecycle.**
+  - *Start:* `POST /api/v0/embed/sessions {key}`. The key must hash to a live
+    row, the request's `Origin` must be in that key's `origins`, and the agent
+    must be enabled and published. The answer is `201 {token, expires_at,
+    idle_ttl_secs, agent: {display}}` with a fresh `gwv_` token.
+  - *Every later request* sends `Authorization: Bearer gwv_…` and re-checks
+    the chain: session not expired, key not revoked, `Origin` in that key's
+    list, agent enabled and published. Only then does the session slide, to
+    `min(now + idle_ttl, max_expires_at)`. So a revoked key or a disabled
+    agent ends open conversations at their next request.
+  - *Idle TTL:* the live spec's `publish.idle_ttl`, default 30 min. *Absolute
+    cap:* 24 h (`MAX_VISITOR_SESSION`); `sessionStorage` normally ends the
+    session sooner, with the tab.
+  - *Reload:* the widget finds its token in `sessionStorage` and calls `GET
+    /api/v0/embed/session` for the transcript, or `…/events`. After the TTL
+    either answers `401 visitor_session_expired`, and the widget starts a new
+    session.
+- **Routes** (`aiplane-api::pages::embed`, routed in `gateway`):
+
+  | Method | Path | Purpose |
+  |---|---|---|
+  | POST | `/api/v0/embed/sessions` | Start a visitor conversation `{key}` |
+  | GET | `/api/v0/embed/session` | The conversation: `{expires_at, idle_ttl_secs, agent, live_turn_id, turns}` |
+  | POST | `/api/v0/embed/messages` | `{text}` (≤ 8000 characters, no other field); `202 {turn_id, user_turn_id}` |
+  | GET | `/api/v0/embed/events` | `chat_json` frames for `fetch` streaming |
+  | GET | `/api/v0/agents/{id}/embed-keys` | Keys of the agent (`read` share); never the key |
+  | POST | `/api/v0/agents/{id}/embed-keys` | `{name, origins}` (`write` share); `201 {embed_key, key}` |
+  | POST | `/api/v0/agents/{id}/embed-keys/{key_id}/revoke` | `write` share; `204` |
+
+  Errors, all in the `/api/v0` envelope: `401 embed_key_invalid`, `403
+  embed_key_revoked`, `403 origin_not_allowed` (names the origin to add), `403
+  agent_disabled`, `409 agent_not_published`, `401 visitor_session_invalid`,
+  `401 visitor_session_expired`, `409 turn_in_progress`, `503
+  agent_runtime_unavailable`.
+- **What a visitor sees.** Turns are filtered before they leave: no tool
+  calls, no reasoning, no model name, no steers or suspension, no content of
+  an unfinished answer, and an errored turn carries a generic message instead
+  of the upstream's. The token names the conversation; no request carries a
+  session id (`messages` refuses unknown fields).
+- **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
+  turn runs. Without one, `idle` and the stream ends. With one, the stream
+  re-reads that turn every 250 ms and, once it is terminal, sends its whole
+  answer as one `turn_delta` with `full: true` and then `turn_finalized`.
+  *Deviation:* the "`status` events" above are SSE comment lines (`:
+  working`) every 15 s. There is no status to report beyond "still running",
+  and a comment needs no new `chat_json` event. A stream gives up after 10
+  minutes with `idle`; the widget re-attaches.
+- **CORS.** `EmbedCorsLayer` (`aiplane-core::rama_server::cors`) handles
+  `/api/v0/embed/*` only. A preflight carries neither key nor token, so the
+  layer reflects an `Origin` only if some live key of an enabled agent lists
+  it (and answers a preflight from any other origin `403`, without CORS
+  headers). The handler then checks the origin against the request's own key.
+  No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
+  quickly. Every other `/api/v0` route still gets no CORS headers.
+- **The runner seam.** The endpoint opens the turn rows (the visitor's user
+  turn and an `in_progress` assistant turn whose model is `main.pool`), then
+  hands an `AgentTurn {principal_id, agent_version, spec, session_id,
+  assistant_turn_id, visitor_id, client_ip}` to
+  `aiplane_runtime::agents::embed::AgentTurnRunner::run(state, turn)` in a
+  background task. The runner must run the turn as the principal with exactly
+  its grants, buffered, and leave the turn terminal. If it does not, or
+  panics, the endpoint errors the turn so the conversation is not stuck.
+  `RamaState::agent_turns` also holds one claim per conversation, so two
+  messages cannot run at once. `RamaState::with_agent_runner` installs the
+  runner. Nothing installs one yet, so `messages` answers `503
+  agent_runtime_unavailable` and stores nothing. **Wiring step (#87/#88):**
+  implement `AgentTurnRunner` on the agent entry point (it builds
+  `Principal::System` with `load_active`, `RunChain::root` with `visitor_id`,
+  the agent `RunProfile` with `OutputPolicy::Buffered`, and drives the opened
+  turn as `headless::drive` does), then call `.with_agent_runner(…)` where
+  `main.rs` builds the `RamaState`.
+- **Rate limits are a stub.** `pages::embed::admit` is called with the visitor
+  session and client IP on every request and always admits. The per-visitor
+  and per-IP buckets of #92 go there. Until then a visitor is bounded by the
+  agent's grants, its gates and the limits on its pool.
+- **Not built here.** Secure input (`/api/v0/embed/secure-input/{request_id}`,
+  #95) and resuming a suspended visitor turn (#96): the visitor view drops
+  `suspension`, and a suspended turn ends the event stream with `idle`. The
+  output filter itself is #89. The widget is #94. User-visible text is in
+  the error envelope's English `message` with a stable `code`; the widget is
+  expected to show its own Fluent strings per `code`.
 
 ## 6. Crate placement
 

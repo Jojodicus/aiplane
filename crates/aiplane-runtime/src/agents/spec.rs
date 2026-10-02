@@ -213,7 +213,7 @@ fn is_duration(s: &str) -> bool {
 }
 
 /// Exactly `scheme://host[:port]`, the form a browser sends in `Origin`.
-fn is_origin(s: &str) -> bool {
+pub fn is_origin(s: &str) -> bool {
     let Some((scheme, rest)) = s.split_once("://") else {
         return false;
     };
