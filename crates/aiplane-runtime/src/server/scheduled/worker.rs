@@ -310,6 +310,8 @@ async fn try_run_action(
             model: action.model.clone(),
             source: aiplane_core::server::db::usage::UsageSource::Scheduled,
             history_limit,
+            finish: None,
+            budget: None,
         },
     )
     .await;

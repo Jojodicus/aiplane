@@ -41,6 +41,7 @@ use std::sync::Arc;
 use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
+use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolSource};
 
 /// Streaming accumulator for one tool call, folded from its SSE delta
@@ -93,6 +94,9 @@ const TOOL_OUTPUT_KEEP_FULL: usize = 3;
 /// preview size so a small `{preview, full_output_ref}` result is never
 /// stubbed (which would drop the ref it carries).
 const TOOL_OUTPUT_STUB_THRESHOLD: usize = 8192;
+/// How much of a stubbed result's head stays in the prompt. Enough for the
+/// model to recognise which call it was and whether it is worth re-running.
+const TOOL_STUB_PREVIEW_CHARS: usize = 300;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopError {
@@ -273,22 +277,27 @@ pub fn announce_final_round(body: &mut Value) {
                           for work you cannot do, and do not claim any file was produced, \
                           attached or made downloadable unless a tool result in this turn \
                           actually says so.";
+    if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        merge_into_leading_system_message(messages, NOTICE);
+    }
+}
 
-    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
-        return;
-    };
+/// Add `notice` to a conversation's leading system message, creating one when
+/// it has none. Merged rather than appended as a second system message, for
+/// the Qwen3 template reason given on [`announce_final_round`].
+pub fn merge_into_leading_system_message(messages: &mut Vec<Value>, notice: &str) {
     match messages.first_mut() {
         Some(first) if first.get("role").and_then(|r| r.as_str()) == Some("system") => {
             match first.get_mut("content") {
-                Some(Value::String(text)) => *text = format!("{text}\n\n---\n\n{NOTICE}"),
+                Some(Value::String(text)) => *text = format!("{text}\n\n---\n\n{notice}"),
                 // A `/v1` caller's block-array system message gains a block
                 // rather than being flattened to a string, which would destroy
                 // structure the upstream may need (cache breakpoints, for one).
-                Some(Value::Array(blocks)) => blocks.push(json!({"type": "text", "text": NOTICE})),
-                _ => first["content"] = json!(NOTICE),
+                Some(Value::Array(blocks)) => blocks.push(json!({"type": "text", "text": notice})),
+                _ => first["content"] = json!(notice),
             }
         }
-        _ => messages.insert(0, json!({"role": "system", "content": NOTICE})),
+        _ => messages.insert(0, json!({"role": "system", "content": notice})),
     }
 }
 
@@ -475,6 +484,7 @@ where
     obj.remove("stream_options");
 
     let mut rounds = 0u32;
+    let mut repeated_calls = RepeatedCallGuard::new();
     loop {
         let final_round = budget.is_final(rounds);
         let mut round_body = request_body.clone();
@@ -547,8 +557,30 @@ where
             .await;
         }
 
-        // Execute gateway-owned tool calls concurrently.
-        let tool_results = execute_tool_calls(tools, ctx, &split.gateway_owned).await;
+        let tool_results = match execute_tool_calls_guarded(
+            tools,
+            ctx,
+            &split.gateway_owned,
+            &mut repeated_calls,
+        )
+        .await
+        {
+            Ok(results) => results,
+            Err(stop) => {
+                let reason = stop.message();
+                tracing::warn!(tool = %stop.tool, tool_rounds = rounds, %reason, "stopping the turn");
+                let out = close_ignored_final_round(
+                    request_body,
+                    response,
+                    split,
+                    status,
+                    rounds,
+                    &upstream,
+                )
+                .await?;
+                return with_stop_reason(out, &reason);
+            }
+        };
 
         // Append the assistant's tool-call message + the tool results to the
         // request's messages for the next round.
@@ -939,6 +971,74 @@ pub async fn execute_tool_calls(
     rama::futures::future::join_all(futs).await
 }
 
+/// A turn the [`RepeatedCallGuard`] gave up on.
+#[derive(Debug)]
+pub struct RepeatedCallStop {
+    pub tool: String,
+}
+
+impl RepeatedCallStop {
+    pub fn message(&self) -> String {
+        stop_message(&self.tool)
+    }
+}
+
+/// [`execute_tool_calls`] behind the per-turn [`RepeatedCallGuard`]: a call
+/// the guard refuses is answered with an error the model can read instead of
+/// running, and one it gives up on ends the turn before anything runs.
+/// Results come back in call order.
+pub async fn execute_tool_calls_guarded(
+    tools: &dyn ToolSource,
+    ctx: &ToolContext,
+    calls: &[ToolCallRef],
+    guard: &mut RepeatedCallGuard,
+) -> Result<Vec<ToolResultRecord>, RepeatedCallStop> {
+    let verdicts: Vec<CallVerdict> = calls
+        .iter()
+        .map(|c| guard.observe(&c.name, &c.arguments_raw))
+        .collect();
+    if let Some(i) = verdicts.iter().position(|v| *v == CallVerdict::Stop) {
+        return Err(RepeatedCallStop {
+            tool: calls[i].name.clone(),
+        });
+    }
+    let runnable: Vec<ToolCallRef> = calls
+        .iter()
+        .zip(&verdicts)
+        .filter(|(_, v)| **v == CallVerdict::Run)
+        .map(|(c, _)| c.clone())
+        .collect();
+    let mut executed = execute_tool_calls(tools, ctx, &runnable).await.into_iter();
+    Ok(calls
+        .iter()
+        .zip(&verdicts)
+        .map(|(call, verdict)| match verdict {
+            CallVerdict::Run => executed.next().expect("one result per runnable call"),
+            _ => ToolResultRecord {
+                call_id: call.id.clone(),
+                body: error_to_tool_message(REFUSAL_MESSAGE),
+            },
+        })
+        .collect())
+}
+
+/// Name why the gateway cut the turn short, next to the budget signal that
+/// already says it did.
+fn with_stop_reason(mut out: LoopOutput, reason: &str) -> Result<LoopOutput, LoopError> {
+    let mut body: Value = serde_json::from_slice(&out.body)
+        .map_err(|e| LoopError::MalformedUpstream(e.to_string()))?;
+    if let Some(signal) = body
+        .get_mut(BUDGET_SIGNAL_FIELD)
+        .and_then(Value::as_object_mut)
+    {
+        signal.insert("stop_reason".into(), json!(reason));
+    }
+    out.body = Bytes::from(
+        serde_json::to_vec(&body).map_err(|e| LoopError::MalformedUpstream(e.to_string()))?,
+    );
+    Ok(out)
+}
+
 /// Clip a raw-JSON args string for safe inclusion in a tracing line.
 /// Keeps the head readable, drops anything past 200 bytes. We don't
 /// strip newlines — `tracing`'s structured-output handles them.
@@ -1099,9 +1199,15 @@ pub(crate) fn stub_old_tool_results(
             .and_then(|c| c.as_str())
             .map(output_ref_hint)
             .unwrap_or_default();
+        let head: String = messages[i]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(TOOL_STUB_PREVIEW_CHARS)
+            .collect();
         messages[i]["content"] = Value::String(format!(
-            "[earlier tool output cleared to save context ({len} chars). Re-run the tool to \
-             regenerate it{ref_hint}.]"
+            "[earlier tool output cleared to save context ({len} bytes). Re-run the tool to \
+             regenerate it{ref_hint}. Started with: {head}]"
         ));
         freed += len.saturating_sub(content_len(&messages[i]));
     }
@@ -1605,6 +1711,17 @@ mod tests {
         })
     }
 
+    /// A tool call whose arguments differ every round, as a model making real
+    /// progress produces (and unlike [`tool_call_reply`], which the repeated-call
+    /// guard rightly stops).
+    fn progressing_call_reply(request: &Value) -> Value {
+        let mut reply = tool_call_reply(None);
+        let step = request["messages"].as_array().map_or(0, Vec::len);
+        reply["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
+            json!(format!("{{\"message\":\"step {step}\"}}"));
+        reply
+    }
+
     fn answer_reply(text: &str) -> Value {
         json!({"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
     }
@@ -1648,7 +1765,7 @@ mod tests {
             if body["tool_choice"] == "none" {
                 answer_reply("Here is what I found.")
             } else {
-                tool_call_reply(None)
+                progressing_call_reply(body)
             }
         });
         let out = run_with_tools(
@@ -1694,6 +1811,59 @@ mod tests {
                 .all(|b| b.get("tool_choice").is_none()),
             "only the last round is restricted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_model_repeating_one_call_is_refused_then_stopped_with_a_reason() {
+        let (upstream, seen) = scripted_upstream(|body| {
+            if body.get("tools").is_none() {
+                answer_reply("I could not get further.")
+            } else {
+                tool_call_reply(None)
+            }
+        });
+        let out = run_with_tools(
+            &registry(),
+            &["company_echo".into()],
+            &ctx().await,
+            json!({"model": "x", "messages": [{"role": "user", "content": "go"}]}),
+            RoundBudget::default(),
+            upstream,
+        )
+        .await
+        .unwrap();
+
+        assert!(out.budget_exhausted);
+        let body: Value = serde_json::from_slice(&out.body).unwrap();
+        assert_eq!(
+            body["choices"][0]["message"]["content"],
+            "I could not get further."
+        );
+        let reason = body[BUDGET_SIGNAL_FIELD]["stop_reason"].as_str().unwrap();
+        assert!(
+            reason.contains("company_echo") && reason.contains("identical"),
+            "{reason}"
+        );
+
+        let seen = seen.lock().unwrap();
+        let rounds_taken = seen.len() as u32;
+        assert_eq!(
+            rounds_taken,
+            crate::repeated_calls::MAX_IDENTICAL_CALLS
+                + crate::repeated_calls::MAX_REFUSED_CALLS
+                + 2,
+            "three runs, two refusals, the stopping call, then the closing round"
+        );
+        let refusals = seen[1..]
+            .iter()
+            .flat_map(|b| b["messages"].as_array().unwrap())
+            .filter(|m| {
+                m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("already made this exact call"))
+            })
+            .count();
+        assert!(refusals >= 1, "the model is told it already has the result");
     }
 
     #[tokio::test]
@@ -2115,6 +2285,111 @@ mod tests {
         for id in ["b", "c", "d"] {
             assert_eq!(tool(id)["content"], json!(big), "{id} kept verbatim");
         }
+    }
+
+    #[test]
+    fn a_stub_keeps_the_head_of_the_result_it_replaced() {
+        let big = format!("HEAD-MARKER{}", "x".repeat(10_000));
+        let mut messages = body_with_tool_results(&[
+            ("a", big.clone()),
+            ("b", big.clone()),
+            ("c", big.clone()),
+            ("d", big),
+        ])["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        stub_old_tool_results(&mut messages, 4096, 3, 4096);
+        let stub = messages
+            .iter()
+            .find(|m| m["tool_call_id"] == json!("a"))
+            .unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert!(stub.contains("HEAD-MARKER"), "{stub}");
+        assert!(stub.len() < 700, "the stub stays short: {}", stub.len());
+    }
+
+    #[test]
+    fn stubbing_twice_changes_nothing_the_second_time() {
+        let big = "x".repeat(10_000);
+        let mut messages = body_with_tool_results(&[
+            ("a", big.clone()),
+            ("b", big.clone()),
+            ("c", big.clone()),
+            ("d", big.clone()),
+            ("e", big),
+        ])["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(stub_old_tool_results(&mut messages, 4096, 3, 1024) > 0);
+        let once = messages.clone();
+        assert_eq!(stub_old_tool_results(&mut messages, 4096, 3, 1024), 0);
+        assert_eq!(messages, once);
+    }
+
+    struct BigResult;
+
+    impl crate::server::tools::Tool for BigResult {
+        fn id(&self) -> &str {
+            "big_result"
+        }
+        fn schema(&self) -> shared::api::ToolDef {
+            shared::api::ToolDef::function(
+                self.id(),
+                "Returns a large payload.",
+                json!({"type": "object", "properties": {"n": {"type": "integer"}}}),
+            )
+        }
+        fn run<'a>(
+            &'a self,
+            _ctx: ToolContext,
+            args: Value,
+        ) -> crate::server::tools::ToolFuture<'a> {
+            Box::pin(async move { Ok(json!({"n": args["n"], "blob": "x".repeat(60_000)})) })
+        }
+    }
+
+    #[tokio::test]
+    async fn many_large_tool_results_keep_the_replayed_request_bounded() {
+        let sizes = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (sz, ca) = (sizes.clone(), calls.clone());
+        let out = run_with_tools(
+            &ToolRegistry::new().with(BigResult),
+            &[],
+            &ctx().await,
+            json!({"model": "x", "messages": [{"role": "user", "content": "go"}]}),
+            RoundBudget::default(),
+            move |body: Value| {
+                let (sz, ca) = (sz.clone(), ca.clone());
+                async move {
+                    sz.lock().unwrap().push(body.to_string().len());
+                    let n = ca.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let msg = if n < 10 {
+                        json!({"role": "assistant", "content": null, "tool_calls": [{
+                            "id": format!("call{n}"), "type": "function",
+                            "function": {"name": "big_result", "arguments": format!("{{\"n\":{n}}}")}
+                        }]})
+                    } else {
+                        json!({"role": "assistant", "content": "done"})
+                    };
+                    let resp = json!({"choices": [{"message": msg}]});
+                    Ok::<_, LoopError>((200u16, Bytes::from(serde_json::to_vec(&resp).unwrap())))
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.rounds, 10, "the run still completes");
+        let sizes = sizes.lock().unwrap();
+        let unbounded = 10 * 60_000;
+        let peak = *sizes.iter().max().unwrap();
+        assert!(
+            peak < unbounded / 2,
+            "request grew to {peak} bytes; 10 verbatim results would be over {unbounded}"
+        );
     }
 
     #[test]

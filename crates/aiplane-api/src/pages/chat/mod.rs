@@ -851,6 +851,9 @@ async fn spawn_assistant_worker(
         source: aiplane_core::server::db::usage::UsageSource::Chat,
         history_limit: None,
         voice_mode: req.voice_mode,
+        finish: None,
+        budget: None,
+        clock: aiplane_runtime::budget::system_clock(),
     });
     let driver_ctx = session_core::driver::SessionContext {
         user_id: Some(user.id.clone()),

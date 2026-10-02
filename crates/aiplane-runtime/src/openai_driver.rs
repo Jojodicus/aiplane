@@ -26,6 +26,10 @@ use session_core::db::{self as chat, ToolCallStatus, Turn, TurnRole, TurnStatus}
 use session_core::driver::{SessionContext, SessionDriver, TurnError, TurnOutcome};
 use session_core::workers::{SteerNote, TurnUpdate};
 
+use crate::budget::{Budget, Clock, Limit};
+use crate::finish::{
+    FINISH_NUDGE, FINISH_TOOL_NAME, FinishRun, IncompleteReason, RunOutcome, gateway_summary,
+};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{ToolContext, runner};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
@@ -472,6 +476,15 @@ pub struct OpenAiDriver {
     /// tables). Never stored in `user_content` — it's a per-turn request-time
     /// overlay, so continuing the same thread in text mode is unaffected.
     pub voice_mode: bool,
+    /// A non-interactive run's completion contract: the turn ends only via a
+    /// schema-valid `finish` call or an incomplete outcome, settled into this
+    /// slot. `None` for every interactive turn.
+    pub finish: Option<Arc<FinishRun>>,
+    /// What this run may spend. `None` derives it from the conversation's
+    /// effort level, which is every interactive turn.
+    pub budget: Option<Budget>,
+    /// Where the run reads "now" for its `seconds` limit.
+    pub clock: Clock,
 }
 
 /// Build the per-turn [`ToolContext`] for a persisted chat session — the single
@@ -638,6 +651,114 @@ impl SessionDriver for OpenAiDriver {
     }
 }
 
+/// One call as it is replayed upstream in the assistant message.
+fn assistant_tool_call(acc: &ToolCallAcc) -> serde_json::Value {
+    serde_json::json!({
+        "id": acc.id.clone(),
+        "type": "function",
+        "function": {
+            "name": acc.name.clone(),
+            // Normalise before replaying upstream: an empty/garbage
+            // args string (common for no-arg tools like
+            // `rag_list_collections`) 400s a strict re-parse.
+            "arguments": runner::normalize_tool_arguments(&acc.arguments),
+        }
+    })
+}
+
+/// The answer to a `finish` call made alongside other calls. Running the
+/// others and ending the run in the same breath would throw their results
+/// away unread.
+const FINISH_NOT_ALONE: &str = "finish was not accepted: call it on its own, after the results \
+                                of your other tool calls have come back.";
+
+/// Shown on a contracted run's turn when it stopped without a valid `finish`.
+/// English-only for the same reason as `TRUNCATED_MESSAGE`.
+const INCOMPLETE_MESSAGE: &str = "This run spent its round budget without the model calling \
+                                  `finish` with a valid result, so it was recorded as incomplete.";
+
+/// Put a `finish` call on the turn's tool rows, settled at once: it runs no
+/// tool, so there is nothing to wait for.
+async fn record_finish_call(
+    d: &OpenAiDriver,
+    ctx: &SessionContext,
+    call: &ToolCallAcc,
+    status: ToolCallStatus,
+    output: &str,
+) -> Result<(), TurnError> {
+    chat::insert_running_tool_call(
+        &d.state.db,
+        &ctx.assistant_turn_id,
+        &call.id,
+        &call.name,
+        &call.arguments,
+    )
+    .await
+    .map_err(persist_err(
+        "insert_running_tool_call",
+        &ctx.assistant_turn_id,
+    ))?;
+    chat::complete_tool_call(
+        &d.state.db,
+        &ctx.assistant_turn_id,
+        &call.id,
+        output,
+        status,
+    )
+    .await
+    .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
+    let _ = ctx.broadcast.send(TurnUpdate::Tick);
+    Ok(())
+}
+
+/// End a contracted run on its final round: a valid `finish` finishes it,
+/// anything else leaves it incomplete. No closing round follows — the account
+/// of what was done is the model's own text, or the gateway's when it wrote
+/// none.
+async fn close_contracted_run(
+    d: &OpenAiDriver,
+    ctx: &SessionContext,
+    run: &FinishRun,
+    collected: &[ToolCallAcc],
+    round_content: &str,
+    gateway_account: String,
+    reason: IncompleteReason,
+) -> Result<TurnOutcome, TurnError> {
+    let mut rejection = None;
+    if let Some(call) = collected.iter().find(|c| c.name == FINISH_TOOL_NAME) {
+        match run.contract().check_call(&call.arguments) {
+            Ok(result) => {
+                record_finish_call(d, ctx, call, ToolCallStatus::Completed, &result.to_string())
+                    .await?;
+                run.settle(RunOutcome::Finished { result });
+                return Ok(TurnOutcome::default());
+            }
+            Err(reason) => {
+                record_finish_call(d, ctx, call, ToolCallStatus::Errored, &reason).await?;
+                rejection = Some(reason);
+            }
+        }
+    }
+    let text = round_content.trim();
+    let mut summary = if text.is_empty() {
+        gateway_account
+    } else {
+        text.to_string()
+    };
+    if let Some(reason) = rejection {
+        summary.push_str(&format!("\n\nThe last finish call was rejected: {reason}"));
+    }
+    tracing::warn!(
+        model = %ctx.model,
+        ?reason,
+        "contracted run spent its budget without a valid finish; recording it as incomplete"
+    );
+    run.settle(RunOutcome::Incomplete { reason, summary });
+    Ok(TurnOutcome {
+        notice: Some(INCOMPLETE_MESSAGE.to_string()),
+    })
+}
+
 async fn classify_and_dispatch_tool_calls(
     d: &OpenAiDriver,
     ctx: &SessionContext,
@@ -674,17 +795,7 @@ async fn classify_and_dispatch_tool_calls(
         ))?;
         let _ = ctx.broadcast.send(TurnUpdate::Tick);
 
-        assistant_tool_calls.push(serde_json::json!({
-            "id": acc.id.clone(),
-            "type": "function",
-            "function": {
-                "name": acc.name.clone(),
-                // Normalise before replaying upstream: an empty/garbage
-                // args string (common for no-arg tools like
-                // `rag_list_collections`) 400s a strict re-parse.
-                "arguments": runner::normalize_tool_arguments(&acc.arguments),
-            }
-        }));
+        assistant_tool_calls.push(assistant_tool_call(acc));
         if crate::server::tools::ToolSource::contains(tool_source, &acc.name) {
             let key = crate::server::tools::catalog::entry_key_for(&acc.name);
             // Hard block: the user switched this tool off for the
@@ -859,6 +970,9 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             compaction.as_ref().map(|c| c.summary.as_str()),
         ),
     );
+    if let Some(run) = d.finish.as_ref() {
+        runner::merge_into_leading_system_message(&mut messages, run.contract().instructions());
+    }
 
     let routing_has_tools = !d
         .state
@@ -949,7 +1063,11 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             serving.dialect,
         )
         .await;
-    let max_rounds = effort.max_rounds();
+    let budget = d.budget.unwrap_or_else(|| Budget::from_effort(effort));
+    let max_rounds = budget.rounds();
+    let run_started = (d.clock)();
+    let mut tokens_used: u64 = 0;
+    let mut limit_hit: Option<Limit> = None;
 
     // Monotonic zero point of the reasoning phase, set on the first
     // reasoning chunk. Used to compute the single authoritative
@@ -1029,6 +1147,11 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // Set once the model ignored its final round: the one request past the
     // budget is the closing round (`runner::prepare_closing_round`).
     let mut closing = false;
+    let mut repeated_calls = crate::repeated_calls::RepeatedCallGuard::new();
+
+    // Names of the tools that ran this turn, for the gateway's own account of
+    // a contracted run that stops without the model giving one.
+    let mut tools_run: Vec<String> = Vec::new();
 
     for round in 0..=max_rounds {
         if round == max_rounds && !closing {
@@ -1058,7 +1181,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // the turn ends with no visible answer (the "stuck after N tool
         // calls" failure). Withholding tools turns that last round into a
         // guaranteed text answer.
-        let final_round = round + 1 == max_rounds;
+        if limit_hit.is_none() {
+            limit_hit = budget.exhausted((d.clock)().duration_since(run_started), tokens_used);
+        }
+        let final_round = round + 1 == max_rounds || limit_hit.is_some();
 
         // Build the request. `stream: true` so we can forward
         // content deltas; tools injected if the user has any
@@ -1076,7 +1202,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             "messages": messages,
             "stream": true,
         });
-        if (metrics_on || compaction_enabled)
+        if (metrics_on || compaction_enabled || budget.tokens().is_some())
             && let Some(obj) = request_body.as_object_mut()
         {
             obj.insert(
@@ -1119,8 +1245,17 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         );
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
+        if let Some(run) = d.finish.as_ref() {
+            run.contract().inject(&mut request_body);
+        }
         if closing {
             runner::prepare_closing_round(&mut request_body);
+        } else if final_round && let Some(run) = d.finish.as_ref() {
+            run.contract().prepare_final_round(&mut request_body);
+            tracing::info!(
+                max_rounds,
+                "tool-round budget reached; offering only finish for the final round"
+            );
         } else if final_round {
             // Whether the definitions may stay depends on whether this backend
             // can be trusted with `tool_choice` at all.
@@ -1453,6 +1588,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             started,
             round_tokens,
         );
+        tokens_used += round_tokens
+            .2
+            .or_else(|| Some(round_tokens.0.unwrap_or(0) + round_tokens.1.unwrap_or(0)))
+            .map_or(0, |t| t.max(0) as u64);
 
         // Track the context size for the compaction trigger. Persisted only
         // when it grows, so a tool-using turn writes at most once per round
@@ -1529,9 +1668,30 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 completion_tokens = ?round_tokens.1,
                 "upstream stopped at the output-token limit; finalizing the turn as truncated"
             );
+            if let Some(run) = d.finish.as_ref() {
+                run.settle(RunOutcome::Incomplete {
+                    reason: IncompleteReason::OutputTruncated,
+                    summary: round_content.trim().to_string(),
+                });
+            }
             return Ok(TurnOutcome {
                 notice: Some(TRUNCATED_MESSAGE.to_string()),
             });
+        }
+
+        if final_round && let Some(run) = d.finish.as_ref() {
+            let mut collected: Vec<ToolCallAcc> = tool_acc.into_values().collect();
+            ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
+            return close_contracted_run(
+                d,
+                &ctx,
+                run,
+                &collected,
+                &round_content,
+                gateway_summary(round + 1, &tools_run),
+                budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
+            )
+            .await;
         }
 
         // The model called a tool on the round that had to end the turn. The
@@ -1574,6 +1734,14 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             continue;
         }
 
+        // A contracted run is not over because the model stopped calling
+        // tools: it gets the text back with a nudge, and the round is spent.
+        if tool_acc.is_empty() && d.finish.is_some() {
+            messages.push(serde_json::json!({"role": "assistant", "content": round_content}));
+            messages.push(serde_json::json!({"role": "user", "content": FINISH_NUDGE}));
+            continue;
+        }
+
         // End of round. If no tool calls, we're done.
         if tool_acc.is_empty() {
             // ...but "done" having written nothing at all is not a reply, and
@@ -1613,6 +1781,50 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // Guarantee unique, non-empty ids before they hit the DB (PK),
         // the replayed assistant message, and the tool results.
         ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
+        let mut finish_refusals: Vec<ToolCallAcc> = Vec::new();
+        if let Some(run) = d.finish.as_ref() {
+            if let [call] = collected.as_slice()
+                && call.name == FINISH_TOOL_NAME
+            {
+                match run.contract().check_call(&call.arguments) {
+                    Ok(result) => {
+                        record_finish_call(
+                            d,
+                            &ctx,
+                            call,
+                            ToolCallStatus::Completed,
+                            &result.to_string(),
+                        )
+                        .await?;
+                        run.settle(RunOutcome::Finished { result });
+                        return Ok(TurnOutcome::default());
+                    }
+                    Err(reason) => {
+                        record_finish_call(d, &ctx, call, ToolCallStatus::Errored, &reason).await?;
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": serde_json::Value::Null,
+                            "tool_calls": [assistant_tool_call(call)],
+                        }));
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": &call.id,
+                            "content": reason,
+                        }));
+                        continue;
+                    }
+                }
+            }
+            let (finish_calls, rest): (Vec<_>, Vec<_>) = collected
+                .into_iter()
+                .partition(|call| call.name == FINISH_TOOL_NAME);
+            collected = rest;
+            for call in &finish_calls {
+                record_finish_call(d, &ctx, call, ToolCallStatus::Errored, FINISH_NOT_ALONE)
+                    .await?;
+            }
+            finish_refusals = finish_calls;
+        }
         // Tool groups the user explicitly switched **off** for this
         // conversation. The model never sees their schemas (they're not in
         // `allowed_tools`), but it can still hallucinate a direct call from
@@ -1627,7 +1839,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             .unwrap_or_default(),
             None => Default::default(),
         };
-        let (assistant_tool_calls, call_refs, refused) = classify_and_dispatch_tool_calls(
+        let (mut assistant_tool_calls, call_refs, mut refused) = classify_and_dispatch_tool_calls(
             d,
             &ctx,
             &tool_source,
@@ -1636,11 +1848,55 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &disabled_keys,
         )
         .await?;
+        for call in &finish_refusals {
+            assistant_tool_calls.push(assistant_tool_call(call));
+            refused.push((call.id.clone(), FINISH_NOT_ALONE.to_string()));
+        }
         if call_refs.is_empty() && refused.is_empty() {
             return Ok(TurnOutcome::default());
         }
 
-        let results = runner::execute_tool_calls(&tool_source, &d.tool_ctx, &call_refs).await;
+        let results = match runner::execute_tool_calls_guarded(
+            &tool_source,
+            &d.tool_ctx,
+            &call_refs,
+            &mut repeated_calls,
+        )
+        .await
+        {
+            Ok(results) => results,
+            Err(stop) => {
+                let message = stop.message();
+                tracing::warn!(
+                    model = %ctx.model,
+                    tool = %stop.tool,
+                    tool_rounds_done = round,
+                    "repeated identical tool call; stopping the turn"
+                );
+                for call in &call_refs {
+                    chat::complete_tool_call(
+                        &d.state.db,
+                        &ctx.assistant_turn_id,
+                        &call.id,
+                        &message,
+                        ToolCallStatus::Errored,
+                    )
+                    .await
+                    .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
+                }
+                let _ = ctx.broadcast.send(TurnUpdate::Tick);
+                if let Some(run) = d.finish.as_ref() {
+                    run.settle(RunOutcome::Incomplete {
+                        reason: IncompleteReason::RepeatedToolCall {
+                            tool: stop.tool.clone(),
+                        },
+                        summary: message.clone(),
+                    });
+                }
+                return Err(TurnError::Aborted { message });
+            }
+        };
+        tools_run.extend(call_refs.iter().map(|call| call.name.clone()));
         messages.push(serde_json::json!({
             "role": "assistant",
             "content": serde_json::Value::Null,

@@ -230,9 +230,10 @@ CREATE TABLE agent_shares (
 
 **Shares**
 - The creator gets a `write` share automatically.
-- A `write` share takes effect only for a holder of `can_manage_agents`.
-- *Chosen:* a `read` share can go to any user. It shows the spec and the
-  agent's conversations, which suits a support lead reviewing cases.
+- Every share takes effect only for a holder of `can_manage_agents`.
+- *Chosen:* `read` shows the spec and the agent's conversations, and those
+  hold visitor data, so a read share needs the permission too. Support staff
+  who only answer handoffs use the HiL inbox (#96), which needs no share.
 
 **Grants are not versioned.** They belong to the principal and persist until
 reconfigured, as decided. If a live spec references a tool whose grant was
@@ -629,7 +630,7 @@ helpers.
 | #81 repeated calls | §3 | 3 identical calls warn, the 4th ends the run as `incomplete` |
 | #82 suspend/resume | §3 | `chat_turn_suspensions` in session-core; `suspended` event; nested suspensions |
 | #83 run identity, call chain | §1, §3 | `ToolContext.principal` replaces `user_id`/`roles`; `RunChain`; `chat_sessions` owner becomes user **or** principal (table rebuild); `agent_audit` |
-| #84 agent definition | §2 | `agents` keyed by principal; `draft_spec` plus immutable `agent_versions`; shares: write needs the permission, read is open to any user |
+| #84 agent definition | §2 | `agents` keyed by principal; `draft_spec` plus immutable `agent_versions`; shares: every share needs the permission |
 | #85 typed state | §3 State | `agent_state` table; `set_by` list per slot; `subject` slot type |
 | #86 gates | §4 | JSON condition tree instead of the string expressions in the epic's example; subject-bound routes must require a non-`llm` provenance |
 | #87 router | §3 synthetic tools | `forward_request()` with no route argument; classifier picks only among open routes |
@@ -644,9 +645,8 @@ helpers.
 | #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind |
 | #97 later | — | unchanged |
 
-## Open questions
+## Deferred
 
-- **Read shares:** this doc lets any user hold one (view spec and
-  conversations). Should read access also require `can_manage_agents`?
-- **Buffered answers on public agents:** acceptable for the first release, or
-  should a streaming mode exist for agents without an output filter?
+- **Streaming on public agents.** The first release buffers each answer of a
+  public main agent until the output filter has checked it. A streaming mode for
+  agents without an output filter can follow once the filter exists.

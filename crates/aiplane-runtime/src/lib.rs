@@ -10,6 +10,8 @@
 //! - [`server::state`] / [`rama_server::state`] — `AppState` and the `RamaState`
 //!   that wraps it. This is the layer that ties the whole world together, which
 //!   is why it sits above both `aiplane-core` and `aiplane-features`.
+//! - [`budget`] — what one run may spend: rounds, seconds, tokens.
+//! - [`finish`] — the completion contract a non-interactive run ends by.
 //! - [`openai_driver`] — the streaming chat-completion driver, plus the
 //!   background workers that need state: `scheduled`, `webhooks`, `compaction`,
 //!   `headless`.
@@ -17,10 +19,13 @@
 //! `aiplane-tools` and `aiplane-api` both depend on this and on nothing of each
 //! other, so a tool edit and a page edit stay independent.
 
+pub mod budget;
 pub mod content_guard;
+pub mod finish;
 pub mod loop_guard;
 pub mod openai_driver;
 pub mod rama_server;
+pub mod repeated_calls;
 pub mod server;
 
 pub use rama_server::state::RamaState;

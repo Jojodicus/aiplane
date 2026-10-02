@@ -2610,7 +2610,8 @@ impl wiremock::Respond for ResearchingChatResponder {
             serde_json::json!({"content": "<tool_call>\n<function=get_user_location>\n</function>\n</tool_call>"})
         } else {
             serde_json::json!({"tool_calls": [{"index": 0, "id": "call-r", "type": "function",
-                "function": {"name": "get_user_location", "arguments": "{}"}}]})
+                "function": {"name": "get_user_location",
+                "arguments": serde_json::json!({"round": body["messages"].as_array().map_or(0, Vec::len)}).to_string()}}]})
         };
         let sse = format!(
             "data: {}\n\ndata: [DONE]\n\n",
@@ -2677,5 +2678,65 @@ async fn a_chat_turn_whose_model_writes_out_a_call_on_its_final_round_ends_on_an
             .count(),
         1,
         "exactly one request past the budget"
+    );
+}
+
+/// A chat model that calls `get_user_location` with the same arguments on
+/// every round and never answers.
+struct StuckChatResponder;
+
+impl wiremock::Respond for StuckChatResponder {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let delta = serde_json::json!({"tool_calls": [{"index": 0, "id": "call-s", "type": "function",
+            "function": {"name": "get_user_location", "arguments": "{}"}}]});
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices": [{"index": 0, "delta": delta}]})
+        );
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    }
+}
+
+#[tokio::test]
+async fn a_chat_turn_repeating_one_identical_call_is_stopped_with_a_reason() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(StuckChatResponder)
+        .mount(&upstream)
+        .await;
+    let (state, cookie) = setup_with_location_tool(&upstream.uri()).await;
+    let app = router(state.clone());
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+
+    let resp = app
+        .serve(json_req(
+            Method::POST,
+            format!("/api/v0/chat/sessions/{}/messages", session.id),
+            &cookie,
+            Some(r#"{"model":"model-a","message":"where am I"}"#.into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    wait_for_idle(&state, "alice").await;
+
+    let turns = chat::list_turns(&state.db, &session.id).await.unwrap();
+    let assistant = turns.last().unwrap();
+    assert_eq!(assistant.turn.status, chat::TurnStatus::Errored);
+    let reason = assistant.turn.error_message.clone().unwrap_or_default();
+    assert!(reason.contains("get_user_location"), "{reason}");
+    assert!(
+        assistant
+            .tool_calls
+            .iter()
+            .all(|c| c.status == chat::ToolCallStatus::Errored
+                || c.status == chat::ToolCallStatus::Completed),
+        "no tool call is left running"
+    );
+    let upstream_calls = upstream.received_requests().await.unwrap().len();
+    assert!(
+        upstream_calls < 10,
+        "stopped long before the round budget: {upstream_calls}"
     );
 }

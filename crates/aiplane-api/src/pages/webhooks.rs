@@ -162,6 +162,8 @@ pub async fn webhook_trigger(
         model: hook.model.clone(),
         source: UsageSource::Webhook,
         history_limit,
+        finish: None,
+        budget: None,
     };
 
     if hook.synchronous {

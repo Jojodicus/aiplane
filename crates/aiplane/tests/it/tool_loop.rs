@@ -841,6 +841,13 @@ impl wiremock::Respond for ToolLoopResponder {
     }
 }
 
+/// Arguments that differ on every round, as a model making progress produces.
+/// A model repeating one identical call is the repeated-call guard's business.
+fn progressing_args(request: &serde_json::Value) -> String {
+    let step = request["messages"].as_array().map_or(0, Vec::len);
+    json!({"message": format!("more {step}")}).to_string()
+}
+
 /// A model researching without end: it calls `company_echo` on every round,
 /// except where `answers(request)` says it would answer instead. `streaming`
 /// picks the wire shape.
@@ -860,7 +867,7 @@ impl wiremock::Respond for BudgetResponder {
             } else {
                 json!({"choices": [{"message": {"role": "assistant", "content": null,
                     "tool_calls": [{"id": "call-r", "type": "function",
-                        "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]},
+                        "function": {"name": "company_echo", "arguments": progressing_args(&body)}}]},
                     "finish_reason": "tool_calls"}]})
             });
         }
@@ -875,7 +882,7 @@ impl wiremock::Respond for BudgetResponder {
             vec![
                 json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
                     "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [{"index": 0, "id": "call-r", "type": "function",
-                        "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]}, "finish_reason": null}]}),
+                        "function": {"name": "company_echo", "arguments": progressing_args(&body)}}]}, "finish_reason": null}]}),
                 json!({"id": "s", "object": "chat.completion.chunk", "created": 1, "model": "model-a",
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
             ]
@@ -1096,7 +1103,7 @@ impl wiremock::Respond for WrittenOutCallResponder {
             vec![
                 chunk(
                     json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "call-r", "type": "function",
-                    "function": {"name": "company_echo", "arguments": r#"{"message":"more"}"#}}]}),
+                    "function": {"name": "company_echo", "arguments": progressing_args(&body)}}]}),
                     json!(null),
                 ),
                 chunk(json!({}), json!("tool_calls")),
@@ -1184,4 +1191,66 @@ async fn a_final_round_that_only_writes_out_a_call_gets_a_closing_round() {
         true
     );
     assert_eq!(calls, MAX_ROUNDS as usize + 1);
+}
+
+/// A model stuck on one call: the same `company_echo` arguments every round,
+/// answering only once its tools are taken away.
+struct StuckOnOneCall;
+
+impl wiremock::Respond for StuckOnOneCall {
+    fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        ResponseTemplate::new(200).set_body_json(if body.get("tools").is_none() {
+            json!({"choices": [{"message": {"role": "assistant", "content": "I could not get further."},
+                "finish_reason": "stop"}]})
+        } else {
+            json!({"choices": [{"message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "call-r", "type": "function",
+                    "function": {"name": "company_echo", "arguments": r#"{"message":"same"}"#}}]},
+                "finish_reason": "tool_calls"}]})
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_model_repeating_one_identical_call_is_stopped_with_a_reason() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(StuckOnOneCall)
+        .mount(&upstream)
+        .await;
+    let state = state_with_tools(&upstream.uri()).await;
+    let bearer = seed_engineer_with_bearer(&state).await;
+    let app = router(Arc::new(state));
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "model-a", "messages": [{"role": "user", "content": "go"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    let resp = app.serve(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("x-gateway-tool-budget-exhausted")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    let body: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let reason = body["aiplane"]["stop_reason"].as_str().unwrap();
+    assert!(reason.contains("company_echo"), "{reason}");
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "I could not get further."
+    );
+    assert!(
+        (chat_calls(&upstream).await as u32) < MAX_ROUNDS,
+        "stopped long before the round budget"
+    );
 }

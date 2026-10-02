@@ -453,14 +453,113 @@ client tool in one turn.
   closing round ends the turn with the "ran its tools but wrote no answer"
   notice. See
   [`gateway-api.md`](gateway-api.md#tool-round-budget).
+- **Repeated identical calls** — `repeated_calls::RepeatedCallGuard` counts
+  gateway-owned calls per turn by (tool id, canonical arguments: object keys
+  sorted, whitespace ignored, empty or unparseable arguments read as `{}`).
+  Any different call in between (calls within one round count in array order) resets the count, so edit, read, edit, read never trips. The first `MAX_IDENTICAL_CALLS` (3) in a row run. The next `MAX_REFUSED_CALLS` (2) do
+  not run; the model gets a tool error saying it already has that result and
+  should use it. The call after that stops the turn. The guard is wired through
+  `runner::execute_tool_calls_guarded` in all three loops (buffered `/v1`,
+  streaming `/v1`, chat driver). It catches what `LoopGuard` cannot: a model
+  that writes no repeated text, only the same well-formed call every round.
+  Buffered `/v1` ends like an exhausted round budget (one closing round without
+  tools, `aiplane.tool_budget_exhausted`) and adds `aiplane.stop_reason` naming
+  the tool. The streaming `/v1` loop ends the stream with an error chunk. The
+  chat UI aborts the turn with the same reason as its error text. Every stop
+  logs a `warn` with the tool and round. The reason is English-only, like
+  `LOOP_MESSAGE`, because it is written into the turn row at generation time.
 - **Per-tool timeout** — 30s, overridable per tool via `max_duration`.
 - **Concurrency** — tool calls within one round run concurrently, bounded by a
   per-request semaphore of 4.
 - **Tool-result context budget** — once cumulative `role:"tool"` content passes
-  128 KB, older large results are replaced by re-callable stubs while the last
-  few stay verbatim. It triggers on size only, so short conversations keep the
-  full history and the prompt cache intact (clearing would invalidate the
-  cached prefix).
+  128 KB (`/v1` loop) or the turn's allowance derived from the model's context
+  window (chat driver), older large results are replaced by re-callable stubs
+  while the last three stay verbatim. Both loops call the one
+  `stub_old_tool_results`. A stub keeps the first 300 characters of the result
+  and its `full_output_ref`, so the model can tell what it was and re-run it.
+  Every `tool_call_id` stays answered, only the content shrinks, and a stub is
+  below the stubbing threshold so a second pass changes nothing. It triggers on
+  size only, so short conversations keep the full history and the prompt cache
+  intact (clearing would invalidate the cached prefix). Only the replayed
+  messages shrink; the stored turn keeps the full results.
+
+### Run budgets
+
+Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
+seconds, tokens }`. A chat turn derives it from the conversation's effort level
+(`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
+so interactive behaviour is unchanged. A headless run may pass one in
+`DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
+`seconds` and `tokens` are optional (`None` = unlimited). A sub-agent run is
+meant to be given a `Budget` of its own, not share its parent's.
+
+- **Tokens** are the upstream-reported usage (the `total_tokens` of each
+  round's trailing usage frame, else prompt + completion), summed over the
+  run's rounds. A run with a token limit always requests `include_usage`, even
+  when metrics and compaction are off. An upstream that reports no usage
+  counts as zero.
+- **Seconds** are wall clock from the start of the run, read through the
+  driver's `Clock` (a test seam; production is `Instant::now`).
+- Time and tokens are checked **between rounds**, before each request is
+  built, never mid-stream: aborting a reply would discard output already paid
+  for and leave a half-written message. A run can overshoot by at most one
+  round.
+- Running out of *any* limit makes the next request the final round, exactly as
+  running out of rounds does (tools withheld, or only `finish` offered under a
+  contract). A contracted run that does not finish there settles as
+  `Incomplete` with `round_budget_exhausted { rounds }`,
+  `seconds_exhausted { seconds }` or `tokens_exhausted { tokens }`, naming the
+  limit that hit. A run always gets at least one request.
+
+### Finish contract
+
+An interactive turn ends when a round comes back without tool calls. That is
+not a result for a run nobody watches, so a non-interactive run can be given a
+`aiplane_runtime::finish::FinishContract` — a JSON schema — and then ends in
+exactly one of two ways: a schema-valid `finish(result)` call
+(`RunOutcome::Finished { result }`), or a structured
+`RunOutcome::Incomplete { reason, summary }`. `headless::drive` takes the
+contract in `DriveParams::finish` and returns the outcome; it is the entry
+point for scheduled actions, webhooks, and later sub-agents. Runs without a
+contract — every chat turn, every `/v1` request — are unchanged, and no
+`finish` tool is offered to them.
+
+Inside the chat driver, with a contract:
+
+- Every round offers `finish` alongside the run's tools, and the leading
+  system message says the run ends only through it.
+- A round of text without `finish` does not end the run. The text is replayed
+  with a user-role nudge, and the round counts against the budget.
+- A `finish` call on its own is validated. A valid one ends the run. An
+  invalid one is answered in its tool slot with every validation error
+  (location and cause), and the run continues. A `finish` made in the same
+  round as other calls is refused ("call it on its own"), because ending
+  there would throw away the other calls' results unread.
+- The final round offers *only* `finish` (the rest of the tool list is
+  replaced, `tool_choice` dropped: `"none"` would forbid the one call that
+  matters). The model is told to call it or write what is left undone.
+  Anything but a valid `finish` there ends the run as
+  `Incomplete { reason: round_budget_exhausted { rounds } }` (or the
+  `seconds_exhausted` / `tokens_exhausted` of a [run budget](#run-budgets)), with the model's
+  last text as `summary`, or a gateway-written account of the rounds and tools
+  when it wrote none. No closing round follows. The turn carries a notice.
+- A contracted run still passes through the repeated-call guard. A guard stop
+  settles as `repeated_tool_call { tool }`, with the stop message as `summary`.
+- An output-token cutoff settles as `output_truncated`. A cancel, an upstream
+  error, or a crash leaves the slot empty, and `drive` reads the turn row:
+  `cancelled` or `failed { message }`.
+
+`RunOutcome` serialises as `{"status": "finished", "result": …}` /
+`{"status": "incomplete", "reason": {"kind": …}, "summary": …}`, so a later
+consumer can hand it back as data.
+
+The schema is checked by a deliberately small validator: `type` (one name or a
+list), `properties`, `required`, `enum`, `items`, and a boolean
+`additionalProperties`. The annotations `title`, `description`, `default`,
+`examples`, and `$schema` are ignored. Any other keyword (`pattern`, `oneOf`,
+`$ref`, …) makes `FinishContract::new` fail, so a schema is never only partly
+enforced. See [`dependencies.md`](dependencies.md) for why no validator crate
+is used.
 
 ### Streaming
 
@@ -502,8 +601,8 @@ success/failure.
 
 - **User-defined tools.** All tools are code-defined and reviewed.
 - **Tool result caching.** Tools run every time they are called.
-- **Sub-agent delegation / multi-agent orchestration.** AIplane is a tool
-  runtime behind an OpenAI-compatible API; a client that needs agent
-  orchestration builds it on its own side. Adding it here would complicate
-  round bounding, cost attribution, RBAC scoping, and usage accounting, with no
-  benefit to a plain `/v1/chat/completions` caller.
+- **Model-driven agent orchestration on `/v1`.** A `/v1/chat/completions`
+  caller still gets one tool loop and builds any orchestration of its own on
+  its side. Gateway-defined agents and sub-agents are a separate surface, built
+  on the headless runtime and the [finish contract](#finish-contract); their
+  design is in [`agents.md`](agents.md).
