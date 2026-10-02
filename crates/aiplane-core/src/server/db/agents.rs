@@ -638,6 +638,7 @@ pub async fn delete(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbErr
     )
     .await?;
     tx.commit().await?;
+    super::embed_keys::origins_changed();
     Ok(true)
 }
 

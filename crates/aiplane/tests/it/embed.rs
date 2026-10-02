@@ -1089,6 +1089,34 @@ async fn a_preflight_is_answered_only_for_an_embeddable_origin() {
         StatusCode::FORBIDDEN,
         "a revoked key opens no origin"
     );
+
+    let (_, _) = new_key(&e.fx, &e.agent, &[OTHER_SITE]).await;
+    let opened = app
+        .serve(preflight("/api/v0/embed/sessions", OTHER_SITE))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.status(),
+        StatusCode::NO_CONTENT,
+        "a new key opens its origin at once"
+    );
+    let (status, body) =
+        e.fx.post(
+            &e.fx.alice,
+            &format!("/api/v0/system-principals/{}/disable", e.agent),
+            json!({}),
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {body}");
+    let disabled = app
+        .serve(preflight("/api/v0/embed/sessions", OTHER_SITE))
+        .await
+        .unwrap();
+    assert_eq!(
+        disabled.status(),
+        StatusCode::FORBIDDEN,
+        "a disabled agent opens no origin, at once"
+    );
 }
 
 #[tokio::test]

@@ -214,6 +214,7 @@ pub async fn disable(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbEr
     )
     .await?;
     tx.commit().await?;
+    super::embed_keys::origins_changed();
     Ok(true)
 }
 

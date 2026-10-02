@@ -1413,7 +1413,10 @@ untrusted audiences.
   layer reflects an `Origin` only if some live key of an enabled agent lists
   it (and answers a preflight from any other origin `403`, without CORS
   headers). The handler then checks the origin against the request's own key.
-  No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
+  The set of such origins is cached in memory (`embed_keys::EmbeddableOrigins`),
+  not read per request: creating or revoking a key and disabling or deleting
+  an agent clear it at once, and a 30 s TTL catches writes from outside the
+  process. No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
   quickly. Every other `/api/v0` route still gets no CORS headers.
 - **The runner.** The endpoint opens the turn rows (the visitor's user turn
   and an `in_progress` assistant turn), then hands an `OpenedTurn {agent_id,
