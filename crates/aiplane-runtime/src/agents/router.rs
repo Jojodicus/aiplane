@@ -23,6 +23,7 @@
 //!
 //! Every decision is written to `agent_audit` with the run's call chain.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
+use super::a2a_client::Dispatch as A2aDispatch;
 use super::bind::{BindSource, render_task};
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
 use super::human::{answered, hand_off, human_routes};
@@ -266,6 +268,62 @@ impl ForwardRequest {
         self.dispatch(ctx, route, &state).await
     }
 
+    /// The route's task rendered from state and its `bind` values resolved,
+    /// or (inner `Err`) the answer that says the task cannot be written yet.
+    #[allow(clippy::type_complexity)]
+    fn task_and_binds(
+        &self,
+        name: &str,
+        spec: &Value,
+        state: &AgentState,
+    ) -> Result<Result<(String, BTreeMap<String, Value>), Value>, ToolError> {
+        let task = match render_task(
+            spec.get("task").and_then(Value::as_str).unwrap_or_default(),
+            state,
+        ) {
+            Ok(task) => task,
+            Err(missing) => {
+                return Ok(Err(json!({
+                    "forwarded": false,
+                    "route": name,
+                    "reason": "task_incomplete",
+                    "message": format!(
+                        "route `{name}` is open, but its task cannot be written yet: {}. Collect \
+                         that, then call forward_request again",
+                        missing.join("; ")
+                    ),
+                })));
+            }
+        };
+        let mut route_binds = BTreeMap::new();
+        for (arg, source) in BindSource::parse_map(spec.get("bind")) {
+            let value = source.resolve(state).map_err(|why| {
+                ToolError::Failed(format!(
+                    "route `{name}` binds `{arg}`, and {why}; its gate should have required \
+                     it. Nothing was forwarded"
+                ))
+            })?;
+            route_binds.insert(arg, value);
+        }
+        Ok(Ok((task, route_binds)))
+    }
+
+    fn a2a<'a>(
+        &'a self,
+        ctx: &'a ToolContext,
+        route: &'a str,
+        route_spec: &'a Value,
+    ) -> A2aDispatch<'a> {
+        A2aDispatch {
+            state: &self.state,
+            ctx,
+            principal: &self.spec.principal,
+            route,
+            route_spec,
+            lang: self.options.lang,
+        }
+    }
+
     async fn dispatch(
         &self,
         ctx: &ToolContext,
@@ -274,6 +332,13 @@ impl ForwardRequest {
     ) -> Result<Value, ToolError> {
         let name = route.name();
         let spec = self.spec.routes.get(name).cloned().unwrap_or_default();
+        if spec.get("a2a").is_some() {
+            let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
+                Ok(both) => both,
+                Err(unwritten) => return Ok(unwritten),
+            };
+            return self.a2a(ctx, name, &spec).start(&task, &route_binds).await;
+        }
         let Some(agent_id) = spec.get("agent").and_then(Value::as_str) else {
             let Some(human) = human_routes(&self.spec.routes).remove(name) else {
                 return Err(ToolError::Failed(format!(
@@ -294,34 +359,10 @@ impl ForwardRequest {
             )
             .await;
         };
-        let task = match render_task(
-            spec.get("task").and_then(Value::as_str).unwrap_or_default(),
-            state,
-        ) {
-            Ok(task) => task,
-            Err(missing) => {
-                return Ok(json!({
-                    "forwarded": false,
-                    "route": name,
-                    "reason": "task_incomplete",
-                    "message": format!(
-                        "route `{name}` is open, but its task cannot be written yet: {}. Collect \
-                         that, then call forward_request again",
-                        missing.join("; ")
-                    ),
-                }));
-            }
+        let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
+            Ok(both) => both,
+            Err(unwritten) => return Ok(unwritten),
         };
-        let mut route_binds = std::collections::BTreeMap::new();
-        for (arg, source) in BindSource::parse_map(spec.get("bind")) {
-            let value = source.resolve(state).map_err(|why| {
-                ToolError::Failed(format!(
-                    "route `{name}` binds `{arg}`, and {why}; its gate should have required \
-                     it. Nothing was forwarded"
-                ))
-            })?;
-            route_binds.insert(arg, value);
-        }
         let bound = json!(route_binds);
         let profile = RunProfile::load(
             &self.state,
@@ -498,6 +539,18 @@ impl Tool for ForwardRequest {
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
             if let Suspend::Decided(Decision::Value { value }) = &ctx.suspend {
+                if let Some(pending) = A2aDispatch::resume_pending(&ctx).await? {
+                    let route_spec = self
+                        .spec
+                        .routes
+                        .get(&pending.route)
+                        .cloned()
+                        .unwrap_or_default();
+                    return self
+                        .a2a(&ctx, &pending.route, &route_spec)
+                        .answer(&pending, value)
+                        .await;
+                }
                 return Ok(answered(value));
             }
             if let Some(keys) = args.as_object().filter(|m| !m.is_empty()) {

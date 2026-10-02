@@ -236,6 +236,7 @@ export const zh: Catalog = {
  "admin-users-you-badge": "你",
  "admin-value-default": "默认",
  "admin-value-na": "不适用",
+ "agent-a2a-input-required": "合作服务还需要一项信息才能继续。请在此输入；该信息只会发送给该服务。",
  "agent-embed-decision-for-staff": "此请求正在等待我们的工作人员处理。一旦做出决定，您将在此处看到答复。",
  "agent-embed-message-waiting": "您的上一条消息仍在等待助手处理。请等待其答复后再发送新消息。",
  "agent-embed-not-waiting": "助手目前没有在等待您的回答。请重新加载对话。",

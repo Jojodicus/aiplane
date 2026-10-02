@@ -249,6 +249,12 @@ principal** with its own `gws_` token. There is no new credential type:
 - The agent card itself is public: it advertises the bearer scheme
   (`securitySchemes.aiplaneSystemToken`), not a secret.
 
+The other direction — an AIplane agent calling an external A2A agent from a
+route — is grant kind **`a2a_agent`** (ref: the external agent's card URL).
+Only an admin can make it, because it lets visitor-derived data leave the
+gateway; the credential for the external agent lives sealed in the route's
+`a2a.auth` ([`agents.md`](agents.md#what-101-built)).
+
 ## What's intentionally out of scope (for now)
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.

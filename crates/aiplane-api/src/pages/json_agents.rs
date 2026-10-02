@@ -187,11 +187,13 @@ async fn spec_issues(
     ))
 }
 
-/// Seal every verifier secret once the spec is valid (the plaintext's length
-/// is checked), before it is stored or echoed: it never rests in a draft, a
-/// version or the audit trail in clear.
+/// Seal every verifier secret and A2A route credential once the spec is
+/// valid (the plaintext is checked), before it is stored or echoed: it never
+/// rests in a draft, a version or the audit trail in clear.
 fn seal_secrets(state: &RamaState, spec: &mut Value) -> Result<(), Response> {
-    aiplane_runtime::agents::verifier::host_jwt::seal_secrets(spec, &state.crypto).map_err(internal)
+    aiplane_runtime::agents::verifier::host_jwt::seal_secrets(spec, &state.crypto)
+        .and_then(|()| aiplane_runtime::agents::a2a_client::seal_secrets(spec, &state.crypto))
+        .map_err(internal)
 }
 
 fn invalid_spec(what: &str, issues: &[SpecIssue]) -> Response {

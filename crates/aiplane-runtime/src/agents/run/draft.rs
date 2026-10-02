@@ -123,7 +123,8 @@ pub struct DraftDebug {
     /// Each `forward_request` decision of this turn: every route's gate and
     /// the route picked, if any.
     pub routing: Vec<Value>,
-    /// Each sub-agent dispatch of this turn, with its outcome once finished.
+    /// Each sub-agent (or external agent) dispatch of this turn, with its
+    /// outcome once finished.
     pub sub_agents: Vec<Value>,
     /// Each tool call of this turn and the grant decision on it.
     pub tool_calls: Vec<Value>,
@@ -191,11 +192,14 @@ pub async fn collect_debug(
             "route_decision" => debug.routing.push(event.detail),
             "sub_agent_dispatched" => debug.sub_agents.push(event.detail),
             "sub_agent_finished" => {
-                let turn = event.detail.get("turn_id").cloned();
+                // A sub-agent run is its child turn; an external agent's has
+                // none, so its dispatch carries an id of its own.
+                let key = |d: &Value| d.get("turn_id").or_else(|| d.get("dispatch_id")).cloned();
+                let finished = key(&event.detail);
                 match debug
                     .sub_agents
                     .iter_mut()
-                    .find(|d| d.get("turn_id") == turn.as_ref())
+                    .find(|d| finished.is_some() && key(d) == finished)
                 {
                     Some(dispatched) => *dispatched = event.detail,
                     None => debug.sub_agents.push(event.detail),

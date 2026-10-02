@@ -1177,3 +1177,39 @@ async fn an_agent_connectors_groups_decide_who_may_grant_it() {
     let (status, _) = fx.grant(&fx.admin, &id, "connector", AGENT).await;
     assert_eq!(status, StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn only_an_admin_grants_an_external_a2a_agent_and_only_by_a_valid_card_url() {
+    const CARD: &str = "https://partner.example.com/.well-known/agent-card.json";
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    let (status, body) = fx.grant(&fx.manager, &id, "a2a_agent", CARD).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"]["code"], "grant_exceeds_manager");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("admin"),
+        "{body}"
+    );
+
+    let (status, body) = fx
+        .grant(
+            &fx.admin,
+            &id,
+            "a2a_agent",
+            "http://partner.example.com/card",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("https"),
+        "{body}"
+    );
+
+    let (status, body) = fx.grant(&fx.admin, &id, "a2a_agent", CARD).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let principal = db::system_principals::load_active(&fx.state.db, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(principal.grants.has(GrantKind::A2aAgent, CARD));
+}

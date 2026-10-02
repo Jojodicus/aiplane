@@ -17,3 +17,5 @@ agent-embed-rate-limited = Sie senden Nachrichten schneller, als dieser Assisten
 agent-embed-decision-for-staff = Diese Anfrage wartet auf eine Entscheidung unseres Teams. Sobald entschieden ist, sehen Sie die Antwort hier.
 agent-embed-not-waiting = Der Assistent wartet gerade nicht auf eine Antwort von Ihnen. Bitte laden Sie das Gespräch neu.
 agent-embed-message-waiting = Ihre vorherige Nachricht wartet noch auf den Assistenten. Bitte warten Sie seine Antwort ab, bevor Sie eine weitere senden.
+
+agent-a2a-input-required = Ein Partnerdienst benötigt noch eine Angabe, um fortzufahren. Geben Sie sie hier ein; sie geht nur an diesen Dienst.

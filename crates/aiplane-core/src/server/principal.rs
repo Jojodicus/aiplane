@@ -45,16 +45,20 @@ pub enum GrantKind {
     /// An agent id (`system_principals.id`) this principal may call over
     /// A2A (`docs/agents.md` "What #102 built"). It grants nothing else.
     A2aCaller,
+    /// An external A2A agent, by its agent card URL (`docs/agents.md`
+    /// "What #101 built").
+    A2aAgent,
 }
 
 impl GrantKind {
-    pub const ALL: [GrantKind; 6] = [
+    pub const ALL: [GrantKind; 7] = [
         Self::Tool,
         Self::Connector,
         Self::Skill,
         Self::RagCollection,
         Self::Pool,
         Self::A2aCaller,
+        Self::A2aAgent,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,6 +69,7 @@ impl GrantKind {
             Self::RagCollection => "rag_collection",
             Self::Pool => "pool",
             Self::A2aCaller => "a2a_caller",
+            Self::A2aAgent => "a2a_agent",
         }
     }
 

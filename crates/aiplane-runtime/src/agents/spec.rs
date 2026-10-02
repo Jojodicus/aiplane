@@ -50,6 +50,7 @@ use super::gate::Cond;
 use verifiers::HOST_JWT;
 
 mod a2a;
+mod route_kinds;
 mod verifiers;
 use super::state::StateSchema;
 use crate::finish::FinishContract;
@@ -135,7 +136,17 @@ const SLOT_TYPES: &[&str] = &[
 
 const ROUTER_KEYS: &[&str] = &["kind", "pool", "order"];
 const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
-const ROUTE_KEYS: &[&str] = &["description", "when", "agent", "task", "bind", "human"];
+const ROUTE_KEYS: &[&str] = &[
+    "description",
+    "when",
+    "agent",
+    "task",
+    "bind",
+    "human",
+    "a2a",
+];
+/// The keys that name a route's target; a route has exactly one.
+const ROUTE_TARGETS: &[&str] = &["agent", "human", "a2a"];
 const HUMAN_KEYS: &[&str] = &["notify", "inbox", "timeout", "transcript"];
 /// Where a handoff may be announced: Web Push to whoever may answer it, and
 /// the agent's Slack and Discord channels.
@@ -1056,25 +1067,22 @@ impl<'a> Check<'a> {
                  simplest one",
             ),
         }
-        match (map.get("agent"), map.get("human")) {
-            (Some(agent), None) => {
+        let targets: Vec<&str> = ROUTE_TARGETS
+            .iter()
+            .copied()
+            .filter(|k| map.contains_key(*k))
+            .collect();
+        match targets.as_slice() {
+            ["agent"] => {
+                let agent = &map["agent"];
                 self.sub_agent(agent, &join(path, "agent"));
-                match map.get("task") {
-                    Some(task) => self.template(task, &join(path, "task")),
-                    None => self.issue(
-                        &join(path, "task"),
-                        "a route to a sub-agent needs a `task` — the sub-agent sees this, \
-                         never the transcript",
-                    ),
-                }
-                if let Some(bind) = map.get("bind") {
-                    self.bind(bind, &join(path, "bind"), false);
-                }
+                self.task_and_bind(map, path, "a sub-agent");
                 if let Some(id) = agent.as_str() {
                     self.route_contract(id, map.get("bind"), path);
                 }
             }
-            (None, Some(human)) => {
+            ["human"] => {
+                let human = &map["human"];
                 if let Some(h) = self.object(human, &join(path, "human"), HUMAN_KEYS) {
                     if let Some(n) = h.get("notify") {
                         let at = join(path, "human.notify");
@@ -1113,18 +1121,27 @@ impl<'a> Check<'a> {
                     if map.contains_key(key) {
                         self.issue(
                             &join(path, key),
-                            format!("`{key}` only applies to a route to a sub-agent"),
+                            format!("`{key}` does not apply to a route to a person"),
                         );
                     }
                 }
             }
-            (Some(_), Some(_)) => self.issue(
+            ["a2a"] => self.a2a_route(map, path),
+            [] => self.issue(
                 path,
-                "a route goes to a sub-agent (`agent`) or to a human (`human`), not both",
+                "a route needs a target — `agent` (a sub-agent's id), `human` or `a2a` (an \
+                 external agent)",
             ),
-            (None, None) => self.issue(
+            several => self.issue(
                 path,
-                "a route needs a target — `agent` (a sub-agent's id) or `human`",
+                format!(
+                    "a route has exactly one target, and this one names {} — keep one",
+                    several
+                        .iter()
+                        .map(|k| format!("`{k}`"))
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                ),
             ),
         }
     }

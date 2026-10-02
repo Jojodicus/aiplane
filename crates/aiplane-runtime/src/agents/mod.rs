@@ -10,9 +10,11 @@
 //! limits and owner budget, the retention sweeper (`retention`), and the
 //! identity verifiers that write trusted slots (`verifier`). Human in the
 //! loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
-//! `inbox` (who answers what, and the notification).
+//! `inbox` (who answers what, and the notification). `a2a_client` is the
+//! route to an external agent over the A2A protocol.
 
 pub mod a2a;
+pub mod a2a_client;
 pub mod approval;
 pub mod bind;
 pub mod embed;

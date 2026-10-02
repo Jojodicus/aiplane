@@ -236,6 +236,7 @@ export const en: Catalog = {
  "admin-users-you-badge": "you",
  "admin-value-default": "default",
  "admin-value-na": "n/a",
+ "agent-a2a-input-required": "A partner service needs one more detail to continue. Enter it here; it goes to that service only.",
  "agent-embed-decision-for-staff": "This request is waiting for a member of staff. You will see the answer here once they have decided.",
  "agent-embed-message-waiting": "Your previous message is still waiting for the assistant. Please wait for its answer before sending another one.",
  "agent-embed-not-waiting": "The assistant is not waiting for an answer from you right now. Please reload the conversation.",
