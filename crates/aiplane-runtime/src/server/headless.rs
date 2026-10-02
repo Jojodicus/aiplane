@@ -31,6 +31,7 @@ use std::sync::atomic::AtomicBool;
 use session_core::db as chat;
 use uuid::Uuid;
 
+use crate::budget::{Budget, Clock};
 use crate::finish::{FinishContract, FinishRun, IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use aiplane_core::server::db::usage::UsageSource;
@@ -90,6 +91,9 @@ pub struct DriveParams {
     /// a structured incomplete outcome, and [`drive`] returns which. `None`
     /// runs the turn exactly as an interactive chat turn would.
     pub finish: Option<FinishContract>,
+    /// What the run may spend. `None` takes the round cap of the session's
+    /// effort level and no time or token limit.
+    pub budget: Option<Budget>,
 }
 
 /// Drive an already-opened turn to completion through the `OpenAiDriver`.
@@ -97,6 +101,15 @@ pub struct DriveParams {
 /// Returns the run's [`RunOutcome`] when it was given a finish contract, and
 /// `None` otherwise.
 pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome> {
+    drive_with_clock(state, p, crate::budget::system_clock()).await
+}
+
+/// [`drive`] with the run's clock supplied, so a `seconds` budget is testable.
+pub async fn drive_with_clock(
+    state: &Arc<RamaState>,
+    p: DriveParams,
+    clock: Clock,
+) -> Option<RunOutcome> {
     let finish = p.finish.map(FinishRun::new);
     let session_id = p.session_id.clone();
     let assistant_turn_id = p.assistant_turn_id.clone();
@@ -123,6 +136,8 @@ pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome>
         history_limit: p.history_limit,
         voice_mode: false,
         finish: finish.clone(),
+        budget: p.budget,
+        clock,
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no
@@ -197,15 +212,25 @@ mod tests {
     struct Scripted {
         deltas: Vec<Value>,
         served: AtomicUsize,
+        /// Total tokens the upstream reports for every round, when set.
+        tokens_per_round: Option<u64>,
     }
 
     impl wiremock::Respond for Scripted {
         fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
             let i = self.served.fetch_add(1, Ordering::SeqCst);
             let delta = &self.deltas[i.min(self.deltas.len() - 1)];
+            let usage = self.tokens_per_round.map(|t| {
+                format!(
+                    "data: {}\n\n",
+                    json!({"choices": [], "usage": {"prompt_tokens": t / 2,
+                        "completion_tokens": t - t / 2, "total_tokens": t}})
+                )
+            });
             let sse = format!(
-                "data: {}\n\ndata: [DONE]\n\n",
-                json!({"choices": [{"index": 0, "delta": delta}]})
+                "data: {}\n\n{}data: [DONE]\n\n",
+                json!({"choices": [{"index": 0, "delta": delta}]}),
+                usage.unwrap_or_default()
             );
             ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
         }
@@ -338,6 +363,7 @@ mod tests {
             source: UsageSource::Scheduled,
             history_limit: None,
             finish,
+            budget: None,
         }
     }
 
@@ -348,6 +374,7 @@ mod tests {
             .respond_with(Scripted {
                 deltas,
                 served: AtomicUsize::new(0),
+                tokens_per_round: None,
             })
             .mount(&upstream)
             .await;
@@ -609,5 +636,114 @@ mod tests {
             panic!("expected a failed outcome, got {outcome:?}");
         };
         assert!(message.contains("500"), "{message}");
+    }
+
+    async fn run_budgeted(
+        budget: Budget,
+        tokens_per_round: Option<u64>,
+        clock: Clock,
+    ) -> (Option<RunOutcome>, Vec<Value>) {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(Scripted {
+                deltas: vec![text("Still working.")],
+                served: AtomicUsize::new(0),
+                tokens_per_round,
+            })
+            .mount(&upstream)
+            .await;
+        let state = state_for(&upstream.uri()).await;
+        let (session_id, turn_id) = open(&state, "max").await;
+        let mut p = params(&session_id, &turn_id, Some(contract()));
+        p.budget = Some(budget);
+        let outcome = drive_with_clock(&state, p, clock).await;
+        let requests = upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        (outcome, requests)
+    }
+
+    /// Time is un-fakeable any other way (London-school seam): every read of
+    /// this clock moves it forward by `step`, so "seconds elapsed" is a pure
+    /// function of how many times the driver looked.
+    fn stepping_clock(step: std::time::Duration) -> Clock {
+        let base = std::time::Instant::now();
+        let reads = Arc::new(AtomicUsize::new(0));
+        Arc::new(move || base + step * reads.fetch_add(1, Ordering::SeqCst) as u32)
+    }
+
+    fn incomplete_reason(outcome: Option<RunOutcome>) -> IncompleteReason {
+        match outcome {
+            Some(RunOutcome::Incomplete { reason, .. }) => reason,
+            other => panic!("expected an incomplete outcome, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_explicit_round_budget_overrides_the_effort_level() {
+        let (outcome, requests) = run_budgeted(
+            Budget::new(3, None, None),
+            None,
+            crate::budget::system_clock(),
+        )
+        .await;
+        assert_eq!(
+            incomplete_reason(outcome),
+            IncompleteReason::RoundBudgetExhausted { rounds: 3 }
+        );
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_seconds_limit_ends_the_run_on_its_final_round() {
+        let (outcome, requests) = run_budgeted(
+            Budget::new(40, Some(30), None),
+            None,
+            stepping_clock(std::time::Duration::from_secs(10)),
+        )
+        .await;
+        assert_eq!(
+            incomplete_reason(outcome),
+            IncompleteReason::SecondsExhausted { seconds: 30 }
+        );
+        assert_eq!(requests.len(), 3, "rounds were left, time was not");
+        let last = requests.last().unwrap();
+        assert_eq!(offered_tools(last), [FINISH_TOOL_NAME]);
+    }
+
+    #[tokio::test]
+    async fn the_token_limit_ends_the_run_on_its_final_round() {
+        let (outcome, requests) = run_budgeted(
+            Budget::new(40, None, Some(250)),
+            Some(100),
+            crate::budget::system_clock(),
+        )
+        .await;
+        assert_eq!(
+            incomplete_reason(outcome),
+            IncompleteReason::TokensExhausted { tokens: 250 }
+        );
+        assert_eq!(
+            requests.len(),
+            4,
+            "the third round crosses 250; the fourth is final"
+        );
+        assert_eq!(offered_tools(requests.last().unwrap()), [FINISH_TOOL_NAME]);
+    }
+
+    #[tokio::test]
+    async fn a_token_budget_asks_the_upstream_for_usage() {
+        let (_, requests) = run_budgeted(
+            Budget::new(1, None, Some(10)),
+            Some(1),
+            crate::budget::system_clock(),
+        )
+        .await;
+        assert_eq!(requests[0]["stream_options"]["include_usage"], true);
     }
 }
