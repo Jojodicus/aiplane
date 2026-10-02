@@ -446,6 +446,55 @@ client tool in one turn.
   intact (clearing would invalidate the cached prefix). Only the replayed
   messages shrink; the stored turn keeps the full results.
 
+### Finish contract
+
+An interactive turn ends when a round comes back without tool calls. That is
+not a result for a run nobody watches, so a non-interactive run can be given a
+`aiplane_runtime::finish::FinishContract` — a JSON schema — and then ends in
+exactly one of two ways: a schema-valid `finish(result)` call
+(`RunOutcome::Finished { result }`), or a structured
+`RunOutcome::Incomplete { reason, summary }`. `headless::drive` takes the
+contract in `DriveParams::finish` and returns the outcome; it is the entry
+point for scheduled actions, webhooks, and later sub-agents. Runs without a
+contract — every chat turn, every `/v1` request — are unchanged, and no
+`finish` tool is offered to them.
+
+Inside the chat driver, with a contract:
+
+- Every round offers `finish` alongside the run's tools, and the leading
+  system message says the run ends only through it.
+- A round of text without `finish` does not end the run. The text is replayed
+  with a user-role nudge, and the round counts against the budget.
+- A `finish` call on its own is validated. A valid one ends the run. An
+  invalid one is answered in its tool slot with every validation error
+  (location and cause), and the run continues. A `finish` made in the same
+  round as other calls is refused ("call it on its own"), because ending
+  there would throw away the other calls' results unread.
+- The final round offers *only* `finish` (the rest of the tool list is
+  replaced, `tool_choice` dropped: `"none"` would forbid the one call that
+  matters). The model is told to call it or write what is left undone.
+  Anything but a valid `finish` there ends the run as
+  `Incomplete { reason: round_budget_exhausted { rounds } }`, with the model's
+  last text as `summary`, or a gateway-written account of the rounds and tools
+  when it wrote none. No closing round follows. The turn carries a notice.
+- A contracted run still passes through the repeated-call guard. A guard stop
+  settles as `repeated_tool_call { tool }`, with the stop message as `summary`.
+- An output-token cutoff settles as `output_truncated`. A cancel, an upstream
+  error, or a crash leaves the slot empty, and `drive` reads the turn row:
+  `cancelled` or `failed { message }`.
+
+`RunOutcome` serialises as `{"status": "finished", "result": …}` /
+`{"status": "incomplete", "reason": {"kind": …}, "summary": …}`, so a later
+consumer can hand it back as data.
+
+The schema is checked by a deliberately small validator: `type` (one name or a
+list), `properties`, `required`, `enum`, `items`, and a boolean
+`additionalProperties`. The annotations `title`, `description`, `default`,
+`examples`, and `$schema` are ignored. Any other keyword (`pattern`, `oneOf`,
+`$ref`, …) makes `FinishContract::new` fail, so a schema is never only partly
+enforced. See [`dependencies.md`](dependencies.md) for why no validator crate
+is used.
+
 ### Streaming
 
 When the client asked for `stream: true`:
@@ -486,8 +535,8 @@ success/failure.
 
 - **User-defined tools.** All tools are code-defined and reviewed.
 - **Tool result caching.** Tools run every time they are called.
-- **Sub-agent delegation / multi-agent orchestration.** AIplane is a tool
-  runtime behind an OpenAI-compatible API; a client that needs agent
-  orchestration builds it on its own side. Adding it here would complicate
-  round bounding, cost attribution, RBAC scoping, and usage accounting, with no
-  benefit to a plain `/v1/chat/completions` caller.
+- **Model-driven agent orchestration on `/v1`.** A `/v1/chat/completions`
+  caller still gets one tool loop and builds any orchestration of its own on
+  its side. Gateway-defined agents and sub-agents are a separate surface, built
+  on the headless runtime and the [finish contract](#finish-contract); their
+  design is in [`agents.md`](agents.md).

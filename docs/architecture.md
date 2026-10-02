@@ -120,6 +120,7 @@ Where the world gets tied together:
 - `server/state.rs` — `AppState`: the db pool, config, `Arc<UpstreamRegistry>`, `Arc<ToolRegistry>`, `Arc<Resolver>`, and the optional feature handles (RAG indexer, skills, ComfyUI, push, geoip, sandbox client, MCP manager).
 - `rama_server/state.rs` — `RamaState` wraps `AppState` (via `Deref`) and adds the session store, worker registry, usage sink and rate-limit enforcer; `rama_server/auth.rs` — `require_bearer` for `/v1/*`.
 - `openai_driver.rs` — the `session_core::SessionDriver` impl that streams a chat completion, plus `loop_guard.rs`.
+- `finish.rs` — the completion contract for non-interactive runs (`FinishContract`, `RunOutcome`): a run given one ends only through a schema-valid `finish(result)` call or a structured incomplete outcome. `headless::drive` takes one and returns the outcome. See [`tools-rbac.md`](tools-rbac.md#finish-contract).
 - `server/{scheduled,webhooks,compaction,headless}` — the background workers that need state.
 - `server/comfyui_tool.rs` — the ComfyUI `Tool`/`ToolSource` impls and the `ComfyuiHandle` that `AppState` holds. Split out of `aiplane-features`' `comfyui/` because it needs the tool API.
 
