@@ -172,6 +172,11 @@ per-request tools on top: a user's connected MCP connectors
 (`comfyui_<workflow>`). One seam means the buffered `/v1` loop, the streaming
 `/v1` loop, and the chat-UI driver all gain per-user tools identically.
 
+`SlotTools` (`aiplane-runtime::agents::slot_tools`) is a third source: the
+generated `set_<slot>` tools of one agent's state, one per slot the model may
+write. They exist only for an agent run and need no grant
+([`agents.md`](agents.md#what-85-built)).
+
 ## Lazy tool disclosure (`enable_tools`)
 
 The defining behaviour of the current design, and the thing most likely to

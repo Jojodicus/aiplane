@@ -341,7 +341,8 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
   - *Publish*: everything above against the grants as they are now, plus
     `main.pool`, instructions, and every routed sub-agent having a live version.
   - Still open: gate type checks (#86), cycle and depth checks of the sub-agent
-    graph (#88), slot run-time semantics (#85).
+    graph (#88). Slot run-time semantics landed with #85
+    ([below](#what-85-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
   or `is_admin`. The caller must also hold the permission on every request.
@@ -435,6 +436,53 @@ registered for that run, need no grant, and do not exist anywhere else.
 - The router decides from state.
 - With `kind: classifier`, a separate small call returns one route name from an
   enum. It can only pick among routes whose gate is already open.
+
+### What #85 built
+
+- **Migration `0082_agent_state.sql`** creates `agent_state` as above, plus a
+  `CHECK` that `provenance` is `llm`, `host` or `verifier:<id>`. It references
+  `chat_sessions(id)` only, so it holds for a user-owned and a principal-owned
+  session alike and does not depend on #83's rebuild (`0081`). Storage is
+  `aiplane-core::server::db::agent_state` (`put`, `for_session`); it knows
+  neither types nor writers and has one caller.
+- **Typed slots** (`aiplane-runtime::agents::state`). `StateSchema::from_spec`
+  reads `state` into `SlotDef`s. `SlotDef::check` validates in code and returns
+  what to fix:
+  - `string`: `min_length`, `max_length` (characters), `pattern`.
+  - `email`: `local@domain.tld`, no whitespace; `max_length`.
+  - `enum`: one of `values`.
+  - `integer`, `number`: `minimum`, `maximum`.
+  - `boolean`.
+  - `subject`: an object, checked against an optional `schema` by #78's
+    schema-subset validator (`finish::validate`).
+- **Two write doors.** `set_<slot>` always writes provenance `llm`.
+  `write_trusted(pool, schema, session, slot, value, TrustedWriter, now)` is
+  the only way to store `verifier:<id>` or `host`; `TrustedWriter` has no
+  conversion from a string or JSON, so a value parsed from a tool call cannot
+  become one. Both refuse a writer outside `set_by` before looking at the
+  value, then refuse an invalid value with the validator's message. A rewrite
+  replaces the row, provenance and `set_at` included.
+- **`set_<slot>` tools** (`agents::slot_tools`). `SlotTools` is a `ToolSource`
+  with one `SetSlotTool` per slot whose `set_by` lists `llm`, and none for any
+  other. A tool takes exactly `{value}` (`additionalProperties: false`); any
+  other key, such as `slot`, `provenance` or `session_id`, is refused by name.
+  The session comes from `ToolContext.session_id`. Invalid values come back as
+  `InvalidArgs` ending in "call set_<slot> again".
+- **The model's view.** `AgentState::load` judges each stored row against the
+  current schema: `set`, `missing`, or `invalid` (a writer the spec no longer
+  allows, or a value that no longer fits). `view()` returns `SlotView`s and
+  `render_view()` the system-message block. A value is shown only when its
+  provenance is `llm`; a trusted slot says `set by verifier:otp`, and its
+  invalid reason never echoes the value.
+- **Clock.** Writes take `now`, and `SlotTools::with_clock` injects it, so
+  tests fix `set_at` and every `max_age` gate on top of it.
+- **Spec checks added.** A constraint on a type it does not apply to (e.g.
+  `pattern` on an `integer`) is an error, not silently unenforced. `schema` is a
+  new slot key for `subject` slots only. A `subject` slot may not list `llm`:
+  it says whose data the agent acts on.
+- **Not wired yet.** Nothing offers `SlotTools` to a run or puts
+  `render_view()` into a system message: both need the agent `RunProfile` and
+  `AgentToolSource` (#87/#88). There is no `state` SSE event yet either.
 
 ### The call chain
 

@@ -256,6 +256,7 @@ connected server. The drift guard matches them by prefix.
 | `typst_<id>` plus `_edit` / `_read` / `_pptx` | one per directory under `[typst] templates_dir`, discovered at boot | `typst_<id>` (the render id; variants collapse onto it via `entry_key_for`) |
 | `comfyui_<id>` | one per manifest in the `[comfyui]` catalog, hot-reloadable | `comfyui` — **one key for the whole family**, so a newly reloaded workflow is enabled automatically |
 | `mcp__<server>__<tool>` | per-user MCP connectors, connected lazily per request | `mcp__<server>` — one key per integration |
+| `set_<slot>` | one per slot of an agent's `state` whose `set_by` lists `llm` (`agents::slot_tools`, [`agents.md`](agents.md#what-85-built)) | none — never in the chat catalog or registry; offered only inside an agent run, and needs no grant |
 
 `AskFirst` (`server/tools/ask_first.rs`) is not a family: it wraps one tool
 and keeps its id, so the wrapped tool's own row above applies. It only changes

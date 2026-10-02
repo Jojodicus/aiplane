@@ -24,9 +24,12 @@
 //!   state slot the model cannot write (no `llm` in its `set_by`), or a
 //!   `{"const": …}` literal.
 //!
-//! What it does not: type-check gate values against slots (#86), check the
-//! sub-agent graph for cycles and depth (#88), or give slots run-time meaning
-//! (#85). Those build on the shape fixed here.
+//! - **Slots.** Each constraint must apply to the slot's type, a `subject`
+//!   slot's `schema` must be one the run-time validator enforces, and the
+//!   model may not write a `subject`. Run-time meaning is [`super::state`].
+//!
+//! What it does not: type-check gate values against slots (#86) or check the
+//! sub-agent graph for cycles and depth (#88).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -96,6 +99,17 @@ const SLOT_KEYS: &[&str] = &[
     "minimum",
     "maximum",
     "pattern",
+    "schema",
+];
+/// Constraint keys and the slot types they apply to. A constraint on a type it
+/// cannot apply to would be silently unenforced, so it is an error instead.
+const SLOT_CONSTRAINTS: &[(&str, &[&str])] = &[
+    ("min_length", &["string"]),
+    ("max_length", &["string", "email"]),
+    ("pattern", &["string"]),
+    ("minimum", &["integer", "number"]),
+    ("maximum", &["integer", "number"]),
+    ("schema", &["subject"]),
 ];
 const SLOT_TYPES: &[&str] = &[
     "string", "email", "enum", "integer", "number", "boolean", "subject",
@@ -662,6 +676,32 @@ impl<'a> Check<'a> {
             };
             let llm = self.set_by(map.get("set_by"), &join(&p, "set_by"));
             self.slots.insert(name.to_string(), llm);
+            if llm && ty.as_deref() == Some("subject") {
+                self.issue(
+                    &join(&p, "set_by"),
+                    "lists `llm`, but a `subject` slot says whose data the agent acts on — only a \
+                     verifier or the host may set it. Remove `llm`, or use a `string` slot for \
+                     what the visitor merely claims",
+                );
+            }
+            if let Some(ty) = ty.as_deref() {
+                for (key, types) in SLOT_CONSTRAINTS {
+                    if map.contains_key(*key) && !types.contains(&ty) {
+                        self.issue(
+                            &join(&p, key),
+                            format!(
+                                "`{key}` does not apply to a slot of type `{ty}` — it applies to: {}",
+                                types.join(", ")
+                            ),
+                        );
+                    }
+                }
+            }
+            if let Some(schema) = map.get("schema")
+                && ty.as_deref() == Some("subject")
+            {
+                self.subject_schema(schema, &join(&p, "schema"));
+            }
 
             match (ty.as_deref(), map.get("values")) {
                 (Some("enum"), Some(Value::Array(values))) if !values.is_empty() => {}
@@ -695,6 +735,27 @@ impl<'a> Check<'a> {
             if let Some(x) = map.get("pattern") {
                 self.regex(x, &join(&p, "pattern"));
             }
+        }
+    }
+
+    /// A subject is an object; its schema goes through the same validator
+    /// that enforces it at run time.
+    fn subject_schema(&mut self, schema: &Value, path: &str) {
+        if let Err(err) = FinishContract::new(schema.clone()) {
+            self.issue(
+                path,
+                format!(
+                    "at `{}`, {} — a subject schema supports only type, properties, required, \
+                     enum, items and a boolean additionalProperties",
+                    err.path, err.problem
+                ),
+            );
+        } else if schema.get("type").is_some_and(|t| t != "object") {
+            self.issue(
+                path,
+                "a subject is an object — set `type` to `object` and describe its fields in \
+                 `properties`",
+            );
         }
     }
 
@@ -1357,6 +1418,81 @@ mod tests {
                 "state.d.type",
                 "state.d.set_by[0]"
             ]
+        );
+    }
+
+    #[test]
+    fn a_constraint_is_refused_on_a_slot_type_it_does_not_apply_to() {
+        let issues = check(
+            json!({ "state": {
+                "age": { "type": "integer", "set_by": ["llm"], "max_length": 3, "minimum": 0 },
+                "name": { "type": "string", "set_by": ["llm"], "maximum": 9, "pattern": "^A" },
+                "ok": { "type": "boolean", "set_by": ["llm"], "pattern": "x" },
+                "email": { "type": "email", "set_by": ["llm"], "max_length": 80 }
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "state.age.max_length",
+                "state.name.maximum",
+                "state.ok.pattern"
+            ]
+        );
+        assert!(
+            issues[0]
+                .message
+                .contains("does not apply to a slot of type `integer`"),
+            "{}",
+            issues[0].message
+        );
+    }
+
+    #[test]
+    fn a_subject_slot_takes_a_schema_the_run_time_validator_can_enforce() {
+        let spec = |schema: Value| {
+            json!({ "state": { "verified": {
+                "type": "subject", "set_by": ["host"], "schema": schema
+            } } })
+        };
+        assert_eq!(
+            check(
+                spec(json!({ "type": "object", "required": ["customer_id"],
+                             "properties": { "customer_id": { "type": "string" } } })),
+                Stage::Draft
+            ),
+            []
+        );
+        let unsupported = check(spec(json!({ "type": "object", "oneOf": [] })), Stage::Draft);
+        assert_eq!(paths(&unsupported), ["state.verified.schema"]);
+        assert!(
+            unsupported[0].message.contains("`oneOf`"),
+            "{unsupported:?}"
+        );
+
+        let not_object = check(spec(json!({ "type": "string" })), Stage::Draft);
+        assert_eq!(paths(&not_object), ["state.verified.schema"]);
+
+        let on_string = check(
+            json!({ "state": { "n": { "type": "string", "set_by": ["llm"],
+                                      "schema": { "type": "object" } } } }),
+            Stage::Draft,
+        );
+        assert_eq!(paths(&on_string), ["state.n.schema"]);
+    }
+
+    #[test]
+    fn the_model_may_not_write_a_subject_slot() {
+        let issues = check(
+            json!({ "state": { "verified": { "type": "subject", "set_by": ["llm", "host"] } } }),
+            Stage::Draft,
+        );
+        assert_eq!(paths(&issues), ["state.verified.set_by"]);
+        assert!(
+            issues[0].message.contains("whose data"),
+            "{}",
+            issues[0].message
         );
     }
 
