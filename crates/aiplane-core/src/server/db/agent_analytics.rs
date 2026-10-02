@@ -327,10 +327,11 @@ pub async fn compute(
                 *out.output_blocks.by_action.entry(action).or_default() += 1;
             }
             "limit_refused" => {
-                out.limit_refusals.total += 1;
-                bucket(&mut days, at).refusals += 1;
+                let refused = detail["count"].as_u64().unwrap_or(1);
+                out.limit_refusals.total += refused;
+                bucket(&mut days, at).refusals += refused;
                 let limit = text(&detail, "limit").unwrap_or_else(|| "unknown".into());
-                *out.limit_refusals.by_kind.entry(limit).or_default() += 1;
+                *out.limit_refusals.by_kind.entry(limit).or_default() += refused;
             }
             HUMAN_HANDOFF_KIND => out.human_handoffs += 1,
             _ => {}

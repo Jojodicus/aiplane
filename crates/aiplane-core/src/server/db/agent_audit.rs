@@ -148,7 +148,16 @@ pub async fn record(
     actor_id: &str,
     detail: Value,
 ) -> Result<(), DbError> {
-    insert(conn, kind, principal_id, Some(actor_id), None, detail).await
+    insert(
+        conn,
+        &Uuid::new_v4().to_string(),
+        kind,
+        principal_id,
+        Some(actor_id),
+        None,
+        detail,
+    )
+    .await
 }
 
 /// Write one row for something the principal itself ran into, with no acting
@@ -176,11 +185,45 @@ pub async fn record_run_event_by(
     detail: Value,
 ) -> Result<(), DbError> {
     let mut conn = pool.acquire().await?;
-    insert(&mut conn, kind, principal_id, actor_id, chain, detail).await
+    insert(
+        &mut conn,
+        &Uuid::new_v4().to_string(),
+        kind,
+        principal_id,
+        actor_id,
+        chain,
+        detail,
+    )
+    .await
+}
+
+/// [`record_run_event`] under an id the caller chose, so it can come back to
+/// the row with [`set_detail_count`].
+pub async fn record_run_event_with_id(
+    pool: &Pool,
+    id: &str,
+    kind: AuditKind,
+    principal_id: &str,
+    detail: Value,
+) -> Result<(), DbError> {
+    let mut conn = pool.acquire().await?;
+    insert(&mut conn, id, kind, principal_id, None, None, detail).await
+}
+
+/// Set the `count` of event `id`'s detail: how many identical events the row
+/// stands for.
+pub async fn set_detail_count(pool: &Pool, id: &str, count: u64) -> Result<(), DbError> {
+    sqlx::query("UPDATE agent_audit SET detail = json_set(detail, '$.count', ?) WHERE id = ?")
+        .bind(i64::try_from(count).unwrap_or(i64::MAX))
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 async fn insert(
     conn: &mut sqlx::SqliteConnection,
+    id: &str,
     kind: AuditKind,
     principal_id: &str,
     actor_id: Option<&str>,
@@ -191,7 +234,7 @@ async fn insert(
         "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(Uuid::new_v4().to_string())
+    .bind(id)
     .bind(kind.as_str())
     .bind(principal_id)
     .bind(actor_id)
