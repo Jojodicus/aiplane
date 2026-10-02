@@ -1661,11 +1661,21 @@ verifiers:
   `exp`/`nbf`/`iss`/`aud` (30 s leeway, `exp`, `iat`, `iss`, `aud`
   required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
   agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
-  five minutes per URL and refetched for an unknown `kid`; only `https://`
-  (or `http://` to localhost) is fetched. Answers: `200 {slots}`, `401
+  five minutes per URL and refetched for an unknown `kid`. The JWKS URL is
+  chosen by the agent's owner, so it is fetched through the A2A client's SSRF
+  guard (`a2a_client::guard`, [below](#what-101-built)): resolved and pinned,
+  no redirects, at most 64 KiB, link-local always refused, and loopback,
+  private addresses and plain `http` only under
+  `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`. The switch kept its name: it
+  governs every URL an agent's owner points the gateway at, the JWKS one
+  included. Answers: `200 {slots}`, `401
   identity_token_invalid` (the message says what is wrong, never a claim
   value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
-  identity_keys_unavailable`. A refused token writes nothing.
+  identity_keys_unavailable`. The `503` message is generic — no URL, status
+  code or parse error, so the endpoint is no probe into the gateway's
+  network; the reason goes to the log and to the `host_identity` audit row
+  (`jwks_url`, `error`), where the owner sees it. A refused token writes
+  nothing.
 - **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
   `secret` (at least 32 characters) and then replace it with `secret_sealed`
   (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.

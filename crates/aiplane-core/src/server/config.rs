@@ -155,7 +155,8 @@ pub struct Config {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentsConfig {
-    /// Let an A2A route reach an agent card or endpoint that resolves to a
+    /// Let an A2A route (agent card, endpoint, OAuth token URL) and a
+    /// `host_jwt` verifier's JWKS URL reach a host that resolves to a
     /// private, loopback or carrier-grade NAT address, and over plain `http`.
     /// Off by default: a route then reaches only public `https` hosts, so a
     /// spec cannot point the gateway at its own network. Set by

@@ -865,7 +865,7 @@ async fn a_public_key_token_verifies_against_the_websites_jwks() {
         }] })))
         .mount(&jwks)
         .await;
-    let world = World::new(&[], None).await;
+    let world = private_world().await;
     let url = format!("{}/.well-known/jwks.json", jwks.uri());
     let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
     let key = EncodingKey::from_ec_pem(EC_PRIVATE.as_bytes()).unwrap();
@@ -887,4 +887,112 @@ async fn a_public_key_token_verifies_against_the_websites_jwks() {
         1,
         "an unknown kid does not refetch the keys on every request"
     );
+}
+
+/// A world whose operator lets agents reach private networks, so a
+/// loopback wiremock can stand in for the website.
+async fn private_world() -> World {
+    World::build_with(
+        &[],
+        None,
+        false,
+        base_tools(),
+        None,
+        aiplane_core::server::config::AgentsConfig {
+            a2a_allow_private_networks: true,
+        },
+    )
+    .await
+}
+
+fn es256_token() -> String {
+    let key = EncodingKey::from_ec_pem(EC_PRIVATE.as_bytes()).unwrap();
+    let mut header = Header::new(jsonwebtoken::Algorithm::ES256);
+    header.kid = Some("site-1".into());
+    encode(&header, &claims(300), &key).unwrap()
+}
+
+/// What a visitor is told when the keys cannot be had: nothing about the
+/// address, its answer or why it failed, so the endpoint is no probe into
+/// the gateway's network.
+fn assert_generic(err: &IdentityError, url: &str, leaks: &[&str]) {
+    assert!(
+        matches!(err, IdentityError::KeysUnavailable { .. }),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), "identity_keys_unavailable");
+    let shown = err.to_string();
+    assert!(!shown.contains(url), "{shown}");
+    for leak in leaks {
+        assert!(!shown.contains(leak), "`{leak}` leaked: {shown}");
+    }
+}
+
+#[tokio::test]
+async fn a_jwks_redirect_is_not_followed() {
+    let inside = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "keys": [{
+            "kty": "EC", "crv": "P-256", "kid": "site-1", "alg": "ES256", "use": "sig",
+            "x": EC_X, "y": EC_Y
+        }] })))
+        .mount(&inside)
+        .await;
+    let outside = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(302).insert_header("location", format!("{}/jwks", inside.uri())),
+        )
+        .mount(&outside)
+        .await;
+    let world = private_world().await;
+    let url = format!("{}/jwks", outside.uri());
+    let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
+
+    let err = present(&world, &spec, &es256_token()).await.unwrap_err();
+    assert_generic(&err, &url, &["302", "Found"]);
+    assert!(
+        inside.received_requests().await.unwrap().is_empty(),
+        "the redirect was followed"
+    );
+}
+
+#[tokio::test]
+async fn a_jwks_url_on_a_private_address_is_refused_without_connecting() {
+    let world = World::new(&[], None).await;
+    let url = "https://10.20.30.40/.well-known/jwks.json";
+    let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
+    let err = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        present(&world, &spec, &es256_token()),
+    )
+    .await
+    .expect("refused before any connection attempt")
+    .unwrap_err();
+    assert_generic(&err, url, &["10.20.30.40", "private"]);
+}
+
+#[tokio::test]
+async fn a_failing_jwks_endpoint_tells_the_visitor_nothing_about_it() {
+    let world = private_world().await;
+
+    let broken = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("db password is hunter2"))
+        .mount(&broken)
+        .await;
+    let url = format!("{}/broken", broken.uri());
+    let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
+    let err = present(&world, &spec, &es256_token()).await.unwrap_err();
+    assert_generic(&err, &url, &["500", "hunter2", "Internal"]);
+
+    let page = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>hello</html>"))
+        .mount(&page)
+        .await;
+    let url = format!("{}/page", page.uri());
+    let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
+    let err = present(&world, &spec, &es256_token()).await.unwrap_err();
+    assert_generic(&err, &url, &["JWKS document", "expected", "line"]);
 }
