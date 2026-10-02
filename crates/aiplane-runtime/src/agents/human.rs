@@ -128,7 +128,6 @@ async fn context(
     route: &HumanRoute,
     question: &str,
     spec: &RouterSpec,
-    lang: Lang,
 ) -> Result<Value, ToolError> {
     let schema = &*spec.schema;
     let session = ctx.session_id.as_deref().unwrap_or_default();
@@ -160,7 +159,7 @@ async fn context(
         "question": question,
         "visitor_message": visitor_message,
         "slots": slots,
-        "lang": lang.code(),
+        "lang": ctx.conversation_lang().await.code(),
         "inbox": route.inbox,
         "notify": route.notify,
     });
@@ -194,7 +193,6 @@ pub async fn hand_off(
     route: &HumanRoute,
     question: &str,
     spec: &RouterSpec,
-    lang: Lang,
     via: &str,
 ) -> Result<Value, ToolError> {
     match &ctx.suspend {
@@ -210,7 +208,7 @@ pub async fn hand_off(
         )),
         Suspend::Available => {
             let question = session_core::text::truncate_chars(question.trim(), MAX_QUESTION_CHARS);
-            let handoff = context(ctx, route, &question, spec, lang).await?;
+            let handoff = context(ctx, route, &question, spec).await?;
             ctx.audit(
                 AuditKind::HumanHandoff,
                 json!({
@@ -303,15 +301,7 @@ impl RequestHuman {
                     .collect::<Vec<_>>(),
             }));
         };
-        hand_off(
-            ctx,
-            route,
-            question,
-            &self.spec,
-            self.options.lang,
-            REQUEST_HUMAN,
-        )
-        .await
+        hand_off(ctx, route, question, &self.spec, REQUEST_HUMAN).await
     }
 }
 
@@ -374,19 +364,14 @@ impl Tool for RequestHuman {
 }
 
 /// A handoff nobody answered in time: the waiting call is settled as
-/// unanswered and the turn ends with the catalog's message in the visitor's
-/// language — no model call, so the visitor reads exactly what the owner's
-/// deployment ships, not a guess.
+/// unanswered and the turn ends with the catalog's message in `lang`, the
+/// conversation's — no model call, so the visitor reads exactly what the
+/// owner's deployment ships, not a guess.
 pub(crate) async fn end_unanswered(
     db: &aiplane_core::server::db::Pool,
     suspension: &chat::TurnSuspension,
-    fallback_lang: Lang,
+    lang: Lang,
 ) -> Result<String, chat::DbError> {
-    let lang = handoff_of(suspension.run_context.as_ref())
-        .and_then(|h| h.get("lang"))
-        .and_then(Value::as_str)
-        .and_then(Lang::from_code)
-        .unwrap_or(fallback_lang);
     let message = t(lang, "agent-human-no-answer");
     chat::complete_tool_call(
         db,

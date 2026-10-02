@@ -38,7 +38,6 @@ use aiplane_runtime::agents::run::{AgentReply, AgentTurn};
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 use session_core::db as chat;
-use session_core::i18n::Lang;
 
 macro_rules! or_return {
     ($e:expr) => {
@@ -123,6 +122,7 @@ pub async fn test_turn(State(state): State<Arc<RamaState>>, req: Request) -> Res
             session_id: body.session_id.as_deref(),
             message: &body.message,
             visitor_id: None,
+            lang: None,
         },
         &draft,
         options.clone(),
@@ -169,7 +169,6 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
     else {
         return bad_request("the URL is missing the conversation or the turn id");
     };
-    let lang = Lang::from_request(req.headers());
     let body: StaffResumeBody =
         or_return!(super::read_json(req.into_body(), "the resume body").await);
     let request_id = body.request_id.clone();
@@ -202,7 +201,7 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
         Ok(claimed) => claimed,
         Err(err) => return resume_error(err),
     };
-    match run_claimed(&state, claimed, RunOptions::default(), lang).await {
+    match run_claimed(&state, claimed, RunOptions::default()).await {
         Ok(reply) => json_ok(StatusCode::OK, reply_json(&reply)),
         Err(err) => run_error(err),
     }

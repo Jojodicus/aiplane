@@ -39,7 +39,7 @@ use aiplane_core::server::db::agent_a2a_tasks::{self, PendingTask};
 use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use serde_json::{Value, json};
-use session_core::i18n::{Lang, t};
+use session_core::i18n::t;
 
 pub use card::AgentCard;
 pub use guard::check_card_url;
@@ -721,7 +721,6 @@ pub struct Dispatch<'a> {
     pub principal: &'a SystemPrincipal,
     pub route: &'a str,
     pub route_spec: &'a Value,
-    pub lang: Lang,
 }
 
 impl Dispatch<'_> {
@@ -829,7 +828,10 @@ impl Dispatch<'_> {
                     .await
                     .map_err(|e| ToolError::Failed(format!("recording the A2A task: {e}")))?;
                 return Ok(tool_suspend(SuspendRequest::secure_input(
-                    t(self.lang, "agent-a2a-input-required"),
+                    t(
+                        self.ctx.conversation_lang().await,
+                        "agent-a2a-input-required",
+                    ),
                     INPUT_TIMEOUT,
                 )));
             }

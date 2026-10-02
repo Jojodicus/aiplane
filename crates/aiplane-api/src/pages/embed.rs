@@ -534,7 +534,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         turn_id: assistant_turn_id.clone(),
         visitor_id: Some(v.session.id.clone()),
         caller: None,
-        lang,
+        lang: Some(lang),
     };
     let state_for_run = state.clone();
     let turn_id = assistant_turn_id.clone();
@@ -709,7 +709,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         let _hold = hold;
         let run = tokio::spawn({
             let state = state.clone();
-            async move { runner.resume(state, claimed, lang).await }
+            async move { runner.resume(state, claimed).await }
         });
         if let Err(err) = run.await {
             tracing::error!(error = %err, turn = %resumed, "agent resume panicked");

@@ -308,7 +308,6 @@ impl ForwardRequest {
             principal: &self.spec.principal,
             route,
             route_spec,
-            lang: self.options.lang,
         }
     }
 
@@ -344,15 +343,7 @@ impl ForwardRequest {
                 Some(description) => description,
                 None => last_visitor_message(ctx).await,
             };
-            return hand_off(
-                ctx,
-                &human,
-                &question,
-                &self.spec,
-                self.options.lang,
-                FORWARD_TOOL_NAME,
-            )
-            .await;
+            return hand_off(ctx, &human, &question, &self.spec, FORWARD_TOOL_NAME).await;
         };
         let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
             Ok(both) => both,

@@ -220,6 +220,7 @@ async fn conversation(world: &World, agent: &str) -> AgentReply {
             session_id: None,
             message: VISITOR,
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -243,6 +244,7 @@ async fn conversation(world: &World, agent: &str) -> AgentReply {
             session_id: Some(&first.session_id),
             message: "Yes, please check.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -420,7 +422,7 @@ async fn structured_input_required_pauses_for_the_visitor_whose_value_goes_only_
     )
     .await
     .unwrap();
-    let done = run_claimed(&world.state, claimed, RunOptions::default(), Lang::En)
+    let done = run_claimed(&world.state, claimed, RunOptions::default())
         .await
         .unwrap();
     assert_eq!(done.status, chat::TurnStatus::Completed);

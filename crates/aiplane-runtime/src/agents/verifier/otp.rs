@@ -354,7 +354,10 @@ impl Flow<'_> {
         detail["expires_at"] = json!(expires);
         audit(self.run, self.ctx, detail).await;
         Ok(tool_suspend(SuspendRequest::secure_input(
-            t(self.run.options.lang, "agent-verifier-code-sent"),
+            t(
+                self.ctx.conversation_lang().await,
+                "agent-verifier-code-sent",
+            ),
             self.cfg.code_ttl.unsigned_abs(),
         )))
     }
@@ -394,7 +397,10 @@ impl Flow<'_> {
         };
         let left = (pending.expires_at.as_second() - self.now().as_second()).max(1);
         Ok(tool_suspend(SuspendRequest::secure_input(
-            t(self.run.options.lang, "agent-verifier-code-again"),
+            t(
+                self.ctx.conversation_lang().await,
+                "agent-verifier-code-again",
+            ),
             std::time::Duration::from_secs(left.unsigned_abs()),
         )))
     }

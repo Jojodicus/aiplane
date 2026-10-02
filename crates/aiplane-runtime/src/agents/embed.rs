@@ -22,8 +22,6 @@ use serde_json::{Value, json};
 
 use session_core::db as chat;
 
-use session_core::i18n::Lang;
-
 use super::profile::{Role, RunOptions, RunProfile};
 pub use super::resume::ClaimedResume;
 use super::resume::run_claimed;
@@ -380,10 +378,11 @@ pub trait AgentTurnRunner: Send + Sync {
 
     /// Continue a suspended conversation whose decision won the claim. Same
     /// contract as [`Self::run`]: when this returns, the conversation's turn
-    /// is terminal or suspended again, never `in_progress`.
-    async fn resume(&self, state: Arc<RamaState>, claimed: ClaimedResume, lang: Lang) {
+    /// is terminal or suspended again, never `in_progress`. The run speaks
+    /// the conversation's language, not the one of whoever decided.
+    async fn resume(&self, state: Arc<RamaState>, claimed: ClaimedResume) {
         let turn = claimed.turn_id().to_string();
-        if let Err(err) = run_claimed(&state, claimed, RunOptions::default(), lang).await {
+        if let Err(err) = run_claimed(&state, claimed, RunOptions::default()).await {
             tracing::warn!(error = %err, %turn, "a suspended visitor turn could not resume");
         }
     }
@@ -396,16 +395,12 @@ pub struct LiveAgentRunner;
 #[async_trait::async_trait]
 impl AgentTurnRunner for LiveAgentRunner {
     async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn) {
-        let options = RunOptions {
-            lang: turn.lang,
-            ..RunOptions::default()
-        };
         let ran = match RunProfile::load_version(
             &state,
             &turn.agent_id,
             Some(turn.version),
             Role::Main,
-            &options,
+            &RunOptions::default(),
         )
         .await
         {

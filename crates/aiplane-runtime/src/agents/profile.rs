@@ -27,7 +27,6 @@ use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use serde_json::{Value, json};
-use session_core::i18n::Lang;
 use shared::api::ToolDef;
 
 use super::approval::Permissions;
@@ -98,10 +97,6 @@ pub struct RunOptions {
     /// router makes on its own: a caller can swap it for a test double, or a
     /// deterministic stand-in, without faking an upstream.
     pub classifier: Option<Arc<dyn RouteClassifier>>,
-    /// The language of text the gateway itself puts in an answer (the
-    /// output filter's fallback). English until the caller knows the
-    /// visitor's.
-    pub lang: Lang,
     /// Where every run started with these options adds the tokens it spends:
     /// set by a `loop` route, whose budget covers all of its child runs (and
     /// anything they dispatch). `None` counts nowhere.
@@ -113,7 +108,6 @@ impl Default for RunOptions {
         Self {
             now: state::system_clock(),
             classifier: None,
-            lang: Lang::En,
             spend: None,
         }
     }

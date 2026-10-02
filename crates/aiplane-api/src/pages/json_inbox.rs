@@ -165,7 +165,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         let _hold = hold;
         let run = tokio::spawn({
             let state = state_for_run.clone();
-            async move { runner.resume(state, claimed, Lang::En).await }
+            async move { runner.resume(state, claimed).await }
         });
         if let Err(err) = run.await {
             tracing::error!(error = %err, turn = %turn_id, "agent resume from the inbox panicked");

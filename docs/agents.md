@@ -908,10 +908,10 @@ grants.
   row carries `error`.
 - **One call site, both entry points.** `drive_opened` runs the filter, so
   `run_turn` and the public endpoint's runner are both covered.
-- **Language.** `OpenedTurn.lang` picks the catalog language of the fallback
-  text: `RunOptions.lang` (default English) for `run_turn`, the request's
-  `Accept-Language` for a visitor message, and the conversation's recorded
-  language on a resume ([Suspend and resume](#suspend-and-resume-82)).
+- **Language.** The fallback text is in the conversation's recorded language
+  (`chat_sessions.lang`, [Suspend and resume](#suspend-and-resume-82)):
+  `AgentTurn.lang` for `run_turn` (English when unset), the request's
+  `Accept-Language` for a visitor message.
 - **No early peek.** The turn row is terminal before the filter has ruled, so
   the embed endpoint treats a session as unfinished while `AgentTurns` still
   holds its claim (`is_running`): the snapshot shows the turn in progress and
@@ -1045,13 +1045,15 @@ agent runs pause and resume durably, sub-agent runs included.
   from the inbox in their own, and the timeout sweeper has none. Every new
   turn (`drive_opened`, so `run_turn`, the embed and A2A runners and a
   queued message alike) records `OpenedTurn.lang` as `chat_sessions.lang`
-  (migration `0093`), and `run_claimed` reads it back for `RunOptions.lang`
-  and `OpenedTurn.lang`. That covers the output filter's fallback texts, a
-  timed-out handoff's `agent-human-no-answer`, and the `lang` of a handoff
-  the resumed run records. The language argument of `run_claimed` (and
-  `AgentTurnRunner::resume`) is only the fallback for a conversation that
-  recorded none (one whose last turn started before `0093`); the inbox and
-  the sweeper pass English.
+  (migration `0093`) when the caller sets one: the public endpoint and an A2A
+  task from the request, `run_turn` from `AgentTurn.lang`. That column is the
+  only source of the run's language: the output filter's fallback texts, a
+  timed-out handoff's `agent-human-no-answer`, the `lang` a handoff records,
+  a verifier's and the A2A client's prompts all read it
+  (`ToolContext::conversation_lang`, through the chain's root conversation, so
+  a routed sub-agent speaks its caller's). A resume passes none, and a
+  conversation that recorded none (one whose last turn started before `0093`)
+  is English.
 - **Secure values.** A `value` goes to the requesting tool through
   `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
   `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's
@@ -1168,9 +1170,8 @@ runs. Migration `0087_human_in_the_loop.sql`.
   `deny` is a tool error the model explains.
 - **Nobody answers.** When a handoff's deadline passes, `run_claimed` does not
   ask the model: the waiting call is settled as unanswered and the turn ends
-  with `agent-human-no-answer` in the language recorded at the handoff
-  (`RunOptions.lang`, which the public runner now sets from the visitor's
-  `Accept-Language`). A message queued behind it runs afterwards as usual.
+  with `agent-human-no-answer` in the conversation's recorded language (the
+  visitor's `Accept-Language` on the public endpoint). A message queued behind it runs afterwards as usual.
 - **Responders** (`agent_responders`, `db::agent_responders`). Users or
   groups who answer an agent's approvals and handoffs without a share — the
   support staff of §2. They need no `can_manage_agents`. Managed with a share
