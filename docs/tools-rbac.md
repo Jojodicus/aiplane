@@ -419,7 +419,7 @@ client tool in one turn.
 - **Repeated identical calls** — `repeated_calls::RepeatedCallGuard` counts
   gateway-owned calls per turn by (tool id, canonical arguments: object keys
   sorted, whitespace ignored, empty or unparseable arguments read as `{}`).
-  The first `MAX_IDENTICAL_CALLS` (3) run. The next `MAX_REFUSED_CALLS` (2) do
+  Any different call in between (calls within one round count in array order) resets the count, so edit, read, edit, read never trips. The first `MAX_IDENTICAL_CALLS` (3) in a row run. The next `MAX_REFUSED_CALLS` (2) do
   not run; the model gets a tool error saying it already has that result and
   should use it. The call after that stops the turn. The guard is wired through
   `runner::execute_tool_calls_guarded` in all three loops (buffered `/v1`,

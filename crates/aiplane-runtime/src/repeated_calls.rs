@@ -11,8 +11,6 @@
 //! `(tool, canonical arguments)` so both tool loops (the `/v1` runner and the
 //! chat driver) share one definition of "the same call".
 
-use std::collections::HashMap;
-
 use aiplane_core::server::tool_args::tool_arguments_object;
 use serde_json::Value;
 
@@ -54,7 +52,7 @@ pub fn stop_message(tool: &str) -> String {
 /// Per-turn state; create one at the start of a turn and drop it at the end.
 #[derive(Default)]
 pub struct RepeatedCallGuard {
-    counts: HashMap<(String, String), u32>,
+    last: Option<((String, String), u32)>,
 }
 
 impl RepeatedCallGuard {
@@ -67,11 +65,21 @@ impl RepeatedCallGuard {
             tool.to_string(),
             canonical_json(&tool_arguments_object(arguments_raw)),
         );
-        let seen = self.counts.entry(key).or_insert(0);
-        *seen += 1;
-        if *seen <= MAX_IDENTICAL_CALLS {
+        // Consecutive only: edit -> read -> edit -> read repeats a call
+        // legitimately because the result changes in between.
+        let seen = match &mut self.last {
+            Some((last, n)) if *last == key => {
+                *n += 1;
+                *n
+            }
+            _ => {
+                self.last = Some((key, 1));
+                1
+            }
+        };
+        if seen <= MAX_IDENTICAL_CALLS {
             CallVerdict::Run
-        } else if *seen <= MAX_IDENTICAL_CALLS + MAX_REFUSED_CALLS {
+        } else if seen <= MAX_IDENTICAL_CALLS + MAX_REFUSED_CALLS {
             CallVerdict::Refuse
         } else {
             CallVerdict::Stop
@@ -177,5 +185,33 @@ mod tests {
             g.observe("t", r#"{"v":[1,2]}"#);
         }
         assert_eq!(g.observe("t", r#"{"v":[2,1]}"#), CallVerdict::Run);
+    }
+
+    #[test]
+    fn alternating_edit_and_read_never_trips() {
+        let mut g = RepeatedCallGuard::new();
+        for _ in 0..10 {
+            assert_eq!(
+                g.observe("read_document", r#"{"id":"d1"}"#),
+                CallVerdict::Run
+            );
+            assert_eq!(
+                g.observe("edit_document", r#"{"id":"d1"}"#),
+                CallVerdict::Run
+            );
+        }
+    }
+
+    #[test]
+    fn an_interleaved_different_call_resets_the_count() {
+        let mut g = RepeatedCallGuard::new();
+        for _ in 0..MAX_IDENTICAL_CALLS {
+            g.observe("t", ARGS);
+        }
+        g.observe("other", ARGS);
+        for _ in 0..MAX_IDENTICAL_CALLS {
+            assert_eq!(g.observe("t", ARGS), CallVerdict::Run);
+        }
+        assert_eq!(g.observe("t", ARGS), CallVerdict::Refuse);
     }
 }
