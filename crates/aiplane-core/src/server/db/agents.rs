@@ -290,6 +290,16 @@ pub async fn list_shared_with(
         .collect()
 }
 
+/// Every agent, by name — what an admin sees, shares or not.
+pub async fn list_all(pool: &Pool) -> Result<Vec<AgentRow>, DbError> {
+    let sql = format!(
+        "SELECT {} FROM agents a JOIN system_principals p ON p.id = a.principal_id ORDER BY p.name",
+        agent_cols()
+    );
+    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    rows.iter().map(map_agent).collect()
+}
+
 /// Replace the draft. The live version is untouched. `Ok(false)` when there
 /// is no such agent.
 pub async fn update_draft(
@@ -793,6 +803,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert_eq!(list_all(&pool).await.unwrap().len(), 1);
         let bob = list_shared_with(&pool, "bob", &groups(&["support-team"]))
             .await
             .unwrap();

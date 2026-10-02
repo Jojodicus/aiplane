@@ -9,6 +9,8 @@
 //! A share takes effect only for a holder of the permission, so a share is
 //! refused for anyone who lacks it, and a holder who loses it loses access
 //! with it. An agent nobody shares is invisible: it answers 404, not 403.
+//! Admins are the exception: they hold `write` on every agent without a
+//! share, so an agent whose last writer left can always be recovered.
 //!
 //! The agent's grants are its principal's, managed through
 //! `/api/v0/system-principals/{id}/grants` with the grant-time cap from #77;
@@ -42,16 +44,20 @@ fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
     state.rbac.role_ids_for(&user.roles)
 }
 
-/// The caller's access to agent `id`: `Ok(None)` when it is not an agent at
-/// all, a 404 when it is one they hold no share on, a 403 when their share is
-/// weaker than `need`.
+/// The caller's access to agent `id`: `write` for an admin, otherwise their
+/// strongest share — a 404 when they hold none, a 403 when it is weaker than
+/// `need`.
 async fn access(
     state: &RamaState,
     user: &users::User,
     id: &str,
     need: Access,
 ) -> Result<Option<Access>, Response> {
-    let held = agents_db::access_for(&state.db, id, &user.id, &group_ids(state, user))
+    let groups = group_ids(state, user);
+    if state.rbac.is_admin(&groups) {
+        return Ok(Some(Access::Write));
+    }
+    let held = agents_db::access_for(&state.db, id, &user.id, &groups)
         .await
         .map_err(internal)?;
     match held {
@@ -207,14 +213,22 @@ async fn require_valid(
     }
 }
 
-/// GET /api/v0/agents — the agents shared with the caller.
+/// GET /api/v0/agents — the agents shared with the caller; every agent for
+/// an admin.
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
-    let rows =
-        match agents_db::list_shared_with(&state.db, &user.id, &group_ids(&state, &user)).await {
-            Ok(rows) => rows,
-            Err(err) => return internal(err),
-        };
+    let groups = group_ids(&state, &user);
+    let rows = if state.rbac.is_admin(&groups) {
+        agents_db::list_all(&state.db)
+            .await
+            .map(|rows| rows.into_iter().map(|a| (a, Access::Write)).collect())
+    } else {
+        agents_db::list_shared_with(&state.db, &user.id, &groups).await
+    };
+    let rows: Vec<(agents_db::AgentRow, Access)> = match rows {
+        Ok(rows) => rows,
+        Err(err) => return internal(err),
+    };
     let agents: Vec<Value> = rows.iter().map(|(a, acc)| agent_json(a, *acc)).collect();
     json_ok(StatusCode::OK, json!({ "agents": agents }))
 }

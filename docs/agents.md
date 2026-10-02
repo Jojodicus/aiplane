@@ -348,15 +348,17 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
   written. For a user that means through their groups; a group needs the flag
   or `is_admin`. The caller must also hold the permission on every request.
   Without a share, an agent answers 404, not 403. Removing or downgrading the
-  last `write` share is refused (`409 last_writer`). Admins get no bypass: an
-  admin sees an agent only through a share.
+  last `write` share is refused (`409 last_writer`). Admins implicitly hold
+  `write` on every agent without a share: they see it in the list and can read,
+  edit, publish, share and delete it. An agent whose last writer left therefore
+  stays recoverable. Non-admin managers still need a share.
 
 **API** (`aiplane-api::pages::json_agents`). Every route needs a session with
 `can_manage_agents`. `read`/`write` is the share needed.
 
 | Method | Path | Share | Purpose |
 |---|---|---|---|
-| GET | `/api/v0/agents` | any | Agents shared with you, with your `access` |
+| GET | `/api/v0/agents` | any | Agents shared with you (every agent for an admin), with your `access` |
 | POST | `/api/v0/agents` | — | Create `{name, display?, description?, spec?}`; 201, 409 on a taken principal name |
 | GET | `/api/v0/agents/{id}` | read | Agent, `draft_spec`, `live_spec`, `publish_issues`, grants, shares, audit |
 | PUT | `/api/v0/agents/{id}/draft` | write | Replace the draft `{spec}`; the live version is untouched |

@@ -8,7 +8,7 @@
 //! Two managers (`alice`, `bob`) hold `can_manage_agents` through the
 //! `managers` group; `plain` holds nothing but the default group, which grants
 //! the time tool and leaves the pool open to everyone — so every manager holds
-//! both and can grant them to an agent.
+//! both and can grant them to an agent. `root` is an admin.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,6 +34,7 @@ const TIME: &str = "get_current_timestamp";
 
 struct Fx {
     state: RamaState,
+    root: String,
     alice: String,
     bob: String,
     plain: String,
@@ -107,16 +108,24 @@ async fn fixture() -> Fx {
     gateway_groups::set_mappings_for_group(&pool, "managers", &["managers".into()])
         .await
         .unwrap();
+    gateway_groups::upsert_group(&pool, "admins", "", true, false)
+        .await
+        .unwrap();
+    gateway_groups::set_mappings_for_group(&pool, "admins", &["admins".into()])
+        .await
+        .unwrap();
     gateway_groups::upsert_group(&pool, "support", "", false, false)
         .await
         .unwrap();
     state.reload_rbac().await;
 
+    let root = person(&state, "root", &["admins"]).await;
     let alice = person(&state, "alice", &["managers"]).await;
     let bob = person(&state, "bob", &["managers"]).await;
     let plain = person(&state, "plain", &[]).await;
     Fx {
         state,
+        root,
         alice,
         bob,
         plain,
@@ -713,4 +722,55 @@ async fn every_mutation_writes_an_audit_row_with_its_actor() {
     assert_eq!(audit[0]["kind"], "agent_share_removed");
     assert_eq!(audit[0]["actor_id"], "bob");
     assert_eq!(audit[0]["detail"]["subject_id"], "alice");
+}
+
+#[tokio::test]
+async fn an_admin_holds_write_on_every_agent_without_a_share() {
+    let fx = fixture().await;
+    let id = fx.runnable("support").await;
+
+    let (_, list) = fx.get(&fx.root, "/api/v0/agents").await;
+    assert_eq!(list["agents"][0]["id"], id.as_str());
+    assert_eq!(list["agents"][0]["access"], "write");
+    let (status, detail) = fx.get(&fx.root, &format!("/api/v0/agents/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["agent"]["access"], "write");
+
+    let (status, body) = fx.put_draft(&fx.root, &id, spec("rescued")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(fx.publish(&fx.root, &id).await.0, StatusCode::CREATED);
+    let (status, body) = fx.share(&fx.root, &id, "user", "bob", "write").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        fx.grant(&fx.root, &id, "pool", "pool").await,
+        StatusCode::OK
+    );
+    let (status, _) = fx
+        .send(
+            Some(&fx.root),
+            Method::DELETE,
+            &format!("/api/v0/agents/{id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn admin_access_does_not_extend_to_a_manager_without_a_share() {
+    let fx = fixture().await;
+    let id = fx.runnable("support").await;
+    fx.get(&fx.root, &format!("/api/v0/agents/{id}")).await;
+    assert_eq!(
+        fx.get(&fx.bob, "/api/v0/agents").await.1["agents"],
+        json!([])
+    );
+    assert_eq!(
+        fx.get(&fx.bob, &format!("/api/v0/agents/{id}")).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        fx.put_draft(&fx.bob, &id, spec("nope")).await.0,
+        StatusCode::NOT_FOUND
+    );
 }
