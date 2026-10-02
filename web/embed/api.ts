@@ -80,10 +80,15 @@ export interface TurnView {
 	error_message: string | null;
 }
 
+/** The wire shape of a transcript entry: the turn, wrapped (tool calls and steers are always empty for visitors). */
+export interface TurnWithTools {
+	turn: TurnView;
+}
+
 export interface SessionView {
 	agent: { display: string };
 	live_turn_id: string | null;
-	turns: TurnView[];
+	turns: TurnWithTools[];
 }
 
 export interface EmbedApiOptions {

@@ -4,7 +4,7 @@
  * with `full: true`), so there is no partial text to reconcile.
  */
 import type { Frame } from './frames.ts';
-import type { TurnView } from './api.ts';
+import type { TurnView, TurnWithTools } from './api.ts';
 
 export interface Message {
 	id: string;
@@ -24,9 +24,9 @@ export function emptyConversation(): Conversation {
 	return { messages: [], pending: false };
 }
 
-export function fromTurns(turns: TurnView[], liveTurnId: string | null): Conversation {
+export function fromTurns(turns: TurnWithTools[], liveTurnId: string | null): Conversation {
 	const messages: Message[] = [];
-	for (const turn of turns) {
+	for (const { turn } of turns) {
 		const text = turn.role === 'user' ? turn.user_content : turn.content;
 		const failed = turn.status === 'errored';
 		if (turn.role === 'assistant' && !text && !failed) continue;
@@ -42,7 +42,7 @@ export function applyFrame(state: Conversation, frame: Frame): Outcome {
 	const data = frame.data;
 	switch (frame.event) {
 		case 'snapshot': {
-			const next = fromTurns((data.turns as TurnView[] | undefined) ?? [], (data.live_turn_id as string | null | undefined) ?? null);
+			const next = fromTurns((data.turns as TurnWithTools[] | undefined) ?? [], (data.live_turn_id as string | null | undefined) ?? null);
 			state.messages = next.messages;
 			state.pending = next.pending;
 			return 'none';

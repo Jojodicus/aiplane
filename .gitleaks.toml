@@ -66,3 +66,8 @@ description = "RFC 8291 §5 Web Push example key material (test fixtures, grants
 # values that are structurally valid.
 regexTarget = "line"
 regexes = ['''BTBZMqHH6r4Tts7J_aSIgg''']
+
+[[allowlists]]
+description = "The fixed dev-ui embed key (embed keys are public by design; it only exists in the in-memory dev-ui database)"
+regexTarget = "line"
+regexes = ['''gwe_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''']

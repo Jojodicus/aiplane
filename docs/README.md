@@ -25,6 +25,7 @@ This directory holds the design docs for **croit AIplane**. The agent-facing ent
 | [`nextcloud-rag-plan.md`](nextcloud-rag-plan.md) | The design record behind `fileshare-rag.md`: what was decided and why, what is deliberately not built, and the cited external protocol behaviour |
 | [`browser-control.md`](browser-control.md) | **Browser control** — the Chrome extension that lets a conversation act in the user's own logged-in browser: user setup (`/tools/browser`), the transport over the chat session, the trust boundary, site access, publishing to the Chrome Web Store |
 | [`agents.md`](agents.md) | **Agent builder** — system principals and default-deny grants, the agent spec, the run model (state, gates, router, sub-agents, finish, suspend/resume), visitor sessions and the embed widget, crate placement |
+| [`embed.md`](embed.md) | **Embedding an agent** — the `<script>` snippet, attributes, theming, what the widget holds, CSP for host sites, trying it with `dev-ui` |
 | [`connectors.md`](connectors.md) | Per-user MCP connector catalog — operator setup for Google/GitHub/Atlassian/GitLab + troubleshooting |
 | [`ui.md`](ui.md) | The SvelteKit SPA in `web/` — how it is built and served, the generated OpenAPI contract, the chat event protocol, theming, PWA |
 | [`testing.md`](testing.md) | Test layers, mocking strategy, coverage targets |

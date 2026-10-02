@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>croit AIplane embed example</title>
+	<style>
+		/* Deliberately aggressive host styles: the widget lives in a shadow root,
+		   so none of this may reach it. */
+		body { font: 18px/1.6 Georgia, serif; color: #333; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+		button, textarea, p, h2, a { font-family: "Comic Sans MS", cursive !important; color: #c00 !important; }
+		button { border: 4px dotted #c00 !important; background: yellow !important; }
+		pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; font: 14px/1.4 monospace; }
+		code { font-family: monospace; }
+	</style>
+</head>
+<body>
+	<h1>Acme Corp support</h1>
+	<p>
+		This stand-in host page carries the croit AIplane chat widget. The red
+		Comic Sans styling on buttons and paragraphs is the host's own: the
+		widget in the corner must look unaffected.
+	</p>
+
+	<h2>The snippet</h2>
+	<pre>&lt;script
+  src="https://YOUR-GATEWAY/embed.js"
+  data-agent-key="gwe_..."
+  async&gt;&lt;/script&gt;</pre>
+	<p>
+		The tag below targets a local <code>mise run dev-ui</code> gateway on
+		<code>http://127.0.0.1:8080</code> with the key it seeds. Serve this
+		directory from <code>http://localhost:8000</code> (the origin that key
+		allows) and open it there:
+	</p>
+	<pre>python3 -m http.server 8000 -d examples/embed</pre>
+
+	<h2>Optional attributes</h2>
+	<pre>data-lang="de"          language (default: the browser's)
+data-theme="dark"       light | dark (default: follows the visitor's OS)
+data-position="left"    left | right (default: right)
+data-title="Ask Acme"   panel title (default: the agent's display name)</pre>
+	<p>
+		Colors and shape are CSS custom properties on the
+		<code>croit-aiplane-embed</code> element, see below.
+	</p>
+
+	<style>
+		croit-aiplane-embed {
+			/* --color-primary: #0b6bcb; */
+			/* --color-primary-content: #ffffff; */
+			/* --radius-box: 0.5rem; */
+		}
+	</style>
+
+	<script src="http://127.0.0.1:8080/embed.js" data-agent-key="gwe_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" async></script>
+</body>
+</html>

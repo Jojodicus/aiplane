@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyFrame, emptyConversation, fromTurns } from './conversation.ts';
-import type { TurnView } from './api.ts';
+import type { TurnView, TurnWithTools } from './api.ts';
 
-const turn = (over: Partial<TurnView>): TurnView => ({
+const turn = (over: Partial<TurnView>): TurnWithTools => ({ turn: {
 	id: 't',
 	role: 'assistant',
 	user_content: null,
@@ -11,7 +11,7 @@ const turn = (over: Partial<TurnView>): TurnView => ({
 	status: 'completed',
 	error_message: null,
 	...over
-});
+} });
 
 test('a snapshot with a running turn is pending and hides the empty answer', () => {
 	const state = fromTurns(

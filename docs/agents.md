@@ -1173,9 +1173,37 @@ untrusted audiences.
 - **Not built here.** Secure input (`/api/v0/embed/secure-input/{request_id}`,
   #95) and resuming a suspended visitor turn (#96): the visitor view drops
   `suspension`, and a suspended turn ends the event stream with `idle`. The
-  output filter itself is #89. The widget is #94. User-visible text is in
+  output filter itself is #89. The widget is #94 (below). User-visible text is in
   the error envelope's English `message` with a stable `code`; the widget is
   expected to show its own Fluent strings per `code`.
+
+### What #94 built
+
+- **`web/embed/`**, a standalone bundle (own Vite config, no SvelteKit),
+  built by `build-web` to `target/frontend/build/embed.js` and served by the
+  gateway at `/embed.js` from `AIPLANE_STATIC_DIR`. About 74 kB, 17 kB
+  gzipped, including daisyUI's CSS for the used components and all six
+  languages. Owner documentation: [`embed.md`](embed.md).
+- **Shadow DOM, daisyUI inside it.** Tailwind v4 + daisyUI v5 are compiled for
+  the widget only and adopted as a constructed stylesheet (not subject to the
+  host's `style-src`). `forShadowRoot` rewrites `:root` to `:host` and turns
+  `@property` defaults into declarations. Theming is daisyUI's custom
+  properties on the `croit-aiplane-embed` element plus `data-theme`.
+- **Session lifecycle** is `TokenStore` + `EmbedApi` (`web/embed/api.ts`): a
+  token in `sessionStorage` (accessor and calls guarded, memory fallback),
+  resume on load, `visitor_session_expired` starts a fresh session and resends
+  the message once, `Authorization` header, `credentials: 'omit'`.
+- **Safe rendering.** Answers are parsed by a small markdown subset
+  (`markdown.ts`) into a tree and built with `createElement`/`textContent`;
+  there is no `innerHTML`. The SPA's `marked` + DOMPurify were left out to
+  keep the bundle small.
+- **Strings** are the `embed-*` Fluent keys. `gen-locales` also writes
+  `web/embed/locales.generated.ts`, checked by
+  `i18n_drift::the_embed_catalog_matches_the_fluent_sources`.
+- **Not built here:** the secure-input field (#95) and resuming a suspended
+  turn (#96); the widget has no UI for either yet.
+- **`dev-ui`** now installs `LiveAgentRunner` and seeds a published agent on
+  the `chat` pool with a fixed embed key for `http://localhost:8000`.
 
 ## 6. Crate placement
 

@@ -268,6 +268,7 @@ This runs the `dev_ui` example (`crates/aiplane/examples/dev_ui.rs`), which boot
 
 - an **in-memory SQLite**;
 - an in-process **`wiremock` chat pool** that serves `GET /models` (advertising `demo-model` + `demo-model-pro`) and `POST /chat/completions` (a streaming variant emitting two SSE deltas + `[DONE]`, plus non-streaming and feedback-extraction variants);
+- a published agent (`website-helper`, on the `chat` pool) with a fixed embed key for `http://localhost:8000`, so the embed widget example works: `python3 -m http.server 8000 -d examples/embed`, then open `http://localhost:8000/` (see [`embed.md`](embed.md));
 - an in-process **`wiremock` transcription pool** that serves `GET /models` (advertising `demo-whisper` + `demo-whisper-large`) and `POST /audio/transcriptions` (a stubbed JSON response);
 - a pre-seeded **`dev@example.com`** user with an `admin` role (every model / tool / skill granted), the `examples/demo-skills` bundle loaded, and representative demo data (a finished chat conversation, scheduled actions, RAG collections, and an MCP connector catalog) so the screens render populated.
 
