@@ -189,11 +189,13 @@ synthetic tools (`set_<slot>`, `forward_request`) on top. It also wraps every
 granted tool that has **bound arguments** in a `BoundTool`
 (`agents::bind`): the bound parameters are removed from the schema the model
 sees, and on every call the gateway's values overwrite whatever the model sent.
-A `const` bind is fixed in the spec. A slot bind is read from the conversation
-state when the call runs, and the call is refused while the slot is unset. For
-a sub-agent, the route's resolved `bind` values apply to every one of its tools
-that declares the argument. Without an agent run the source passes `inner`
-through unchanged. The run offers only the spec's `main.tools` that the
+Binds are mapped explicitly per tool (`tool_resources.<tool>.bind: {param:
+source}`). A `const` bind is fixed in the spec. A `state.<slot>` bind is read
+from the conversation state when the call runs, and the call is refused while
+the slot is unset. A `route.<name>` bind takes the value the dispatching route
+passed. A tool that declares a *subject parameter* (one another tool binds from
+state or a route) without binding it is withheld: not offered, and refused if
+called. Without an agent run the source passes `inner` through unchanged. The run offers only the spec's `main.tools` that the
 principal is also granted, plus the synthetic ones
 ([`agents.md`](agents.md#what-8788-built)).
 
