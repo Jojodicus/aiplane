@@ -86,6 +86,16 @@ pub struct RouterSpec {
     pub snapshot: Arc<StateSnapshot>,
 }
 
+/// What [`ForwardRequest::task_and_binds`] makes of an open route.
+enum TaskOutcome {
+    Ready {
+        task: String,
+        route_binds: BTreeMap<String, Value>,
+    },
+    /// The answer to the model that says the task cannot be written yet.
+    Unwritten(Value),
+}
+
 pub struct ForwardRequest {
     state: Arc<RamaState>,
     spec: Arc<RouterSpec>,
@@ -256,22 +266,20 @@ impl ForwardRequest {
         self.dispatch(ctx, route, &state).await
     }
 
-    /// The route's task rendered from state and its `bind` values resolved,
-    /// or (inner `Err`) the answer that says the task cannot be written yet.
-    #[allow(clippy::type_complexity)]
+    /// The route's task rendered from state and its `bind` values resolved.
     fn task_and_binds(
         &self,
         name: &str,
         spec: &Value,
         state: &AgentState,
-    ) -> Result<Result<(String, BTreeMap<String, Value>), Value>, ToolError> {
+    ) -> Result<TaskOutcome, ToolError> {
         let task = match render_task(
             spec.get("task").and_then(Value::as_str).unwrap_or_default(),
             state,
         ) {
             Ok(task) => task,
             Err(missing) => {
-                return Ok(Err(json!({
+                return Ok(TaskOutcome::Unwritten(json!({
                     "forwarded": false,
                     "route": name,
                     "reason": "task_incomplete",
@@ -293,7 +301,7 @@ impl ForwardRequest {
             })?;
             route_binds.insert(arg, value);
         }
-        Ok(Ok((task, route_binds)))
+        Ok(TaskOutcome::Ready { task, route_binds })
     }
 
     fn a2a<'a>(
@@ -321,15 +329,15 @@ impl ForwardRequest {
         let spec = self.spec.routes.get(name).cloned().unwrap_or_default();
         if spec.get("a2a").is_some() {
             let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                Ok(both) => both,
-                Err(unwritten) => return Ok(unwritten),
+                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                TaskOutcome::Unwritten(answer) => return Ok(answer),
             };
             return self.a2a(ctx, name, &spec).start(&task, &route_binds).await;
         }
         if let Some(looped) = spec.get("loop") {
             let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                Ok(both) => both,
-                Err(unwritten) => return Ok(unwritten),
+                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                TaskOutcome::Unwritten(answer) => return Ok(answer),
             };
             return self.run_loop(ctx, name, looped, &task, route_binds).await;
         }
@@ -346,8 +354,8 @@ impl ForwardRequest {
             return hand_off(ctx, &human, &question, &self.spec, FORWARD_TOOL_NAME).await;
         };
         let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-            Ok(both) => both,
-            Err(unwritten) => return Ok(unwritten),
+            TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+            TaskOutcome::Unwritten(answer) => return Ok(answer),
         };
         let bound = json!(route_binds);
         let child = ChildRun {

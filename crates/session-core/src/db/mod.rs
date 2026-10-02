@@ -137,6 +137,12 @@ impl TurnStatus {
             Self::Suspended => "suspended",
         }
     }
+    /// Completed, cancelled or errored: nothing runs it again. A suspended
+    /// turn is not terminal, since a resume continues it.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Errored)
+    }
+
     fn parse(s: &str) -> Result<Self, DbError> {
         match s {
             "in_progress" => Ok(Self::InProgress),
@@ -323,6 +329,28 @@ pub(crate) mod tests {
     use super::*;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
     use std::str::FromStr;
+
+    #[test]
+    fn only_a_finished_turn_is_terminal() {
+        let terminal: Vec<TurnStatus> = [
+            TurnStatus::InProgress,
+            TurnStatus::Completed,
+            TurnStatus::Cancelled,
+            TurnStatus::Errored,
+            TurnStatus::Suspended,
+        ]
+        .into_iter()
+        .filter(|s| s.is_terminal())
+        .collect();
+        assert_eq!(
+            terminal,
+            [
+                TurnStatus::Completed,
+                TurnStatus::Cancelled,
+                TurnStatus::Errored
+            ]
+        );
+    }
 
     #[test]
     fn cap_tool_output_passes_small_payloads_through() {

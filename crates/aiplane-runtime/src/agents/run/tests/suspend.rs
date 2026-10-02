@@ -115,10 +115,7 @@ pub(super) async fn wait_settled(world: &World, session: &str, turn: &str) -> ch
             .await
             .unwrap()
             .unwrap();
-        if !matches!(
-            t.status,
-            chat::TurnStatus::InProgress | chat::TurnStatus::Suspended
-        ) {
+        if t.status.is_terminal() {
             return t;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;

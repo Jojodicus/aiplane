@@ -192,7 +192,7 @@ impl ToolContext {
     /// geoip, indexer, image-gen, sandbox, chat turn/session). Replaces the
     /// 13-field literal that used to be copied into ~25 tool test modules.
     /// Override individual fields with struct-update syntax:
-    /// `ToolContext { principal: ToolContext::test_user("u1"), ..ToolContext::for_test(pool) }`.
+    /// `ToolContext { session_id: Some(id), ..ToolContext::for_test(pool) }`.
     pub fn for_test(db: aiplane_core::server::db::Pool) -> Self {
         Self {
             principal: Self::test_user("u"),
@@ -222,8 +222,9 @@ impl ToolContext {
         }
     }
 
-    /// A person with no group claims, for tests.
-    pub fn test_user(id: &str) -> aiplane_core::server::principal::Principal {
+    /// A person with no group claims, for tests. Crate-private: the other
+    /// crates' tests build their principal themselves.
+    pub(crate) fn test_user(id: &str) -> aiplane_core::server::principal::Principal {
         aiplane_core::server::principal::Principal::User {
             id: id.into(),
             roles: vec![],

@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::slot_tools::set_tool_name;
-use super::spec::SpecIssue;
+use super::spec::{SpecIssue, type_name};
 
 /// Who wrote a slot's current value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -178,13 +178,13 @@ impl SlotDef {
             }
             SlotType::Integer => {
                 if value.as_i64().is_none() && value.as_u64().is_none() {
-                    return Err(format!("must be a whole number, not {}", kind(value)));
+                    return Err(format!("must be a whole number, not {}", type_name(value)));
                 }
                 self.range(value)
             }
             SlotType::Number => {
                 if !value.is_number() {
-                    return Err(format!("must be a number, not {}", kind(value)));
+                    return Err(format!("must be a number, not {}", type_name(value)));
                 }
                 self.range(value)
             }
@@ -192,12 +192,12 @@ impl SlotDef {
                 if value.is_boolean() {
                     Ok(())
                 } else {
-                    Err(format!("must be true or false, not {}", kind(value)))
+                    Err(format!("must be true or false, not {}", type_name(value)))
                 }
             }
             SlotType::Subject(schema) => {
                 if !value.is_object() {
-                    return Err(format!("must be an object, not {}", kind(value)));
+                    return Err(format!("must be an object, not {}", type_name(value)));
                 }
                 let errors = schema
                     .as_ref()
@@ -215,7 +215,7 @@ impl SlotDef {
     /// A string slot's text, within its length bounds.
     fn text<'v>(&self, value: &'v Value) -> Result<&'v str, String> {
         let Some(text) = value.as_str() else {
-            return Err(format!("must be text, not {}", kind(value)));
+            return Err(format!("must be text, not {}", type_name(value)));
         };
         let len = text.chars().count() as u64;
         if let Some(min) = self.min_length
@@ -598,12 +598,16 @@ pub fn render_view(views: &[SlotView]) -> String {
                 v.slot,
                 by.as_ref().map(ToString::to_string).unwrap_or_default()
             ),
-            (SlotStatus::Missing, ..) => format!("{}: missing{}", v.slot, how_to_set(v)),
+            (SlotStatus::Missing, ..) => format!(
+                "{}: missing{}",
+                v.slot,
+                how_to_set(v.tool.as_deref(), &v.set_by)
+            ),
             (SlotStatus::Invalid, ..) => format!(
                 "{}: invalid: {}{}",
                 v.slot,
                 v.reason.as_deref().unwrap_or_default(),
-                how_to_set(v)
+                how_to_set(v.tool.as_deref(), &v.set_by)
             ),
         };
         out.push_str("\n- ");
@@ -612,14 +616,17 @@ pub fn render_view(views: &[SlotView]) -> String {
     out
 }
 
-fn how_to_set(v: &SlotView) -> String {
-    match &v.tool {
+/// The tail of a message about a slot: who can set it. `tool` is its
+/// `set_<slot>` when the model may.
+pub(crate) fn how_to_set(tool: Option<&str>, set_by: &[Provenance]) -> String {
+    match tool {
         Some(tool) => format!(" — call {tool}"),
-        None => format!(" — set by {}, not by you", writers(&v.set_by)),
+        None => format!(" — set by {}, not by you", writers(set_by)),
     }
 }
 
-fn writers(set_by: &[Provenance]) -> String {
+/// `verifier:otp or host`.
+pub(crate) fn writers(set_by: &[Provenance]) -> String {
     let names: Vec<String> = set_by.iter().map(ToString::to_string).collect();
     names.join(" or ")
 }
@@ -643,17 +650,6 @@ fn is_email(s: &str) -> bool {
                 && !l.ends_with('-')
                 && l.chars().all(|c| c.is_alphanumeric() || c == '-')
         })
-}
-
-fn kind(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "a boolean",
-        Value::Number(_) => "a number",
-        Value::String(_) => "text",
-        Value::Array(_) => "an array",
-        Value::Object(_) => "an object",
-    }
 }
 
 /// `1`, not `1.0`, for a bound written as a whole number.
