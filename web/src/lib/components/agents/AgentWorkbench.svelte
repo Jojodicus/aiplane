@@ -14,10 +14,12 @@
 		type AgentVersion,
 		type Granted,
 		type Spec,
-		type SpecIssue
+		type SpecIssue,
+		type TestDebug
 	} from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 	import AgentEditor from './AgentEditor.svelte';
+	import AgentCanvas from './AgentCanvas.svelte';
 	import AnalyticsPanel from './AnalyticsPanel.svelte';
 	import TestsPanel from './TestsPanel.svelte';
 	import GrantsPanel from './GrantsPanel.svelte';
@@ -37,7 +39,7 @@
 	 */
 	let { id }: { id: string } = $props();
 
-	const TABS = ['edit', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'sharing'] as const;
+	const TABS = ['edit', 'canvas', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'sharing'] as const;
 	type Tab = (typeof TABS)[number];
 	const asTab = (v: string | null): Tab => (TABS.find((x) => x === v) ?? 'edit');
 
@@ -54,6 +56,7 @@
 	let error = $state<string | null>(null);
 	let notice = $state<string | null>(null);
 	let busy = $state(false);
+	let lastDebug = $state<TestDebug | null>(null);
 	let tab = $state<Tab>(asTab(page.url.searchParams.get('tab')));
 
 	const writable = $derived(detail?.access === 'write');
@@ -227,6 +230,10 @@
 						<AgentEditor bind:spec {issues} {granted} {agents} ongrants={() => selectTab('grants')} />
 					</fieldset>
 				{/key}
+			{:else if tab === 'canvas'}
+				<fieldset disabled={!writable} class="min-w-0">
+					<AgentCanvas bind:spec {issues} {granted} {agents} {lastDebug} ongrants={() => selectTab('grants')} />
+				</fieldset>
 			{:else if tab === 'json'}
 				{#key formKey}
 					<SpecJsonEditor {spec} {issues} onapply={applyJson} />
@@ -234,7 +241,7 @@
 			{:else if tab === 'grants'}
 				<GrantsPanel agentId={id} grants={detail.grants} {resources} {writable} onchanged={() => refresh(true)} />
 			{:else if tab === 'test'}
-				<TestChat agentId={id} {dirty} onsave={async () => void (await save())} />
+				<TestChat agentId={id} {dirty} onturn={(debug) => (lastDebug = debug)} onsave={async () => void (await save())} />
 			{:else if tab === 'tests'}
 				<TestsPanel agentId={id} {versions} liveVersion={detail.live_version} {dirty} {writable} onsave={async () => void (await save())} />
 			{:else if tab === 'versions'}
