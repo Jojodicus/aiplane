@@ -742,7 +742,7 @@ async fn task_view(
     let TurnWithTools {
         turn, suspension, ..
     } = &turns[at];
-    let held = state.agent_turns.is_running(session_id);
+    let held = state.agent_turns.holds(session_id, task_id);
     let state = TaskState::of(turn.status, held);
     let asked = at
         .checked_sub(1)
@@ -924,7 +924,9 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         .map_err(internal)?,
     };
     let session_id = context.session_id.clone();
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
+    let user_turn = uuid::Uuid::new_v4().to_string();
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let Some(hold) = state.agent_turns.claim(&session_id, &task_id) else {
         return Err(task_in_progress(""));
     };
     if let Some(busy) = chat::in_flight_turn(&state.db, &session_id)
@@ -962,8 +964,6 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         })
         .unwrap_or_default();
 
-    let user_turn = uuid::Uuid::new_v4().to_string();
-    let task_id = uuid::Uuid::new_v4().to_string();
     chat::create_user_turn(&state.db, &session_id, &user_turn, &p.text)
         .await
         .map_err(internal)?;
@@ -1020,7 +1020,7 @@ async fn continue_task(
         )));
     }
     let session_id = context.session_id.clone();
-    match TaskState::of(turn.status, state.agent_turns.is_running(&session_id)) {
+    match TaskState::of(turn.status, state.agent_turns.holds(&session_id, task_id)) {
         TaskState::Working => return Err(task_in_progress(task_id)),
         s if s.is_terminal() => {
             return Err(unsupported(format!(
@@ -1035,7 +1035,7 @@ async fn continue_task(
     let Some(runner) = state.agent_turns.runner() else {
         return Err(runtime_unavailable());
     };
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
+    let Some(hold) = state.agent_turns.claim(&session_id, task_id) else {
         return Err(task_in_progress(task_id));
     };
     let decision = super::chat::json_api::decision_from(
@@ -1120,19 +1120,19 @@ async fn cancel_task(call: &Call, params: &Value) -> Result<Response, RpcError> 
     let (context, turn) = find_task(call, &id).await?;
     let session_id = &context.session_id;
     let turns = &call.state.agent_turns;
-    match TaskState::of(turn.status, turns.is_running(session_id)) {
+    match TaskState::of(turn.status, turns.holds(session_id, &id)) {
         s if s.is_terminal() => return Err(not_cancelable(&id, s)),
         TaskState::Working => {
-            if !turns.cancel(session_id) {
+            if !turns.cancel(session_id, &id) {
                 return Err(not_cancelable(&id, TaskState::Working));
             }
             let started = tokio::time::Instant::now();
-            while turns.is_running(session_id) && started.elapsed() < CANCEL_WAIT {
+            while turns.holds(session_id, &id) && started.elapsed() < CANCEL_WAIT {
                 tokio::time::sleep(POLL / 5).await;
             }
         }
         _ => {
-            let Some(_hold) = turns.claim(session_id) else {
+            let Some(_hold) = turns.claim(session_id, &id) else {
                 return Err(task_in_progress(&id));
             };
             cancel_paused(call, &id).await?;
@@ -1170,7 +1170,7 @@ async fn subscribe(call: &Call, params: &Value) -> Result<Response, RpcError> {
     let (context, turn) = find_task(call, &id).await?;
     let state = TaskState::of(
         turn.status,
-        call.state.agent_turns.is_running(&context.session_id),
+        call.state.agent_turns.holds(&context.session_id, &id),
     );
     if state.is_terminal() {
         return Err(unsupported(format!(

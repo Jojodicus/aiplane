@@ -480,7 +480,9 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
              GET /api/v0/embed/events, then send this one",
         )
     };
-    let Some(claim) = state.agent_turns.claim(&session_id) else {
+    let user_turn_id = uuid::Uuid::new_v4().to_string();
+    let assistant_turn_id = uuid::Uuid::new_v4().to_string();
+    let Some(claim) = state.agent_turns.claim(&session_id, &assistant_turn_id) else {
         return turn_in_progress();
     };
     match chat::in_flight_turn(&state.db, &session_id).await {
@@ -494,8 +496,6 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(err) => return internal(err),
     }
 
-    let user_turn_id = uuid::Uuid::new_v4().to_string();
-    let assistant_turn_id = uuid::Uuid::new_v4().to_string();
     let model = v
         .live
         .spec
@@ -655,20 +655,22 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         );
     };
     let session_id = v.session.session_id.clone();
-    let Some(hold) = state.agent_turns.claim(&session_id) else {
-        return refuse(
+    let busy = || {
+        refuse(
             StatusCode::CONFLICT,
             "turn_in_progress",
             "the assistant is busy with this conversation right now — wait for it on \
              GET /api/v0/embed/events, then answer again",
-        );
+        )
     };
     let turn_id = match chat::suspended_turn_in_session(&state.db, &session_id).await {
         Ok(Some(turn)) => turn,
-        Ok(None) => {
-            return not_waiting(lang);
-        }
+        Ok(None) if state.agent_turns.is_running(&session_id) => return busy(),
+        Ok(None) => return not_waiting(lang),
         Err(err) => return internal(err),
+    };
+    let Some(hold) = state.agent_turns.claim(&session_id, &turn_id) else {
+        return busy();
     };
     let claimed = match claim_resume(
         &state,

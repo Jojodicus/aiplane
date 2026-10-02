@@ -177,7 +177,7 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
         Ok(decision) => decision,
         Err(msg) => return bad_request(msg),
     };
-    let Some(_hold) = state.agent_turns.claim(&session_id) else {
+    let Some(_hold) = state.agent_turns.claim(&session_id, &turn_id) else {
         return json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",

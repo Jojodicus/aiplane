@@ -1930,7 +1930,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   | task (`id`) | one assistant turn of that conversation, and the user turn before it |
   | `SendMessage` without `taskId` | a new turn: in a new context, or in the caller's `contextId` |
   | `SendMessage` with `taskId` of an `INPUT_REQUIRED` task | the answer to a `secure_input` pause, through the same `agents::resume::claim` / runner `resume` as `POST /api/v0/embed/resume` (`ResumedBy::Participant`), so a verifier's code goes to the tool and nowhere else (not the transcript, the task, the model) |
-  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled) |
+  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled). Per task: the claim names the turn holding the context (`AgentTurns::holds`), so a finished task reads as finished — and `CancelTask` on it is `-32002` — while a later task of the same context runs |
   | `TASK_STATE_COMPLETED` | `completed`; the answer is the artifact `answer` and the last `history` message |
   | `TASK_STATE_FAILED` | `errored`; `status.message` is the generic `embed-error-generic` text, never the upstream's |
   | `TASK_STATE_CANCELED` | `cancelled` |
@@ -1973,8 +1973,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   started, answered or cancelled task is also an `agent_audit` row
   `a2a_task` on the agent: `{action: message | input | cancel, context_id,
   task_id, caller_id, caller_name, token_id}`, never the text.
-- **Stopping a running agent turn.** `AgentTurns` keeps a stop flag per
-  claimed conversation (`cancel`, `cancel_flag`), and `headless::drive` hands
+- **Stopping a running agent turn.** `AgentTurns` keeps, per claimed
+  conversation, the turn holding it and a stop flag (`claim(session, turn)`,
+  `cancel(session, turn)` — only the holding turn can be stopped,
+  `cancel_flag`). A message queued behind a decision runs under the resumed
+  turn's claim, which `hand_over` passes on to the new turn. And `headless::drive` hands
   an agent run its root conversation's flag, so a cancel reaches sub-agent
   runs too. Only `CancelTask` sets it today.
 - **Errors.** JSON-RPC 2.0 envelopes (§9.5): `error.data` is one
