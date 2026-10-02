@@ -31,6 +31,50 @@ starts when they send their first message.
 | `data-theme` | `light` `dark` | follows the visitor's OS setting |
 | `data-position` | `left` `right` | `right` |
 | `data-title` | panel title | the agent's display name |
+| `data-identity-token` | a token your site signed for the signed-in visitor ([below](#signed-in-visitors)) | none |
+
+## Verification codes
+
+When the agent verifies a visitor's email address (an `mcp_code` verifier),
+the panel shows a dedicated field under the conversation: masked, offered for
+the browser's one-time-code autofill, and sent straight to the verifier. The
+code never becomes a chat message, so neither the assistant nor the
+conversation's transcript ever contains it. Cancel declines the request.
+
+## Signed-in visitors
+
+If your site already knows who the visitor is, it can say so with a short-lived
+JSON Web Token it signs, and the agent's `host_jwt` verifier fills its slots
+from the token's claims — no code to type. Configure the verifier in the
+agent's spec ([`agents.md`](agents.md#what-95-built)): the algorithm (HS256
+with a shared secret, or RS256/ES256 with your public key or a JWKS address),
+the `issuer` and `audience` your tokens carry, and which claim fills which
+slot.
+
+Sign on your server, never in the browser:
+
+```json
+{ "iss": "https://www.example.com", "aud": "support-agent", "sub": "K-12345",
+  "iat": 1790000000, "exp": 1790000300, "jti": "a-fresh-random-id" }
+```
+
+- `exp`, `iat`, `iss` and `aud` are required; the token may live at most the
+  verifier's `max_lifetime` (10 minutes by default). A `jti` makes it usable
+  once.
+- Pass it in the snippet, or later — after your own login — from script:
+
+```html
+<script src="https://YOUR-GATEWAY/embed.js" data-agent-key="gwe_..."
+        data-identity-token="eyJhbGciOi..." async></script>
+```
+
+```js
+document.querySelector('croit-aiplane-embed').setIdentityToken(freshToken);
+```
+
+The widget sends it once per conversation to `POST /api/v0/embed/identity`.
+A refused token leaves the conversation working without it and logs the
+reason to the browser console (`identity_token_invalid: it has expired`, …).
 
 ## Styling
 
@@ -67,6 +111,8 @@ for visitors who ask for reduced motion.
 - The origin list on the key stops *other websites* from embedding your agent.
   It does not stop a script that fakes an `Origin` header. Abuse is limited by
   the agent's grants and gates, and by rate limits and the owner's budget.
+- An identity token you pass is held in memory only and sent to the gateway
+  once per conversation; it is never stored by the widget.
 - Answers are shown as text. A small markdown subset (paragraphs, lists, code,
   bold, emphasis, `http(s)` links) is built with DOM calls, never as HTML.
 

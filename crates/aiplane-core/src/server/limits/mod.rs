@@ -362,6 +362,10 @@ pub struct VisitorKey<'a> {
 pub enum RateScope {
     Visitor,
     Ip,
+    /// A verifier's sends to one email address, across conversations.
+    Email,
+    /// A verifier's sends or lookups in one conversation.
+    Session,
 }
 
 impl RateScope {
@@ -369,6 +373,8 @@ impl RateScope {
         match self {
             RateScope::Visitor => "visitor",
             RateScope::Ip => "ip",
+            RateScope::Email => "email",
+            RateScope::Session => "session",
         }
     }
 }

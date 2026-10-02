@@ -137,7 +137,7 @@ impl Embed {
 
     /// Wait until the conversation's latest turn is no longer running and no
     /// runner holds the conversation.
-    async fn settled(&self, token: &str) -> chat::Turn {
+    pub(super) async fn settled(&self, token: &str) -> chat::Turn {
         let session = self.conversation_of(token).await;
         for _ in 0..500 {
             let t = self.last_turn(token).await;
@@ -151,7 +151,7 @@ impl Embed {
         panic!("the conversation never settled");
     }
 
-    async fn event_frames(&self, token: &str) -> Vec<(String, Value)> {
+    pub(super) async fn event_frames(&self, token: &str) -> Vec<(String, Value)> {
         let resp = self
             .raw(
                 Method::GET,
@@ -167,7 +167,7 @@ impl Embed {
         frames(&body)
     }
 
-    async fn answer(&self, token: &str, body: Value) -> super::Reply {
+    pub(super) async fn answer(&self, token: &str, body: Value) -> super::Reply {
         self.send(
             Method::POST,
             "/api/v0/embed/resume",
@@ -187,7 +187,7 @@ impl Embed {
 }
 
 /// Every text value in every table, FTS shadow tables included.
-async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> String {
+pub(super) async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> String {
     let tables: Vec<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
             .fetch_all(db)
@@ -213,7 +213,7 @@ async fn every_stored_text(db: &aiplane_core::server::db::Pool) -> String {
 
 /// Every log line written while the guard lives, at every level.
 #[derive(Clone, Default)]
-struct Logs(Arc<Mutex<Vec<u8>>>);
+pub(super) struct Logs(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Logs {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -226,17 +226,20 @@ impl std::io::Write for Logs {
 }
 
 impl Logs {
-    fn capture(&self) -> tracing::subscriber::DefaultGuard {
+    pub(super) fn capture(&self) -> tracing::subscriber::DefaultGuard {
         let sink = self.clone();
+        // Everything the production filter lets through at `RUST_LOG=trace`.
         let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
+            .with_env_filter(aiplane::logging::filter(
+                tracing_subscriber::EnvFilter::new("trace"),
+            ))
             .with_ansi(false)
             .with_writer(move || sink.clone())
             .finish();
         tracing::subscriber::set_default(subscriber)
     }
 
-    fn text(&self) -> String {
+    pub(super) fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
 }

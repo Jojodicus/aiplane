@@ -90,6 +90,10 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
     "aiplane-runtime/src/agents/slot_tools.rs",
     // BoundTool — delegates to the wrapped tool
     "aiplane-runtime/src/agents/bind.rs",
+    // verify_<id>_request_code / verify_<id>_submit_code — an mcp_code verifier
+    "aiplane-runtime/src/agents/verifier/otp.rs",
+    // verify_<id> — a lookup verifier
+    "aiplane-runtime/src/agents/verifier/lookup.rs",
 ];
 
 /// Synthetic tools of an agent run. They are never registered nor offered to

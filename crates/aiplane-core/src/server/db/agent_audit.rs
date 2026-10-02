@@ -60,6 +60,11 @@ pub enum AuditKind {
     LimitRefused,
     /// The retention sweeper deleted conversations; counts only.
     ConversationsSwept,
+    /// A verifier step (#95): a code sent, a code checked, a lookup made, and
+    /// the outcome. Never the code, the address or a looked-up value.
+    VerifierOutcome,
+    /// A host identity token was accepted or refused (#95). Never a claim value.
+    HostIdentity,
 }
 
 impl AuditKind {
@@ -90,6 +95,8 @@ impl AuditKind {
             Self::EmbedKeyRevoked => "embed_key_revoked",
             Self::LimitRefused => "limit_refused",
             Self::ConversationsSwept => "conversations_swept",
+            Self::VerifierOutcome => "verifier_outcome",
+            Self::HostIdentity => "host_identity",
         }
     }
 }

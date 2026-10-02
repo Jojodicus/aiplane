@@ -313,7 +313,10 @@ pub struct LiveAgentRunner;
 #[async_trait::async_trait]
 impl AgentTurnRunner for LiveAgentRunner {
     async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn) {
-        let options = RunOptions::default();
+        let options = RunOptions {
+            lang: turn.lang,
+            ..RunOptions::default()
+        };
         let ran = match RunProfile::load_version(
             &state,
             &turn.agent_id,

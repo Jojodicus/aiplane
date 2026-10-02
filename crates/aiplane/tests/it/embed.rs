@@ -36,6 +36,9 @@ const PARTIAL: &str = "Let me check the ord";
 mod limits;
 // Suspended agent runs: secure input, approvals, resume.
 mod suspend;
+// Identity verifiers: a one-time code through the agent's connector, a
+// website's signed identity token.
+mod verifiers;
 
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive

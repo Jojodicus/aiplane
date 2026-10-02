@@ -284,8 +284,12 @@ async fn rebuild(
             Role::SubAgent { route_binds: binds }
         };
         let source = source_of(state, &level.session).await?;
+        let options = RunOptions {
+            lang,
+            ..options.clone()
+        };
         let profile =
-            RunProfile::load_from(state, &level.session.principal_id, source, role, options)
+            RunProfile::load_from(state, &level.session.principal_id, source, role, &options)
                 .await?;
         let chain = match i {
             0 => {

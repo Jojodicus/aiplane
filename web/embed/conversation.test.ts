@@ -76,3 +76,33 @@ test('a snapshot rebuilds the transcript from the server, replacing local state'
 	});
 	assert.deepEqual(state.messages.map((m) => m.id), ['u9']);
 });
+
+const waiting = {
+	request_id: 'req-1',
+	kind: 'secure_input' as const,
+	message: 'Enter the code we sent you.',
+	options: ['value' as const, 'deny' as const],
+	expires_at: '2026-10-02T12:10:00Z'
+};
+
+test('a paused turn in the snapshot says what it waits for and hides its empty answer', () => {
+	const state = fromTurns(
+		[turn({ id: 'u1', role: 'user', user_content: 'hi' }), { ...turn({ id: 'a1', status: 'suspended' }), suspension: waiting }],
+		null
+	);
+	assert.deepEqual(state.waiting, waiting);
+	assert.equal(state.pending, false);
+	assert.equal(state.messages.length, 1);
+});
+
+test('a suspended frame ends the wait with the request; the finalize clears it', () => {
+	const state = fromTurns([turn({ id: 'u1', role: 'user', user_content: 'hi' })], 'a1');
+	assert.equal(applyFrame(state, { event: 'suspended', data: { turn_id: 'a1', ...waiting } }), 'idle');
+	assert.equal(state.pending, false);
+	assert.equal(state.waiting?.request_id, 'req-1');
+	applyFrame(state, { event: 'snapshot', data: { turns: [], live_turn_id: 'a1' } });
+	assert.equal(state.waiting, null, 'the resumed turn runs again');
+	state.waiting = waiting;
+	applyFrame(state, { event: 'turn_finalized', data: { turn_id: 'a1', status: 'completed' } });
+	assert.equal(state.waiting, null);
+});

@@ -292,6 +292,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_post("/api/v0/embed/messages", pages::embed::send_message)
         .with_get("/api/v0/embed/events", pages::embed::events)
         .with_post("/api/v0/embed/resume", pages::embed::resume)
+        .with_post("/api/v0/embed/identity", pages::embed::identity)
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)

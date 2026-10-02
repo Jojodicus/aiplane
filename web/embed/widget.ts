@@ -8,6 +8,7 @@
 import { EmbedApi, EmbedError } from './api.ts';
 import { applyFrame, emptyConversation, fromTurns, type Conversation, type Message } from './conversation.ts';
 import { isSafeHref, parseBlocks, type Block, type Inline } from './markdown.ts';
+import { secureInputForm, secureRequest } from './secure-input.ts';
 
 export interface WidgetOptions {
 	api: EmbedApi;
@@ -241,6 +242,24 @@ export class Widget {
 		void this.follow();
 	}
 
+	/** Answer the secure field: the code goes to `/embed/resume`, never into the transcript. */
+	private async answerWaiting(decision: 'value' | 'deny', code?: string): Promise<void> {
+		const waiting = secureRequest(this.state.waiting);
+		if (!waiting) return;
+		this.error = null;
+		this.state.waiting = null;
+		this.state.pending = true;
+		this.syncInput();
+		this.renderLog();
+		try {
+			await this.o.api.answer(waiting.request_id, decision, code);
+		} catch (error) {
+			this.state.waiting = waiting;
+			return this.fail(errorKey(error));
+		}
+		void this.follow();
+	}
+
 	private fail(key: string): void {
 		this.error = this.o.t(key);
 		this.state.pending = false;
@@ -285,6 +304,18 @@ export class Widget {
 		if (this.notice) {
 			const notice = this.notice;
 			items.push({ key: 'notice', signature: notice, build: () => h('div', 'alert alert-info alert-soft text-sm', { role: 'status' }, notice) });
+		}
+		const secure = secureRequest(this.state.waiting);
+		if (secure) {
+			items.push({
+				key: 'secure-input',
+				signature: secure.request_id,
+				build: () =>
+					secureInputForm(secure, t, {
+						submit: (code) => void this.answerWaiting('value', code),
+						cancel: () => void this.answerWaiting('deny')
+					})
+			});
 		}
 		if (this.state.pending) {
 			items.push({

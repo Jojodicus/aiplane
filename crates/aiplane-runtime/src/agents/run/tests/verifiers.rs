@@ -1,0 +1,890 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Identity verifiers in real agent runs: the customer's ERP is a wiremock
+//! MCP server granted as an `agent` connector, the model a scripted
+//! upstream, the database real. The visitor's code arrives the way the
+//! widget sends it, as the decision of a `secure_input` pause.
+
+use jiff::SignedDuration;
+
+use aiplane_core::server::db::{mcp_audit, mcp_catalog};
+use jsonwebtoken::{EncodingKey, Header, encode};
+use session_core::db::{Decision, DecisionKind, SuspensionKind};
+use session_core::i18n::t;
+
+use super::suspend::every_stored_text;
+use super::*;
+use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::verifier::host_jwt::{self, IdentityError, Refusal};
+
+const CODE: &str = "481516";
+const ALICE: &str = "alice@example.com";
+const STRANGER: &str = "nobody@example.com";
+const REQUEST: &str = "verify_otp_request_code";
+const SUBMIT: &str = "verify_otp_submit_code";
+
+/// The customer's ERP over MCP: `send_code` knows only [`ALICE`],
+/// `check_code` accepts [`CODE`] for her, `find_customer` knows Alice
+/// Smith, K-1. Every call is recorded as `(tool, arguments)`.
+async fn erp() -> (MockServer, Arc<Mutex<Vec<(String, Value)>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let server = MockServer::start().await;
+    let tool = |name: &str, props: Value| {
+        json!({ "name": name, "description": name,
+                "inputSchema": { "type": "object", "properties": props } })
+    };
+    let tools = json!([
+        tool("send_code", json!({ "email": {"type": "string"} })),
+        tool(
+            "check_code",
+            json!({ "email": {"type": "string"}, "code": {"type": "string"} })
+        ),
+        tool(
+            "find_customer",
+            json!({ "name": {"type": "string"}, "number": {"type": "string"} })
+        ),
+    ]);
+    Mock::given(method("POST"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let text = |t: Value, error: bool| {
+                json!({ "content": [{"type": "text", "text": t.to_string()}], "isError": error })
+            };
+            let result = match body["method"].as_str() {
+                Some("initialize") => json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "erp", "version": "1"},
+                }),
+                Some("tools/list") => json!({ "tools": tools }),
+                Some("tools/call") => {
+                    let name = body["params"]["name"].as_str().unwrap().to_string();
+                    let args = body["params"]["arguments"].clone();
+                    log.lock().unwrap().push((name.clone(), args.clone()));
+                    let alice = args["email"] == ALICE;
+                    match name.as_str() {
+                        "send_code" if alice => text(json!({"sent": true}), false),
+                        "send_code" => text(json!({"error": "no such customer"}), true),
+                        "check_code" if alice && args["code"] == CODE => text(
+                            json!({"valid": true, "customer_id": "K-1", "name": "Alice"}),
+                            false,
+                        ),
+                        "check_code" => text(json!({"valid": false}), false),
+                        "find_customer"
+                            if args["name"] == "Alice Smith" && args["number"] == "K-1" =>
+                        {
+                            text(json!({"valid": true, "customer_id": "K-1"}), false)
+                        }
+                        "find_customer" => text(json!({"valid": false}), false),
+                        other => panic!("unexpected tool {other}"),
+                    }
+                }
+                Some("notifications/initialized") => return ResponseTemplate::new(202),
+                other => panic!("unexpected MCP method {other:?}"),
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}))
+        })
+        .mount(&server)
+        .await;
+    (server, seen)
+}
+
+impl World {
+    /// The ERP as an enabled, audited `agent` connector `erp`.
+    async fn connect_erp(&self, erp: &MockServer) {
+        mcp_catalog::create(
+            self.db(),
+            mcp_catalog::ConnectorInput {
+                key: "erp".into(),
+                name: "ERP".into(),
+                description: None,
+                icon: None,
+                category: None,
+                url: erp.uri(),
+                auth: mcp_catalog::AuthKind::None,
+                scope: mcp_catalog::Scope::Agent,
+                audit: true,
+                use_dcr: false,
+                client_id: None,
+                client_secret_ct: None,
+                client_secret_nonce: None,
+                authorize_url: None,
+                token_url: None,
+                registration_url: None,
+                scopes: vec![],
+                allowed_groups: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        mcp_catalog::set_enabled(self.db(), "erp", true)
+            .await
+            .unwrap();
+    }
+}
+
+fn erp_calls(seen: &Mutex<Vec<(String, Value)>>, tool: &str) -> Vec<Value> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|(t, _)| t == tool)
+        .map(|(_, a)| a.clone())
+        .collect()
+}
+
+fn otp_spec(otp: Value) -> Value {
+    let mut verifier = json!({
+        "kind": "mcp_code", "connector": "erp", "email_slot": "email",
+        "writes": { "verified": "result", "verified_email": "input.email" },
+        "max_attempts": 5, "code_ttl": "10m"
+    });
+    if let (Value::Object(v), Value::Object(extra)) = (&mut verifier, otp) {
+        v.extend(extra);
+    }
+    json!({
+        "main": {
+            "pool": "support-pool",
+            "instructions": { "orchestration": "Verify the visitor, then help." },
+            "budget": { "rounds": 12 }
+        },
+        "state": {
+            "email": { "type": "email", "set_by": ["llm"] },
+            "name": { "type": "string", "set_by": ["llm"] },
+            "customer_number": { "type": "string", "set_by": ["llm"] },
+            "verified": { "type": "subject", "set_by": ["verifier:otp", "verifier:kyc", "host"] },
+            "verified_email": { "type": "email", "set_by": ["verifier:otp"] }
+        },
+        "verifiers": {
+            "otp": verifier,
+            "kyc": {
+                "kind": "lookup", "tool": "mcp__erp__find_customer", "assurance": "low",
+                "inputs": { "name": "state.name", "number": "state.customer_number" },
+                "writes": { "verified": "result" }, "max_attempts": 2
+            }
+        },
+        "routes": {
+            "billing": {
+                "when": { "slot": "verified", "provenance": "verifier:otp", "max_age": "15m" },
+                "agent": "billing-agent",
+                "task": "Invoices of {verified.customer_id}"
+            }
+        }
+    })
+}
+
+/// The support agent on `spec`, granted the pool and the ERP connector.
+async fn support(world: &World, spec: &Value) -> String {
+    let id = world
+        .agent(
+            "support",
+            &[
+                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Connector, "erp"),
+            ],
+        )
+        .await;
+    world.publish(&id, spec).await;
+    id
+}
+
+/// A clock the test moves.
+fn clock() -> (Arc<Mutex<jiff::Timestamp>>, RunOptions) {
+    let now = Arc::new(Mutex::new(jiff::Timestamp::now()));
+    let read = now.clone();
+    let options = RunOptions {
+        now: Arc::new(move || *read.lock().unwrap()),
+        ..RunOptions::default()
+    };
+    (now, options)
+}
+
+async fn says(world: &World, agent: &str, options: &RunOptions, message: &str) -> AgentReply {
+    run_turn_with(
+        &world.state,
+        AgentTurn {
+            agent_id: agent,
+            session_id: None,
+            message,
+            visitor_id: None,
+        },
+        options.clone(),
+    )
+    .await
+    .unwrap()
+}
+
+/// The visitor types `code` into the field the paused turn shows.
+async fn types(
+    world: &World,
+    agent: &str,
+    paused: &AgentReply,
+    options: &RunOptions,
+    code: &str,
+) -> AgentReply {
+    let waiting = paused
+        .suspension
+        .as_ref()
+        .expect("the turn waits for input");
+    assert_eq!(waiting.kind, SuspensionKind::SecureInput);
+    let claimed = claim(
+        &world.state,
+        AgentResume {
+            agent_id: agent,
+            session_id: &paused.session_id,
+            turn_id: &paused.turn_id,
+            request_id: Some(&waiting.request_id),
+            decision: Decision::Value { value: json!(code) },
+            by: ResumedBy::Participant,
+        },
+    )
+    .await
+    .unwrap();
+    run_claimed(&world.state, claimed, options.clone(), Lang::En)
+        .await
+        .unwrap()
+}
+
+async fn slot_rows(world: &World, session: &str) -> Vec<(String, Value, String)> {
+    aiplane_core::server::db::agent_state::for_session(world.db(), session)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.slot, s.value, s.provenance))
+        .collect()
+}
+
+fn verifier_outcomes(events: &[agent_audit::AuditEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e.kind == "verifier_outcome")
+        .map(|e| e.detail["outcome"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_code_the_visitor_types_writes_the_verifier_slots_and_opens_the_gate() {
+    let main = llm(vec![
+        call("k1", "set_email", json!({ "value": ALICE })),
+        call("k2", REQUEST, json!({})),
+        text("Thanks, you are verified."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let agent = support(&world, &otp_spec(json!({}))).await;
+    let (_, options) = clock();
+
+    let paused = says(&world, &agent, &options, "I have a billing question.").await;
+    assert_eq!(paused.status, chat::TurnStatus::Suspended);
+    let waiting = paused.suspension.clone().unwrap();
+    assert_eq!(
+        waiting.message.as_deref(),
+        Some(t(Lang::En, "agent-verifier-code-sent").as_str())
+    );
+    assert_eq!(waiting.options, [DecisionKind::Value, DecisionKind::Deny]);
+    assert_eq!(erp_calls(&seen, "send_code"), [json!({ "email": ALICE })]);
+
+    let done = types(&world, &agent, &paused, &options, CODE).await;
+    assert_eq!(done.status, chat::TurnStatus::Completed);
+    assert_eq!(done.answer.as_deref(), Some("Thanks, you are verified."));
+    assert_eq!(
+        erp_calls(&seen, "check_code"),
+        [json!({ "email": ALICE, "code": CODE })]
+    );
+
+    assert_eq!(
+        slot_rows(&world, &paused.session_id).await,
+        [
+            ("email".into(), json!(ALICE), "llm".into()),
+            (
+                "verified".into(),
+                json!({ "customer_id": "K-1", "name": "Alice" }),
+                "verifier:otp".into()
+            ),
+            ("verified_email".into(), json!(ALICE), "verifier:otp".into()),
+        ]
+    );
+    let sent = requests(&main).await;
+    assert_eq!(sent.len(), 3);
+    assert!(
+        system(&sent[1]).contains("- billing: closed"),
+        "{}",
+        system(&sent[1])
+    );
+    assert!(
+        system(&sent[2]).contains("- billing: open"),
+        "{}",
+        system(&sent[2])
+    );
+    assert!(
+        system(&sent[2]).contains("verified: set by verifier:otp"),
+        "the model sees who vouched, not the value"
+    );
+    let verified = tool_answer(&sent, "k2");
+    assert!(verified.contains("\"verified\": true"), "{verified}");
+    for request in &sent {
+        let request = request.to_string();
+        assert!(!request.contains(CODE), "the code never reaches the model");
+        assert!(
+            !request.contains("K-1"),
+            "nor what the verifier vouched for"
+        );
+    }
+
+    assert!(
+        !every_stored_text(world.db()).await.contains(CODE),
+        "the code is nowhere in the database"
+    );
+    let audited = mcp_audit::recent(world.db(), 10).await.unwrap();
+    let check = audited
+        .iter()
+        .find(|e| e.tool_id.ends_with("check_code"))
+        .unwrap();
+    assert_eq!(check.arguments.as_deref(), Some("[redacted]"));
+    let send = audited
+        .iter()
+        .find(|e| e.tool_id.ends_with("send_code"))
+        .unwrap();
+    assert!(send.arguments.as_deref().unwrap().contains(ALICE));
+    assert_eq!(
+        verifier_outcomes(&world.audit(&agent).await),
+        ["code_sent", "verified"]
+    );
+}
+
+#[tokio::test]
+async fn five_wrong_codes_use_the_code_up() {
+    let main = llm(vec![
+        call("k1", "set_email", json!({ "value": ALICE })),
+        call("k2", REQUEST, json!({})),
+        call("k3", SUBMIT, json!({})),
+        call("k4", SUBMIT, json!({})),
+        call("k5", SUBMIT, json!({})),
+        call("k6", SUBMIT, json!({})),
+        call("k7", SUBMIT, json!({})),
+        text("Too many wrong codes."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let agent = support(&world, &otp_spec(json!({}))).await;
+    let (_, options) = clock();
+
+    let mut turn = says(&world, &agent, &options, "Hi").await;
+    for guess in ["111111", "222222", "333333", "444444", "555555"] {
+        assert_eq!(turn.status, chat::TurnStatus::Suspended, "{turn:?}");
+        turn = types(&world, &agent, &turn, &options, guess).await;
+    }
+    assert_eq!(turn.status, chat::TurnStatus::Completed, "{turn:?}");
+    assert_eq!(erp_calls(&seen, "check_code").len(), 5);
+
+    let sent = requests(&main).await;
+    assert!(tool_answer(&sent, "k2").contains("\"attempts_left\": 4"));
+    assert!(tool_answer(&sent, "k5").contains("\"attempts_left\": 1"));
+    for used_up in ["k6", "k7"] {
+        let answer = tool_answer(&sent, used_up);
+        assert!(
+            answer.contains("\"reason\": \"locked\""),
+            "{used_up}: {answer}"
+        );
+        assert!(
+            answer.contains(REQUEST),
+            "says how to get a new code: {answer}"
+        );
+    }
+    assert!(
+        slot_rows(&world, &turn.session_id)
+            .await
+            .iter()
+            .all(|(slot, ..)| slot == "email"),
+        "nothing verified"
+    );
+    assert_eq!(
+        verifier_outcomes(&world.audit(&agent).await),
+        [
+            "code_sent",
+            "wrong_code",
+            "wrong_code",
+            "wrong_code",
+            "wrong_code",
+            "locked"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_expired_code_is_refused_without_asking_the_connector() {
+    let main = llm(vec![
+        call("k1", "set_email", json!({ "value": ALICE })),
+        call("k2", REQUEST, json!({})),
+        text("It expired."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let agent = support(&world, &otp_spec(json!({ "code_ttl": "10m" }))).await;
+    let (now, options) = clock();
+
+    let paused = says(&world, &agent, &options, "Hi").await;
+    let later = now
+        .lock()
+        .unwrap()
+        .checked_add(SignedDuration::from_mins(11))
+        .unwrap();
+    *now.lock().unwrap() = later;
+    let done = types(&world, &agent, &paused, &options, CODE).await;
+
+    assert_eq!(done.status, chat::TurnStatus::Completed);
+    assert!(erp_calls(&seen, "check_code").is_empty());
+    let answer = tool_answer(&requests(&main).await, "k2").to_string();
+    assert!(answer.contains("\"reason\": \"expired\""), "{answer}");
+    assert!(
+        slot_rows(&world, &paused.session_id)
+            .await
+            .iter()
+            .all(|(slot, ..)| slot == "email")
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_address_hears_exactly_what_a_registered_one_hears() {
+    let (erp, seen) = erp().await;
+    let mut answers = Vec::new();
+    let mut prompts = Vec::new();
+    for email in [ALICE, STRANGER] {
+        let main = llm(vec![
+            call("k1", "set_email", json!({ "value": email })),
+            call("k2", REQUEST, json!({})),
+            text("Done."),
+        ])
+        .await;
+        let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+        world.connect_erp(&erp).await;
+        let agent = support(&world, &otp_spec(json!({}))).await;
+        let (_, options) = clock();
+        let paused = says(&world, &agent, &options, "Hi").await;
+        let waiting = paused.suspension.clone().unwrap();
+        prompts.push((waiting.kind, waiting.message, waiting.options));
+        types(&world, &agent, &paused, &options, "000000").await;
+        answers.push(tool_answer(&requests(&main).await, "k2").to_string());
+        let delivery: Vec<Value> = world
+            .audit(&agent)
+            .await
+            .iter()
+            .filter(|e| e.detail["outcome"] == "code_sent")
+            .map(|e| e.detail["delivery"].clone())
+            .collect();
+        let expected = if email == ALICE {
+            "accepted"
+        } else {
+            "refused"
+        };
+        assert_eq!(delivery, [json!(expected)], "the owner's audit still knows");
+    }
+    assert_eq!(prompts[0], prompts[1]);
+    assert_eq!(answers[0], answers[1]);
+    assert!(answers[0].contains("wrong_code"), "{}", answers[0]);
+    assert_eq!(erp_calls(&seen, "send_code").len(), 2);
+}
+
+#[tokio::test]
+async fn a_conversation_cannot_send_more_codes_than_its_limit() {
+    let main = llm(vec![
+        call("k1", "set_email", json!({ "value": ALICE })),
+        call("k2", REQUEST, json!({})),
+        call("k3", REQUEST, json!({})),
+        text("Try later."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let spec = otp_spec(json!({ "send_limits": { "session": { "max": 1, "per": "15m" } } }));
+    let agent = support(&world, &spec).await;
+    let (_, options) = clock();
+
+    let paused = says(&world, &agent, &options, "Hi").await;
+    let waiting = paused.suspension.clone().unwrap();
+    let claimed = claim(
+        &world.state,
+        AgentResume {
+            agent_id: &agent,
+            session_id: &paused.session_id,
+            turn_id: &paused.turn_id,
+            request_id: Some(&waiting.request_id),
+            decision: Decision::Deny {
+                reason: session_core::db::DenyReason::User,
+            },
+            by: ResumedBy::Participant,
+        },
+    )
+    .await
+    .unwrap();
+    let done = run_claimed(&world.state, claimed, options.clone(), Lang::En)
+        .await
+        .unwrap();
+    assert_eq!(done.status, chat::TurnStatus::Completed, "{done:?}");
+    assert_eq!(erp_calls(&seen, "send_code").len(), 1);
+    let answer = tool_answer(&requests(&main).await, "k3").to_string();
+    assert!(answer.contains("rate_limited"), "{answer}");
+    assert!(answer.contains("retry_after_secs"), "{answer}");
+}
+
+#[tokio::test]
+async fn the_model_can_neither_hand_over_a_code_nor_write_a_verifier_slot() {
+    let main = llm(vec![
+        call("k1", SUBMIT, json!({ "code": CODE })),
+        call(
+            "k2",
+            "set_verified",
+            json!({ "value": { "customer_id": "K-1" } }),
+        ),
+        text("I could not."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let agent = support(&world, &otp_spec(json!({}))).await;
+    let (_, options) = clock();
+
+    let done = says(&world, &agent, &options, "My code is 481516").await;
+    assert_eq!(done.status, chat::TurnStatus::Completed);
+    let sent = requests(&main).await;
+    let tools = offered(&sent[0]);
+    assert!(
+        tools.contains(&REQUEST) && tools.contains(&SUBMIT),
+        "{tools:?}"
+    );
+    assert!(tools.contains(&"verify_kyc"), "{tools:?}");
+    assert!(
+        !tools
+            .iter()
+            .any(|t| *t == "set_verified" || *t == "set_verified_email")
+    );
+    assert_eq!(
+        tool_def(&sent[0], SUBMIT)["function"]["parameters"],
+        json!({ "type": "object", "properties": {}, "additionalProperties": false })
+    );
+    assert!(tool_answer(&sent, "k1").contains("takes no arguments"));
+    assert!(tool_answer(&sent, "k1").contains("`code`"));
+    assert!(!tool_answer(&sent, "k2").contains("\"status\": \"set\""));
+    assert!(slot_rows(&world, &done.session_id).await.is_empty());
+    assert!(seen.lock().unwrap().is_empty(), "nothing reached the ERP");
+}
+
+#[tokio::test]
+async fn a_lookup_vouches_with_its_own_provenance_and_caps_its_attempts() {
+    let main = llm(vec![
+        call("k1", "set_name", json!({ "value": "Alice Smith" })),
+        call("k2", "set_customer_number", json!({ "value": "K-2" })),
+        call("k3", "verify_kyc", json!({})),
+        call("k4", "set_customer_number", json!({ "value": "K-1" })),
+        call("k5", "verify_kyc", json!({})),
+        call("k6", "verify_kyc", json!({})),
+        text("Done."),
+    ])
+    .await;
+    let (erp, seen) = erp().await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    world.connect_erp(&erp).await;
+    let agent = support(&world, &otp_spec(json!({}))).await;
+    let (_, options) = clock();
+
+    let done = says(&world, &agent, &options, "I am Alice Smith").await;
+    assert_eq!(done.status, chat::TurnStatus::Completed, "{done:?}");
+    let sent = requests(&main).await;
+    let miss = tool_answer(&sent, "k3");
+    assert!(miss.contains("not_confirmed"), "{miss}");
+    let hit = tool_answer(&sent, "k5");
+    assert!(
+        hit.contains("\"verified\": true") && hit.contains("\"low\""),
+        "{hit}"
+    );
+    let capped = tool_answer(&sent, "k6");
+    assert!(capped.contains("too_many_attempts"), "{capped}");
+    assert_eq!(erp_calls(&seen, "find_customer").len(), 2);
+
+    let verified = slot_rows(&world, &done.session_id)
+        .await
+        .into_iter()
+        .find(|(s, ..)| s == "verified")
+        .unwrap();
+    assert_eq!(verified.1, json!({ "customer_id": "K-1" }));
+    assert_eq!(verified.2, "verifier:kyc");
+    let assurance: Vec<Value> = world
+        .audit(&agent)
+        .await
+        .iter()
+        .filter(|e| e.kind == "verifier_outcome")
+        .map(|e| e.detail["assurance"].clone())
+        .collect();
+    assert!(assurance.iter().all(|a| a == "low"), "{assurance:?}");
+    assert!(
+        system(&sent[6]).contains("- billing: closed"),
+        "a lookup does not open a gate that requires the code"
+    );
+}
+
+// --- host identity tokens ----------------------------------------------------
+
+const SECRET: &str = "a-shared-secret-of-at-least-32-bytes!";
+const ISSUER: &str = "https://www.example.com";
+const AUDIENCE: &str = "support-agent";
+/// A throw-away P-256 key for the JWKS test: the private half signs, the
+/// public half is served from the mock JWKS below. Generated for this test,
+/// never used anywhere else.
+const EC_PRIVATE: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgyor9Z19yS0e42TBC
+SjOt4WNm3QabfIgqoG5wO4gv6euhRANCAATD20OG9gBw3nfEgVqWewZvgC33X7YD
+RcNm4EJrOD+IHmSMZ9soKSVOFAURZOFu88JqiUma30te8xHfHPhIssmx
+-----END PRIVATE KEY-----";
+const EC_X: &str = "w9tDhvYAcN53xIFalnsGb4At91-2A0XDZuBCazg_iB4";
+const EC_Y: &str = "ZIxn2ygpJU4UBRFk4W7zwmqJSZrfS17zEd8c-EiyybE";
+
+fn host_spec(world: &World, key: Value) -> Value {
+    let mut verifier = json!({
+        "kind": "host_jwt", "issuer": ISSUER, "audience": AUDIENCE,
+        "claims": { "verified": { "customer_id": "sub", "plan": "plan" } }
+    });
+    verifier
+        .as_object_mut()
+        .unwrap()
+        .extend(key.as_object().unwrap().clone());
+    let mut spec = json!({
+        "state": { "verified": { "type": "subject", "set_by": ["host"] } },
+        "verifiers": { "site": verifier }
+    });
+    host_jwt::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    spec
+}
+
+fn hs256() -> Value {
+    json!({ "algorithm": "HS256", "secret": SECRET })
+}
+
+fn claims(lifetime: i64) -> Value {
+    let now = jiff::Timestamp::now().as_second();
+    json!({ "iss": ISSUER, "aud": AUDIENCE, "sub": "K-1", "plan": "pro",
+            "iat": now, "exp": now + lifetime })
+}
+
+fn signed(claims: &Value, secret: &str) -> String {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .unwrap()
+}
+
+/// A conversation of a fresh agent, for writing slots into.
+async fn conversation(world: &World) -> (String, String) {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let name = format!("site-{}", N.fetch_add(1, Ordering::SeqCst));
+    let agent = world.agent(&name, &[]).await;
+    let session = chat::create_principal_session(
+        world.db(),
+        &chat::NewRunSession {
+            principal_id: &agent,
+            title: None,
+            parent_turn_id: None,
+            agent_version: Some(1),
+        },
+    )
+    .await
+    .unwrap();
+    (agent, session.id)
+}
+
+async fn present(world: &World, spec: &Value, token: &str) -> Result<Vec<String>, IdentityError> {
+    let (agent, session) = conversation(world).await;
+    host_jwt::accept(
+        &world.state,
+        &agent,
+        &session,
+        spec,
+        token,
+        jiff::Timestamp::now(),
+    )
+    .await
+}
+
+fn refusal(result: Result<Vec<String>, IdentityError>) -> Refusal {
+    match result {
+        Err(IdentityError::Invalid(r)) => r,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_valid_host_token_writes_its_claims_as_host() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(&world, hs256());
+    let (agent, session) = conversation(&world).await;
+    let written = host_jwt::accept(
+        &world.state,
+        &agent,
+        &session,
+        &spec,
+        &signed(&claims(300), SECRET),
+        jiff::Timestamp::now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(written, ["verified"]);
+    assert_eq!(
+        slot_rows(&world, &session).await,
+        [(
+            "verified".into(),
+            json!({ "customer_id": "K-1", "plan": "pro" }),
+            "host".into()
+        )]
+    );
+    let events = world.audit(&agent).await;
+    let accepted = events.iter().find(|e| e.kind == "host_identity").unwrap();
+    assert_eq!(accepted.detail["outcome"], "accepted");
+    assert!(
+        !accepted.detail.to_string().contains("K-1"),
+        "no claim value"
+    );
+    assert!(!every_stored_text(world.db()).await.contains(SECRET));
+}
+
+#[tokio::test]
+async fn expired_misaddressed_forged_and_long_lived_tokens_are_refused() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(&world, hs256());
+
+    let mut expired = claims(300);
+    expired["exp"] = json!(jiff::Timestamp::now().as_second() - 120);
+    expired["iat"] = json!(jiff::Timestamp::now().as_second() - 400);
+    assert_eq!(
+        refusal(present(&world, &spec, &signed(&expired, SECRET)).await),
+        Refusal::Expired
+    );
+
+    let mut elsewhere = claims(300);
+    elsewhere["aud"] = json!("another-agent");
+    assert_eq!(
+        refusal(present(&world, &spec, &signed(&elsewhere, SECRET)).await),
+        Refusal::WrongAudience
+    );
+
+    let mut issuer = claims(300);
+    issuer["iss"] = json!("https://evil.example");
+    assert_eq!(
+        refusal(present(&world, &spec, &signed(&issuer, SECRET)).await),
+        Refusal::WrongIssuer
+    );
+
+    let forged = signed(&claims(300), "another-secret-of-at-least-32-bytes!!");
+    assert_eq!(
+        refusal(present(&world, &spec, &forged).await),
+        Refusal::BadSignature
+    );
+
+    assert!(matches!(
+        refusal(present(&world, &spec, &signed(&claims(3 * 3600), SECRET)).await),
+        Refusal::TooLong { .. }
+    ));
+
+    let mut no_plan = claims(300);
+    no_plan.as_object_mut().unwrap().remove("plan");
+    assert_eq!(
+        refusal(present(&world, &spec, &signed(&no_plan, SECRET)).await),
+        Refusal::MissingClaim("plan".into())
+    );
+
+    assert_eq!(
+        refusal(present(&world, &spec, "not.a.jwt").await),
+        Refusal::Malformed
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_state")
+        .fetch_one(world.db())
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "a refused token writes nothing");
+}
+
+#[tokio::test]
+async fn a_token_signed_with_another_algorithm_is_refused_before_its_signature() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(
+        &world,
+        json!({ "algorithm": "ES256", "jwks_url": "http://127.0.0.1:9/jwks" }),
+    );
+    // The classic confusion: an HMAC token for a public-key verifier.
+    assert_eq!(
+        refusal(present(&world, &spec, &signed(&claims(300), SECRET)).await),
+        Refusal::WrongAlgorithm {
+            expected: "ES256".into(),
+            found: "HS256".into()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_token_with_a_jti_is_accepted_once() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(&world, hs256());
+    let mut once = claims(300);
+    once["jti"] = json!("token-1");
+    let token = signed(&once, SECRET);
+    let (agent, first) = conversation(&world).await;
+    let now = jiff::Timestamp::now();
+    assert!(
+        host_jwt::accept(&world.state, &agent, &first, &spec, &token, now)
+            .await
+            .is_ok()
+    );
+    let (_, elsewhere) = conversation(&world).await;
+    let replayed = host_jwt::accept(&world.state, &agent, &elsewhere, &spec, &token, now).await;
+    assert!(
+        matches!(replayed, Err(IdentityError::Replayed)),
+        "{replayed:?}"
+    );
+    assert!(slot_rows(&world, &elsewhere).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_public_key_token_verifies_against_the_websites_jwks() {
+    let jwks = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/jwks.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "keys": [{
+            "kty": "EC", "crv": "P-256", "kid": "site-1", "alg": "ES256", "use": "sig",
+            "x": EC_X, "y": EC_Y
+        }] })))
+        .mount(&jwks)
+        .await;
+    let world = World::new(&[], None).await;
+    let url = format!("{}/.well-known/jwks.json", jwks.uri());
+    let spec = host_spec(&world, json!({ "algorithm": "ES256", "jwks_url": url }));
+    let key = EncodingKey::from_ec_pem(EC_PRIVATE.as_bytes()).unwrap();
+    let mut header = Header::new(jsonwebtoken::Algorithm::ES256);
+    header.kid = Some("site-1".into());
+    let token = encode(&header, &claims(300), &key).unwrap();
+    assert_eq!(present(&world, &spec, &token).await.unwrap(), ["verified"]);
+
+    header.kid = Some("rotated-away".into());
+    let stale = encode(&header, &claims(300), &key).unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            refusal(present(&world, &spec, &stale).await),
+            Refusal::UnknownKey
+        );
+    }
+    assert_eq!(
+        jwks.received_requests().await.unwrap().len(),
+        1,
+        "an unknown kid does not refetch the keys on every request"
+    );
+}

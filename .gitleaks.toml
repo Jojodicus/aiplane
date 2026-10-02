@@ -71,3 +71,7 @@ regexes = ['''BTBZMqHH6r4Tts7J_aSIgg''']
 description = "The fixed dev-ui embed key (embed keys are public by design; it only exists in the in-memory dev-ui database)"
 regexTarget = "line"
 regexes = ['''gwe_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''']
+
+[[allowlists]]
+description = "Throw-away ES256 key and HS256 placeholder secret of the host-identity verifier tests (#95); they sign test tokens only and verify nothing outside the tests"
+regexes = ['''yor9Z19yS0e42TBC''', '''^0123456789abcdef0123456789abcdef$''']

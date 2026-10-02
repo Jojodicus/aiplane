@@ -15,6 +15,7 @@ use thiserror::Error;
 pub mod agent_audit;
 pub mod agent_retention;
 pub mod agent_state;
+pub mod agent_verifiers;
 pub mod agents;
 pub mod app_settings;
 pub mod audit;

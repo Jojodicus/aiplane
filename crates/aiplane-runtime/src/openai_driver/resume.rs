@@ -22,12 +22,9 @@ use session_core::workers::TurnUpdate;
 use super::{OpenAiDriver, ToolResultBudget, cap_tool_result, persist_err};
 use crate::server::tools::runner::{self, ToolCallRef, ToolResultRecord};
 use crate::server::tools::{ToolContext, ToolSource, extract_content_parts};
-use crate::suspend::{ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend};
-
-/// What stands in a tool's result wherever it repeated a secure input: the
-/// value goes to the tool that asked, never to the model, the stored
-/// transcript or a log.
-const SECURE_INPUT_WITHHELD: &str = "[secure input withheld]";
+use crate::suspend::{
+    ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend, withhold_secret,
+};
 
 /// The answer to a second suspend request in the same round. A turn waits
 /// for one decision at a time; the model can ask again once it has the first.
@@ -307,40 +304,6 @@ pub(super) fn tool_call_ids(messages: &[Value]) -> impl Iterator<Item = String> 
         .filter_map(|m| m["tool_calls"].as_array())
         .flatten()
         .filter_map(|call| call["id"].as_str().map(str::to_string))
-}
-
-/// `body` with every repetition of the secure input `value` replaced by
-/// [`SECURE_INPUT_WITHHELD`]. A well-behaved tool never repeats the value;
-/// this makes sure a careless one cannot hand it to the model or the
-/// transcript either.
-fn withhold_secret(body: Value, value: &Value) -> Value {
-    let secret = match value {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    };
-    if secret.is_empty() {
-        return body;
-    }
-    fn walk(v: Value, secret: &str) -> Value {
-        match v {
-            Value::String(s) if s.contains(secret) => {
-                Value::String(s.replace(secret, SECURE_INPUT_WITHHELD))
-            }
-            Value::Number(n) if n.to_string() == secret => {
-                Value::String(SECURE_INPUT_WITHHELD.into())
-            }
-            Value::Array(items) => {
-                Value::Array(items.into_iter().map(|i| walk(i, secret)).collect())
-            }
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .map(|(k, v)| (k.replace(secret, SECURE_INPUT_WITHHELD), walk(v, secret)))
-                    .collect(),
-            ),
-            other => other,
-        }
-    }
-    walk(body, &secret)
 }
 
 /// What the model reads in place of a denied call's result.
@@ -727,7 +690,7 @@ mod tests {
 
     #[test]
     fn a_tool_that_repeats_a_secure_input_has_it_withheld() {
-        use super::SECURE_INPUT_WITHHELD as W;
+        use crate::suspend::SECURE_INPUT_WITHHELD as W;
         let body = json!({"echo": "you typed 481516", "n": 481516, "ok": true});
         assert_eq!(
             super::withhold_secret(body.clone(), &json!("481516")),

@@ -4,6 +4,10 @@
 
 export const catalogs: Record<string, Record<string, string>> = {
  "de": {
+  "embed-code-cancel": "Abbrechen",
+  "embed-code-hint": "Nur Sie sehen dieses Feld. Der Assistent sieht den Code nie.",
+  "embed-code-label": "Bestätigungscode",
+  "embed-code-submit": "Bestätigen",
   "embed-default-title": "Assistent",
   "embed-error-busy": "Bitte warten Sie auf die Antwort auf Ihre vorherige Nachricht.",
   "embed-error-generic": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
@@ -23,6 +27,10 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-working": "Ihre Antwort wird vorbereitet…"
  },
  "en": {
+  "embed-code-cancel": "Cancel",
+  "embed-code-hint": "Only you see this field. The assistant never sees the code.",
+  "embed-code-label": "Verification code",
+  "embed-code-submit": "Confirm",
   "embed-default-title": "Assistant",
   "embed-error-busy": "Please wait for the answer to your previous message.",
   "embed-error-generic": "Something went wrong. Please try again.",
@@ -42,6 +50,10 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-working": "Working on your answer…"
  },
  "es": {
+  "embed-code-cancel": "Cancelar",
+  "embed-code-hint": "Solo usted ve este campo. El asistente nunca ve el código.",
+  "embed-code-label": "Código de verificación",
+  "embed-code-submit": "Confirmar",
   "embed-default-title": "Asistente",
   "embed-error-busy": "Espere la respuesta a su mensaje anterior.",
   "embed-error-generic": "Algo salió mal. Inténtelo de nuevo.",
@@ -61,6 +73,10 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-working": "Preparando su respuesta…"
  },
  "fr": {
+  "embed-code-cancel": "Annuler",
+  "embed-code-hint": "Vous seul voyez ce champ. L'assistant ne voit jamais le code.",
+  "embed-code-label": "Code de vérification",
+  "embed-code-submit": "Confirmer",
   "embed-default-title": "Assistant",
   "embed-error-busy": "Veuillez attendre la réponse à votre message précédent.",
   "embed-error-generic": "Une erreur s'est produite. Veuillez réessayer.",
@@ -80,6 +96,10 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-working": "Préparation de votre réponse…"
  },
  "ru": {
+  "embed-code-cancel": "Отмена",
+  "embed-code-hint": "Это поле видите только вы. Ассистент никогда не видит код.",
+  "embed-code-label": "Код подтверждения",
+  "embed-code-submit": "Подтвердить",
   "embed-default-title": "Ассистент",
   "embed-error-busy": "Дождитесь ответа на предыдущее сообщение.",
   "embed-error-generic": "Что-то пошло не так. Попробуйте ещё раз.",
@@ -99,6 +119,10 @@ export const catalogs: Record<string, Record<string, string>> = {
   "embed-working": "Готовим ответ…"
  },
  "zh": {
+  "embed-code-cancel": "取消",
+  "embed-code-hint": "只有您能看到此字段。助手永远看不到验证码。",
+  "embed-code-label": "验证码",
+  "embed-code-submit": "确认",
   "embed-default-title": "助手",
   "embed-error-busy": "请等待上一条消息的回答。",
   "embed-error-generic": "出了点问题，请重试。",
