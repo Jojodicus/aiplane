@@ -36,6 +36,8 @@ const PARTIAL: &str = "Let me check the ord";
 mod limits;
 // Suspended agent runs: secure input, approvals, resume.
 mod suspend;
+// Human in the loop: the inbox, responders, channels (#96).
+mod hil;
 
 /// Stands in for the agent turn runner, which a sibling branch (#87/#88)
 /// builds on the real driver. The endpoint's contract with it is only "drive

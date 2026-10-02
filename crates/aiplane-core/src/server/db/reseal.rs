@@ -52,6 +52,12 @@ struct Column {
 /// migration would only race with them.
 const COLUMNS: &[Column] = &[
     Column {
+        table: "agent_notify_channels",
+        id: "id",
+        nonce: "url_nonce",
+        ct: "url_ct",
+    },
+    Column {
         table: "backends",
         id: "name",
         nonce: "api_key_nonce",

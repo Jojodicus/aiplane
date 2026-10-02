@@ -467,7 +467,8 @@ pub(crate) mod tests {
                 on_timeout   TEXT NOT NULL,
                 expires_at   TEXT NOT NULL,
                 created_at   TEXT NOT NULL,
-                run_context  TEXT
+                run_context  TEXT,
+                notified_at  TEXT
             ) STRICT"#,
             // FTS5 table for search (matches migration 0031). Keyed on the
             // implicit integer `rowid` because `chat_turns.id` is a TEXT UUID

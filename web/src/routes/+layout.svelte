@@ -11,6 +11,7 @@
 	import { pageTitleDescriptor } from '$lib/page-titles';
 	import { pageTitleOverride } from '$lib/page-title';
 	import { loadMe, me } from '$lib/session.svelte';
+	import { inboxLive, watchInbox } from '$lib/inbox.svelte';
 	import { sidebar, refreshSidebar, searchAsYouType, openSearch, closeSearch } from '$lib/sidebar.svelte';
 	import { feedback, loadConfig } from '$lib/feedback.svelte';
 	import { t, locale } from '$lib/i18n.svelte';
@@ -34,6 +35,13 @@
 		if (me.loaded && me.value === null && !page.url.pathname.endsWith('/login') && !isSetup) {
 			window.location.href = `${base}${loginPageUrl(page.url.pathname + page.url.search)}`;
 		}
+	});
+
+	// Anyone may be asked to answer: a responder of an agent, or the owner of
+	// a scheduled run that paused. So the badge's stream opens for every
+	// signed-in user.
+	$effect(() => {
+		if (me.value) watchInbox();
 	});
 
 	// Mirrors `document.documentElement.dataset.theme`, which the inline script
@@ -137,6 +145,7 @@
 	// template rather than once at module scope.
 	type NavLink = [string, string, NavIconName];
 	const workspaceLinks: NavLink[] = [
+		['nav-inbox', '/inbox', 'inbox'],
 		['nav-scheduled', '/scheduled', 'clock'],
 		['nav-webhooks', '/webhooks', 'send'],
 		['nav-agents', '/agents', 'cpu'],
@@ -281,6 +290,9 @@
 							>
 								<NavIcon name={icon} />
 								{t(label)}
+								{#if path === '/inbox' && inboxLive.count > 0}
+									<span class="badge badge-primary badge-sm ml-auto" aria-label={t('nav-inbox-count', { count: inboxLive.count })}>{inboxLive.count}</span>
+								{/if}
 							</a>
 						{/each}
 					</div>

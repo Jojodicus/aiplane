@@ -110,6 +110,10 @@ impl Tool for McpTool {
         &self.registry_id
     }
 
+    fn changes_state(&self) -> bool {
+        self.destructive && !self.read_only
+    }
+
     fn schema(&self) -> ToolDef {
         self.schema.clone()
     }

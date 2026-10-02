@@ -6,6 +6,7 @@
 		| 'cube'
 		| 'database'
 		| 'folder'
+		| 'inbox'
 		| 'key'
 		| 'message'
 		| 'plug'
@@ -33,6 +34,8 @@
 		<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>
 	{:else if name === 'clock'}
 		<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+	{:else if name === 'inbox'}
+		<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
 	{:else if name === 'cpu'}
 		<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>
 	{:else if name === 'cube'}

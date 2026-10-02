@@ -324,7 +324,8 @@ async fn try_run_action(
 }
 
 /// Classify a finished run by reading its assistant turn's final status.
-/// Returns `("ok" | "error", Option<error message>)`.
+/// Returns `("ok" | "waiting" | "error", Option<error message>)`; `waiting`
+/// is a run that paused for a decision its owner gives in the inbox.
 async fn outcome_for(
     state: &RamaState,
     session_id: &str,
@@ -333,6 +334,7 @@ async fn outcome_for(
     match chat::get_turn(&state.db, session_id, turn_id).await {
         Ok(Some(turn)) => match turn.status {
             TurnStatus::Completed => ("ok", None),
+            TurnStatus::Suspended => ("waiting", None),
             _ => (
                 "error",
                 turn.error_message

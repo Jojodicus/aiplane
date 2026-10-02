@@ -188,6 +188,9 @@ pub async fn drive_opened_from(
             .await
             .map_err(DbError::from)?
             .map(|s| s.view());
+        if let Some(waiting) = &suspension {
+            super::inbox::announce_in_background(state.clone(), waiting.request_id.clone());
+        }
         return Ok(AgentReply {
             session_id: turn.session_id.clone(),
             turn_id: turn.turn_id.clone(),

@@ -31,10 +31,13 @@ impl AskFirst {
     /// Gate `inner` behind an approval that expires after `timeout`, as a
     /// denial: an approval nobody gives is never one.
     pub fn new(inner: impl Tool, timeout: Duration) -> Self {
-        Self {
-            inner: Arc::new(inner),
-            timeout,
-        }
+        Self::wrap(Arc::new(inner), timeout)
+    }
+
+    /// [`Self::new`] for a tool already behind an `Arc`, as a tool source
+    /// hands it out.
+    pub fn wrap(inner: Arc<dyn Tool>, timeout: Duration) -> Self {
+        Self { inner, timeout }
     }
 }
 
@@ -79,6 +82,10 @@ impl Tool for AskFirst {
 
     fn sensitive_args(&self) -> bool {
         self.inner.sensitive_args()
+    }
+
+    fn changes_state(&self) -> bool {
+        self.inner.changes_state()
     }
 }
 

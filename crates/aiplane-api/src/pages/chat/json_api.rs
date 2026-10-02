@@ -51,7 +51,7 @@ use session_core::i18n::{Lang, t};
 /// waiting out its timeout and then failing. `transport_is_secure` reads the
 /// forwarded-proto header rather than just the configured public URL, so a
 /// gateway behind a TLS-terminating proxy is not reported as plaintext.
-fn request_ctx(state: &RamaState, req: &Request, voice_mode: bool) -> RequestCtx {
+pub(crate) fn request_ctx(state: &RamaState, req: &Request, voice_mode: bool) -> RequestCtx {
     RequestCtx {
         client_ip: state.client_ip(req),
         secure: aiplane_features::server::geoip::transport_is_secure(

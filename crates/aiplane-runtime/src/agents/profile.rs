@@ -9,11 +9,12 @@
 //!   no person's memory, location or connectors. Rebuilt every round, so a
 //!   slot the model just set shows up on the next one.
 //! - **Tools**: the principal's grants that the spec lists, plus the run's
-//!   synthetic tools (`set_<slot>`, `forward_request`). The synthetic ones are
-//!   layered over the grant-narrowed source, never inside it: they are no
-//!   grant, and exist only for this run.
+//!   synthetic tools (`set_<slot>`, `forward_request`, `request_human`). The
+//!   synthetic ones are layered over the grant-narrowed source, never inside
+//!   it: they are no grant, and exist only for this run.
 //! - **Bound arguments** wrap the granted tools they apply to, so the model
-//!   never sees nor sets them.
+//!   never sees nor sets them; a tool's `permission` puts an approval in
+//!   front of it ([`super::approval`]).
 //! - **Budget**, **finish contract** (sub-agents only) and an injection policy
 //!   of `Flag`: an agent's tool results are untrusted data by default.
 
@@ -28,8 +29,10 @@ use serde_json::{Value, json};
 use session_core::i18n::Lang;
 use shared::api::ToolDef;
 
+use super::approval::Permissions;
 use super::bind::{BoundTool, ToolBinds, WithheldTool, without_bound};
 use super::gate::{GateInput, GateStatus, RouteGates};
+use super::human::{RequestHuman, human_routes};
 use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
@@ -247,18 +250,20 @@ impl RunProfile {
             now: options.now.clone(),
         });
         if !gates.is_empty() {
-            let forward = ForwardRequest::new(
-                state.clone(),
-                Arc::new(RouterSpec {
-                    principal: principal.clone(),
-                    schema: schema.clone(),
-                    gates,
-                    routes,
-                    router: spec.get("router").cloned(),
-                    main_pool: pool,
-                }),
-                options.clone(),
-            );
+            let router = Arc::new(RouterSpec {
+                principal: principal.clone(),
+                schema: schema.clone(),
+                gates,
+                routes,
+                router: spec.get("router").cloned(),
+                main_pool: pool,
+            });
+            if matches!(role, Role::Main)
+                && let Some(human) = RequestHuman::new(router.clone(), options.clone())
+            {
+                synthetic.insert(human.id().to_string(), Arc::new(human));
+            }
+            let forward = ForwardRequest::new(state.clone(), router, options.clone());
             synthetic.insert(forward.id().to_string(), Arc::new(forward));
         }
         let binds = match role {
@@ -279,6 +284,7 @@ impl RunProfile {
                 .collect(),
             synthetic,
             binds,
+            permissions: Permissions::from_spec(&spec),
             schema: (!schema.is_empty()).then_some(schema),
             pools,
         };
@@ -374,6 +380,7 @@ pub struct AgentRun {
     tools: Vec<String>,
     synthetic: BTreeMap<String, Arc<dyn Tool>>,
     binds: ToolBinds,
+    permissions: Permissions,
     schema: Option<Arc<StateSchema>>,
     pools: PoolAccess,
 }
@@ -468,6 +475,12 @@ fn route_summary(gates: &RouteGates, routes: &Value, input: GateInput<'_>) -> St
         "Routes. When the request is complete, call forward_request: the gateway picks an open \
          route and hands the request over. You choose neither the route nor whom it concerns.",
     );
+    if !human_routes(routes).is_empty() {
+        out.push_str(
+            " To hand the conversation to a member of staff, call request_human with the \
+             question they should answer; a route to a person must be open for it.",
+        );
+    }
     for (name, status) in statuses {
         let about = routes
             .pointer(&format!("/{name}/description"))
@@ -499,12 +512,17 @@ impl<'a> RunToolSource<'a> {
         Self { inner, run }
     }
 
+    /// A granted tool as this run offers it: its bound arguments filled in,
+    /// behind an approval when its permission asks for one. A withheld tool
+    /// is refused outright, so nobody is asked to approve a call that could
+    /// not run.
     fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
-        match run.binds.for_tool(tool.id(), &tool.schema()) {
+        let bound: Arc<dyn Tool> = match run.binds.for_tool(tool.id(), &tool.schema()) {
             Ok(binds) if binds.is_empty() => tool,
             Ok(binds) => Arc::new(BoundTool::new(tool, binds, run.schema.clone())),
-            Err(unbound) => Arc::new(WithheldTool::new(tool, unbound)),
-        }
+            Err(unbound) => return Arc::new(WithheldTool::new(tool, unbound)),
+        };
+        run.permissions.gate(bound)
     }
 }
 
@@ -573,6 +591,7 @@ mod tests {
             synthetic: BTreeMap::new(),
             binds: ToolBinds::from_spec(&spec)
                 .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
+            permissions: Permissions::default(),
             schema: None,
             pools: PoolAccess::all(),
         }

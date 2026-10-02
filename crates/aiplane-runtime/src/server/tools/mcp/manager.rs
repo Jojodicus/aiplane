@@ -806,6 +806,10 @@ impl Tool for AuditedTool {
         self.inner.max_duration()
     }
 
+    fn changes_state(&self) -> bool {
+        self.inner.changes_state()
+    }
+
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         let db = self.db.clone();
         let connector = self.connector_key.clone();
