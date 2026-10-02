@@ -408,9 +408,15 @@ mod tests {
         revoke(&pool, &a, &ka.id, "alice").await.unwrap();
         assert!(!allows("https://a.example").await, "a revoked key at once");
         sp::disable(&pool, &b, "alice").await.unwrap();
-        assert!(!allows("https://b.example").await, "a disabled agent at once");
+        assert!(
+            !allows("https://b.example").await,
+            "a disabled agent at once"
+        );
         agents::delete(&pool, &c, "alice").await.unwrap();
-        assert!(!allows("https://c.example").await, "a deleted agent at once");
+        assert!(
+            !allows("https://c.example").await,
+            "a deleted agent at once"
+        );
     }
 
     /// The point of the cache: a CORS answer is not a table scan. A write

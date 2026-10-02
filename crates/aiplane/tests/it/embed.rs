@@ -897,7 +897,10 @@ async fn an_errored_answer_reads_the_generic_error_in_the_visitors_language() {
 
     let session: Value =
         serde_json::from_slice(&get_in(&e, "/api/v0/embed/session", &token, "de").await).unwrap();
-    assert_eq!(session["turns"][1]["turn"]["error_message"], GERMAN, "{session}");
+    assert_eq!(
+        session["turns"][1]["turn"]["error_message"], GERMAN,
+        "{session}"
+    );
 }
 
 // ---------------------------------------------------------------------------

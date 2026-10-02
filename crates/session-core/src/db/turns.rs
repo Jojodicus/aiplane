@@ -454,11 +454,7 @@ pub async fn get_turn(
 
 /// The turn right before `seq` in its session — a turn's prompt, without
 /// reading the rest of the conversation.
-pub async fn turn_before(
-    pool: &Pool,
-    session_id: &str,
-    seq: i64,
-) -> Result<Option<Turn>, DbError> {
+pub async fn turn_before(pool: &Pool, session_id: &str, seq: i64) -> Result<Option<Turn>, DbError> {
     let row = sqlx::query(
         r#"SELECT id, session_id, seq, role, user_content, model, content,
                   reasoning, reasoning_elapsed_ms, reasoning_started_at,

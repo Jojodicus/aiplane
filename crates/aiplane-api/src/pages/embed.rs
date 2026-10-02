@@ -815,9 +815,9 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         }
         (Some(turn_id), _) => {
             let state = state.clone();
-            tokio::spawn(
-                async move { tail_buffered(state, session_id, turn_id, lang, releases, tx).await },
-            );
+            tokio::spawn(async move {
+                tail_buffered(state, session_id, turn_id, lang, releases, tx).await
+            });
         }
     }
     json_stream_response(rx)

@@ -1109,7 +1109,9 @@ pub(crate) mod tests {
         create_assistant_turn_in_progress(&pool, &s.id, "a1", "m")
             .await
             .unwrap();
-        create_user_turn(&pool, &s.id, "u2", "second").await.unwrap();
+        create_user_turn(&pool, &s.id, "u2", "second")
+            .await
+            .unwrap();
         let a2 = create_assistant_turn_in_progress(&pool, &s.id, "a2", "m")
             .await
             .unwrap();
@@ -1118,11 +1120,19 @@ pub(crate) mod tests {
         assert_eq!(before.id, "u2");
         assert_eq!(before.user_content.as_deref(), Some("second"));
         let first = get_turn(&pool, &s.id, "u1").await.unwrap().unwrap();
-        assert!(turn_before(&pool, &s.id, first.seq).await.unwrap().is_none());
+        assert!(
+            turn_before(&pool, &s.id, first.seq)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         let other = create_session(&pool, "u1").await.unwrap();
         assert!(
-            turn_before(&pool, &other.id, a2.seq).await.unwrap().is_none(),
+            turn_before(&pool, &other.id, a2.seq)
+                .await
+                .unwrap()
+                .is_none(),
             "scoped to its session"
         );
     }

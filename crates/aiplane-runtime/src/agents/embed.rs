@@ -570,7 +570,10 @@ mod tests {
         assert!(turns.runner().is_none());
         let first = turns.claim("s1", "t1").expect("free");
         assert!(turns.claim("s1", "t2").is_none(), "already running");
-        assert!(turns.claim("s2", "t3").is_some(), "other conversations are free");
+        assert!(
+            turns.claim("s2", "t3").is_some(),
+            "other conversations are free"
+        );
         drop(first);
         assert!(turns.claim("s1", "t2").is_some(), "released on drop");
     }
@@ -615,7 +618,10 @@ mod tests {
         assert!(!turns.cancel("s1", "t1"), "nothing runs");
         let claim = turns.claim("s1", "t1").expect("free");
         let flag = turns.cancel_flag("s1").expect("a running turn has a flag");
-        assert!(!turns.cancel("s1", "t0"), "another turn of the conversation");
+        assert!(
+            !turns.cancel("s1", "t0"),
+            "another turn of the conversation"
+        );
         assert!(!flag.load(Ordering::SeqCst));
         assert!(turns.cancel("s1", "t1"));
         assert!(flag.load(Ordering::SeqCst), "the driver sees the request");
