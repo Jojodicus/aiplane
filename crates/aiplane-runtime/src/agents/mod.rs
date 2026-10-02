@@ -11,6 +11,8 @@
 
 pub mod bind;
 pub mod embed;
+pub mod eval;
+pub mod eval_judge;
 pub mod gate;
 pub mod output_filter;
 pub mod profile;

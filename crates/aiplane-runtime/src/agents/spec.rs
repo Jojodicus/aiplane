@@ -149,6 +149,7 @@ const PUBLISH_KEYS: &[&str] = &[
     "rate_limits",
     "budget",
     "output_filter",
+    "require_passing_tests",
 ];
 const RATE_SCOPES: &[&str] = &["visitor", "ip"];
 const RATE_KEYS: &[&str] = &["max", "per"];
@@ -1382,6 +1383,15 @@ impl<'a> Check<'a> {
         if let Some(x) = map.get("retention_days") {
             self.positive_int(x, "publish.retention_days", None);
         }
+        if let Some(x) = map.get("require_passing_tests")
+            && !x.is_boolean()
+        {
+            self.issue(
+                "publish.require_passing_tests",
+                "must be true or false: true blocks publishing until the latest test run of this                  draft is green"
+                    .to_string(),
+            );
+        }
         if let Some(rates) = map.get("rate_limits")
             && let Some(rates) = self.object(rates, "publish.rate_limits", RATE_SCOPES)
         {
@@ -2228,6 +2238,20 @@ mod tests {
             "{}",
             over[0].message
         );
+    }
+
+    #[test]
+    fn require_passing_tests_is_a_boolean() {
+        let ok = check(
+            json!({ "publish": { "require_passing_tests": true } }),
+            Stage::Draft,
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+        let bad = check(
+            json!({ "publish": { "require_passing_tests": "yes" } }),
+            Stage::Draft,
+        );
+        assert_eq!(paths(&bad), ["publish.require_passing_tests"]);
     }
 
     #[test]
