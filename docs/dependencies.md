@@ -118,6 +118,7 @@ output (see the Dockerfile).
 | any npm package at **runtime** | The image ships the Rust binary plus static files. Everything in `web/package.json` is compiled away by `vite build`; a package that needs a Node process, or that must be fetched by the browser from a CDN, does not belong here. |
 | `chrono`, `time` | `jiff` is the chosen time crate. Don't mix. |
 | `lazy_static`, `once_cell` | `std::sync::OnceLock` / `LazyLock` cover it. |
+| `jsonschema`, `boon`, `valico` | The finish contract (`aiplane_runtime::finish`) validates a run's result with a ~100-line subset validator — `type`, `properties`, `required`, `enum`, `items`, boolean `additionalProperties` — and refuses any other keyword when the contract is built. A full validator would pull in regex engines, URI/format checkers and remote `$ref` resolution for schemas an operator writes by hand. Revisit if contracts need `$ref`, `oneOf` or formats. |
 | `serde_yaml` | Config is TOML. One format. |
 | `figment` | Hand-roll config layering until it stops being trivial. |
 | `axum`, `tower-sessions`, `tower-http` | The server stack is rama-only. Sessions are hand-rolled (`rama_server::session`); HTTP-layer concerns ride on rama services. Bringing axum back would mean running two routers in parallel. |

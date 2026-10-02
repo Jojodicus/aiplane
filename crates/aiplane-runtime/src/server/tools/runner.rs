@@ -273,22 +273,27 @@ pub fn announce_final_round(body: &mut Value) {
                           for work you cannot do, and do not claim any file was produced, \
                           attached or made downloadable unless a tool result in this turn \
                           actually says so.";
+    if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        merge_into_leading_system_message(messages, NOTICE);
+    }
+}
 
-    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
-        return;
-    };
+/// Add `notice` to a conversation's leading system message, creating one when
+/// it has none. Merged rather than appended as a second system message, for
+/// the Qwen3 template reason given on [`announce_final_round`].
+pub fn merge_into_leading_system_message(messages: &mut Vec<Value>, notice: &str) {
     match messages.first_mut() {
         Some(first) if first.get("role").and_then(|r| r.as_str()) == Some("system") => {
             match first.get_mut("content") {
-                Some(Value::String(text)) => *text = format!("{text}\n\n---\n\n{NOTICE}"),
+                Some(Value::String(text)) => *text = format!("{text}\n\n---\n\n{notice}"),
                 // A `/v1` caller's block-array system message gains a block
                 // rather than being flattened to a string, which would destroy
                 // structure the upstream may need (cache breakpoints, for one).
-                Some(Value::Array(blocks)) => blocks.push(json!({"type": "text", "text": NOTICE})),
-                _ => first["content"] = json!(NOTICE),
+                Some(Value::Array(blocks)) => blocks.push(json!({"type": "text", "text": notice})),
+                _ => first["content"] = json!(notice),
             }
         }
-        _ => messages.insert(0, json!({"role": "system", "content": NOTICE})),
+        _ => messages.insert(0, json!({"role": "system", "content": notice})),
     }
 }
 

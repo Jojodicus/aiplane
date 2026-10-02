@@ -1041,6 +1041,7 @@ pub async fn webhooks_rerun(
             model: hook.model.clone(),
             source: UsageSource::Webhook,
             history_limit: None,
+            finish: None,
         },
     )
     .await;
