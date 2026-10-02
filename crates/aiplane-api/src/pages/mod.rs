@@ -345,7 +345,7 @@ pub(crate) fn payload_too_large(what: &str, max: usize) -> Response {
 
 /// `65536` → `64 KiB`, `1048576` → `1 MiB`.
 pub(crate) fn human_size(bytes: usize) -> String {
-    if bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 {
+    if bytes >= 1024 * 1024 && bytes.is_multiple_of(1024 * 1024) {
         format!("{} MiB", bytes / (1024 * 1024))
     } else {
         format!("{} KiB", bytes / 1024)
