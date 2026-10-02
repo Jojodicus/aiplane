@@ -37,7 +37,7 @@ use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{self as embed_rt, AgentTurn};
+use aiplane_runtime::agents::embed::{self as embed_rt, OpenedTurn};
 use aiplane_runtime::rama_server::state::RamaState;
 
 macro_rules! or_return {
@@ -109,9 +109,10 @@ fn visitor_session_expired() -> Response {
     )
 }
 
-/// The request's `Origin`, which must be one the key lists. A browser always
-/// sends it on the widget's cross-origin calls.
-fn check_origin(key: &EmbedKey, headers: &HeaderMap) -> Result<(), Response> {
+/// The request's `Origin`, which must be one the key lists and, when the
+/// conversation's version sets `publish.origins`, one listed there too. A
+/// browser always sends it on the widget's cross-origin calls.
+fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(), Response> {
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
@@ -124,27 +125,43 @@ fn check_origin(key: &EmbedKey, headers: &HeaderMap) -> Result<(), Response> {
              on a website its embed key lists",
         ));
     };
-    if key.allows(origin) {
+    if !key.allows(origin) {
+        return Err(refuse(
+            StatusCode::FORBIDDEN,
+            "origin_not_allowed",
+            &format!(
+                "`{origin}` may not embed this agent — the site owner needs to add exactly \
+                 `{origin}` to the embed key's origins"
+            ),
+        ));
+    }
+    if embed_rt::spec_allows_origin(spec, origin) {
         return Ok(());
     }
     Err(refuse(
         StatusCode::FORBIDDEN,
         "origin_not_allowed",
         &format!(
-            "`{origin}` may not embed this agent — the site owner needs to add exactly \
-             `{origin}` to the embed key's origins"
+            "`{origin}` is on the embed key but not in the agent's published \
+             `publish.origins` — the agent's owner needs to add it there and publish again"
         ),
     ))
 }
 
-/// The agent as visitors may use it: enabled, with a live version.
+/// The agent as a visitor's conversation runs it: enabled, published, on the
+/// version the conversation is pinned to (the live one for a new
+/// conversation).
 struct Live {
     agent: AgentRow,
     version: i64,
     spec: Value,
 }
 
-async fn live_agent(state: &RamaState, principal_id: &str) -> Result<Live, Response> {
+async fn live_agent(
+    state: &RamaState,
+    principal_id: &str,
+    pinned: Option<i64>,
+) -> Result<Live, Response> {
     let Some(agent) = agents_db::get(&state.db, principal_id)
         .await
         .map_err(internal)?
@@ -167,7 +184,7 @@ async fn live_agent(state: &RamaState, principal_id: &str) -> Result<Live, Respo
              a website can use it",
         )
     };
-    let Some(version) = agent.live_version else {
+    let Some(version) = pinned.or(agent.live_version) else {
         return Err(not_published());
     };
     let Some(row) = agents_db::version(&state.db, principal_id, version)
@@ -222,8 +239,8 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
     if key.revoked_at.is_some() {
         return embed_key_revoked();
     }
-    or_return!(check_origin(&key, &headers));
-    let live = or_return!(live_agent(&state, &key.principal_id).await);
+    let live = or_return!(live_agent(&state, &key.principal_id, None).await);
+    or_return!(check_origin(&key, &live.spec, &headers));
     or_return!(admit(None, ip.as_deref()));
 
     let (visitor_token, token_hash) = token::mint_visitor();
@@ -256,12 +273,11 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
     }
 }
 
-/// An accepted visitor request: its session (already slid), the live agent
-/// and the caller's IP.
+/// An accepted visitor request: its session (already slid) and the agent on
+/// the conversation's version.
 struct Visitor {
     session: VisitorSession,
     live: Live,
-    client_ip: Option<String>,
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -290,18 +306,17 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
         .map_err(internal)?
         .filter(|k| k.revoked_at.is_none())
         .ok_or_else(embed_key_revoked)?;
-    check_origin(&key, req.headers())?;
-    let live = live_agent(state, &session.principal_id).await?;
-    let ip = client_ip(req);
-    admit(Some(&session), ip.as_deref())?;
+    let pinned = chat::get_principal_session(&state.db, &session.principal_id, &session.session_id)
+        .await
+        .map_err(internal)?
+        .and_then(|run| run.agent_version);
+    let live = live_agent(state, &session.principal_id, pinned).await?;
+    check_origin(&key, &live.spec, req.headers())?;
+    admit(Some(&session), client_ip(req).as_deref())?;
     let session = visitor_sessions::slide(&state.db, &session, now)
         .await
         .map_err(internal)?;
-    Ok(Visitor {
-        session,
-        live,
-        client_ip: ip,
-    })
+    Ok(Visitor { session, live })
 }
 
 /// A turn as a visitor may see it: the text of the exchange, and nothing of
@@ -430,14 +445,12 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         return internal(err);
     }
 
-    let turn = AgentTurn {
-        principal_id: v.session.principal_id.clone(),
-        agent_version: v.live.version,
-        spec: v.live.spec.clone(),
+    let turn = OpenedTurn {
+        agent_id: v.session.principal_id.clone(),
+        version: v.live.version,
         session_id: session_id.clone(),
-        assistant_turn_id: assistant_turn_id.clone(),
-        visitor_id: v.session.id.clone(),
-        client_ip: v.client_ip.clone(),
+        turn_id: assistant_turn_id.clone(),
+        visitor_id: Some(v.session.id.clone()),
     };
     let state_for_run = state.clone();
     let turn_id = assistant_turn_id.clone();

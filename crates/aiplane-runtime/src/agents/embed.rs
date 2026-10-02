@@ -16,10 +16,14 @@ use std::sync::{Arc, Mutex};
 use jiff::SignedDuration;
 use serde_json::Value;
 
+use session_core::db as chat;
+
+use super::profile::{Role, RunOptions, RunProfile};
+pub use super::run::OpenedTurn;
+use super::run::drive_opened;
 use crate::rama_server::state::RamaState;
 
-/// A visitor session's idle TTL when the live spec names no
-/// `publish.idle_ttl`.
+/// A visitor session's idle TTL when the spec names no `publish.idle_ttl`.
 pub const DEFAULT_IDLE_TTL: SignedDuration = SignedDuration::from_secs(30 * 60);
 
 /// The absolute cap on one visitor session, however often it is used:
@@ -37,40 +41,66 @@ pub fn idle_ttl(spec: &Value) -> SignedDuration {
         .unwrap_or(DEFAULT_IDLE_TTL)
 }
 
-/// One visitor turn, opened and ready to run.
-///
-/// The endpoint has already written the visitor's message as a user turn and
-/// an `in_progress` assistant turn after it; the runner drives
-/// `assistant_turn_id` to a terminal status.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentTurn {
-    /// The agent, which is also the principal the turn runs as.
-    pub principal_id: String,
-    /// The live version at the time of the message, and its spec.
-    pub agent_version: i64,
-    pub spec: Value,
-    /// The principal-owned `chat_sessions` row of the conversation.
-    pub session_id: String,
-    pub assistant_turn_id: String,
-    /// `visitor_sessions.id`, for the run's call chain.
-    pub visitor_id: String,
-    pub client_ip: Option<String>,
+/// Whether the spec lets a browser on `origin` use the agent: always when it
+/// sets no `publish.origins`, otherwise only an origin listed there. The
+/// embed key's own list applies on top; an origin must pass both.
+pub fn spec_allows_origin(spec: &Value, origin: &str) -> bool {
+    match spec.pointer("/publish/origins").and_then(Value::as_array) {
+        None => true,
+        Some(list) => list.iter().any(|o| o.as_str() == Some(origin)),
+    }
 }
 
-/// Runs one turn of an agent conversation as the agent's principal.
+/// Runs one opened turn of an agent conversation as the agent's principal.
 ///
 /// Contract:
-/// - The turn runs as `principal_id` with exactly its grants and the live
-///   spec, never as a person.
+/// - The turn runs as `agent_id` with exactly its grants, on `version` (the
+///   version the conversation started on), never as a person.
 /// - Output is buffered (`OutputPolicy::Buffered`): the endpoint shows a
 ///   visitor an assistant answer only once its turn is terminal, so a runner
 ///   may write partial content as it likes.
-/// - When `run` returns, `assistant_turn_id` is terminal. The endpoint errors
-///   a turn left `in_progress`, so a runner that crashes cannot wedge the
+/// - When `run` returns, `turn_id` is terminal. The endpoint errors a turn
+///   left `in_progress`, so a runner that crashes cannot wedge the
 ///   conversation.
 #[async_trait::async_trait]
 pub trait AgentTurnRunner: Send + Sync {
-    async fn run(&self, state: Arc<RamaState>, turn: AgentTurn);
+    async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn);
+}
+
+/// The production runner: the agent entry point of `agents::run`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveAgentRunner;
+
+#[async_trait::async_trait]
+impl AgentTurnRunner for LiveAgentRunner {
+    async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn) {
+        let options = RunOptions::default();
+        let ran = match RunProfile::load_version(
+            &state,
+            &turn.agent_id,
+            Some(turn.version),
+            Role::Main,
+            &options,
+        )
+        .await
+        {
+            Ok(profile) => drive_opened(&state, &profile, &turn).await.map(|_| ()),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = ran {
+            tracing::warn!(error = %err, turn = %turn.turn_id, "visitor turn could not run");
+            if let Err(db) = chat::finalize_turn(
+                &state.db,
+                &turn.turn_id,
+                chat::TurnStatus::Errored,
+                Some(&err.to_string()),
+            )
+            .await
+            {
+                tracing::warn!(error = %db, turn = %turn.turn_id, "recording a failed visitor turn");
+            }
+        }
+    }
 }
 
 /// The runner, if this build has one, and the conversations with a turn
@@ -138,6 +168,17 @@ mod tests {
             DEFAULT_IDLE_TTL
         );
         assert_eq!(DEFAULT_IDLE_TTL, SignedDuration::from_secs(1800));
+    }
+
+    #[test]
+    fn the_specs_origins_narrow_only_when_it_lists_some() {
+        let open = json!({ "publish": {} });
+        assert!(spec_allows_origin(&open, "https://any.example"));
+        let listed = json!({ "publish": { "origins": ["https://a.example"] } });
+        assert!(spec_allows_origin(&listed, "https://a.example"));
+        assert!(!spec_allows_origin(&listed, "https://b.example"));
+        let empty = json!({ "publish": { "origins": [] } });
+        assert!(!spec_allows_origin(&empty, "https://a.example"));
     }
 
     #[test]

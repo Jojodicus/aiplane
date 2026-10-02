@@ -198,7 +198,8 @@ what was built: [`agents.md`](agents.md#what-91-built).
   once. Revoking it ends every conversation started with it at the next
   request.
 - **Origin allowlist.** Every embed request must carry an `Origin` the key
-  lists. This keeps other websites from embedding the agent; it does not stop
+  lists, and, when the conversation's agent version sets `publish.origins`,
+  that list too. This keeps other websites from embedding the agent; it does not stop
   abuse, since a non-browser client sets any `Origin` it likes. Abuse is
   bounded by the agent's default-deny grants, its gates and (with #92)
   per-visitor and per-IP limits.

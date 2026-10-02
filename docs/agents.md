@@ -611,14 +611,17 @@ grants.
 
 - **Entry point.** `agents::run::run_turn(state, AgentTurn { agent_id,
   session_id, message, visitor_id })` runs one visitor message as the agent's
-  principal on its **live** version and returns `AgentReply { session_id,
+  principal and returns `AgentReply { session_id,
   turn_id, status, answer, error }`. A new conversation is a principal-owned
   session (`parent_turn_id` `NULL`, `agent_version` set). A `session_id` must
-  belong to that agent, or the call fails with `UnknownSession`. The chain is
+  belong to that agent, or the call fails with `UnknownSession`; a new
+  conversation runs the live version, a continued one the version it started
+  on (#91, `RunProfile::load_version`). The chain is
   `RunChain::root(session, visitor, main frame)`. `run_turn_with` takes
   `RunOptions { now, classifier }`: the clock that gates and slot writes read,
-  and a `RouteClassifier` to use instead of the pool classifier. No HTTP route
-  calls it yet: the test chat is #90, the public endpoint #91.
+  and a `RouteClassifier` to use instead of the pool classifier. The public
+  endpoint (#91) drives its turns through the same `drive_opened`; the test
+  chat is #90.
 - **`RunProfile::load(state, agent_id, Role, options)`** reads the live version
   and the principal (`load_active`, so a disabled one is refused). It returns
   `{principal, version, model, budget, finish, injection, run: Arc<AgentRun>}`,
@@ -978,11 +981,11 @@ untrusted audiences.
     must be enabled and published. The answer is `201 {token, expires_at,
     idle_ttl_secs, agent: {display}}` with a fresh `gwv_` token.
   - *Every later request* sends `Authorization: Bearer gwv_…` and re-checks
-    the chain: session not expired, key not revoked, `Origin` in that key's
-    list, agent enabled and published. Only then does the session slide, to
+    the chain: session not expired, key not revoked, `Origin` allowed (see
+    below), agent enabled and published. Only then does the session slide, to
     `min(now + idle_ttl, max_expires_at)`. So a revoked key or a disabled
     agent ends open conversations at their next request.
-  - *Idle TTL:* the live spec's `publish.idle_ttl`, default 30 min. *Absolute
+  - *Idle TTL:* the starting version's `publish.idle_ttl`, default 30 min. *Absolute
     cap:* 24 h (`MAX_VISITOR_SESSION`); `sessionStorage` normally ends the
     session sooner, with the tab.
   - *Reload:* the widget finds its token in `sessionStorage` and calls `GET
@@ -1026,23 +1029,31 @@ untrusted audiences.
   headers). The handler then checks the origin against the request's own key.
   No `Allow-Credentials`, `Max-Age` 600 s so a revoked origin stops working
   quickly. Every other `/api/v0` route still gets no CORS headers.
-- **The runner seam.** The endpoint opens the turn rows (the visitor's user
-  turn and an `in_progress` assistant turn whose model is `main.pool`), then
-  hands an `AgentTurn {principal_id, agent_version, spec, session_id,
-  assistant_turn_id, visitor_id, client_ip}` to
+- **The runner.** The endpoint opens the turn rows (the visitor's user turn
+  and an `in_progress` assistant turn), then hands an `OpenedTurn {agent_id,
+  version, session_id, turn_id, visitor_id}` to
   `aiplane_runtime::agents::embed::AgentTurnRunner::run(state, turn)` in a
-  background task. The runner must run the turn as the principal with exactly
-  its grants, buffered, and leave the turn terminal. If it does not, or
-  panics, the endpoint errors the turn so the conversation is not stuck.
-  `RamaState::agent_turns` also holds one claim per conversation, so two
-  messages cannot run at once. `RamaState::with_agent_runner` installs the
-  runner. Nothing installs one yet, so `messages` answers `503
-  agent_runtime_unavailable` and stores nothing. **Wiring step (#87/#88):**
-  implement `AgentTurnRunner` on the agent entry point (it builds
-  `Principal::System` with `load_active`, `RunChain::root` with `visitor_id`,
-  the agent `RunProfile` with `OutputPolicy::Buffered`, and drives the opened
-  turn as `headless::drive` does), then call `.with_agent_runner(…)` where
-  `main.rs` builds the `RamaState`.
+  background task. `OpenedTurn` is the same type `agents::run` uses: its
+  `run_turn` opens the rows itself and then calls the same `drive_opened` the
+  production runner `LiveAgentRunner` calls, so the two paths share one
+  driver. `main.rs` installs `LiveAgentRunner` with
+  `RamaState::with_agent_runner`; a profile that cannot load (agent disabled,
+  no healthy model) errors the turn with that reason. Without a runner (only
+  in tests) `messages` answers `503 agent_runtime_unavailable` and stores
+  nothing. A runner that leaves the turn unfinished, or panics, has its turn
+  errored by the endpoint, and `RamaState::agent_turns` holds one claim per
+  conversation so two messages cannot run at once.
+- **A conversation is pinned to its version.** It runs the version that was
+  live when it started, recorded in `chat_sessions.agent_version`; publishing
+  or rolling back changes only conversations started afterwards. Versions are
+  immutable and deleted only with the agent, so a pinned version always
+  exists. `agents::run::run_turn` applies the same rule to a continued
+  session (`RunProfile::load_version`).
+- **Origins: the key's, narrowed by the spec's.** A request's `Origin` must be
+  in the embed key's `origins` and, when the conversation's version sets
+  `publish.origins`, in those too. The refusal says which list lacks it. The
+  CORS layer only knows the keys, so an origin the spec excludes still gets a
+  preflight answer, and the handler then refuses it.
 - **Rate limits are a stub.** `pages::embed::admit` is called with the visitor
   session and client IP on every request and always admits. The per-visitor
   and per-IP buckets of #92 go there. Until then a visitor is bounded by the

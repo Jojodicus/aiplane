@@ -62,6 +62,12 @@ async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
 }
 
 pub(crate) async fn fixture() -> Fx {
+    fixture_on(None).await
+}
+
+/// The fixture with `pool` served by `upstream`, a chat backend that
+/// serves model `m`, when one is given.
+pub(crate) async fn fixture_on(upstream: Option<&str>) -> Fx {
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
     pools.insert(
@@ -76,10 +82,18 @@ pub(crate) async fn fixture() -> Fx {
             kind: PoolKind::Chat,
             strategy: PickerStrategy::RoundRobin,
             models: Vec::new(),
-            backend: vec![common::mock_backend("mock", "http://127.0.0.1:9")],
+            backend: vec![common::mock_backend(
+                "mock",
+                upstream.unwrap_or("http://127.0.0.1:9"),
+            )],
         },
     );
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
+    if upstream.is_some() {
+        for p in registry.pools() {
+            p.backends[0].set_models(["m".to_string()].into());
+        }
+    }
     let app = AppState::new(
         common::test_config(),
         pool.clone(),

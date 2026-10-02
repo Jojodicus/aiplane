@@ -21,9 +21,11 @@ use crate::agents::{self, Fx, spec};
 use crate::common;
 
 use aiplane_core::server::crypto::sha256_hex;
-use aiplane_runtime::agents::embed::{AgentTurn, AgentTurnRunner};
+use aiplane_runtime::agents::embed::{AgentTurnRunner, LiveAgentRunner, OpenedTurn};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::db as chat;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SITE: &str = "https://www.example.com";
 const OTHER_SITE: &str = "https://evil.example";
@@ -40,7 +42,7 @@ const PARTIAL: &str = "Let me check the ord";
 struct ScriptedRunner {
     hold: Option<Arc<Notify>>,
     finish: bool,
-    seen: Mutex<Vec<AgentTurn>>,
+    seen: Mutex<Vec<OpenedTurn>>,
 }
 
 impl ScriptedRunner {
@@ -62,26 +64,21 @@ impl ScriptedRunner {
 
 #[async_trait::async_trait]
 impl AgentTurnRunner for ScriptedRunner {
-    async fn run(&self, state: Arc<RamaState>, turn: AgentTurn) {
+    async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn) {
         self.seen.lock().unwrap().push(turn.clone());
-        chat::set_content(&state.db, &turn.assistant_turn_id, PARTIAL)
+        chat::set_content(&state.db, &turn.turn_id, PARTIAL)
             .await
             .unwrap();
         if let Some(gate) = &self.hold {
             gate.notified().await;
         }
         if self.finish {
-            chat::set_content(&state.db, &turn.assistant_turn_id, ANSWER)
+            chat::set_content(&state.db, &turn.turn_id, ANSWER)
                 .await
                 .unwrap();
-            chat::finalize_turn(
-                &state.db,
-                &turn.assistant_turn_id,
-                chat::TurnStatus::Completed,
-                None,
-            )
-            .await
-            .unwrap();
+            chat::finalize_turn(&state.db, &turn.turn_id, chat::TurnStatus::Completed, None)
+                .await
+                .unwrap();
         }
     }
 }
@@ -218,6 +215,21 @@ async fn embed_with(runner: Option<ScriptedRunner>, extra_spec: Option<Value>) -
     if installed {
         fx.state = fx.state.clone().with_agent_runner(runner.clone());
     }
+    published(fx, runner, extra_spec).await
+}
+
+/// The same, served end to end: the production runner on a pool whose
+/// backend is `upstream`.
+async fn embed_live(upstream: &MockServer) -> Embed {
+    let mut fx = agents::fixture_on(Some(&upstream.uri())).await;
+    fx.state = fx
+        .state
+        .clone()
+        .with_agent_runner(Arc::new(LiveAgentRunner));
+    published(fx, Arc::default(), None).await
+}
+
+async fn published(fx: Fx, runner: Arc<ScriptedRunner>, extra_spec: Option<Value>) -> Embed {
     let agent = fx.runnable("support").await;
     if let Some(extra) = extra_spec {
         let mut s = spec("v1");
@@ -507,11 +519,11 @@ async fn a_message_runs_as_the_agent_on_its_live_version() {
     let seen = e.runner.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
     let run = &seen[0];
-    assert_eq!(run.principal_id, e.agent);
-    assert_eq!(run.agent_version, 1);
+    assert_eq!(run.agent_id, e.agent);
+    assert_eq!(run.version, 1);
     assert_eq!(run.session_id, session);
-    assert_eq!(run.assistant_turn_id, turn_id);
-    assert_eq!(run.spec["main"]["instructions"]["orchestration"], "v1");
+    assert_eq!(run.turn_id, turn_id);
+    assert!(run.visitor_id.is_some());
     let owner = chat::session_owner(&e.fx.state.db, &session)
         .await
         .unwrap()
@@ -991,4 +1003,140 @@ async fn an_embeddable_origin_gets_no_cors_on_any_other_api_route() {
             "{uri}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Version pinning and the spec's own origins
+
+#[tokio::test]
+async fn a_conversation_stays_on_the_version_it_started_on() {
+    let e = embed().await;
+    let old = e.visitor().await;
+    e.fx.put_draft(&e.fx.alice, &e.agent, spec("v2")).await;
+    let (status, body) = e.fx.publish(&e.fx.alice, &e.agent).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let new = e.visitor().await;
+
+    for token in [&old, &new] {
+        let r = e.say(token, "hi").await;
+        assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+        let session = e.conversation_of(token).await;
+        e.wait_terminal(&session, r.body["turn_id"].as_str().unwrap())
+            .await;
+    }
+    let versions: Vec<i64> = e
+        .runner
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|t| t.version)
+        .collect();
+    assert_eq!(versions, [1, 2], "the old conversation keeps version 1");
+}
+
+#[tokio::test]
+async fn an_origin_must_also_be_in_the_specs_publish_origins_when_it_sets_them() {
+    let e = embed_with(
+        Some(ScriptedRunner::answering()),
+        Some(json!({ "publish": { "origins": [OTHER_SITE] } })),
+    )
+    .await;
+    let r = e.start_with(&e.key, Some(SITE)).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(code(&r), "origin_not_allowed");
+    assert!(
+        r.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("publish.origins"),
+        "{}",
+        r.body
+    );
+
+    let (_, both) = new_key(&e.fx, &e.agent, &[SITE, OTHER_SITE]).await;
+    let r = e.start_with(&both, Some(OTHER_SITE)).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+}
+
+// ---------------------------------------------------------------------------
+// End to end: the production runner on a wiremock upstream
+
+#[tokio::test]
+async fn a_visitor_gets_the_main_agents_answer_from_the_real_runner() {
+    let upstream = MockServer::start().await;
+    let streamed = [
+        json!({"choices": [{"index": 0, "delta": {"content": "Your order "}}]}),
+        json!({"choices": [{"index": 0, "delta": {"content": "ships today."}}]}),
+    ];
+    let sse = streamed
+        .iter()
+        .map(|c| format!("data: {c}\n\n"))
+        .collect::<String>()
+        + "data: [DONE]\n\n";
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(&upstream)
+        .await;
+    let e = embed_live(&upstream).await;
+
+    let token = e.visitor().await;
+    let r = e.say(&token, "where is my order?").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.body);
+    let resp = e
+        .raw(
+            Method::GET,
+            "/api/v0/embed/events",
+            Some(SITE),
+            Some(&token),
+            None,
+        )
+        .await;
+    let body = tokio::time::timeout(Duration::from_secs(20), common::read_body(resp))
+        .await
+        .expect("the stream ends once the answer is in");
+    let frames = frames(&body);
+    let names: Vec<&str> = frames.iter().map(|(n, _)| n.as_str()).collect();
+    let deltas: Vec<&Value> = frames
+        .iter()
+        .filter(|(n, _)| n == "turn_delta")
+        .map(|(_, d)| d)
+        .collect();
+    if names.last() == Some(&"turn_finalized") {
+        assert_eq!(
+            deltas.len(),
+            1,
+            "one whole answer, not a token stream: {names:?}"
+        );
+        assert_eq!(deltas[0]["text_delta"], "Your order ships today.");
+        assert_eq!(deltas[0]["full"], true);
+        assert_eq!(frames.last().unwrap().1["status"], "completed");
+    } else {
+        assert_eq!(
+            names,
+            ["snapshot", "idle"],
+            "the turn finished before attaching"
+        );
+        assert_eq!(
+            frames[0].1["turns"][1]["turn"]["content"],
+            "Your order ships today."
+        );
+    }
+
+    let session = e.conversation_of(&token).await;
+    let turns = chat::list_turns(&e.fx.state.db, &session).await.unwrap();
+    assert_eq!(turns[1].turn.status, chat::TurnStatus::Completed);
+    let sent: Value =
+        serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(sent["model"], "m");
+    let system = sent["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.contains("v1"),
+        "the agent's own instructions: {system}"
+    );
+    assert_eq!(
+        sent["messages"].as_array().unwrap().last().unwrap()["content"],
+        "where is my order?"
+    );
 }
