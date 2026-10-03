@@ -1921,7 +1921,7 @@ verifiers:
   Cancel) on `/embed/resume`; `data-identity-token` and
   `croit-aiplane-embed.setIdentityToken(token)` send the host token once per
   conversation ([`embed.md`](embed.md#signed-in-visitors)). The builder edits
-  verifiers in the JSON tab; its Settings section lists them with their
+  verifiers in the JSON panel (or, for the assistant's own `identity`, in the setup's identity step); its Settings section lists them with their
   issues.
 - **Deviations.**
   - The design table put verifier tools in `aiplane-tools`; they need the
@@ -2915,6 +2915,33 @@ what the guard is shown); `agents/profile.rs` (the brief's sections);
 `spec.rs` (scope validation); `tests/it/agent_test_chat.rs` (the 422 for a
 strict scope without a refusal, the verdict in the debug view).
 
+### What #116 built
+
+The setup assistant and overview in the SPA ([`ui.md`](ui.md#agent-setup)).
+The spec is unchanged: every step reads and writes the parts of it described
+in that table, and leaves the rest alone.
+
+- **Model choices.** Settings `agents.pool_fast`, `agents.pool_balanced`,
+  `agents.pool_thorough` (`aiplane-core::server::settings`, section `agents`,
+  Chat tab; `Config::agents`). `GET /api/v0/agent-resources` returns them as
+  `tiers: {fast, balanced, thorough}` (each a pool name or `null`), whether or
+  not the caller holds that pool, so the assistant can say why a choice is
+  unavailable instead of hiding it. Choosing a tier grants the pool through
+  the ordinary grant route, so the manager's cap applies unchanged.
+- **Templates.** `web/src/lib/agent-templates.json`: five starter drafts
+  (FAQ, customer support with an e-mail-code identity check and a fallback to
+  a person, lead qualification, internal helper, blank). A string `@<key>` is
+  a catalog message. `tests/it/agent_test_chat.rs`
+  (`every_setup_template_is_a_valid_draft_in_every_language`) creates every
+  template in all six languages through `POST /api/v0/agents`, so the
+  validator accepts each as a draft; `resources_name_the_pool_behind_each_model_choice_an_admin_mapped`
+  covers `tiers`.
+- **Reserved names the assistant owns.** The verifier `identity`, the slots
+  `verified`, `topic` and `request`, and the route `fallback`. A route is the
+  assistant's when it has exactly the hand-off shape; anything else under
+  those names, and every other route, slot or verifier, is shown as "set up in
+  the advanced editor" and kept as it is.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2970,6 +2997,7 @@ use `regex`, and hashing uses the token helpers.
 | #111 activity log | §5 | `agent_audit` becomes a hash-chained activity log (per conversation, per agent); every model exchange, tool call, state write, turn and decision of an agent run recorded in full, synchronously, failing the run closed; `publish.audit_retention_days`; `/api/v0/agents/{id}/activity` (+ `export`, `verify`); Activity tab ([built](#what-111-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
+| #116 setup assistant | §2 | overview, routed step assistant and single-step modal over the same spec; admin-mapped model choices (`agents.pool_*`, `tiers` on `agent-resources`); five starter templates validated in six languages ([built](#what-116-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred

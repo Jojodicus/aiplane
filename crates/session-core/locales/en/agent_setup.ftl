@@ -1,0 +1,251 @@
+# Strings owned by the agent setup assistant (`/agents/{id}` Setup tab and
+# `/agents/{id}/setup/{step}`): the overview, the steps, the checklist, and
+# the starter templates' texts (`web/src/lib/agent-templates.json`).
+agents-tab-setup = Setup
+agents-tab-try = Try it
+agents-tab-insights = Insights
+agents-tab-settings = Settings
+agents-setup-advanced = Advanced editor
+agents-setup-advanced-hint = For experts: the form, the canvas and the JSON edit the same agent.
+agents-setup-cta-title = Set it up step by step
+agents-setup-cta-text = The assistant walks you through every point. You can also open each point on its own later.
+agents-setup-cta-start = Start the assistant
+agents-setup-edit = Edit
+agents-setup-status-done = Done
+agents-setup-status-open = Open
+agents-setup-status-optional = Optional
+agents-setup-checklist = Before you publish
+agents-setup-fix = Fix
+agents-setup-fix-advanced = Open the advanced editor
+agents-setup-ready = Everything is ready. You can publish.
+agents-setup-ready-pill = Ready
+agents-setup-open-count = { $count ->
+    [one] { $count } point open
+   *[other] { $count } points open
+}
+agents-setup-publish-blocked = Some points are still open. See “Before you publish” under Setup.
+agents-setup-check-scope = { $count ->
+    [one] Topic list with { $count } topic
+   *[other] Topic list with { $count } topics
+}
+agents-setup-check-scope-strict = { $count ->
+    [one] Topic list with { $count } topic, strictly enforced
+   *[other] Topic list with { $count } topics, strictly enforced
+}
+agents-setup-preview = How it looks on your website
+agents-setup-preview-greeting = Hello! I am { $name }. How can I help you?
+agents-setup-preview-offtopic = How does a diesel engine work?
+agents-setup-preview-free = Without strict enforcement the model decides for itself, and often answers anyway.
+agents-setup-preview-placeholder = Message …
+agents-setup-modal-note = Changes go into the draft.
+agents-setup-apply = Apply
+agents-setup-assistant = Assistant
+agents-setup-back = Back
+agents-setup-next = Next
+agents-setup-done = Done
+agents-setup-step-of = Step { $current } of { $total }
+agents-setup-unknown-step = This step does not exist.
+agents-setup-step-start = What is it about?
+agents-setup-step-start-short = Scenario
+agents-setup-step-basics = Task & tone
+agents-setup-step-basics-short = Task
+agents-setup-step-scope = Topics
+agents-setup-step-scope-short = Topics
+agents-setup-step-abilities = Knowledge & abilities
+agents-setup-step-abilities-short = Knowledge
+agents-setup-step-slots = Information to collect
+agents-setup-step-slots-short = Details
+agents-setup-step-identity = Identity check
+agents-setup-step-identity-short = Identity
+agents-setup-step-routes = Hand-offs
+agents-setup-step-routes-short = Hand-offs
+agents-setup-step-site = Website
+agents-setup-step-site-short = Website
+agents-setup-step-review = Check & test
+agents-setup-step-review-short = Check
+agents-setup-start-lead = Describe in your own words what the agent should do, or pick a template.
+agents-setup-scenario = Your scenario
+agents-setup-scenario-placeholder = For example: a support bot for our website that answers questions from our documentation and opens tickets.
+agents-setup-propose = Suggest a setup
+agents-setup-propose-coming = Coming soon: the assistant will turn your scenario into a suggestion for every step.
+agents-setup-or-template = or pick a template:
+agents-setup-tpl-faq = Website FAQ
+agents-setup-tpl-faq-desc = Answers questions from your documents.
+agents-setup-tpl-support = Customer support with identity check
+agents-setup-tpl-support-desc = Helps customers and checks who they are before sensitive topics.
+agents-setup-tpl-leads = Qualify leads
+agents-setup-tpl-leads-desc = Asks about needs and hands over to sales.
+agents-setup-tpl-internal = Internal helper
+agents-setup-tpl-internal-desc = For employees, with access to internal sources.
+agents-setup-tpl-blank = Start blank
+agents-setup-tpl-blank-desc = For experts, without presets.
+agents-setup-tpl-replace = Replace the current setup with the template “{ $template }”? Access already granted stays as it is.
+agents-setup-tpl-applied = Template applied. Go through the steps with “Next” and adjust them.
+agents-tpl-faq-task = Answer visitors’ questions using our documentation. If the documentation does not cover a question, say so honestly and do not guess.
+agents-tpl-faq-refusal = I can’t help with that. I’m happy to answer questions about our products and services.
+agents-tpl-support-task = Help our customers with questions about our products and their orders. Before you share anything about a customer’s account, confirm who they are. If you cannot solve a problem, summarise it and hand it over to the support team.
+agents-tpl-support-refusal = I can’t help with that, unfortunately. I’m happy to help with questions about our products and your orders.
+agents-tpl-leads-task = Find out what the visitor needs: their name, e-mail address, company and what they are looking for. Answer general questions about our offering, then hand the request over to our sales team.
+agents-tpl-leads-refusal = I can’t help with that. I’m happy to tell you about our offering.
+agents-tpl-internal-task = Help employees find information in our internal sources. Name the source of every answer.
+agents-tpl-internal-refusal = I can only help with questions about our internal topics.
+agents-tpl-slot-name = Name
+agents-tpl-slot-email = E-mail address
+agents-tpl-slot-company = Company
+agents-tpl-slot-need = What they are looking for
+agents-setup-name = Name
+agents-setup-task = What should the agent do?
+agents-setup-task-hint = One or two sentences: who is it for, and what does it help with?
+agents-setup-tone = How should it sound?
+agents-setup-tone-friendly = Friendly
+agents-setup-tone-factual = Factual
+agents-setup-tone-casual = Casual
+agents-setup-tone-brief = Short & crisp
+agents-setup-tone-detailed = Detailed
+agents-setup-tone-formal = Formal address
+agents-setup-tone-informal = Informal address
+agents-setup-language = Answers in
+agents-setup-language-visitor = The visitor’s language
+agents-setup-language-fixed = Always one language
+agents-setup-language-none = Not specified
+agents-setup-language-pick = Language
+agents-setup-tone-more = More about how it should answer
+agents-setup-tone-more-hint = Anything else about style or length. Optional.
+agents-setup-model = How thorough?
+agents-setup-model-hint = An admin decides once which model each choice uses.
+agents-setup-model-fast = Fast
+agents-setup-model-balanced = Balanced
+agents-setup-model-thorough = Thorough
+agents-setup-model-custom = Currently another model: { $pool }
+agents-setup-model-pool = Model
+agents-setup-model-unmapped = Your admin has not set up the model choices yet, so pick a model directly. (Admins: Settings → Chat → Agent model choices.)
+agents-setup-model-none = There is no model you could give this agent. Ask an admin for access to a model pool.
+agents-setup-model-unavailable = “{ $choice }” uses a model you do not have access to yourself, so you cannot give it to the agent. Ask an admin.
+agents-setup-grant-failed = The agent could not be given access: { $reason }
+agents-setup-scope-lead = What may the agent talk about? Everything else gets your standard answer.
+agents-setup-topics = Allowed topics
+agents-setup-topic-add = Add topic
+agents-setup-topic-placeholder = For example: Invoices
+agents-setup-refusal = Answer for other topics
+agents-setup-strict = Enforce strictly (topic guard)
+agents-setup-strict-hint = Before every answer a small model checks whether the question fits the topics. If it does not, the visitor gets the standard answer and the main model is never asked.
+agents-setup-strict-needs = A strict topic guard needs at least one topic and an answer for other topics.
+agents-setup-scope-try = Try it in the “Try it” tab: the test chat shows the topic guard’s verdict for every message.
+agents-setup-abilities-lead = What may the agent use? The access it needs is granted automatically, as far as you hold it yourself.
+agents-setup-knowledge = Knowledge
+agents-setup-knowledge-desc = Answers from the knowledge base “{ $name }”.
+agents-setup-knowledge-no-search = You may not use the knowledge search yourself, so you cannot give it to the agent. Ask an admin.
+agents-setup-abilities = Abilities
+agents-setup-connector-desc = { $count ->
+    [one] Through the “{ $name }” connector ({ $count } tool).
+   *[other] Through the “{ $name }” connector ({ $count } tools).
+}
+agents-setup-skill-desc = Follows the instructions of the skill “{ $name }”.
+agents-setup-locked = Granted by someone else
+agents-setup-locked-hint = You do not hold this yourself, so you cannot change it. Ask an admin.
+agents-setup-kept-live = Still granted, because the published version uses it.
+agents-setup-nothing-available = There is nothing you could give this agent yet. An admin can connect knowledge bases and connectors.
+agents-setup-abilities-more = Not listed? An admin can connect more knowledge bases and connectors.
+agents-setup-slots-lead = Which details should the agent ask for in the conversation? It only asks when it needs them.
+agents-setup-slots-empty = Nothing to collect yet.
+agents-setup-slot-label = Label
+agents-setup-slot-kind = Kind
+agents-setup-slot-kind-text = Text
+agents-setup-slot-kind-long_text = Longer text
+agents-setup-slot-kind-email = E-mail address
+agents-setup-slot-kind-phone = Phone number
+agents-setup-slot-kind-customer_number = Customer number
+agents-setup-slot-kind-order_number = Order number
+agents-setup-slot-kind-date = Date
+agents-setup-slot-kind-number = Number
+agents-setup-slot-kind-yes_no = Yes or no
+agents-setup-slot-kind-choice = Choice from a list
+agents-setup-slot-kind-custom = Set up in the advanced editor
+agents-setup-slot-values = Options, separated by commas
+agents-setup-slot-add = Add detail
+agents-setup-slot-new = New detail
+agents-setup-slot-suggest = Suggestions:
+agents-setup-slot-in-use = Used by the identity check
+agents-setup-identity-lead = Before the agent shows personal data, it must be clear who is writing. How should that be checked?
+agents-setup-identity-none = No check
+agents-setup-identity-none-desc = For public questions. Personal data stays locked.
+agents-setup-identity-email_code = Code by e-mail
+agents-setup-identity-email_code-desc = The visitor gets a code from your system and types it into a secure field.
+agents-setup-identity-signed_in = Signed in on your website
+agents-setup-identity-signed_in-desc = Your website tells the agent who is signed in. The most convenient.
+agents-setup-identity-customer_lookup = Customer number and name
+agents-setup-identity-customer_lookup-desc = Checked against your system. Weaker, for data that is not sensitive.
+agents-setup-identity-connector = Which system sends and checks the code?
+agents-setup-identity-connector-hint = A connector with the tools send_code and check_code.
+agents-setup-identity-no-connector = No connector is available to you. An admin can connect one.
+agents-setup-identity-tool = Which tool checks the customer?
+agents-setup-identity-tool-hint = It receives the name and the customer number and answers whether they match.
+agents-setup-identity-dev = For your web developer
+agents-setup-identity-issuer = Issuer (your website’s address)
+agents-setup-identity-audience = Audience (a name for this agent)
+agents-setup-identity-secret = Shared secret
+agents-setup-identity-secret-generate = Generate
+agents-setup-identity-secret-hint = At least 32 characters. Your website signs a short token with it; the embed documentation shows how.
+agents-setup-identity-secret-set = A secret is stored. Enter a new one to replace it.
+agents-setup-identity-blocked = “No check” is not possible while these hand-offs need a confirmed identity: { $topic }.
+agents-setup-identity-custom = { $count ->
+    [one] { $count } more check is set up in the advanced editor.
+   *[other] { $count } more checks are set up in the advanced editor.
+}
+agents-setup-routes-lead = When should the agent hand over to a specialist or a person? Read each rule like a sentence.
+agents-setup-rule-when = When it is about
+agents-setup-rule-topic = Topic
+agents-setup-rule-topic-placeholder = For example: Invoices
+agents-setup-rule-and = and
+agents-setup-rule-condition = Condition
+agents-setup-rule-always = always
+agents-setup-rule-verified = the identity is confirmed
+agents-setup-rule-then = , hand over to
+agents-setup-rule-target = Hand over to
+agents-setup-rule-person = a person (your team’s inbox)
+agents-setup-rule-agent = Specialist: { $name }
+agents-setup-rule-add = Add rule
+agents-setup-fallback = Otherwise, when the agent cannot help,
+agents-setup-fallback-human = hand over to a person
+agents-setup-fallback-none = end the conversation politely
+agents-setup-routes-note = What the specialist learns is passed on automatically from the details collected, for example the confirmed customer number, never the whole conversation.
+agents-setup-rule-needs-identity = This specialist works with confirmed customer data, so the rule needs a confirmed identity.
+agents-setup-rule-no-identity = To hand over only after a confirmed identity, set up the identity check first.
+agents-setup-rule-bind-missing = The specialist needs “{ $names }”, which this agent does not collect in a confirmed way. Set that up in the advanced editor.
+agents-setup-rule-unreadable = The specialist’s setup could not be read. You may not have access to it.
+agents-setup-rule-no-target = The hand-off “{ $topic }” has no target yet.
+agents-setup-routes-custom = { $count ->
+    [one] { $count } more rule is set up in the advanced editor.
+   *[other] { $count } more rules are set up in the advanced editor.
+}
+agents-setup-site-origins = On which website does the agent appear?
+agents-setup-site-origins-hint = One address per line, for example https://www.example.com. Only these websites may embed the agent.
+agents-setup-site-invalid = “{ $value }” is not a website address. Write it like https://www.example.com.
+agents-setup-site-code = Embed code
+agents-setup-site-code-hint = Create a key for these websites, then paste the line just before </body>. The key is shown only once.
+agents-setup-site-create-key = Create embed code
+agents-setup-site-keys = { $count ->
+    [one] { $count } embed key is active. Manage it under Settings → Sharing.
+   *[other] { $count } embed keys are active. Manage them under Settings → Sharing.
+}
+agents-setup-copy = Copy
+agents-setup-copied = Copied
+agents-setup-review-lead = This is how { $name } behaves:
+agents-setup-review-try = Try it out in the “Try it” tab, with a look behind every answer.
+agents-setup-sum-basics = { $task } · Model: { $model }
+agents-setup-sum-no-task = No task written yet
+agents-setup-sum-model-none = not chosen
+agents-setup-sum-scope-strict = { $topics }. Everything else is refused by the topic guard.
+agents-setup-sum-scope-soft = { $topics }. As guidance only.
+agents-setup-sum-scope-none = No topic list yet
+agents-setup-sum-abilities-none = Nothing selected
+agents-setup-sum-slots-none = Nothing to collect
+agents-setup-sum-routes-other = Otherwise → { $target }
+agents-setup-sum-routes-none = No hand-offs
+agents-setup-sum-site-none = No website named yet
+agents-setup-todo-model = Choose how thorough the agent should be (its model).
+agents-setup-todo-task = Describe what the agent should do.
+agents-setup-todo-identity-connector = Choose which system sends the e-mail code.
+agents-setup-todo-identity-tool = Choose the tool that checks the customer.
+agents-setup-todo-identity-token = Enter the issuer, the audience and the shared secret for the sign-in check.
+agents-setup-todo-site = Name the website the agent appears on, so no other site can embed it.

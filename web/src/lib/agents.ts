@@ -129,6 +129,8 @@ export interface AgentResources {
 	connectors: { key: string; name: string; tools: string[] }[];
 	skills: string[];
 	rag_collections: { id: number; name: string }[];
+	/** The pool an admin mapped to each of the setup's model choices, held by the caller or not. */
+	tiers?: { fast: string | null; balanced: string | null; thorough: string | null };
 }
 
 export interface Unmet {

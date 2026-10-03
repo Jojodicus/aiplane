@@ -35,7 +35,7 @@
 		createError = null;
 		try {
 			const agent = await agentsApi.create({ name: name.trim(), display: display.trim() || undefined, description });
-			await goto(`${base}/agents/${agent.id}`);
+			await goto(`${base}/agents/${agent.id}/setup/start`);
 		} catch (err) {
 			createError = (err as AgentError).message;
 		} finally {

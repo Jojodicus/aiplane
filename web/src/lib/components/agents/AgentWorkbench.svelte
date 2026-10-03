@@ -1,24 +1,8 @@
 <script lang="ts">
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
-	import { goto, replaceState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import {
-		agentsApi,
-		cleanSpec,
-		ensureShape,
-		liveIssues,
-		type AgentDetail,
-		type AgentError,
-		type AgentResources,
-		type AgentSummary,
-		type AgentVersion,
-		type Granted,
-		type Spec,
-		type SpecIssue,
-		type TestDebug
-	} from '$lib/agents';
+	import type { Spec } from '$lib/agents';
+	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import AgentEditor from './AgentEditor.svelte';
 	import AgentCanvas from './AgentCanvas.svelte';
@@ -33,254 +17,121 @@
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
 	import TestChat from './TestChat.svelte';
 	import VersionsPanel from './VersionsPanel.svelte';
+	import SetupOverview from './setup/SetupOverview.svelte';
 
 	/**
-	 * One agent: the builder, its JSON, grants, the test chat, versions and
-	 * sharing. The spec being edited is a buffer; **Save draft** sends it, and
-	 * the server's validation answer is kept as `issues` and shown beside the
-	 * fields it is about. The test chat and Publish both act on what is saved,
-	 * so both save first when the buffer is ahead.
+	 * One agent's page, in four tabs: **Setup** (the plain-language overview,
+	 * or behind a switch the advanced editor — form, canvas, JSON, grants —
+	 * on the same buffer), **Try it** (test chat, test cases), **Insights**
+	 * (analytics, activity) and **Settings** (versions, sharing, responders,
+	 * channels, embed keys). The choice lives in the URL: `?tab=`, `?view=advanced`,
+	 * `?sub=`.
 	 */
-	let { id }: { id: string } = $props();
+	const ws = useWorkspace();
 
-	const TABS = ['edit', 'canvas', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'activity', 'sharing'] as const;
-	type Tab = (typeof TABS)[number];
-	const asTab = (v: string | null): Tab => (TABS.find((x) => x === v) ?? 'edit');
+	const TABS = {
+		setup: [] as string[],
+		try: ['test', 'tests'],
+		insights: ['analytics', 'activity'],
+		settings: ['versions', 'sharing']
+	} as const;
+	type Tab = keyof typeof TABS;
+	const ADVANCED = ['edit', 'canvas', 'json', 'grants'] as const;
 
-	let detail = $state<AgentDetail | null>(null);
-	let versions = $state<AgentVersion[]>([]);
-	let resources = $state<AgentResources | null>(null);
-	let agents = $state<AgentSummary[]>([]);
-	let spec = $state<Spec>(ensureShape({}));
-	let savedJson = $state('');
-	let formKey = $state(0);
-	let issues = $state<SpecIssue[]>([]);
-	/** Only what still points into the draft: removing the route a refusal was about clears it. */
-	const shownIssues = $derived(liveIssues(issues, spec));
-	const staleRefusal = $derived(issues.length > 0 && shownIssues.length === 0);
-	let loading = $state(true);
-	let loadError = $state<string | null>(null);
-	let error = $state<string | null>(null);
-	let notice = $state<string | null>(null);
-	let busy = $state(false);
-	let lastDebug = $state<TestDebug | null>(null);
-	let tab = $state<Tab>(asTab(page.url.searchParams.get('tab')));
+	const param = (name: string) => page.url.searchParams.get(name);
+	const tab = $derived((Object.keys(TABS) as Tab[]).find((x) => x === param('tab')) ?? 'setup');
+	const advanced = $derived(tab === 'setup' && param('view') === 'advanced');
+	const subs = $derived<readonly string[]>(advanced ? ADVANCED : TABS[tab]);
+	const sub = $derived(subs.find((x) => x === param('sub')) ?? subs[0] ?? '');
 
-	const writable = $derived(detail?.access === 'write');
-	const dirty = $derived(JSON.stringify(cleanSpec(spec)) !== savedJson);
-	const granted = $derived.by((): Granted => {
-		const grants = detail?.grants ?? [];
-		const toolName = (tid: string) => resources?.tools.find((x) => x.id === tid)?.name ?? tid;
-		const connectorTools = grants
-			.filter((g) => g.kind === 'connector')
-			.flatMap((g) => resources?.connectors.find((c) => c.key === g.ref)?.tools ?? []);
-		return {
-			pools: grants.filter((g) => g.kind === 'pool').map((g) => g.ref),
-			tools: [...grants.filter((g) => g.kind === 'tool').map((g) => g.ref), ...connectorTools].map((tid) => ({ id: tid, name: toolName(tid) })),
-			skills: grants.filter((g) => g.kind === 'skill').map((g) => g.ref)
-		};
-	});
-
-	function adopt(next: AgentDetail) {
-		detail = next;
-		const shaped = ensureShape(next.draft_spec);
-		spec = shaped;
-		savedJson = JSON.stringify(cleanSpec(shaped));
-		formKey++;
-	}
-
-	async function refresh(keepBuffer = false) {
-		const [next, vs] = await Promise.all([agentsApi.get(id), agentsApi.versions(id)]);
-		versions = vs.versions;
-		if (keepBuffer) detail = next;
-		else adopt(next);
-	}
-
-	onMount(async () => {
-		try {
-			await refresh();
-			const [r, a] = await Promise.all([agentsApi.resources(), agentsApi.list()]);
-			resources = r;
-			agents = a.filter((x) => x.id !== id);
-		} catch (err) {
-			loadError = (err as AgentError).message;
-		} finally {
-			loading = false;
-		}
-	});
-
-	function selectTab(next: Tab) {
-		tab = next;
+	function navigate(next: Record<string, string | null>) {
 		const url = new URL(page.url);
-		url.searchParams.set('tab', next);
-		replaceState(url, {});
-	}
-
-	function fail(err: unknown) {
-		const e = err as AgentError;
-		error = e.message;
-		issues = e.issues ?? [];
-	}
-
-	async function save(): Promise<boolean> {
-		busy = true;
-		error = null;
-		notice = null;
-		try {
-			const clean = cleanSpec(spec);
-			await agentsApi.saveDraft(id, clean);
-			savedJson = JSON.stringify(clean);
-			issues = [];
-			await refresh(true);
-			notice = t('agents-saved');
-			return true;
-		} catch (err) {
-			fail(err);
-			return false;
-		} finally {
-			busy = false;
+		for (const [key, value] of Object.entries(next)) {
+			if (value === null) url.searchParams.delete(key);
+			else url.searchParams.set(key, value);
 		}
-	}
-
-	/** A rollback (or roll forward) publishes nothing, so it replaces whatever the last save or publish said. */
-	async function madeLive(version: number) {
-		error = null;
-		notice = t('agents-live-is', { version });
-		await refresh(true);
-	}
-
-	async function publish() {
-		if (dirty && !(await save())) return;
-		busy = true;
-		error = null;
-		notice = null;
-		try {
-			const result = await agentsApi.publish(id);
-			issues = [];
-			await refresh(true);
-			notice = t('agents-published', { version: result.version });
-		} catch (err) {
-			fail(err);
-			if (issues.length) selectTab('edit');
-			throw err;
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function remove() {
-		if (!detail || !confirm(t('agents-delete-confirm', { name: detail.name }))) return;
-		try {
-			await agentsApi.remove(id);
-			await goto(`${base}/agents`);
-		} catch (err) {
-			fail(err);
-		}
+		void goto(url, { replaceState: true, noScroll: true, keepFocus: true });
 	}
 
 	function applyJson(parsed: Spec) {
-		spec = ensureShape(parsed);
-		formKey++;
+		ws.replace(parsed);
 	}
+	const save = async () => void (await ws.save());
+	const toGrants = () => navigate({ tab: 'setup', view: 'advanced', sub: 'grants' });
 </script>
 
-<div class="w-full space-y-4">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/agents">← {t('agents-back')}</a>
+<div role="tablist" class="tabs tabs-border w-full overflow-x-auto border-b border-base-300">
+	{#each Object.keys(TABS) as name (name)}
+		<button role="tab" type="button" class="tab whitespace-nowrap" class:tab-active={tab === name} aria-selected={tab === name} onclick={() => navigate({ tab: name, sub: null, view: null })}>
+			{t(`agents-tab-${name}`)}
+		</button>
+	{/each}
+</div>
 
-	{#if loadError}
-		<div class="alert alert-error"><span>{loadError}</span></div>
-	{:else if loading || !detail}
-		<div class="skeleton h-96 w-full"></div>
-	{:else}
-		<header class="flex flex-wrap items-center gap-3">
-			<div class="min-w-0">
-				<h1 class="truncate text-2xl font-bold">{detail.display || detail.name}</h1>
-				<p class="font-mono text-xs text-base-content/60">{detail.name}</p>
-			</div>
-			{#if detail.live_version === null}
-				<StatusPill>{t('agents-never-published')}</StatusPill>
-			{:else}
-				<StatusPill tone="ok">{t('agents-live-badge', { version: detail.live_version })}</StatusPill>
-			{/if}
-			{#if dirty}<StatusPill tone="warn">{t('agents-unsaved')}</StatusPill>{/if}
-			{#if !writable}<StatusPill>{t('agents-read-only')}</StatusPill>{/if}
-			{#if writable}
-				<div class="ml-auto flex flex-wrap gap-2">
-					<button class="btn btn-primary btn-sm" type="button" disabled={busy || !dirty} onclick={() => void save()}>{t('agents-save')}</button>
-					<button class="btn btn-sm" type="button" disabled={busy} onclick={() => void publish().catch(() => {})}>{t('agents-publish-action')}</button>
-					<button class="btn btn-ghost btn-sm text-error" type="button" onclick={() => void remove()}>{t('agents-delete')}</button>
-				</div>
-			{/if}
-		</header>
+{#if tab === 'setup'}
+	<div class="flex flex-wrap items-center gap-3">
+		<label class="flex cursor-pointer items-center gap-2 text-sm">
+			<input type="checkbox" class="toggle toggle-sm" checked={advanced} onchange={(e) => navigate({ view: e.currentTarget.checked ? 'advanced' : null, sub: null })} />
+			{t('agents-setup-advanced')}
+		</label>
+		{#if advanced}<span class="text-sm text-base-content/60">{t('agents-setup-advanced-hint')}</span>{/if}
+	</div>
+{/if}
 
-		{#if error && !staleRefusal}
-			<div class="alert alert-error text-sm" role="alert">
-				<div>
-					<p>{error}</p>
-					{#if shownIssues.length > 1}
-						<ul class="mt-1 list-inside list-disc">
-							{#each shownIssues as issue (issue.path + issue.message)}
-								<li><span class="font-mono">{issue.path || t('agents-issue-root')}</span>: {issue.message}</li>
-							{/each}
-						</ul>
-					{/if}
-				</div>
-			</div>
-		{/if}
-		{#if notice}<div class="alert alert-success text-sm"><span>{notice}</span></div>{/if}
+{#if subs.length}
+	<div role="tablist" class="tabs tabs-box tabs-sm w-fit max-w-full overflow-x-auto">
+		{#each subs as name (name)}
+			<button role="tab" type="button" class="tab whitespace-nowrap" class:tab-active={sub === name} aria-selected={sub === name} onclick={() => navigate({ sub: name })}>
+				{t(`agents-tab-${name}`)}
+			</button>
+		{/each}
+	</div>
+{/if}
 
-		<div role="tablist" class="tabs tabs-border w-full overflow-x-auto border-b border-base-300">
-			{#each TABS as name (name)}
-				<button role="tab" type="button" class="tab whitespace-nowrap" class:tab-active={tab === name} aria-selected={tab === name} onclick={() => selectTab(name)}>
-					{t(`agents-tab-${name}`)}
-				</button>
-			{/each}
-		</div>
-
-		<div class="pt-2">
-			{#if tab === 'edit'}
-				{#key formKey}
-					<fieldset disabled={!writable} class="min-w-0">
-						<AgentEditor bind:spec issues={shownIssues} {granted} {agents} ongrants={() => selectTab('grants')} />
-					</fieldset>
-				{/key}
-			{:else if tab === 'canvas'}
-				<fieldset disabled={!writable} class="min-w-0">
-					<AgentCanvas bind:spec issues={shownIssues} {granted} {agents} {lastDebug} ongrants={() => selectTab('grants')} />
-				</fieldset>
-			{:else if tab === 'json'}
-				{#key formKey}
-					<SpecJsonEditor {spec} issues={shownIssues} onapply={applyJson} />
-				{/key}
-			{:else if tab === 'grants'}
-				<GrantsPanel agentId={id} grants={detail.grants} {resources} {writable} onchanged={() => refresh(true)} />
-			{:else if tab === 'test'}
-				<TestChat agentId={id} {dirty} onturn={(debug) => (lastDebug = debug)} onsave={async () => void (await save())} />
-			{:else if tab === 'tests'}
-				<TestsPanel agentId={id} {versions} liveVersion={detail.live_version} {dirty} {writable} onsave={async () => void (await save())} />
-			{:else if tab === 'versions'}
-				<VersionsPanel
-					agentId={id}
-					liveVersion={detail.live_version}
-					{versions}
-					publishIssues={detail.publish_issues}
-					{dirty}
-					{writable}
-					onpublish={publish}
-					onlive={madeLive}
-				/>
-			{:else if tab === 'analytics'}
-				<AnalyticsPanel agentId={id} {versions} />
-			{:else if tab === 'activity'}
-				<ActivityPanel agentId={id} />
-			{:else}
-				<div class="space-y-6">
-					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
-					<RespondersPanel agentId={id} {writable} />
-					<ChannelsPanel agentId={id} {writable} />
-					<EmbedKeysPanel agentId={id} {writable} />
-				</div>
-			{/if}
+<div class="pt-1">
+	{#if tab === 'setup' && !advanced}
+		<SetupOverview onadvanced={() => navigate({ view: 'advanced', sub: null })} />
+	{:else if sub === 'edit'}
+		{#key ws.formKey}
+			<fieldset disabled={!ws.writable} class="min-w-0">
+				<AgentEditor bind:spec={ws.spec} issues={ws.shownIssues} granted={ws.granted} agents={ws.agents} ongrants={toGrants} />
+			</fieldset>
+		{/key}
+	{:else if sub === 'canvas'}
+		<fieldset disabled={!ws.writable} class="min-w-0">
+			<AgentCanvas bind:spec={ws.spec} issues={ws.shownIssues} granted={ws.granted} agents={ws.agents} lastDebug={ws.lastDebug} ongrants={toGrants} />
+		</fieldset>
+	{:else if sub === 'json'}
+		{#key ws.formKey}
+			<SpecJsonEditor spec={ws.spec} issues={ws.shownIssues} onapply={applyJson} />
+		{/key}
+	{:else if sub === 'grants' && ws.detail}
+		<GrantsPanel agentId={ws.id} grants={ws.detail.grants} resources={ws.resources} writable={ws.writable} onchanged={() => ws.refresh(true)} />
+	{:else if sub === 'test'}
+		<TestChat agentId={ws.id} dirty={ws.dirty} onturn={(debug) => (ws.lastDebug = debug)} onsave={save} />
+	{:else if sub === 'tests' && ws.detail}
+		<TestsPanel agentId={ws.id} versions={ws.versions} liveVersion={ws.detail.live_version} dirty={ws.dirty} writable={ws.writable} onsave={save} />
+	{:else if sub === 'analytics'}
+		<AnalyticsPanel agentId={ws.id} versions={ws.versions} />
+	{:else if sub === 'activity'}
+		<ActivityPanel agentId={ws.id} />
+	{:else if sub === 'versions' && ws.detail}
+		<VersionsPanel
+			agentId={ws.id}
+			liveVersion={ws.detail.live_version}
+			versions={ws.versions}
+			publishIssues={ws.detail.publish_issues}
+			dirty={ws.dirty}
+			writable={ws.writable}
+			onpublish={async () => void (await ws.publish())}
+			onlive={(version) => ws.madeLive(version)}
+		/>
+	{:else if sub === 'sharing' && ws.detail}
+		<div class="space-y-6">
+			<SharingPanel agentId={ws.id} shares={ws.detail.shares} writable={ws.writable} onchanged={() => ws.refresh(true)} />
+			<RespondersPanel agentId={ws.id} writable={ws.writable} />
+			<ChannelsPanel agentId={ws.id} writable={ws.writable} />
+			<EmbedKeysPanel agentId={ws.id} writable={ws.writable} />
 		</div>
 	{/if}
 </div>
