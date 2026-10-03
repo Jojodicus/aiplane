@@ -567,6 +567,19 @@ pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appen
     if event.kind == AuditKind::LlmExchange {
         let created_at = Timestamp::now().to_string();
         for (hash, data) in exchange::take_blobs(&mut event.detail) {
+            // Every round of a turn re-sends the conversation's images, so
+            // nearly every blob is already stored: probe the primary key
+            // rather than ship a multi-megabyte payload to be ignored.
+            let stored: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM activity_blobs WHERE chain_key = ? AND hash = ?)",
+            )
+            .bind(&chain_key)
+            .bind(&hash)
+            .fetch_one(&mut **conn)
+            .await?;
+            if stored {
+                continue;
+            }
             sqlx::query(
                 "INSERT INTO activity_blobs (chain_key, hash, data, created_at)
                  VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
