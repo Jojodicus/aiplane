@@ -2142,7 +2142,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   the task or the model's input; the caller in `run_resumed`'s chain); an
   approval the caller cannot give; the streamed task, answer and status. Unit
   tests: `agents/a2a.rs` (opt-in, card, derived skills, state mapping),
-  `agents/spec/a2a.rs` (validation), `pages/a2a.rs` (parts, configuration,
+  `agents/spec/a2a.rs` (validation), `pages/a2a/` (parts, configuration,
   versions, error shape), `db/a2a_contexts.rs`, `run_chain.rs`,
   `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
   `principal_grants` rebuild keeps every grant).

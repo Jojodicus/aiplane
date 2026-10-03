@@ -214,9 +214,8 @@ impl RunProfile {
         let spec = &compiled.spec;
         let parts = compiled.parts().map_err(|m| bad(m.to_string()))?;
         let (schema, gates) = (parts.schema.clone(), parts.gates.clone());
-        let pool = spec
-            .pointer("/main/pool")
-            .and_then(Value::as_str)
+        let pool = compiled
+            .main_pool()
             .ok_or_else(|| bad("it names no `main.pool`".into()))?
             .to_string();
         let pools = PoolAccess::for_system_pools(&principal, [pool.as_str()]);

@@ -68,6 +68,11 @@ impl CompiledSpec {
         }
     }
 
+    /// The pool the main run's model comes from (`main.pool`).
+    pub fn main_pool(&self) -> Option<&str> {
+        self.spec.pointer("/main/pool").and_then(Value::as_str)
+    }
+
     /// The built parts, or why the spec cannot run (phrased to follow "cannot
     /// run its live version N: ").
     pub(crate) fn parts(&self) -> Result<&SpecParts, &str> {
