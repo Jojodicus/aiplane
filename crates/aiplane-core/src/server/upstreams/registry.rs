@@ -1709,8 +1709,29 @@ impl UpstreamRegistry {
     /// `None` when no speech pool advertises a model. Used by the session
     /// `POST /api/v0/speech`; the raw `/v1/audio/speech` proxy takes an explicit
     /// model/voice from the caller instead.
-    pub fn speech_target(&self, language: &str) -> Option<(String, Option<String>)> {
+    ///
+    /// `preferred` is the admin's default speech model (`default_model.speech`):
+    /// when a speech pool serves it, that pool and model win.
+    pub fn speech_target(
+        &self,
+        language: &str,
+        preferred: Option<&str>,
+    ) -> Option<(String, Option<String>)> {
         let d = self.data();
+        let preferred_pool = preferred.and_then(|m| {
+            d.pools.values().find(|p| {
+                p.kind == PoolKind::Speech
+                    && (p.configured_models.iter().any(|c| c == m) || p.serves_model(m))
+            })
+        });
+        if let (Some(pool), Some(model)) = (preferred_pool, preferred) {
+            let voice = pool
+                .voices
+                .get(language)
+                .or_else(|| pool.voices.get(""))
+                .cloned();
+            return Some((model.to_string(), voice));
+        }
         let pool = d.pools.values().find(|p| p.kind == PoolKind::Speech)?;
         // Prefer the operator's declared model (`models = ["tts-1"]`): a cloud
         // provider's `/models` probe lists its whole catalogue, so the probe
@@ -3307,12 +3328,12 @@ mod tests {
         assert!(reg.has_speech());
         // Configured model wins over the flood; voice resolves by language.
         assert_eq!(
-            reg.speech_target("de"),
+            reg.speech_target("de", None),
             Some(("tts-1".to_string(), Some("nova".to_string())))
         );
         // Unknown language → the "" default voice.
         assert_eq!(
-            reg.speech_target("fr"),
+            reg.speech_target("fr", None),
             Some(("tts-1".to_string(), Some("alloy".to_string())))
         );
     }
@@ -3388,8 +3409,39 @@ mod tests {
         );
         // Resolution is untouched by the menu: `de` still gets its own voice.
         assert_eq!(
-            reg.speech_target("de"),
+            reg.speech_target("de", None),
             Some(("tts-1".to_string(), Some("onyx".to_string())))
+        );
+    }
+
+    #[test]
+    fn speech_target_follows_the_admins_default_speech_model() {
+        let speech = |model: &str, voice: &str| -> UpstreamPoolConfig {
+            toml::from_str(&format!(
+                r#"
+                kind = "speech"
+                models = ["{model}"]
+                [voices]
+                "" = "{voice}"
+                [[backend]]
+                name = "{model}-backend"
+                base_url = "http://127.0.0.1:9/v1"
+            "#
+            ))
+            .unwrap()
+        };
+        let reg = build(vec![
+            ("a-cloud", speech("tts-1", "alloy")),
+            ("b-local", speech("kokoro", "af_heart")),
+        ]);
+        assert_eq!(
+            reg.speech_target("en", Some("kokoro")),
+            Some(("kokoro".to_string(), Some("af_heart".to_string())))
+        );
+        let fallback = reg.speech_target("en", Some("retired")).unwrap();
+        assert!(
+            fallback.0 == "tts-1" || fallback.0 == "kokoro",
+            "an unserved default is ignored: {fallback:?}"
         );
     }
 
@@ -3404,7 +3456,8 @@ mod tests {
             ),
         )]);
         assert!(!reg.has_speech());
-        assert_eq!(reg.speech_target("en"), None);
+        assert_eq!(reg.speech_target("en", None), None);
+        assert_eq!(reg.speech_target("en", Some("tts-1")), None);
     }
 
     #[test]
