@@ -688,9 +688,38 @@ that every step round-trips through the advanced editor's
   step with its reason. The task, the tone and the answer for other topics
   each have *Improve* (`ImproveText`, `…/assist/improve`): the proposed text
   before / after with the reason, applied only on *Apply*.
-- **Not built here.** The agent architect (#118), voice in the widget (#119),
-  and a widget colour (the embed widget has no per-agent colour yet, so the
-  step does not offer one).
+- **The agent architect** (#118): see below.
+
+### Agent architect
+
+A conversation that plans an agent with the person and writes the draft
+([`agents.md`](agents.md#what-118-built)). `ArchitectModal`
+(`lib/components/agents/`) is a centred `Modal` (`lg`, the body about
+70 dvh high; never a side drawer) holding `ArchitectChat`, which mounts only
+while it is open.
+
+- **Entry points.** The agents list header (*Plan with the architect*), the
+  new-agent dialog (*Or plan it in a conversation with the architect*, which
+  swaps the dialog for the architect) and the setup overview's call to
+  action, which plans that agent.
+- **The conversation** is the person's chat (`POST /api/v0/agent-architect`
+  opens their newest one about the agent, *New conversation* a fresh one)
+  and streams through the same `createConversationController` as `/chat`.
+  User turns are `chat-end` bubbles, the architect's answers Markdown, and
+  every tool call shows in `ToolCalls` with its input and output.
+- **Undo and links** (`lib/architect.ts`, unit-tested): a completed
+  `update_agent_draft` offers *Undo*, which restores the revision it kept
+  (`agentsApi.restoreDraft`; the server also revokes the grants that change
+  made unless something still uses them) and then shows *Undone*; on the agents list a
+  call naming a setup page offers *Open setup*. After every finished turn
+  (and an undo) the host reloads: the list its agents, the overview the
+  workspace with `refresh(ws.dirty)`, which keeps an unsaved edit of the
+  person's buffer instead of overwriting it.
+- **Voice** is the composer's dictation: `DictationButton` with the first
+  transcription model (`/api/v0/transcription_models`), the transcript
+  appended to the text field. It shows only when a transcription model is
+  available. Enter sends, Shift+Enter breaks the line.
+- **Strings** are `architect-*` in `agent_setup.ftl`.
 
 ## Inbox
 

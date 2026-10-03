@@ -282,3 +282,21 @@ agents-setup-voice-voice = Voice (optional)
 agents-setup-voice-voice-hint = Leave it empty for the default voice of the visitor's language.
 agents-setup-voice-unavailable-input = Voice input isn't available because no speech-recognition model is enabled for you — ask an admin.
 agents-setup-voice-unavailable-output = Reading answers aloud isn't available because no speech-output model is enabled for you — ask an admin.
+
+# The agent architect (#118): a centred chat window that plans an agent.
+architect-open = Plan with the architect
+architect-title = Agent architect
+architect-intro = Plans the agent with you and writes the draft. Publishing stays your decision.
+architect-conversation-title = Agent architect: { $name }
+architect-conversation-new = Agent architect: new agent
+architect-placeholder = Describe what your agent should do …
+architect-send = Send
+architect-new-conversation = New conversation
+architect-undo = Undo
+architect-undone = Undone
+architect-open-setup = Open setup
+architect-starting = Starting the architect …
+architect-empty = Tell the architect what your agent should do, by typing or with the microphone. Every change it makes shows up here and can be undone.
+architect-working = The architect is working …
+architect-create-option = Or plan it in a conversation with the architect
+architect-message-label = Message to the architect

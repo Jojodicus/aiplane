@@ -261,6 +261,9 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             "/api/v0/agent-resources",
             pages::json_agent_resources::resources,
         )
+        // The agent architect (docs/agents.md "What #118 built"): a person's
+        // chat that plans an agent with them.
+        .with_post("/api/v0/agent-architect", pages::architect::start)
         // The inbox (docs/agents.md "What #96 built"): before `/agents/{id}`,
         // because rama matches in registration order.
         .with_get("/api/v0/agents/inbox", pages::json_inbox::list)
@@ -276,6 +279,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_put(
             "/api/v0/agents/{id}/draft",
             pages::json_agents::update_draft,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/draft/restore",
+            pages::json_agents::restore_draft,
         )
         .with_post("/api/v0/agents/{id}/publish", pages::json_agents::publish)
         .with_post(

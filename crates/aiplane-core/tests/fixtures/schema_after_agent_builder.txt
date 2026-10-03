@@ -1,3 +1,5 @@
+index agent_architect_sessions_by_user on agent_architect_sessions: CREATE INDEX agent_architect_sessions_by_user ON agent_architect_sessions(user_id,agent_id,created_at)
+index agent_draft_revisions_by_agent on agent_draft_revisions: CREATE INDEX agent_draft_revisions_by_agent ON agent_draft_revisions(principal_id,id)
 index agent_embed_keys_principal on agent_embed_keys: CREATE INDEX agent_embed_keys_principal ON agent_embed_keys(principal_id)
 index agent_notify_channels_principal on agent_notify_channels: CREATE INDEX agent_notify_channels_principal ON agent_notify_channels(principal_id)
 index automatic_route_decisions_alias_created on automatic_route_decisions: CREATE INDEX automatic_route_decisions_alias_created ON automatic_route_decisions(route_alias,created_at DESC)
@@ -58,6 +60,7 @@ index sqlite_autoindex__sqlx_migrations_1 on _sqlx_migrations:
 index sqlite_autoindex_a2a_contexts_1 on a2a_contexts: 
 index sqlite_autoindex_activity_verified_1 on activity_verified: 
 index sqlite_autoindex_agent_a2a_tasks_1 on agent_a2a_tasks: 
+index sqlite_autoindex_agent_architect_sessions_1 on agent_architect_sessions: 
 index sqlite_autoindex_agent_audit_1 on agent_audit: 
 index sqlite_autoindex_agent_embed_keys_1 on agent_embed_keys: 
 index sqlite_autoindex_agent_embed_keys_2 on agent_embed_keys: 
@@ -171,7 +174,9 @@ table a2a_contexts on a2a_contexts: CREATE TABLE a2a_contexts(session_id TEXT PR
 table activity_blobs on activity_blobs: CREATE TABLE activity_blobs(chain_key TEXT NOT NULL,hash TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(chain_key,hash))STRICT,WITHOUT ROWID
 table activity_verified on activity_verified: CREATE TABLE activity_verified(chain_key TEXT PRIMARY KEY NOT NULL,seq INTEGER NOT NULL,hash TEXT,book TEXT,key_id TEXT NOT NULL,mac TEXT NOT NULL,verified_at TEXT NOT NULL)STRICT
 table agent_a2a_tasks on agent_a2a_tasks: CREATE TABLE agent_a2a_tasks(turn_id TEXT NOT NULL REFERENCES chat_turns(id)ON DELETE CASCADE,tool_call_id TEXT NOT NULL,route TEXT NOT NULL,card_url TEXT NOT NULL,task_id TEXT NOT NULL,context_id TEXT,created_at TEXT NOT NULL,PRIMARY KEY(turn_id,tool_call_id))STRICT
+table agent_architect_sessions on agent_architect_sessions: CREATE TABLE agent_architect_sessions(session_id TEXT PRIMARY KEY NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,user_id TEXT NOT NULL REFERENCES users(id)ON DELETE CASCADE,agent_id TEXT REFERENCES agents(principal_id)ON DELETE SET NULL,created_at TEXT NOT NULL)STRICT
 table agent_audit on agent_audit: CREATE TABLE agent_audit(id TEXT PRIMARY KEY NOT NULL,kind TEXT NOT NULL,principal_id TEXT NOT NULL,actor_id TEXT,chain TEXT,detail TEXT NOT NULL,created_at TEXT NOT NULL,chain_key TEXT,seq INTEGER,prev_hash TEXT,hash TEXT,agent_id TEXT,version INTEGER,conversation_id TEXT,session_id TEXT,turn_id TEXT,round INTEGER,call_id TEXT,visitor_id TEXT,caller_id TEXT,duration_ms INTEGER,key_id TEXT)STRICT
+table agent_draft_revisions on agent_draft_revisions: CREATE TABLE agent_draft_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,spec TEXT NOT NULL,granted TEXT NOT NULL DEFAULT '[]',saved_by TEXT NOT NULL,saved_at TEXT NOT NULL)STRICT
 table agent_embed_keys on agent_embed_keys: CREATE TABLE agent_embed_keys(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,key_hash TEXT NOT NULL UNIQUE,origins TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL,revoked_at TEXT)STRICT
 table agent_identity_jtis on agent_identity_jtis: CREATE TABLE agent_identity_jtis(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,jti_hash TEXT NOT NULL,expires_at TEXT NOT NULL,PRIMARY KEY(principal_id,jti_hash))STRICT
 table agent_notify_channels on agent_notify_channels: CREATE TABLE agent_notify_channels(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN('slack','discord')),name TEXT NOT NULL,url_nonce BLOB NOT NULL,url_ct BLOB NOT NULL,url_host TEXT NOT NULL,details INTEGER NOT NULL DEFAULT 0 CHECK(details IN(0,1)),lang TEXT NOT NULL DEFAULT 'en',created_by TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
@@ -314,6 +319,21 @@ agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 1|pk|0
 agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 0|0|turn_id|0|BINARY|1
 agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 1|1|tool_call_id|0|BINARY|1
 agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 2|-1|NULL|0|BINARY|0
+agent_architect_sessions column 0|session_id|TEXT|1|NULL|1|0
+agent_architect_sessions column 1|user_id|TEXT|1|NULL|0|0
+agent_architect_sessions column 2|agent_id|TEXT|0|NULL|0|0
+agent_architect_sessions column 3|created_at|TEXT|1|NULL|0|0
+agent_architect_sessions fk 0|0|agents|agent_id|principal_id|NO ACTION|SET NULL|NONE
+agent_architect_sessions fk 1|0|users|user_id|id|NO ACTION|CASCADE|NONE
+agent_architect_sessions fk 2|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+agent_architect_sessions index agent_architect_sessions_by_user 0|c|0
+agent_architect_sessions index agent_architect_sessions_by_user 0|1|user_id|0|BINARY|1
+agent_architect_sessions index agent_architect_sessions_by_user 1|2|agent_id|0|BINARY|1
+agent_architect_sessions index agent_architect_sessions_by_user 2|3|created_at|0|BINARY|1
+agent_architect_sessions index agent_architect_sessions_by_user 3|-1|NULL|0|BINARY|0
+agent_architect_sessions index sqlite_autoindex_agent_architect_sessions_1 1|pk|0
+agent_architect_sessions index sqlite_autoindex_agent_architect_sessions_1 0|0|session_id|0|BINARY|1
+agent_architect_sessions index sqlite_autoindex_agent_architect_sessions_1 1|-1|NULL|0|BINARY|0
 agent_audit column 0|id|TEXT|1|NULL|1|0
 agent_audit column 1|kind|TEXT|1|NULL|0|0
 agent_audit column 2|principal_id|TEXT|1|NULL|0|0
@@ -369,6 +389,17 @@ agent_audit index idx_agent_audit_sweep 4|-1|NULL|0|BINARY|0
 agent_audit index sqlite_autoindex_agent_audit_1 1|pk|0
 agent_audit index sqlite_autoindex_agent_audit_1 0|0|id|0|BINARY|1
 agent_audit index sqlite_autoindex_agent_audit_1 1|-1|NULL|0|BINARY|0
+agent_draft_revisions column 0|id|INTEGER|0|NULL|1|0
+agent_draft_revisions column 1|principal_id|TEXT|1|NULL|0|0
+agent_draft_revisions column 2|spec|TEXT|1|NULL|0|0
+agent_draft_revisions column 3|granted|TEXT|1|'[]'|0|0
+agent_draft_revisions column 4|saved_by|TEXT|1|NULL|0|0
+agent_draft_revisions column 5|saved_at|TEXT|1|NULL|0|0
+agent_draft_revisions fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_draft_revisions index agent_draft_revisions_by_agent 0|c|0
+agent_draft_revisions index agent_draft_revisions_by_agent 0|1|principal_id|0|BINARY|1
+agent_draft_revisions index agent_draft_revisions_by_agent 1|0|id|0|BINARY|1
+agent_draft_revisions index agent_draft_revisions_by_agent 2|-1|NULL|0|BINARY|0
 agent_embed_keys column 0|id|TEXT|1|NULL|1|0
 agent_embed_keys column 1|principal_id|TEXT|1|NULL|0|0
 agent_embed_keys column 2|name|TEXT|1|NULL|0|0

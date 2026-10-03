@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Modal from '$lib/components/ui/Modal.svelte';
+	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { base } from '$app/paths';
 	import { ensureShape, type Spec } from '$lib/agents';
@@ -48,6 +49,12 @@
 	let applied = false;
 	let applying = $state(false);
 	let failed = $state(false);
+	let planning = $state(false);
+
+	/** The architect changed the draft: show it, keeping any unsaved edit of the person's. */
+	function architectChanged() {
+		void ws.refresh(ws.dirty);
+	}
 
 	function edit(step: StepKey | null) {
 		if (!step) return onadvanced();
@@ -87,7 +94,10 @@
 					<h2 class="m-0 text-base font-semibold">{t('agents-setup-cta-title')}</h2>
 					<p class="m-0 text-sm text-base-content/70">{t('agents-setup-cta-text')}</p>
 				</div>
-				<a class="btn btn-primary" href="{base}/agents/{ws.id}/setup/start">{t('agents-setup-cta-start')}</a>
+				<div class="flex flex-wrap gap-2">
+					<button class="btn" type="button" onclick={() => (planning = true)}>🎙 {t('architect-open')}</button>
+					<a class="btn btn-primary" href="{base}/agents/{ws.id}/setup/start">{t('agents-setup-cta-start')}</a>
+				</div>
 			</div>
 		{/if}
 
@@ -133,6 +143,8 @@
 	<button class="btn btn-ghost" type="button" onclick={() => (open = false)}>{t('admin-cancel')}</button>
 	<button class="btn btn-primary" type="button" disabled={applying} onclick={() => void apply()}>{t('agents-setup-apply')}</button>
 {/snippet}
+
+<ArchitectModal bind:open={planning} agentId={ws.id} agentName={ws.spec.profile?.display || ws.detail?.display || null} onchanged={architectChanged} />
 
 {#if editing}
 	<Modal bind:open title={t(`agents-setup-step-${editing}`)} size={SIZE[editing] ?? 'lg'} footer={actions} onclose={closed}>

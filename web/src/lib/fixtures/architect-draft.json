@@ -1,0 +1,100 @@
+{
+  "main": {
+    "instructions": {
+      "orchestration": "You answer questions about Acme orders."
+    },
+    "pool": "main-pool"
+  },
+  "router": {
+    "kind": "rules",
+    "order": [
+      "invoices",
+      "complaints",
+      "fallback"
+    ]
+  },
+  "routes": {
+    "complaints": {
+      "description": "Complaints",
+      "human": {},
+      "when": {
+        "all": [
+          {
+            "eq": "Complaints",
+            "slot": "topic"
+          },
+          {
+            "set": true,
+            "slot": "request"
+          }
+        ]
+      }
+    },
+    "fallback": {
+      "human": {},
+      "when": {
+        "set": true,
+        "slot": "request"
+      }
+    },
+    "invoices": {
+      "agent": "billing-agent",
+      "description": "Invoices",
+      "task": "Request about {topic}: {request}",
+      "when": {
+        "all": [
+          {
+            "eq": "Invoices",
+            "slot": "topic"
+          },
+          {
+            "set": true,
+            "slot": "request"
+          }
+        ]
+      }
+    }
+  },
+  "state": {
+    "issue": {
+      "description": "What it is about",
+      "order": 1,
+      "set_by": [
+        "llm"
+      ],
+      "type": "enum",
+      "values": [
+        "billing",
+        "delivery"
+      ]
+    },
+    "order": {
+      "description": "Order number",
+      "max_length": 200,
+      "order": 0,
+      "set_by": [
+        "llm"
+      ],
+      "type": "string"
+    },
+    "request": {
+      "description": "A short summary of what the visitor needs.",
+      "max_length": 2000,
+      "set_by": [
+        "llm"
+      ],
+      "type": "string"
+    },
+    "topic": {
+      "description": "What the request is about.",
+      "set_by": [
+        "llm"
+      ],
+      "type": "enum",
+      "values": [
+        "Invoices",
+        "Complaints"
+      ]
+    }
+  }
+}

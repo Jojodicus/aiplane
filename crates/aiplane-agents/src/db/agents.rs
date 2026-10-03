@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use aiplane_core::server::principal::GrantKind;
 use jiff::Timestamp;
 use serde_json::json;
 use sqlx::Row;
@@ -298,38 +299,155 @@ pub async fn list_all(pool: &Pool) -> Result<Vec<AgentRow>, DbError> {
     rows.iter().map(map_agent).collect()
 }
 
-/// Replace the draft. The live version is untouched. `Ok(false)` when there
-/// is no such agent.
+/// How many earlier drafts of one agent are kept for undo.
+pub const MAX_DRAFT_REVISIONS: i64 = 50;
+
+/// A saved draft: the revision that holds the draft as it was before, `None`
+/// when the save changed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DraftSaved {
+    pub revision: Option<i64>,
+}
+
+/// An earlier draft, kept so a change can be undone.
+#[derive(Debug, Clone)]
+pub struct RevisionRow {
+    pub id: i64,
+    pub spec: String,
+    /// The grants the change after this draft made.
+    pub granted: Vec<(GrantKind, String)>,
+    pub saved_by: String,
+    pub saved_at: String,
+}
+
+/// What a draft save is, besides the new draft: for the revision it keeps
+/// and the activity log.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DraftChange<'a> {
+    /// Grants made for this change (an architect's), revoked when it is undone.
+    pub granted: &'a [(GrantKind, String)],
+    /// The revision this save restores (an undo).
+    pub restored: Option<i64>,
+    /// Grants the undo revokes after the save.
+    pub revoking: &'a [(GrantKind, String)],
+}
+
+fn grants_json(grants: &[(GrantKind, String)]) -> serde_json::Value {
+    grants
+        .iter()
+        .map(|(kind, reference)| json!({ "kind": kind.as_str(), "ref": reference }))
+        .collect()
+}
+
+fn parse_grants(text: &str) -> Vec<(GrantKind, String)> {
+    serde_json::from_str::<Vec<serde_json::Value>>(text)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| {
+            Some((
+                GrantKind::parse(g.get("kind")?.as_str()?)?,
+                g.get("ref")?.as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// Replace the draft, keeping the one it replaces as a revision (the newest
+/// [`MAX_DRAFT_REVISIONS`] per agent). The live version is untouched.
+/// `Ok(None)` when there is no such agent.
 pub async fn update_draft(
     pool: &Pool,
     id: &str,
     draft_spec: &str,
     actor_id: &str,
-) -> Result<bool, DbError> {
+    change: DraftChange<'_>,
+) -> Result<Option<DraftSaved>, DbError> {
     let mut tx = WriteTx::begin(pool).await?;
-    let changed =
-        sqlx::query("UPDATE agents SET draft_spec = ?, updated_at = ? WHERE principal_id = ?")
-            .bind(draft_spec)
-            .bind(Timestamp::now().to_string())
+    let before: Option<String> =
+        sqlx::query_scalar("SELECT draft_spec FROM agents WHERE principal_id = ?")
             .bind(id)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-    if changed == 0 {
-        return Ok(false);
-    }
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(before) = before else {
+        return Ok(None);
+    };
+    let now = Timestamp::now().to_string();
+    let revision = if before == draft_spec {
+        None
+    } else {
+        let revision: i64 = sqlx::query_scalar(
+            "INSERT INTO agent_draft_revisions (principal_id, spec, granted, saved_by, saved_at)
+             VALUES (?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(id)
+        .bind(&before)
+        .bind(grants_json(change.granted).to_string())
+        .bind(actor_id)
+        .bind(&now)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM agent_draft_revisions WHERE principal_id = ? AND id NOT IN (
+                SELECT id FROM agent_draft_revisions WHERE principal_id = ?
+                 ORDER BY id DESC LIMIT ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(MAX_DRAFT_REVISIONS)
+        .execute(&mut *tx)
+        .await?;
+        Some(revision)
+    };
+    sqlx::query("UPDATE agents SET draft_spec = ?, updated_at = ? WHERE principal_id = ?")
+        .bind(draft_spec)
+        .bind(&now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     agent_audit::append(
         &mut tx,
         agent_audit::NewEvent::new(
             AuditKind::AgentDraftUpdated,
             id,
-            json!({ "bytes": draft_spec.len() }),
+            json!({
+                "bytes": draft_spec.len(),
+                "revision": revision,
+                "granted": grants_json(change.granted),
+                "restored": change.restored,
+                "revoking": grants_json(change.revoking),
+            }),
         )
         .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Some(DraftSaved { revision }))
+}
+
+/// Revision `revision` of agent `id`'s draft, if it is still kept.
+pub async fn draft_revision(
+    pool: &Pool,
+    id: &str,
+    revision: i64,
+) -> Result<Option<RevisionRow>, DbError> {
+    let row = sqlx::query(
+        "SELECT id, spec, granted, saved_by, saved_at FROM agent_draft_revisions
+          WHERE principal_id = ? AND id = ?",
+    )
+    .bind(id)
+    .bind(revision)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|r| {
+        Ok(RevisionRow {
+            id: r.try_get("id")?,
+            spec: r.try_get("spec")?,
+            granted: parse_grants(&r.try_get::<String, _>("granted")?),
+            saved_by: r.try_get("saved_by")?,
+            saved_at: r.try_get("saved_at")?,
+        })
+    })
+    .transpose()
 }
 
 /// Snapshot `spec` — the draft as the caller validated it — as the next
@@ -750,7 +868,12 @@ mod tests {
             publish(&pool, id, "{\"v\":1}", "alice").await.unwrap(),
             Some(1)
         );
-        assert!(update_draft(&pool, id, "{\"v\":2}", "alice").await.unwrap());
+        assert!(
+            update_draft(&pool, id, "{\"v\":2}", "alice", DraftChange::default())
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         let now = get(&pool, id).await.unwrap().unwrap();
         assert_eq!(now.draft_spec, "{\"v\":2}");
@@ -984,5 +1107,106 @@ mod tests {
             .await;
             assert!(res.is_err(), "{kind}/{access} accepted");
         }
+    }
+
+    #[tokio::test]
+    async fn a_saved_draft_keeps_the_one_it_replaced_for_undo() {
+        let pool = pool().await;
+        let a = agent(&pool, "undo", "alice").await;
+        let id = &a.principal.id;
+
+        let first = update_draft(&pool, id, r#"{"v":1}"#, "alice", DraftChange::default())
+            .await
+            .unwrap()
+            .unwrap();
+        let kept = draft_revision(&pool, id, first.revision.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.spec, r#"{"main":{}}"#);
+        assert_eq!(kept.saved_by, "alice");
+        assert!(kept.granted.is_empty());
+
+        let granted = [(GrantKind::Tool, "fetch_url".to_string())];
+        let tooled = update_draft(
+            &pool,
+            id,
+            r#"{"v":"tooled"}"#,
+            "alice",
+            DraftChange {
+                granted: &granted,
+                ..DraftChange::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let kept = draft_revision(&pool, id, tooled.revision.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            kept.granted, granted,
+            "the change's grants ride with its revision"
+        );
+
+        let same = update_draft(
+            &pool,
+            id,
+            r#"{"v":"tooled"}"#,
+            "alice",
+            DraftChange::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(same.revision, None, "an unchanged draft adds no revision");
+
+        let mut last = None;
+        for n in 2..(MAX_DRAFT_REVISIONS + 5) {
+            last = update_draft(
+                &pool,
+                id,
+                &format!(r#"{{"v":{n}}}"#),
+                "bob",
+                DraftChange::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .revision;
+        }
+        let kept: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM agent_draft_revisions WHERE principal_id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kept, MAX_DRAFT_REVISIONS);
+        assert!(
+            draft_revision(&pool, id, first.revision.unwrap())
+                .await
+                .unwrap()
+                .is_none(),
+            "the oldest revisions are dropped"
+        );
+        assert!(
+            draft_revision(&pool, id, last.unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            draft_revision(&pool, "other", last.unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            update_draft(&pool, "missing", "{}", "alice", DraftChange::default())
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

@@ -865,6 +865,10 @@ async fn spawn_assistant_worker(
             suspendable: true,
         },
     );
+    // An architect conversation (docs/agents.md "What #118 built") runs as
+    // the architect persona: its prompt and its tools instead of the
+    // person's chat tools.
+    let persona = crate::pages::architect::persona_for(state, user, session_id).await;
     let driver = Box::new(aiplane_runtime::openai_driver::OpenAiDriver {
         state: state.clone(),
         tool_ctx,
@@ -873,6 +877,7 @@ async fn spawn_assistant_worker(
         voice_mode: req.voice_mode,
         clock: aiplane_runtime::budget::system_clock(),
         resume,
+        persona,
     });
     let driver_ctx = session_core::driver::SessionContext {
         user_id: Some(user.id.clone()),

@@ -203,6 +203,7 @@ async fn drive_inner(
         voice_mode: false,
         clock,
         resume,
+        persona: None,
     });
 
     // A person's headless run takes no registry slot — it must not count

@@ -17,6 +17,7 @@ pub mod agent_state;
 pub mod agent_tests;
 pub mod agent_verifiers;
 pub mod agents;
+pub mod architect_sessions;
 pub mod embed_keys;
 pub mod run_sessions;
 pub mod system_principals;

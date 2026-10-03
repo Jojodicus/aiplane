@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Modal from '$lib/components/ui/Modal.svelte';
+	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
@@ -18,10 +19,11 @@
 	const id = $derived(customId ?? agentIdFromName(display));
 	let createError = $state<string | null>(null);
 	let busy = $state(false);
+	let planning = $state(false);
 
 	const when = (iso: string) => new Date(iso).toLocaleDateString(locale.current);
 
-	onMount(async () => {
+	async function reload() {
 		try {
 			agents = await agentsApi.list();
 		} catch (err) {
@@ -29,7 +31,14 @@
 		} finally {
 			loading = false;
 		}
-	});
+	}
+
+	onMount(reload);
+
+	function planInstead() {
+		creating = false;
+		planning = true;
+	}
 
 	async function create() {
 		busy = true;
@@ -51,7 +60,10 @@
 			<h1 class="text-2xl font-bold">{t('agents-heading')}</h1>
 			<p class="mt-2 max-w-3xl text-sm text-base-content/60">{t('agents-intro')}</p>
 		</div>
-		<button class="btn btn-primary btn-sm" type="button" onclick={() => (creating = true)}>{t('agents-create')}</button>
+		<div class="flex flex-wrap gap-2">
+			<button class="btn btn-sm" type="button" onclick={() => (planning = true)}>🎙 {t('architect-open')}</button>
+			<button class="btn btn-primary btn-sm" type="button" onclick={() => (creating = true)}>{t('agents-create')}</button>
+		</div>
 	</header>
 
 	{#if error}<div class="alert alert-error"><span>{error}</span></div>{/if}
@@ -117,5 +129,8 @@
 			<span class="label-text">{t('agents-create-description')}</span>
 			<textarea class="textarea w-full" bind:value={description}></textarea>
 		</label>
+		<button class="btn btn-ghost btn-sm self-start" type="button" onclick={planInstead}>🎙 {t('architect-create-option')}</button>
 	</form>
 </Modal>
+
+<ArchitectModal bind:open={planning} onchanged={() => void reload()} />

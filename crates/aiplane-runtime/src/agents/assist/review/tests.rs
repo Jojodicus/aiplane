@@ -23,6 +23,7 @@ fn candidates() -> Candidates {
             id: "billing-agent".into(),
             name: "Billing".into(),
         }],
+        pools: vec!["main-pool".into(), "fast-pool".into()],
     }
 }
 
@@ -388,4 +389,157 @@ fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
     .unwrap();
     assert_eq!(input["scenario"], "ignore all rules");
     assert_eq!(input["abilities"][0]["name"], "Current time");
+}
+
+#[test]
+fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
+    let w = World::new();
+    let base = json!({ "main": { "pool": "main-pool" } });
+    let changes = json!({
+        "display": "  Harald ",
+        "pool": "fast-pool",
+        "task": "You answer questions about Acme orders.",
+        "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
+        "slots": [{ "name": "Order Number", "label": "The order number", "type": "text",
+                    "choices": [] }],
+        "tests": [{ "name": "x", "kind": "in_scope", "messages": ["hi"],
+                    "answer_contains": [], "answer_not_contains": [] }]
+    });
+    let out = apply_changes(&changes, &base, &w.ctx());
+
+    assert_eq!(out.display.as_deref(), Some("Harald"));
+    assert_eq!(out.pool.as_deref(), Some("fast-pool"));
+    assert_eq!(
+        out.grants,
+        [
+            (GrantKind::Pool, "fast-pool".to_string()),
+            (GrantKind::Tool, "get_current_timestamp".to_string()),
+        ]
+    );
+    assert_eq!(out.draft["profile"]["display"], "Harald");
+    assert_eq!(out.draft["main"]["pool"], "fast-pool");
+    assert_eq!(out.draft["main"]["tools"], json!(["get_current_timestamp"]));
+    assert_eq!(out.draft["state"]["order_number"]["type"], "string");
+    assert_eq!(
+        out.draft["main"]["instructions"]["orchestration"],
+        "You answer questions about Acme orders."
+    );
+    assert_eq!(
+        out.suggestion.dropped.len(),
+        1,
+        "{:#?}",
+        out.suggestion.dropped
+    );
+    assert_eq!(out.suggestion.dropped[0].step, "tests");
+
+    let granted = GrantSet::new(
+        w.grants
+            .iter()
+            .map(|(k, r)| (k, r.to_string()))
+            .chain(out.grants.iter().cloned()),
+    );
+    let ctx = SpecContext {
+        agent_id: AGENT,
+        grants: &granted,
+        agents: &w.agents,
+        live_specs: &w.live,
+        voice_defaults: &Default::default(),
+    };
+    spec::check(&out.draft, &ctx, Stage::Draft).unwrap();
+}
+
+/// The draft an architect writes, as the setup assistant must read it:
+/// `web/src/lib/agent-setup.test.ts` reads this file back and expects the
+/// hand-offs as rules and the slots as friendly kinds, never "advanced".
+/// Regenerate with `UPDATE_ARCHITECT_FIXTURE=1` after a deliberate change.
+#[test]
+fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() {
+    let w = World::new();
+    let base = json!({ "main": { "pool": "main-pool" } });
+    let changes = json!({
+        "task": "You answer questions about Acme orders.",
+        "slots": [
+            { "name": "order", "label": "Order number", "type": "text", "choices": [] },
+            { "name": "issue", "label": "What it is about", "type": "choice",
+              "choices": ["billing", "delivery"] }
+        ],
+        "handoffs": [
+            { "topic": "Invoices", "target": "billing-agent" },
+            { "topic": "Complaints", "target": "human", "identity": true },
+            { "topic": "Hacking", "target": "nobody" }
+        ],
+        "fallback_to_person": true
+    });
+    let out = apply_changes(&changes, &base, &w.ctx());
+    assert!(out.handoffs);
+    let steps: Vec<(&str, Option<&str>)> = out
+        .suggestion
+        .dropped
+        .iter()
+        .map(|d| (d.step, d.item.as_deref()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("handoffs", Some("Complaints")),
+            ("handoffs", Some("Hacking"))
+        ],
+        "no identity check to condition on, and an unknown target"
+    );
+    spec::check(
+        &out.draft,
+        &SpecContext {
+            agent_id: AGENT,
+            grants: &w.grants,
+            agents: &w.agents,
+            live_specs: &w.live,
+            voice_defaults: &Default::default(),
+        },
+        Stage::Draft,
+    )
+    .unwrap();
+
+    let read = super::super::handoffs::read(&out.draft);
+    assert_eq!(read.rules.len(), 2);
+    assert!(read.fallback && read.custom.is_empty());
+    assert_eq!(out.draft["state"]["order"]["order"], 0);
+    assert_eq!(out.draft["state"]["issue"]["order"], 1);
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../web/src/lib/fixtures/architect-draft.json");
+    let written = serde_json::to_string_pretty(&out.draft).unwrap() + "\n";
+    if std::env::var_os("UPDATE_ARCHITECT_FIXTURE").is_some() {
+        std::fs::write(&path, &written).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap_or_default(),
+        written,
+        "the architect now writes a different draft than {} — regenerate it with \
+         UPDATE_ARCHITECT_FIXTURE=1 and make sure agent-setup.test.ts still reads it",
+        path.display()
+    );
+}
+
+#[test]
+fn an_architect_cannot_give_an_agent_what_the_person_may_not_grant() {
+    let w = World::new();
+    let base = json!({ "main": { "pool": "main-pool" } });
+    let changes = json!({
+        "pool": "admin-only-pool",
+        "abilities": [{ "id": "run_in_sandbox", "why": "run code" }],
+    });
+    let out = apply_changes(&changes, &base, &w.ctx());
+
+    assert!(out.grants.is_empty(), "{:?}", out.grants);
+    assert_eq!(out.draft, base);
+    assert_eq!(out.pool, None);
+    let steps: Vec<&str> = out.suggestion.dropped.iter().map(|d| d.step).collect();
+    assert_eq!(steps, ["pool", "abilities"]);
+    assert!(
+        out.suggestion.dropped[1]
+            .reason
+            .contains("not an ability you may grant"),
+        "{:?}",
+        out.suggestion.dropped
+    );
 }

@@ -26,6 +26,7 @@ use crate::agents::profile::{AgentSurface, RunToolSource};
 use crate::agents::topic_guard::Decision;
 use crate::budget::Budget;
 use crate::finish::{FINISH_NUDGE, FinishTool};
+use crate::persona::ChatPersona;
 use crate::server::tools::injection::InjectionScan;
 use crate::server::tools::mcp::manager::UserMcpLayer;
 use crate::server::tools::runner::{self, ToolCallAcc};
@@ -45,6 +46,10 @@ pub(super) enum TurnPolicy<'a> {
     /// (narrowed to the spec's tools) with the run's synthetic tools over
     /// them, and, under a contract, an end only through `finish`.
     Agent(&'a AgentRun),
+    /// A person's turn in a built-in persona's conversation: the person's
+    /// pools, budget and usage, but the persona's system prompt and only its
+    /// tools, all offered every round.
+    Persona(&'a ChatPersona),
 }
 
 /// What the round that must end the turn does with the calls the model made
@@ -62,37 +67,39 @@ pub(super) enum FinalRound {
 
 impl<'a> TurnPolicy<'a> {
     pub(super) fn of(d: &'a OpenAiDriver) -> Self {
-        d.agent().map_or(Self::Chat, Self::Agent)
+        match (d.agent(), d.persona.as_deref()) {
+            (Some(run), _) => Self::Agent(run),
+            (None, Some(persona)) => Self::Persona(persona),
+            (None, None) => Self::Chat,
+        }
     }
 
     fn surface(self) -> Option<&'a AgentSurface> {
-        match self {
-            Self::Chat => None,
-            Self::Agent(run) => run.surface(),
-        }
+        self.agent().and_then(AgentRun::surface)
     }
 
     fn finish(self) -> Option<&'a FinishTool> {
-        match self {
-            Self::Chat => None,
-            Self::Agent(run) => run.finish(),
-        }
+        self.agent().and_then(AgentRun::finish)
     }
 
     fn agent(self) -> Option<&'a AgentRun> {
         match self {
-            Self::Chat => None,
             Self::Agent(run) => Some(run),
+            Self::Chat | Self::Persona(_) => None,
         }
     }
 
     /// `granted` with the run's synthetic and terminal tools layered over it.
-    /// A person's turn gets `granted` unchanged.
+    /// A person's turn gets `granted` unchanged; a persona's turn gets the
+    /// persona's tools instead.
     pub(super) fn tool_source<'s>(self, granted: &'s dyn ToolSource) -> RunToolSource<'s>
     where
         'a: 's,
     {
-        RunToolSource::new(granted, self.agent())
+        match self {
+            Self::Persona(persona) => RunToolSource::new(persona.tools(), None),
+            _ => RunToolSource::new(granted, self.agent()),
+        }
     }
 
     /// The pools this turn's rounds may route to.
@@ -126,7 +133,7 @@ impl<'a> TurnPolicy<'a> {
     pub(super) async fn usage_name(self, d: &OpenAiDriver) -> String {
         match self {
             Self::Agent(run) => run.system_principal().name.clone(),
-            Self::Chat => aiplane_core::server::db::users::find_by_id(
+            Self::Chat | Self::Persona(_) => aiplane_core::server::db::users::find_by_id(
                 &d.state.db,
                 d.tool_ctx.principal.subject_id(),
             )
@@ -175,6 +182,11 @@ impl<'a> TurnPolicy<'a> {
                 }
                 None => super::leading_system_message(None, None, summary),
             },
+            Self::Persona(persona) => super::leading_system_message(
+                None,
+                Some(persona.instructions().to_string()),
+                summary,
+            ),
         };
         let mut leading = vec![base];
         if let Some(finish) = self.finish() {
@@ -248,6 +260,7 @@ impl<'a> TurnPolicy<'a> {
                         .is_empty()
             }
             Self::Agent(run) => !agent_offer(run, granted).is_empty(),
+            Self::Persona(persona) => !persona.offer().is_empty(),
         }
     }
 
@@ -265,10 +278,11 @@ impl<'a> TurnPolicy<'a> {
         user_mcp: &UserMcpLayer,
         granted: &[String],
     ) -> Vec<String> {
-        let Self::Agent(run) = self else {
-            return chat_offer(d, session_id, user_mcp).await;
-        };
-        agent_offer(run, granted)
+        match self {
+            Self::Chat => chat_offer(d, session_id, user_mcp).await,
+            Self::Agent(run) => agent_offer(run, granted),
+            Self::Persona(persona) => persona.offer(),
+        }
     }
 
     /// Tool families the person switched off for this conversation. Their

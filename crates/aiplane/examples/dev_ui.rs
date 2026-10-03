@@ -91,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         .mount(&chat_mock)
         .await;
     mount_agent_model(&chat_mock).await;
+    mount_architect_model(&chat_mock).await;
     Mock::given(method("POST"))
         .and(path("/systemone"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -984,6 +985,106 @@ async fn mount_agent_model(chat_mock: &MockServer) {
         })
         .mount(chat_mock)
         .await;
+}
+
+/// The agent architect's scripted model (`docs/agents.md` "What #118
+/// built"), for requests that offer `update_agent_draft`. Per turn: create a
+/// draft named "Harald" when the conversation plans no agent yet, then set
+/// its task and topics, then (when the person said "test") try it, and say
+/// what it did.
+async fn mount_architect_model(chat_mock: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(|request: &wiremock::Request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(|body| {
+                body["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|t| t["function"]["name"] == "update_agent_draft")
+            })
+        })
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            completion(&body, architect_step(&body))
+        })
+        .mount(chat_mock)
+        .await;
+}
+
+fn architect_step(body: &serde_json::Value) -> serde_json::Value {
+    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+    let last_user = messages
+        .iter()
+        .rposition(|m| m["role"] == "user")
+        .unwrap_or(0);
+    let said = messages
+        .get(last_user)
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    let done: Vec<(String, serde_json::Value)> = messages[last_user..]
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .flat_map(|m| m["tool_calls"].as_array().cloned().unwrap_or_default())
+        .map(|c| {
+            let name = c["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let result = messages
+                .iter()
+                .find(|m| m["role"] == "tool" && m["tool_call_id"] == c["id"])
+                .and_then(|m| m["content"].as_str())
+                .and_then(|t| serde_json::from_str(t).ok())
+                .unwrap_or_default();
+            (name, result)
+        })
+        .collect();
+    let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+    let planned = system
+        .split("plans the agent `")
+        .nth(1)
+        .and_then(|rest| rest.split('`').next())
+        .map(str::to_string);
+    let agent = planned.or_else(|| {
+        done.iter()
+            .find(|(n, _)| n == "create_agent_draft")
+            .and_then(|(_, r)| r["agent_id"].as_str().map(str::to_string))
+    });
+    let did = |tool: &str| done.iter().any(|(n, _)| n == tool);
+    let Some(agent) = agent else {
+        if did("create_agent_draft") {
+            return serde_json::json!({ "content": "I could not create the agent — see the tool call above." });
+        }
+        return calls(&[(
+            "create_agent_draft",
+            serde_json::json!({ "display": "Harald", "description": "Answers questions about Acme orders" }),
+        )]);
+    };
+    if !did("update_agent_draft") {
+        return calls(&[(
+            "update_agent_draft",
+            serde_json::json!({ "agent_id": agent, "changes": {
+                "task": "You answer questions about Acme orders. First ask for the order number.",
+                "scope": { "topics": ["Acme orders", "Shipping"],
+                           "refusal": "I can only help with Acme orders.", "strict": false },
+                "slots": [{ "name": "order_number", "label": "Order number", "type": "text",
+                            "choices": [] }]
+            } }),
+        )]);
+    }
+    if said.contains("test") && !did("run_test_turn") {
+        return calls(&[(
+            "run_test_turn",
+            serde_json::json!({ "agent_id": agent, "message": "Where is my order?" }),
+        )]);
+    }
+    serde_json::json!({ "content": format!(
+        "I set the task, the topics and the order number to collect. You can undo that \
+         change with the button above. When you are happy, review it and press **Publish** on \
+         [the setup page](/agents/{agent})."
+    ) })
 }
 
 fn is_judge(body: &serde_json::Value) -> bool {

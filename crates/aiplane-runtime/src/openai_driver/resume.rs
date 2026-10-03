@@ -533,6 +533,15 @@ mod tests {
 
     /// Drive the turn once through the chat driver, as the chat path wires it.
     async fn drive(state: &Arc<RamaState>, session_id: &str, resume: Option<ResumeFrom>) {
+        drive_as(state, session_id, resume, None).await;
+    }
+
+    async fn drive_as(
+        state: &Arc<RamaState>,
+        session_id: &str,
+        resume: Option<ResumeFrom>,
+        persona: Option<Arc<crate::persona::ChatPersona>>,
+    ) {
         let tool_ctx = build_tool_context(
             state,
             TurnFacts {
@@ -554,6 +563,7 @@ mod tests {
             voice_mode: false,
             clock: crate::budget::system_clock(),
             resume,
+            persona,
         });
         let (broadcast, _rx) = tokio::sync::broadcast::channel(64);
         let ctx = session_core::driver::SessionContext {
@@ -774,5 +784,59 @@ mod tests {
             None
         );
         assert_eq!(requests(&server).await.len(), 2);
+    }
+
+    /// A persona's turn (the agent architect's) is the person's turn with the
+    /// persona's prompt and only its tools: the person's own tools are neither
+    /// offered nor run.
+    #[tokio::test]
+    async fn a_personas_turn_offers_only_its_tools_and_refuses_the_persons() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = upstream(vec![
+            echo_call(),
+            json!({"tool_calls": [{"index": 0, "id": "call-2", "type": "function",
+                "function": {"name": "get_current_timestamp", "arguments": "{}"}}]}),
+            json!({"content": "Planned."}),
+        ])
+        .await;
+        let state = boot(
+            &dir.path().join("gateway.db"),
+            &server.uri(),
+            ToolRegistry::new().with(Echo),
+        )
+        .await;
+        let (session_id, _) = open_turn(&state).await;
+        let persona = crate::persona::ChatPersona::new(
+            "You are the agent architect.",
+            Arc::new(ToolRegistry::new().with(crate::server::tools::time::CurrentTimestamp)),
+        );
+        drive_as(&state, &session_id, None, Some(Arc::new(persona))).await;
+
+        let done = the_turn(&state, &session_id).await;
+        assert_eq!(done.turn.status, TurnStatus::Completed);
+        assert_eq!(done.turn.content.as_deref(), Some("Planned."));
+        let calls: Vec<(&str, ToolCallStatus)> = done
+            .tool_calls
+            .iter()
+            .map(|c| (c.name.as_str(), c.status))
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("company_echo", ToolCallStatus::Errored),
+                ("get_current_timestamp", ToolCallStatus::Completed),
+            ]
+        );
+
+        let sent = requests(&server).await;
+        let offered: Vec<&str> = sent[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(offered, ["get_current_timestamp"]);
+        let system = sent[0]["messages"][0]["content"].as_str().unwrap();
+        assert!(system.contains("You are the agent architect."), "{system}");
     }
 }

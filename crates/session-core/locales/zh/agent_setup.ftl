@@ -276,3 +276,21 @@ agents-setup-voice-voice = 声音（可选）
 agents-setup-voice-voice-hint = 留空则使用访客语言的默认声音。
 agents-setup-voice-unavailable-input = 语音输入不可用，因为没有为您启用任何语音识别模型——请联系管理员。
 agents-setup-voice-unavailable-output = 朗读回答不可用，因为没有为您启用任何语音输出模型——请联系管理员。
+
+# The agent architect (#118): a centred chat window that plans an agent.
+architect-open = 与架构师一起规划
+architect-title = 智能体架构师
+architect-intro = 与您一起规划智能体并编写草稿。是否发布由您决定。
+architect-conversation-title = 智能体架构师：{ $name }
+architect-conversation-new = 智能体架构师：新智能体
+architect-placeholder = 描述您的智能体应该做什么 …
+architect-send = 发送
+architect-new-conversation = 新对话
+architect-undo = 撤销
+architect-undone = 已撤销
+architect-open-setup = 打开设置
+architect-starting = 正在启动架构师 …
+architect-empty = 通过输入或麦克风告诉架构师您的智能体应该做什么。它所做的每项更改都会显示在这里，并且可以撤销。
+architect-working = 架构师正在工作 …
+architect-create-option = 或者在与架构师的对话中规划
+architect-message-label = 发给架构师的消息

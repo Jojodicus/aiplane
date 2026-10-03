@@ -374,25 +374,9 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    match manager_holds(&state, &manager, kind, reference).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return json_error(
-                StatusCode::FORBIDDEN,
-                "grant_exceeds_manager",
-                &format!(
-                    "cannot grant {} `{reference}`: you do not hold it yourself, and a manager \
-                     can only grant what they hold. Ask an admin to grant it to one of your \
-                     groups, or have someone who holds it make this grant.",
-                    kind_label(kind)
-                ),
-            );
-        }
-        Err(resp) => return resp,
-    }
-    let added = match sp_db::add_grant(&state.db, &p.id, kind, reference, &manager.id).await {
+    let added = match add_capped_grant(&state, &manager, &p.id, kind, reference).await {
         Ok(added) => added,
-        Err(err) => return internal(err),
+        Err(resp) => return resp,
     };
     json_ok(
         if added {
@@ -402,6 +386,33 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         },
         json!({ "kind": kind.as_str(), "ref": reference, "added": added }),
     )
+}
+
+/// Grant `kind` `reference` to principal `principal_id` (whose access the
+/// caller already checked), capped at what `manager` holds right now.
+/// Whether the grant is new.
+pub(crate) async fn add_capped_grant(
+    state: &RamaState,
+    manager: &users::User,
+    principal_id: &str,
+    kind: GrantKind,
+    reference: &str,
+) -> Result<bool, Response> {
+    if !manager_holds(state, manager, kind, reference).await? {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "grant_exceeds_manager",
+            &format!(
+                "cannot grant {} `{reference}`: you do not hold it yourself, and a manager \
+                 can only grant what they hold. Ask an admin to grant it to one of your \
+                 groups, or have someone who holds it make this grant.",
+                kind_label(kind)
+            ),
+        ));
+    }
+    sp_db::add_grant(&state.db, principal_id, kind, reference, &manager.id)
+        .await
+        .map_err(internal)
 }
 
 /// POST /api/v0/system-principals/{id}/grants/revoke — remove one grant. Any

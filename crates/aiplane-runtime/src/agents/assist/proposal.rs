@@ -240,6 +240,56 @@ pub fn suggest_schema(candidates: &Candidates) -> Value {
     }))
 }
 
+/// The shape of an architect's `changes` ([`super::apply_changes`]): the
+/// proposal's draft steps, each optional, plus the agent's name and model.
+/// Not strict: what may be granted or targeted is checked when applied.
+pub fn changes_schema() -> Value {
+    let to_strings = |s: &[&str]| s.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "display": { "type": "string", "description": "the agent's name as visitors see it" },
+            "pool": { "type": "string", "description": "a chat pool from list_grantable `pools`" },
+            "task": { "type": "string" },
+            "tone": object(json!({ "response": { "type": "string" }, "chips": strings() })),
+            "scope": object(json!({
+                "topics": strings(),
+                "refusal": { "type": "string" },
+                "strict": { "type": "boolean" },
+            })),
+            "abilities": { "type": "array", "items": object(json!({
+                "id": { "type": "string" },
+                "why": { "type": "string" },
+            })) },
+            "slots": { "type": "array", "items": object(json!({
+                "name": { "type": "string" },
+                "label": { "type": "string" },
+                "type": one_of(to_strings(SLOT_TYPES)),
+                "choices": strings(),
+            })) },
+            "handoffs": { "type": "array",
+                "description": "rules: when the request is about `topic`, hand it over to \
+                                `target`; a rule with a topic that exists replaces it",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["topic", "target"],
+                    "properties": {
+                        "topic": { "type": "string" },
+                        "target": { "type": "string",
+                                    "description": "an agent id, or \"human\" for a person" },
+                        "identity": { "type": "boolean",
+                                      "description": "only once the visitor's identity is \
+                                                      confirmed" },
+                    },
+                } },
+            "fallback_to_person": { "type": "boolean",
+                "description": "otherwise hand every other request over to a person" },
+        },
+    })
+}
+
 pub fn improve_schema() -> Value {
     object(json!({ "suggestion": { "type": "string" }, "why": { "type": "string" } }))
 }

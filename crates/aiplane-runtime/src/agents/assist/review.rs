@@ -15,6 +15,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
+use super::handoffs::{self, Rule, Target};
 use super::proposal::{
     AbilityProposal, HandoffProposal, IdentityProposal, ScopeProposal, SlotProposal, TestProposal,
     ToneProposal,
@@ -26,7 +27,8 @@ use crate::agents::spec::{self, SpecContext, SpecIssue, Stage};
 const MAX_CHIPS: usize = 8;
 const MAX_CHIP_CHARS: usize = 40;
 const MAX_IDENT_LEN: usize = 48;
-const TEXT_MAX: u64 = 500;
+/// The setup's `text` shape (`SLOT_SHAPES` in `web/src/lib/agent-setup.ts`).
+const TEXT_MAX: u64 = 200;
 const LONG_TEXT_MAX: u64 = 2000;
 
 /// What the agent's draft is checked against: its grants as stored now,
@@ -163,30 +165,7 @@ pub struct Dropped {
 /// is editing) and keep what holds.
 pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggestion {
     let mut r = Reviewer::new(base, ctx);
-    if let Some(task) = r.field::<String>(answer, "task") {
-        r.task(task);
-    }
-    if let Some(tone) = r.field::<ToneProposal>(answer, "tone") {
-        r.tone(tone);
-    }
-    if let Some(scope) = r.field::<ScopeProposal>(answer, "scope") {
-        r.scope(scope);
-    }
-    for ability in r
-        .field::<Vec<AbilityProposal>>(answer, "abilities")
-        .unwrap_or_default()
-    {
-        r.ability(ability);
-    }
-    for slot in r
-        .field::<Vec<SlotProposal>>(answer, "slots")
-        .unwrap_or_default()
-    {
-        r.slot(slot);
-    }
-    if let Some(identity) = r.field::<IdentityProposal>(answer, "identity") {
-        r.identity(identity);
-    }
+    r.steps(answer);
     for handoff in r
         .field::<Vec<HandoffProposal>>(answer, "handoffs")
         .unwrap_or_default()
@@ -202,14 +181,80 @@ pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggesti
     r.out
 }
 
+/// One rule of the setup's hand-off step, as an architect asks for it.
+#[derive(Debug, serde::Deserialize)]
+struct SetupHandoff {
+    topic: String,
+    /// An agent id, or `human`.
+    target: String,
+    /// Only once the visitor's identity is confirmed.
+    #[serde(default)]
+    identity: bool,
+}
+
+/// An architect's changes applied to `base`: the draft to save, the grants
+/// it needs, and what was applied or left out (`docs/agents.md` "What #118
+/// built").
+#[derive(Debug, Clone)]
+pub struct Applied {
+    pub suggestion: Suggestion,
+    pub draft: Value,
+    /// Made before the draft is saved, through the capped grant route.
+    pub grants: Vec<(GrantKind, String)>,
+    pub display: Option<String>,
+    pub pool: Option<String>,
+    /// Whether the hand-offs changed.
+    pub handoffs: bool,
+}
+
+/// Apply `changes` — the proposal's steps plus `display` (the agent's name)
+/// and `pool` (its model) — to `base`, one piece at a time, with the same
+/// checks [`review`] makes. Slots and hand-offs are written in the shapes the
+/// setup assistant reads (a slot's `order`; hand-offs as its rules, see
+/// [`super::handoffs`]). Test cases are not part of a draft, so they are left
+/// out with a reason.
+pub fn apply_changes(changes: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Applied {
+    let mut r = Reviewer::new(base, ctx);
+    r.ordered = true;
+    let display = r
+        .field::<String>(changes, "display")
+        .and_then(|d| r.display(d));
+    let pool = r.field::<String>(changes, "pool").and_then(|p| r.pool(p));
+    r.steps(changes);
+    let wanted = r
+        .field::<Vec<SetupHandoff>>(changes, "handoffs")
+        .unwrap_or_default();
+    let fallback = r.field::<bool>(changes, "fallback_to_person");
+    let handoffs = (!wanted.is_empty() || fallback.is_some()) && r.setup_handoffs(wanted, fallback);
+    if changes.get("tests").is_some_and(|t| !t.is_null()) {
+        r.drop(
+            "tests",
+            None,
+            "test cases are not part of the draft — the person saves them on the setup's last \
+             step",
+        );
+    }
+    Applied {
+        suggestion: r.out,
+        draft: r.draft,
+        grants: r.granted,
+        display,
+        pool,
+        handoffs,
+    }
+}
+
 struct Reviewer<'a> {
     ctx: &'a ReviewContext<'a>,
     draft: Value,
-    /// The tools the offered abilities would grant: the draft is checked as
-    /// if the manager had granted them, which applying the step does.
-    granted: Vec<String>,
+    /// What the offered abilities (and an architect's model choice) would
+    /// grant: the draft is checked as if the manager had granted them, which
+    /// applying the step does.
+    granted: Vec<(GrantKind, String)>,
     known: BTreeSet<(String, String)>,
     tests: BTreeSet<String>,
+    /// Give each new slot the setup's next position (`order`).
+    ordered: bool,
     out: Suggestion,
 }
 
@@ -226,6 +271,7 @@ impl<'a> Reviewer<'a> {
             granted: Vec::new(),
             known: BTreeSet::new(),
             tests: BTreeSet::new(),
+            ordered: false,
             out: Suggestion::default(),
         };
         r.known = r.issues(&r.draft);
@@ -265,7 +311,7 @@ impl<'a> Reviewer<'a> {
                 .grants
                 .iter()
                 .map(|(k, r)| (k, r.to_string()))
-                .chain(self.granted.iter().map(|t| (GrantKind::Tool, t.clone()))),
+                .chain(self.granted.iter().cloned()),
         );
         let ctx = SpecContext {
             agent_id: self.ctx.agent_id,
@@ -310,6 +356,182 @@ impl<'a> Reviewer<'a> {
         let mut draft = self.draft.clone();
         set_at(&mut draft, pointer, value);
         draft
+    }
+
+    /// Every draft step of `answer`, in the assistant's step order.
+    fn steps(&mut self, answer: &Value) {
+        if let Some(task) = self.field::<String>(answer, "task") {
+            self.task(task);
+        }
+        if let Some(tone) = self.field::<ToneProposal>(answer, "tone") {
+            self.tone(tone);
+        }
+        if let Some(scope) = self.field::<ScopeProposal>(answer, "scope") {
+            self.scope(scope);
+        }
+        for ability in self
+            .field::<Vec<AbilityProposal>>(answer, "abilities")
+            .unwrap_or_default()
+        {
+            self.ability(ability);
+        }
+        for slot in self
+            .field::<Vec<SlotProposal>>(answer, "slots")
+            .unwrap_or_default()
+        {
+            self.slot(slot);
+        }
+        if let Some(identity) = self.field::<IdentityProposal>(answer, "identity") {
+            self.identity(identity);
+        }
+    }
+
+    /// The setup's next free slot position.
+    fn next_order(&self) -> u64 {
+        self.draft
+            .get("state")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|s| s.values())
+            .filter_map(|d| d.get("order").and_then(Value::as_u64))
+            .map(|o| o + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Add or change the setup's hand-off rules ("when it is about `topic`,
+    /// hand over to `target`") and its fallback to a person, as one step.
+    fn setup_handoffs(&mut self, wanted: Vec<SetupHandoff>, fallback: Option<bool>) -> bool {
+        let mut h = handoffs::read(&self.draft);
+        let writer = handoffs::identity_writer(&self.draft);
+        for w in wanted {
+            let topic = w.topic.trim().to_string();
+            if topic.is_empty() {
+                self.drop("handoffs", None, "a hand-off needs a topic");
+                continue;
+            }
+            let target = w.target.trim();
+            let target = if target == HUMAN_TARGET {
+                Target::Human
+            } else if let Some(agent) = self
+                .ctx
+                .candidates
+                .agents
+                .iter()
+                .find(|a| a.id == target && a.id != self.ctx.agent_id)
+            {
+                Target::Agent(agent.id.clone())
+            } else {
+                self.drop(
+                    "handoffs",
+                    Some(&topic),
+                    format!(
+                        "`{target}` is not an agent you may hand off to — pick one of the agents \
+                         shared with you, or a person"
+                    ),
+                );
+                continue;
+            };
+            let bind = match &target {
+                Target::Agent(id) => {
+                    let (bind, missing) =
+                        handoffs::derive_bind(self.ctx.live_specs.get(id), &self.draft);
+                    if !missing.is_empty() {
+                        self.drop(
+                            "handoffs",
+                            Some(&topic),
+                            format!(
+                                "kept, but `{id}` needs {} from a confirmed identity, which this \
+                                 agent has no check for yet — the setup's checklist asks for it",
+                                missing.join(", ")
+                            ),
+                        );
+                    }
+                    bind
+                }
+                Target::Human => Map::new(),
+            };
+            if w.identity && writer.is_none() {
+                self.drop(
+                    "handoffs",
+                    Some(&topic),
+                    "kept without the identity condition: the agent has no identity check yet",
+                );
+            }
+            let identity = w.identity && writer.is_some();
+            match h
+                .rules
+                .iter_mut()
+                .find(|r| r.topic.trim().eq_ignore_ascii_case(&topic))
+            {
+                Some(rule) => {
+                    rule.target = target;
+                    rule.identity = identity;
+                    rule.bind = bind;
+                }
+                None => h.rules.push(Rule {
+                    route: None,
+                    topic,
+                    identity,
+                    target,
+                    bind,
+                }),
+            }
+        }
+        if let Some(f) = fallback {
+            h.fallback = f;
+        }
+        let mut candidate = self.draft.clone();
+        handoffs::write(&mut candidate, &h);
+        if candidate == self.draft {
+            return false;
+        }
+        match self.adopt(candidate) {
+            Ok(()) => true,
+            Err(reason) => {
+                self.drop("handoffs", None, reason);
+                false
+            }
+        }
+    }
+
+    fn display(&mut self, display: String) -> Option<String> {
+        let display = display.trim().to_string();
+        if display.is_empty() {
+            self.drop("display", None, "the name is empty");
+            return None;
+        }
+        let candidate = self.with(&["profile", "display"], json!(display));
+        match self.adopt(candidate) {
+            Ok(()) => Some(display),
+            Err(reason) => {
+                self.drop("display", None, reason);
+                None
+            }
+        }
+    }
+
+    fn pool(&mut self, pool: String) -> Option<String> {
+        let pool = pool.trim().to_string();
+        if !self.ctx.candidates.pools.contains(&pool) {
+            self.drop(
+                "pool",
+                Some(&pool),
+                "it is not a model you may use and grant — pick one of the model choices \
+                 `list_grantable` names",
+            );
+            return None;
+        }
+        let candidate = self.with(&["main", "pool"], json!(pool));
+        self.granted.push((GrantKind::Pool, pool.clone()));
+        match self.adopt(candidate) {
+            Ok(()) => Some(pool),
+            Err(reason) => {
+                self.granted.pop();
+                self.drop("pool", Some(&pool), reason);
+                None
+            }
+        }
     }
 
     fn task(&mut self, task: String) {
@@ -402,7 +624,7 @@ impl<'a> Reviewer<'a> {
             tools.push(json!(id));
         }
         let candidate = self.with(&["main", "tools"], Value::Array(tools));
-        self.granted.push(id.to_string());
+        self.granted.push((GrantKind::Tool, id.to_string()));
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.abilities.push(AbilityStep {
                 id: id.to_string(),
@@ -445,6 +667,9 @@ impl<'a> Reviewer<'a> {
         let label = slot.label.trim().to_string();
         if !label.is_empty() {
             def["description"] = json!(label);
+        }
+        if self.ordered {
+            def["order"] = json!(self.next_order());
         }
         let candidate = self.with(&["state", &name], def.clone());
         match self.adopt(candidate) {

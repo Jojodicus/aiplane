@@ -101,6 +101,8 @@ const DYNAMIC_ID_IMPLS: &[&str] = &[
     "aiplane-runtime/src/agents/verifier/otp.rs",
     // verify_<id> — a lookup verifier
     "aiplane-runtime/src/agents/verifier/lookup.rs",
+    // the agent architect's persona tools, offered only in its conversations
+    "aiplane-api/src/pages/architect/tools.rs",
 ];
 
 /// Synthetic tools of an agent run. They are never registered nor offered to

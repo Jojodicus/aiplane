@@ -283,3 +283,21 @@ agents-setup-voice-voice = Voix (facultatif)
 agents-setup-voice-voice-hint = Laissez vide pour la voix par défaut de la langue du visiteur.
 agents-setup-voice-unavailable-input = La saisie vocale n’est pas disponible, car aucun modèle de reconnaissance vocale n’est activé pour vous — demandez à un administrateur.
 agents-setup-voice-unavailable-output = La lecture à voix haute n’est pas disponible, car aucun modèle de synthèse vocale n’est activé pour vous — demandez à un administrateur.
+
+# The agent architect (#118): a centred chat window that plans an agent.
+architect-open = Planifier avec l'architecte
+architect-title = Architecte d'agents
+architect-intro = Planifie l'agent avec vous et rédige le brouillon. La publication reste votre décision.
+architect-conversation-title = Architecte d'agents : { $name }
+architect-conversation-new = Architecte d'agents : nouvel agent
+architect-placeholder = Décrivez ce que votre agent doit faire …
+architect-send = Envoyer
+architect-new-conversation = Nouvelle conversation
+architect-undo = Annuler
+architect-undone = Annulé
+architect-open-setup = Ouvrir la configuration
+architect-starting = Démarrage de l'architecte …
+architect-empty = Dites à l'architecte ce que votre agent doit faire, au clavier ou au micro. Chaque modification apparaît ici et peut être annulée.
+architect-working = L'architecte travaille …
+architect-create-option = Ou planifiez-le en conversation avec l'architecte
+architect-message-label = Message à l'architecte

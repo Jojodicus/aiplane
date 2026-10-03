@@ -297,3 +297,21 @@ agents-setup-voice-voice = Голос (необязательно)
 agents-setup-voice-voice-hint = Оставьте пустым, чтобы использовать голос по умолчанию для языка посетителя.
 agents-setup-voice-unavailable-input = Голосовой ввод недоступен: для вас не включена ни одна модель распознавания речи — обратитесь к администратору.
 agents-setup-voice-unavailable-output = Чтение ответов вслух недоступно: для вас не включена ни одна модель синтеза речи — обратитесь к администратору.
+
+# The agent architect (#118): a centred chat window that plans an agent.
+architect-open = Спланировать с архитектором
+architect-title = Архитектор агентов
+architect-intro = Планирует агента вместе с вами и создаёт черновик. Публикуете вы сами.
+architect-conversation-title = Архитектор агентов: { $name }
+architect-conversation-new = Архитектор агентов: новый агент
+architect-placeholder = Опишите, что должен делать ваш агент …
+architect-send = Отправить
+architect-new-conversation = Новый разговор
+architect-undo = Отменить
+architect-undone = Отменено
+architect-open-setup = Открыть настройку
+architect-starting = Архитектор запускается …
+architect-empty = Расскажите архитектору, что должен делать агент, текстом или голосом. Каждое изменение видно здесь, и его можно отменить.
+architect-working = Архитектор работает …
+architect-create-option = Или спланируйте его в разговоре с архитектором
+architect-message-label = Сообщение архитектору

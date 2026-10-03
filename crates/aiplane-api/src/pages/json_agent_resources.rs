@@ -25,10 +25,11 @@ use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
 use super::{internal, json_ok};
+use aiplane_core::server::db::users::User;
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
 use aiplane_core::server::feature_defaults::{self, Feature, PoolDefault};
 use aiplane_core::server::upstreams::PoolKind;
@@ -62,43 +63,58 @@ pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Abi
         .collect()
 }
 
+/// The pools of `kind` `user` may use, by name.
+fn usable_pools(state: &RamaState, user: &User, kind: PoolKind) -> Vec<String> {
+    let access = state.pool_access_for(&user.roles);
+    let mut names: Vec<String> = state
+        .upstreams
+        .pools()
+        .into_iter()
+        .filter(|p| p.kind == kind && access.allows(p))
+        .map(|p| p.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The chat pools `user` may use, by name.
+pub(super) fn usable_chat_pools(state: &RamaState, user: &User) -> Vec<String> {
+    usable_pools(state, user, PoolKind::Chat)
+}
+
 pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = match require_agent_manager(&state, &req).await {
         Ok(user) => user,
         Err(resp) => return resp,
     };
+    match resources_for(&state, &user).await {
+        Ok(view) => json_ok(StatusCode::OK, view),
+        Err(resp) => resp,
+    }
+}
+
+/// What `user` holds and may grant, as `GET /api/v0/agent-resources`
+/// answers it.
+pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Value, Response> {
     let role_ids = state.rbac.role_ids_for(&user.roles);
     let is_admin = state.rbac.is_admin(&role_ids);
-
     let access = state.pool_access_for(&user.roles);
-    let held = |kind: PoolKind| {
-        let mut names: Vec<String> = state
-            .upstreams
-            .pools()
-            .into_iter()
-            .filter(|p| p.kind == kind && access.allows(p))
-            .map(|p| p.name.clone())
-            .collect();
-        names.sort();
-        names
-    };
-    let pools = held(PoolKind::Chat);
+    let pools = usable_chat_pools(state, user);
     // `publish.voice` names one of each for the embed widget.
     let voice_pools = json!({
-        "speech": held(PoolKind::Speech),
-        "transcription": held(PoolKind::Transcription),
+        "speech": usable_pools(state, user, PoolKind::Speech),
+        "transcription": usable_pools(state, user, PoolKind::Transcription),
     });
 
     let grantable = state.grantable_tool_ids();
-    let tools: Vec<_> = grantable_tools(&state, &role_ids)
+    let tools: Vec<_> = grantable_tools(state, &role_ids)
         .into_iter()
         .map(|t| json!({ "id": t.id, "name": t.name, "description": t.description }))
         .collect();
 
-    let connectors = match mcp_catalog::list_enabled(&state.db).await {
-        Ok(all) => all,
-        Err(err) => return internal(err),
-    };
+    let connectors = mcp_catalog::list_enabled(&state.db)
+        .await
+        .map_err(internal)?;
     let mcp_grant = state.mcp_grant_for(&user.roles);
     let connectors: Vec<_> = connectors
         .into_iter()
@@ -129,17 +145,16 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         names
     });
 
-    let collections = match rag_db::list_collections(&state.db).await {
-        Ok(all) => all,
-        Err(err) => return internal(err),
-    };
+    let collections = rag_db::list_collections(&state.db)
+        .await
+        .map_err(internal)?;
     let rag_collections: Vec<_> = collections
         .into_iter()
         .filter(|c| state.rbac.resource_allowed(&role_ids, &c.allowed_groups))
         .map(|c| json!({ "id": c.id, "name": c.name }))
         .collect();
 
-    let chat_default = defaults::chat_pool(&state, &access).await;
+    let chat_default = defaults::chat_pool(state, &access).await;
     let transcription_default = feature_defaults::default_pool(
         &state.db,
         &state.upstreams,
@@ -176,17 +191,14 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         json!({ "fast": null, "balanced": null, "thorough": null })
     };
 
-    json_ok(
-        StatusCode::OK,
-        json!({
-            "pools": pools,
-            "voice_pools": voice_pools,
-            "tiers": tiers,
-            "defaults": defaults,
-            "tools": tools,
-            "connectors": connectors,
-            "skills": skills,
-            "rag_collections": rag_collections,
-        }),
-    )
+    Ok(json!({
+        "pools": pools,
+        "voice_pools": voice_pools,
+        "tiers": tiers,
+        "defaults": defaults,
+        "tools": tools,
+        "connectors": connectors,
+        "skills": skills,
+        "rag_collections": rag_collections,
+    }))
 }

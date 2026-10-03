@@ -30,6 +30,7 @@ pub mod content_guard;
 pub mod finish;
 pub mod loop_guard;
 pub mod openai_driver;
+pub mod persona;
 pub mod rama_server;
 pub mod repeated_calls;
 pub mod server;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import { cleanSpec, ensureShape, type AgentResources, type Grant, type Spec } from './agents.ts';
 import {
@@ -520,4 +521,30 @@ test('setup errors are plain words, never a raw HTTP status line', () => {
 	const told = { status: 403, code: 'assist_pool_not_allowed', message: 'you may not use pool x — pick one you hold', issues: [] };
 	assert.equal(setupErrorMessage(told, words, 'assist'), told.message, "the server's own advice is kept");
 	assert.equal(setupErrorMessage({ status: 500, code: 'x', message: '500 Internal Server Error', issues: [] }, words), 'agents-error-generic');
+});
+
+test('a draft the agent architect wrote reads as hand-off sentences and friendly details, not "advanced"', () => {
+	// Written by `apply_changes` on the server; `review/tests.rs` pins it.
+	const draft = JSON.parse(readFileSync(new URL('./fixtures/architect-draft.json', import.meta.url), 'utf8')) as Spec;
+	const h = readHandoffs(throughEditor(draft));
+	assert.deepEqual(h.custom, []);
+	assert.equal(h.fallback, true);
+	assert.deepEqual(
+		h.rules.map((r) => [r.topic, r.target, r.identity]),
+		[
+			['Invoices', { kind: 'agent', id: 'billing-agent' }, false],
+			['Complaints', { kind: 'human' }, false]
+		]
+	);
+	assert.deepEqual(
+		readSlots(throughEditor(draft)).map((r) => [r.key, r.kind]),
+		[
+			['order', 'text'],
+			['issue', 'choice']
+		]
+	);
+	const again = structuredClone(draft);
+	writeHandoffs(again, h);
+	assert.deepEqual(sortKeys(again.routes), sortKeys(draft.routes), 'writing the rules back changes nothing');
+	assert.deepEqual(sortKeys(again.state), sortKeys(draft.state));
 });
