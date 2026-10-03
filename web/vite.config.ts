@@ -44,6 +44,9 @@ export default defineConfig({
 		host: '127.0.0.1',
 		port: Number(process.env.AIPLANE_DEV_PUBLIC_PORT ?? 8080),
 		strictPort: true,
+		// SvelteKit narrows Vite's allow list to its own folders; the widget and
+		// the SPA share `shared/`, which the dev server must serve too.
+		fs: { allow: ['shared'] },
 		proxy: gatewayDevProxy(process.env.AIPLANE_DEV_BACKEND_ORIGIN ?? 'http://127.0.0.1:8081')
 	}
 });
