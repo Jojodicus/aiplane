@@ -247,6 +247,8 @@ pub enum RateScope {
     Email,
     /// A verifier's sends or lookups in one conversation.
     Session,
+    /// A manager's prompt-assistant calls for one agent.
+    Manager,
 }
 
 impl RateScope {
@@ -256,6 +258,7 @@ impl RateScope {
             RateScope::Ip => "ip",
             RateScope::Email => "email",
             RateScope::Session => "session",
+            RateScope::Manager => "manager",
         }
     }
 }

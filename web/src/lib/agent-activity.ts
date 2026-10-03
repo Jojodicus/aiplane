@@ -64,6 +64,7 @@ export const KIND_GROUPS = {
 		'agent_share_set',
 		'agent_share_removed',
 		'agent_deleted',
+		'assist_suggested',
 		'principal_created',
 		'principal_disabled',
 		'grant_added',

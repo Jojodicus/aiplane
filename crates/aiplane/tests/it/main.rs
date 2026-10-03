@@ -15,6 +15,7 @@ mod a2a;
 mod admin_json_api;
 mod agent_activity;
 mod agent_analytics;
+mod agent_assist;
 mod agent_evaluation;
 mod agent_test_chat;
 mod agents;

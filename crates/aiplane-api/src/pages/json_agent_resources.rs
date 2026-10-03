@@ -20,9 +20,34 @@ use super::json_principals::require_agent_manager;
 use super::{internal, json_ok};
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
 use aiplane_core::server::upstreams::PoolKind;
+use aiplane_runtime::agents::assist::Ability;
 use aiplane_runtime::rama_server::state::RamaState;
 
 const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
+
+/// The registry tools (MCP tools aside: those come with their connector) a
+/// manager in groups `role_ids` holds and may therefore grant.
+pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Ability> {
+    let grantable = state.grantable_tool_ids();
+    let mut held = state.rbac.allowed_tools(role_ids, &state.tools());
+    state.expand_comfyui_tools(&mut held, role_ids);
+    let tool_ids: Vec<String> = held
+        .into_iter()
+        .filter(|id| !id.starts_with(MCP_TOOL_PREFIX) && grantable.contains(id))
+        .collect();
+    let summaries = state.tools().summaries_for(&tool_ids);
+    tool_ids
+        .into_iter()
+        .map(|id| {
+            let known = summaries.iter().find(|s| s.id == id);
+            Ability {
+                name: known.map_or_else(|| id.clone(), |s| s.name.clone()),
+                description: known.map(|s| s.description.clone()),
+                id,
+            }
+        })
+        .collect()
+}
 
 pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = match require_agent_manager(&state, &req).await {
@@ -43,23 +68,9 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
     pools.sort();
 
     let grantable = state.grantable_tool_ids();
-    let mut held = state.rbac.allowed_tools(&role_ids, &state.tools());
-    state.expand_comfyui_tools(&mut held, &role_ids);
-    let tool_ids: Vec<String> = held
+    let tools: Vec<_> = grantable_tools(&state, &role_ids)
         .into_iter()
-        .filter(|id| !id.starts_with(MCP_TOOL_PREFIX) && grantable.contains(id))
-        .collect();
-    let summaries = state.tools().summaries_for(&tool_ids);
-    let tools: Vec<_> = tool_ids
-        .iter()
-        .map(|id| {
-            let known = summaries.iter().find(|s| &s.id == id);
-            json!({
-                "id": id,
-                "name": known.map_or(id.as_str(), |s| s.name.as_str()),
-                "description": known.map(|s| s.description.as_str()),
-            })
-        })
+        .map(|t| json!({ "id": t.id, "name": t.name, "description": t.description }))
         .collect();
 
     let connectors = match mcp_catalog::list_enabled(&state.db).await {

@@ -282,6 +282,15 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             "/api/v0/agents/{id}/test-turn",
             pages::json_agent_test::test_turn,
         )
+        // The prompt assistant (docs/agents.md "What #117 built"): writes nothing.
+        .with_post(
+            "/api/v0/agents/{id}/assist/suggest",
+            pages::json_agent_assist::suggest,
+        )
+        .with_post(
+            "/api/v0/agents/{id}/assist/improve",
+            pages::json_agent_assist::improve,
+        )
         .with_post(
             "/api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume",
             pages::json_agent_test::resume_turn,

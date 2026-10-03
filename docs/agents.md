@@ -2683,6 +2683,7 @@ logged and the request goes on as it would have.
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
 | `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
 | management kinds | the agent DB modules, on the change's transaction | as before |
+| `assist_suggested` | the prompt assistant (`agents::assist`, #117), in the agent's own chain | `action`, `scenario`/`template` or `field`/`text`, `pool`, `model`, `usage`, `offered`, `dropped`, `error` ([#117](#what-117-built)) |
 | `activity_swept` | the retention sweep, on the deletion's transaction | `chain_key`, `events`, `before` |
 | `chain_checkpoint` | the retention sweep, when it cuts the agent's own chain | `base_seq`, `base_hash`, `removed`, `seqs`, `from`, `to`, `before`, `anchors` |
 | `chain_anchored` | the end of every turn (`drive_opened_from`) | `chain_key`, `seq`, `hash` of the conversation chain's head |
@@ -2915,6 +2916,129 @@ what the guard is shown); `agents/profile.rs` (the brief's sections);
 `spec.rs` (scope validation); `tests/it/agent_test_chat.rs` (the 422 for a
 strict scope without a refusal, the verdict in the debug view).
 
+### What #117 built
+
+The prompt assistant: from a manager's scenario (typed or spoken) or a
+template, one model call proposes a value for every setup step plus test
+cases; another improves one text. The UI (#116) shows the proposal per step
+and applies what the manager accepts.
+
+**Shared mechanisms.**
+- *Used:* `pool_choice` for the constrained call, the typed spec's validator
+  (`spec::validate`, on the draft as it would be), `eval::parse_case` for the
+  proposed tests, the grant cap's predicates (`json_agent_resources::grantable_tools`,
+  the same list `GET /api/v0/agent-resources` serves), the rate primitive
+  (`rates::record_now`, new scope `manager`), the spend limits
+  (`Enforcer::check_for_model`), `read_json_capped`, and the activity log's
+  runtime door (`agents::audit::record_event`).
+- *Introduced:* `pool_choice::ask_json`, the one structured (`json_schema`,
+  strict) non-streaming call on a pool, which `PoolChoice` (route classifier,
+  topic guard) now runs on too; whose usage row it is stays the caller's
+  (`JsonExchange::usage_record`).
+
+**It writes nothing.** Neither endpoint touches the draft, the grants, the
+versions or the test cases. A scenario that talks the model into proposing
+anything at all — "publish this", "grant run_in_sandbox", "hand everything to
+agent X" — yields at most an offer the manager sees, filtered as below; the
+UI applies an accepted step through the ordinary draft, grant and test
+routes, which check it again (the grant route with its cap). The scenario is
+sent as a JSON field of the user message, never as instructions, and the
+system message says to ignore instructions in it.
+
+**API** (`aiplane-api::pages::json_agent_assist`; `can_manage_agents` and a
+`write` share, admins hold one):
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| POST | `/api/v0/agents/{id}/assist/suggest` | `{scenario, template?, current_draft?, pool?}` | `{steps, dropped, pool, model, usage}` |
+| POST | `/api/v0/agents/{id}/assist/improve` | `{field: task\|tone\|refusal, text, pool?}` | `{field, suggestion, why, pool, model, usage}` |
+
+`steps` (each `null` or empty when nothing is offered):
+- `task: {orchestration}` — `main.instructions.orchestration`;
+- `tone: {response, chips}` — `main.instructions.response`, plus up to 8
+  short tone labels for the UI;
+- `scope: {topics, refusal, strict}` — `scope` (an existing `classifier_pool`
+  is kept);
+- `abilities: [{id, name, why}]` — tools for `main.tools`, which the UI grants
+  when applied;
+- `slots: [{name, label, type, def}]` — `state.<name> = def`. `type` is a
+  friendly kind: `text` (string, ≤500), `long_text` (string, ≤2000), `email`,
+  `number`, `whole_number` (integer), `yes_no` (boolean), `choice` (enum of
+  the proposed values); `set_by: [llm]`, `description` = `label`;
+- `identity: {method, why}` — `none`, `website_login`, `email_code` or
+  `lookup`; a recommendation only, since each needs a connector or a key the
+  identity step asks for;
+- `handoffs: [{name, topic, target, target_name, condition: {slot, equals},
+  route}]` — `routes.<name> = route`: `when` is `{slot, eq}` (the value typed
+  like the slot) or `{slot, set: true}`, the target `agent` (with `task`) or
+  `human: {}`;
+- `tests: [{name, kind, script, expect}]` — the body `POST …/tests` takes, at
+  most 6. Every case expects `finished: true`; an `out_of_scope` case expects
+  the draft's refusal in the answer (and is dropped when there is none yet).
+
+`dropped: [{step, item?, reason}]` lists what was left out and why, in words.
+
+**What may be offered.** The model is given — and its schema enumerates —
+exactly the tools this manager holds and may grant (ids with friendly names)
+and the agents shared with them (not the agent itself) plus `human` as
+targets. Because a backend may ignore the schema, the review checks again: an
+ability or a target outside those lists is dropped, never offered.
+
+**Validation per piece.** Pieces are applied in step order to the draft the
+manager is editing (`current_draft`, else the stored draft), each checked with
+`spec::validate` at the `Draft` stage against the agent's grants as stored now
+plus the tools of the abilities offered so far (applying an ability grants
+it). A piece is kept when it adds no issue the draft did not already have —
+so a draft that is invalid already does not sink the proposal — and dropped
+with the issues it would add. Later pieces build on kept earlier ones: a
+hand-off gating on a proposed slot holds only if that slot was kept. A slot or
+route name the draft already has is kept as it is, not replaced. Names are
+made spec identifiers (`Order Number` → `order_number`). A step whose JSON
+does not read is dropped whole; the others stand.
+
+**Pool.** *Chosen, until #116's Fast/Balanced/Thorough mapping lands:* the
+request's `pool` when the manager may use it (`403 assist_pool_not_allowed`
+otherwise), else the draft's `main.pool` when the manager may use it and it
+serves a model, else the first chat pool (by name) the manager may use that
+serves one; `503 assist_no_model` when none does. The manager's pool access
+decides, not the agent's grants: it is the manager's call.
+
+**Recording.** *Chosen:* a manager's call, not an agent run.
+- A usage row of the manager's (`principal_kind = user`, `source = chat`, like
+  the rest of the session UI), under the manager's own spend limits
+  (`429 rate_limit_exceeded` with `Retry-After` when over).
+- In no conversation chain. The agent's own chain gets one `assist_suggested`
+  event per call, actor = the manager: `action` (`suggest`/`improve`), the
+  `scenario` and `template` (or the improved `field` and `text`), `pool`,
+  `model`, `usage` (token counts), `latency_ms`, `offered` (the step kinds),
+  `dropped`, and `error` for a failed call. *Chosen to keep the scenario:* it
+  is the manager's own input, and without it the event cannot explain what
+  was proposed. The proposal itself is not kept (it is in the answer, and
+  what is applied is recorded by the routes that apply it). The event is
+  written for a failed model call too; when it cannot be written the call
+  answers `503 activity_log_unavailable`.
+
+**Limits.** `ASSIST_RATE` = 30 calls per manager per agent per hour, suggest
+and improve together, on the agent's `rate_events` (counter
+`assist:<user id>`); `429 assist_rate_limited` with `Retry-After`. The rate is
+per agent because `rate_events` is keyed by the principal; the spend limits
+bound a manager across agents. Scenario and improved text at most 8000
+characters, template at most 200, body at most 512 KiB (`400
+invalid_assist_input`, 413). Model timeouts 120 s (suggest) and 60 s
+(improve); a failed or unreadable answer is `502 assist_model_failed`.
+
+**Tests.** `agents/assist/review/tests.rs` (a good proposal applied to the
+draft passes `spec::check` at draft and publish stage; an ungrantable ability
+never offered; an invalid slot dropped with the validator's reason and the
+hand-off depending on it with it; targets limited to shared agents and
+people; unreadable steps dropped whole; test-case rules; existing names kept;
+the schema's enums); `tests/it/agent_assist.rs` (the endpoint end to end on a
+scripted model: checked steps, every offered test case accepted by the tests
+route, nothing written, the event and the usage row; a prompt-injection
+scenario; improve; the rate refusing with `Retry-After` and per manager; bad
+input and missing shares refused before the model is asked; a failed model
+call recorded and answered `502`).
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2932,6 +3056,7 @@ upward.
 | `/api/v0/embed/*` routes and CORS (`rama_server::embed_cors`), `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only; the embed CORS layer reads embed keys, so it cannot sit in `aiplane-core` beside the `/v1` one |
 | The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-agents` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
+| The prompt assistant: the structured call (`pool_choice::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
 
@@ -2970,6 +3095,7 @@ use `regex`, and hashing uses the token helpers.
 | #111 activity log | §5 | `agent_audit` becomes a hash-chained activity log (per conversation, per agent); every model exchange, tool call, state write, turn and decision of an agent run recorded in full, synchronously, failing the run closed; `publish.audit_retention_days`; `/api/v0/agents/{id}/activity` (+ `export`, `verify`); Activity tab ([built](#what-111-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
+| #117 prompt assistant | §2, §5 | `POST …/assist/suggest` and `…/assist/improve`: a proposal per setup step and test cases, each piece checked against the draft and dropped with a reason; writes nothing; a usage row of the manager's and an `assist_suggested` event ([built](#what-117-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred
