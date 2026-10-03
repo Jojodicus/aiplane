@@ -11,7 +11,8 @@
 	 * belongs to, until the person applies or dismisses it. Applying goes
 	 * through the step's own model, so the spec is written like any other
 	 * edit (and saved on Next / Apply). A box can stand for several parts
-	 * (the abilities box: tools, knowledge bases and missing knowledge).
+	 * (the abilities box: tools, knowledge bases and missing knowledge). An
+	 * `onapply` that throws keeps the box, with the reason in it.
 	 */
 	type Part = keyof AssistSuggestion['steps'];
 	let { part, label = null, children, onapply }: {

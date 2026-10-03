@@ -2,7 +2,7 @@
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import type { Spec } from '$lib/agents';
-	import { RAG_LIST, RAG_SEARCH, abilities, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
+	import { RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
 	import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from '$lib/ability-list';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -63,7 +63,8 @@
 	 * Every proposed tool and knowledge base, staged for granting and put
 	 * into the spec like a switched-on card: knowledge as its card's
 	 * `toggle` does it, the collection and the search granted, the search
-	 * bound to what is on.
+	 * bound to what is on. Knowledge the agent could not search fails the
+	 * apply, so the suggestion stays with the reason in it.
 	 */
 	function applySuggested() {
 		for (const s of suggested) {
@@ -71,11 +72,8 @@
 			setAbility(spec, { kind: 'tool', ref: s.id, tools: [s.id] }, true);
 		}
 		const off = suggestedKnowledge.filter((k) => !knowledge.some((c) => c.ref === k.id && c.on));
+		requireKnowledgeSearch(off.map((k) => k.id), offers(RAG_SEARCH), t);
 		if (!off.length) return;
-		if (!offers(RAG_SEARCH)) {
-			error = t('agents-setup-grant-failed', { reason: t('agents-setup-knowledge-no-search') });
-			return;
-		}
 		for (const k of off) ws.stageGrant('rag_collection', k.id);
 		ws.stageGrant('tool', RAG_SEARCH);
 		const names = collectionNames();

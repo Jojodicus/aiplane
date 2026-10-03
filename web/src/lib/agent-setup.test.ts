@@ -10,6 +10,7 @@ import {
 	abilities,
 	applyTemplate,
 	applySuggestedRules,
+	requireKnowledgeSearch,
 	asStep,
 	checklist,
 	deriveBind,
@@ -352,6 +353,15 @@ test('a suggested hand-off that waits for the identity sets up the proposed chec
 	assert.equal(applySuggestedRules(signedIn, [], proposed, { method: 'email_code' }, labels).identity, false, 'an existing check stays');
 	assert.equal(applySuggestedRules({}, [], proposed, { method: 'none' }, labels).identity, false);
 	assert.equal(applySuggestedRules({}, [], [{ topic: 'X', target: 'human' }], { method: 'email_code' }, labels).identity, false);
+});
+
+test('suggested knowledge that cannot be searched fails the apply with the reason', () => {
+	assert.doesNotThrow(() => requireKnowledgeSearch([], false, tr));
+	assert.doesNotThrow(() => requireKnowledgeSearch(['docs'], true, tr));
+	assert.throws(
+		() => requireKnowledgeSearch(['docs'], false, tr),
+		(err: Parameters<typeof setupErrorMessage>[0]) => setupErrorMessage(err, tr) === '«agents-setup-knowledge-no-search»'
+	);
 });
 
 test('a specialist’s route values come from trusted slots or the confirmed identity', () => {

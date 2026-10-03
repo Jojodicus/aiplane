@@ -1241,3 +1241,10 @@ export function applySuggestedRules(
 	if (needed) writeIdentity(spec, { ...readIdentity(spec), method }, labels);
 	return { rules, identity: needed };
 }
+
+/** Knowledge bases need the knowledge search to be found; without it a proposal to add some fails with the reason. */
+export function requireKnowledgeSearch(knowledge: string[], canSearch: boolean, tr: (key: string) => string): void {
+	if (!knowledge.length || canSearch) return;
+	const refusal: AgentError = { status: 403, code: 'knowledge_search_not_grantable', message: tr('agents-setup-knowledge-no-search'), issues: [] };
+	throw refusal;
+}
