@@ -404,13 +404,8 @@ mod tests {
             }
         }
         let pinned = pinned.unwrap();
-        let body = pinned
-            .client
-            .get(pinned.url)
-            .send()
-            .await
-            .unwrap()
-            .text()
+        let resp = pinned.client.get(pinned.url).send().await.unwrap();
+        let body = crate::server::capped_read::read_capped_text(resp, 1024)
             .await
             .unwrap();
         assert_eq!(body, "direct");
