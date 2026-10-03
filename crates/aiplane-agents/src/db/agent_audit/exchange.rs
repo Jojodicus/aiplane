@@ -19,7 +19,8 @@
 //! The reference is inside the event's signed hash; a blob whose content no
 //! longer matches it is not served.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -34,8 +35,8 @@ pub const BLOB_MIN_BYTES: usize = 4096;
 /// What stands in an exchange's detail for a part stored as a blob.
 pub const BLOB_REF: &str = "activity-blob:sha256:";
 
-/// How many reconstructed requests a [`Reconstructor`] keeps for the deltas
-/// after them.
+/// How many whole requests a [`Reconstructor`] keeps for the deltas after
+/// them.
 const CACHED_REQUESTS: usize = 64;
 
 /// `cur` as a delta against `prev`, the request of the round before; `None`
@@ -127,11 +128,13 @@ fn walk_strings(v: &mut Value, f: &mut impl FnMut(&mut String)) {
 
 /// Gives back what a stored model exchange stood for: its whole request,
 /// rebuilt from the deltas before it, with its blobs put back. Keeps the
-/// requests it rebuilt for the deltas that follow, so reading a turn in
-/// order rebuilds each request once.
+/// [`CACHED_REQUESTS`] newest requests it met or rebuilt, shared rather
+/// than copied, so reading a turn in order rebuilds each request once.
 #[derive(Default)]
 pub struct Reconstructor {
-    requests: HashMap<String, Value>,
+    requests: HashMap<String, Arc<Value>>,
+    /// The ids in `requests`, oldest first.
+    order: VecDeque<String>,
 }
 
 impl Reconstructor {
@@ -144,12 +147,14 @@ impl Reconstructor {
             return Ok(json);
         }
         let detail = &mut json["detail"];
-        if detail.get("request_delta").is_some()
-            && let Some(request) = self.request(pool, &event.id, detail).await?
+        if let Some(request) = detail.get("request") {
+            self.remember(event.id.clone(), Arc::new(request.clone()));
+        } else if let Some(delta) = detail.get("request_delta")
+            && let Some(request) = self.rebuild(pool, &event.id, delta).await?
             && let Some(map) = detail.as_object_mut()
         {
             map.remove("request_delta");
-            map.insert("request".into(), request);
+            map.insert("request".into(), Value::clone(&request));
         }
         if let Some(chain) = &event.chain_key {
             resolve_blobs(pool, chain, detail).await?;
@@ -157,56 +162,67 @@ impl Reconstructor {
         Ok(json)
     }
 
-    /// The whole request of exchange `id` with `detail`, blobs still as
-    /// references; `None` when a delta's chain of `prev` is broken.
-    pub async fn request(
+    /// The whole request of exchange `id`, stored as `delta`, blobs still as
+    /// references; `None` when the chain of `prev` behind it is broken.
+    async fn rebuild(
         &mut self,
         pool: &Pool,
         id: &str,
-        detail: &Value,
-    ) -> Result<Option<Value>, DbError> {
-        if let Some(request) = detail.get("request") {
-            return Ok(Some(request.clone()));
-        }
+        delta: &Value,
+    ) -> Result<Option<Arc<Value>>, DbError> {
         if let Some(request) = self.requests.get(id) {
             return Ok(Some(request.clone()));
         }
-        let Some(delta) = detail.get("request_delta") else {
-            return Ok(None);
-        };
-        let mut deltas = vec![delta.clone()];
+        let mut older: Vec<(String, Value)> = Vec::new();
+        let mut prev = delta["prev"].as_str().map(str::to_string);
         let base = loop {
-            let Some(prev) = deltas.last().and_then(|d| d["prev"].as_str()) else {
+            let Some(prev_id) = prev else {
                 return Ok(None);
             };
-            if let Some(request) = self.requests.get(prev) {
+            if let Some(request) = self.requests.get(&prev_id) {
                 break request.clone();
             }
             let stored: Option<String> =
                 sqlx::query_scalar("SELECT detail FROM agent_audit WHERE id = ?")
-                    .bind(prev)
+                    .bind(&prev_id)
                     .fetch_optional(pool)
                     .await?;
-            let Some(stored) = stored.and_then(|d| serde_json::from_str::<Value>(&d).ok()) else {
+            let Some(Value::Object(mut stored)) =
+                stored.and_then(|d| serde_json::from_str::<Value>(&d).ok())
+            else {
                 return Ok(None);
             };
-            if let Some(request) = stored.get("request") {
-                break request.clone();
+            if let Some(request) = stored.remove("request") {
+                let request = Arc::new(request);
+                self.remember(prev_id, request.clone());
+                break request;
             }
-            match stored.get("request_delta") {
-                Some(delta) => deltas.push(delta.clone()),
-                None => return Ok(None),
-            }
+            let Some(delta) = stored.remove("request_delta") else {
+                return Ok(None);
+            };
+            prev = delta["prev"].as_str().map(str::to_string);
+            older.push((prev_id, delta));
         };
-        let request = deltas
-            .iter()
-            .rev()
-            .fold(base, |request, delta| apply_delta(&request, delta));
-        if self.requests.len() >= CACHED_REQUESTS {
-            self.requests.clear();
+        let mut request = base;
+        for (older_id, delta) in older.into_iter().rev() {
+            request = Arc::new(apply_delta(&request, &delta));
+            self.remember(older_id, request.clone());
         }
-        self.requests.insert(id.to_string(), request.clone());
+        let request = Arc::new(apply_delta(&request, delta));
+        self.remember(id.to_string(), request.clone());
         Ok(Some(request))
+    }
+
+    fn remember(&mut self, id: String, request: Arc<Value>) {
+        if self.requests.insert(id.clone(), request).is_some() {
+            return;
+        }
+        self.order.push_back(id);
+        if self.order.len() > CACHED_REQUESTS
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.requests.remove(&oldest);
+        }
     }
 }
 
@@ -281,6 +297,22 @@ mod tests {
         let dropped = request_delta(&second, &closing).unwrap();
         assert_eq!(dropped["tools"], Value::Null);
         assert_eq!(apply_delta(&second, &dropped), closing);
+    }
+
+    #[test]
+    fn the_reconstructor_lets_go_of_its_oldest_request_first() {
+        let mut r = Reconstructor::default();
+        for n in 0..=CACHED_REQUESTS {
+            r.remember(format!("e{n}"), Arc::new(json!(n)));
+        }
+        r.remember("e1".into(), Arc::new(json!("again")));
+        assert_eq!(r.requests.len(), CACHED_REQUESTS);
+        assert_eq!(r.order.len(), CACHED_REQUESTS);
+        assert!(!r.requests.contains_key("e0"), "the oldest went");
+        assert_eq!(
+            *r.requests[&format!("e{CACHED_REQUESTS}")],
+            json!(CACHED_REQUESTS)
+        );
     }
 
     #[test]
