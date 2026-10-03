@@ -178,16 +178,6 @@ pub async fn slide(
     })
 }
 
-/// `t` as it compares against a timestamp column inside SQL. The column
-/// holds `Timestamp`'s own RFC 3339 text, whose fractional seconds vary in
-/// length, so as stored it does not order as a string within one second
-/// (`…:05.1Z` sorts after `…:05.15Z`). Without the trailing `Z` it does, so
-/// the rate-window queries compare and order on `rtrim(created_at, 'Z')`
-/// against this key and stay exact.
-pub(super) fn window_key(t: Timestamp) -> String {
-    t.to_string().trim_end_matches('Z').to_string()
-}
-
 pub(super) fn parse_times(rows: Vec<String>) -> Vec<Timestamp> {
     rows.iter().filter_map(|t| t.parse().ok()).collect()
 }
@@ -207,7 +197,7 @@ pub async fn message_times(
          ORDER BY rtrim(t.created_at, 'Z') DESC LIMIT ?",
     )
     .bind(id)
-    .bind(window_key(since))
+    .bind(super::window_key(since))
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -225,7 +215,7 @@ pub async fn ip_event_times(
     since: Timestamp,
     limit: u32,
 ) -> Result<Vec<Timestamp>, DbError> {
-    let from = window_key(since);
+    let from = super::window_key(since);
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT created_at FROM (
              SELECT created_at FROM visitor_sessions

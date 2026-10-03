@@ -16,8 +16,8 @@ use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::visitor_sessions::{parse_times, window_key};
-use super::{DbError, Pool};
+use super::visitor_sessions::parse_times;
+use super::{DbError, Pool, window_key};
 use crate::server::run_chain::RemoteCaller;
 
 /// The protocol name a context's caller is recorded under in a call chain.

@@ -109,6 +109,16 @@ pub(crate) fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestam
     })
 }
 
+/// `t` as it compares against a timestamp column inside SQL. The column
+/// holds `Timestamp`'s own RFC 3339 text, whose fractional seconds vary in
+/// length, so as stored it does not order as a string within one second
+/// (`…:05.1Z` sorts after `…:05.15Z`). Without the trailing `Z` it does, so a
+/// query that must be exact compares and orders on `rtrim(created_at, 'Z')`
+/// against this key.
+pub(crate) fn window_key(t: jiff::Timestamp) -> String {
+    t.to_string().trim_end_matches('Z').to_string()
+}
+
 /// [`parse_ts`] for a nullable column: `None` stays `None`, `Some` is parsed.
 pub(crate) fn parse_optional_ts(
     s: Option<String>,

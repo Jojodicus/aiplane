@@ -1873,11 +1873,14 @@ that already exist. No second event store.
   `limit_refused` rows have no chain, because a refusal happens before any
   version runs, so they are left out while a version is selected (the SPA says
   so).
-- **Why Rust and not SQL aggregation.** The version sits inside a JSON string
-  and timestamps are RFC 3339 with fractional seconds of varying length, which
-  do not order as text. SQL narrows by whole days (index-friendly) and
-  `db::agent_analytics::compute` applies the exact range and the version. The
-  cost is one pass over the agent's rows for the period; a range is capped at
+- **Aggregated in SQL.** Conversations, turns, usage and the audit kinds that
+  are only counted are `GROUP BY substr(created_at, 1, 10)` (the UTC day)
+  queries. The version filter reads the chain with `json_extract`; the exact
+  range compares on `rtrim(created_at, 'Z')`, because RFC 3339 text with
+  fractional seconds of varying length orders correctly only without its `Z`
+  (`db::window_key`); whole-day bounds alongside keep the indexes in use. Only
+  the audit rows whose `detail` carries the numbers (route decisions, sub-agent
+  outcomes, output blocks, limit refusals) are fetched. A range is capped at
   366 days.
 - **SPA.** An *Analytics* tab on `/agents/{id}`
   ([`ui.md`](ui.md#agent-builder)).
