@@ -28,7 +28,7 @@ use std::time::Instant;
 use jiff::Timestamp;
 
 use crate::rama_server::multipart::{MultipartField, build_multipart, parse_multipart_fields};
-use crate::rama_server::vad;
+use aiplane_features::server::vad;
 use aiplane_core::server::auth::UserCtx;
 use aiplane_core::server::automatic_routing::{
     AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError,
