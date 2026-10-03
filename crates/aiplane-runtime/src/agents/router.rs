@@ -200,7 +200,7 @@ impl ForwardRequest {
             .unwrap_or(&self.spec.main_pool);
         PoolClassifier(PoolChoice::new(
             self.state.clone(),
-            &pool,
+            pool,
             &self.spec.principal,
             ctx,
         ))
