@@ -17,7 +17,7 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::json_agent_resources::grantable_tools;
+use super::json_agent_resources::{grantable_tools, usable_chat_pools};
 use super::json_agents::{SpecWorld, agent_at, parse_spec, visible_agents};
 use super::json_principals::require_agent_manager;
 use super::{internal, json_error, json_ok};
@@ -73,7 +73,9 @@ fn refused(err: AssistError) -> Response {
     resp
 }
 
-async fn candidates(
+/// What `user` may offer agent `agent_id`: the tools they may grant, the
+/// agents shared with them, and the chat pools they may use.
+pub(super) async fn candidates(
     state: &RamaState,
     user: &User,
     agent_id: &str,
@@ -91,7 +93,7 @@ async fn candidates(
     Ok(Candidates {
         abilities: grantable_tools(state, &role_ids),
         agents,
-        pools: Vec::new(),
+        pools: usable_chat_pools(state, user),
     })
 }
 
@@ -104,12 +106,26 @@ pub async fn suggest(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     let body: SuggestBody = or_return!(
         super::read_json_capped(req.into_body(), "the assistant request", MAX_BODY_BYTES).await
     );
+    match suggest_for(&state, &user, &agent, body).await {
+        Ok(suggested) => json_ok(StatusCode::OK, suggested),
+        Err(resp) => resp,
+    }
+}
+
+/// A proposal for `agent` (which `user` may write), as `…/assist/suggest`
+/// answers it.
+pub(super) async fn suggest_for(
+    state: &RamaState,
+    user: &User,
+    agent: &AgentRow,
+    body: SuggestBody,
+) -> Result<Value, Response> {
     let id = &agent.principal.id;
     let base = body
         .current_draft
         .unwrap_or_else(|| parse_spec(&agent.draft_spec));
-    let world = or_return!(SpecWorld::load(&state, id).await);
-    let candidates = or_return!(candidates(&state, &user, id).await);
+    let world = SpecWorld::load(state, id).await?;
+    let candidates = candidates(state, user, id).await?;
     let ctx = ReviewContext {
         agent_id: id,
         grants: &world.grants,
@@ -118,8 +134,8 @@ pub async fn suggest(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         candidates: &candidates,
     };
     let asker = Asker {
-        state: &state,
-        user: &user,
+        state,
+        user,
         agent_id: id,
     };
     let request = SuggestRequest {
@@ -128,13 +144,11 @@ pub async fn suggest(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         base: &base,
         pool: body.pool.as_deref(),
     };
-    match asker.suggest(request, &ctx).await {
-        Ok(suggested) => json_ok(
-            StatusCode::OK,
-            serde_json::to_value(suggested).unwrap_or_default(),
-        ),
-        Err(err) => refused(err),
-    }
+    asker
+        .suggest(request, &ctx)
+        .await
+        .map(|suggested| serde_json::to_value(suggested).unwrap_or_default())
+        .map_err(refused)
 }
 
 /// POST /api/v0/agents/{id}/assist/improve — `{field: task|tone|refusal,

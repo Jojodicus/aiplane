@@ -19,10 +19,11 @@ use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
 use super::{internal, json_ok};
+use aiplane_core::server::db::users::User;
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
 use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::assist::Ability;
@@ -54,14 +55,8 @@ pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Abi
         .collect()
 }
 
-pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let user = match require_agent_manager(&state, &req).await {
-        Ok(user) => user,
-        Err(resp) => return resp,
-    };
-    let role_ids = state.rbac.role_ids_for(&user.roles);
-    let is_admin = state.rbac.is_admin(&role_ids);
-
+/// The chat pools `user` may use, by name.
+pub(super) fn usable_chat_pools(state: &RamaState, user: &User) -> Vec<String> {
     let access = state.pool_access_for(&user.roles);
     let mut pools: Vec<String> = state
         .upstreams
@@ -71,17 +66,36 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         .map(|p| p.name.clone())
         .collect();
     pools.sort();
+    pools
+}
+
+pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = match require_agent_manager(&state, &req).await {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    match resources_for(&state, &user).await {
+        Ok(view) => json_ok(StatusCode::OK, view),
+        Err(resp) => resp,
+    }
+}
+
+/// What `user` holds and may grant, as `GET /api/v0/agent-resources`
+/// answers it.
+pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Value, Response> {
+    let role_ids = state.rbac.role_ids_for(&user.roles);
+    let is_admin = state.rbac.is_admin(&role_ids);
+    let pools = usable_chat_pools(state, user);
 
     let grantable = state.grantable_tool_ids();
-    let tools: Vec<_> = grantable_tools(&state, &role_ids)
+    let tools: Vec<_> = grantable_tools(state, &role_ids)
         .into_iter()
         .map(|t| json!({ "id": t.id, "name": t.name, "description": t.description }))
         .collect();
 
-    let connectors = match mcp_catalog::list_enabled(&state.db).await {
-        Ok(all) => all,
-        Err(err) => return internal(err),
-    };
+    let connectors = mcp_catalog::list_enabled(&state.db)
+        .await
+        .map_err(internal)?;
     let mcp_grant = state.mcp_grant_for(&user.roles);
     let connectors: Vec<_> = connectors
         .into_iter()
@@ -112,10 +126,9 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         names
     });
 
-    let collections = match rag_db::list_collections(&state.db).await {
-        Ok(all) => all,
-        Err(err) => return internal(err),
-    };
+    let collections = rag_db::list_collections(&state.db)
+        .await
+        .map_err(internal)?;
     let rag_collections: Vec<_> = collections
         .into_iter()
         .filter(|c| state.rbac.resource_allowed(&role_ids, &c.allowed_groups))
@@ -130,15 +143,12 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         "thorough": agents.pool_thorough,
     });
 
-    json_ok(
-        StatusCode::OK,
-        json!({
-            "pools": pools,
-            "tiers": tiers,
-            "tools": tools,
-            "connectors": connectors,
-            "skills": skills,
-            "rag_collections": rag_collections,
-        }),
-    )
+    Ok(json!({
+        "pools": pools,
+        "tiers": tiers,
+        "tools": tools,
+        "connectors": connectors,
+        "skills": skills,
+        "rag_collections": rag_collections,
+    }))
 }

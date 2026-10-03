@@ -30,7 +30,7 @@ use super::agent_errors::resume_error;
 use super::json_agents::{agent_at, parse_spec};
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, raw_path_segment};
-use aiplane_agents::db::agents::Access;
+use aiplane_agents::db::agents::{Access, AgentRow};
 use aiplane_runtime::agents::profile::{AgentRunError, RunOptions};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use aiplane_runtime::agents::run::draft::{DRAFT_VERSION, collect_debug, run_draft_turn};
@@ -78,19 +78,32 @@ pub async fn test_turn(State(state): State<Arc<RamaState>>, req: Request) -> Res
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
     let body: TestTurnBody =
         or_return!(super::read_json(req.into_body(), "the test message").await);
-    if body.message.trim().is_empty() {
-        return bad_request("a test turn needs a non-empty `message`");
+    match draft_test_turn(&state, &agent, &body.message, body.session_id.as_deref()).await {
+        Ok(out) => json_ok(StatusCode::OK, out),
+        Err(resp) => resp,
     }
-    let id = agent.principal.id;
+}
+
+/// One test-chat turn against `agent`'s draft, with its debug view.
+pub(super) async fn draft_test_turn(
+    state: &RamaState,
+    agent: &AgentRow,
+    message: &str,
+    session_id: Option<&str>,
+) -> Result<Value, Response> {
+    if message.trim().is_empty() {
+        return Err(bad_request("a test turn needs a non-empty `message`"));
+    }
+    let id = &agent.principal.id;
     let draft = parse_spec(&agent.draft_spec);
     let options = RunOptions::default();
     let started = Timestamp::now();
-    let reply = match run_draft_turn(
-        &state,
+    let reply = run_draft_turn(
+        state,
         AgentTurn {
-            agent_id: &id,
-            session_id: body.session_id.as_deref(),
-            message: &body.message,
+            agent_id: id,
+            session_id,
+            message,
             visitor_id: None,
             lang: None,
         },
@@ -98,11 +111,8 @@ pub async fn test_turn(State(state): State<Arc<RamaState>>, req: Request) -> Res
         options.clone(),
     )
     .await
-    {
-        Ok(reply) => reply,
-        Err(err) => return run_error(err),
-    };
-    with_debug(&state, &id, &draft, &reply, started, &options).await
+    .map_err(run_error)?;
+    with_debug(state, id, &draft, &reply, started, &options).await
 }
 
 /// A test-chat reply with the debug view of its conversation as it is now:
@@ -114,16 +124,14 @@ async fn with_debug(
     reply: &AgentReply,
     started: Timestamp,
     options: &RunOptions,
-) -> Response {
-    let debug =
-        match collect_debug(state, agent_id, draft, &reply.session_id, started, options).await {
-            Ok(debug) => debug,
-            Err(err) => return internal(err),
-        };
+) -> Result<Value, Response> {
+    let debug = collect_debug(state, agent_id, draft, &reply.session_id, started, options)
+        .await
+        .map_err(internal)?;
     let mut out = reply_json(reply);
     out["draft_version"] = json!(DRAFT_VERSION);
     out["debug"] = json!(debug);
-    json_ok(StatusCode::OK, out)
+    Ok(out)
 }
 
 #[derive(Deserialize)]
@@ -195,7 +203,7 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
     match run_claimed(&state, claimed, options.clone()).await {
         Ok(reply) if test_chat => {
             let draft = parse_spec(&agent.draft_spec);
-            with_debug(
+            match with_debug(
                 &state,
                 &agent.principal.id,
                 &draft,
@@ -204,6 +212,10 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
                 &options,
             )
             .await
+            {
+                Ok(out) => json_ok(StatusCode::OK, out),
+                Err(resp) => resp,
+            }
         }
         Ok(reply) => json_ok(StatusCode::OK, reply_json(&reply)),
         Err(err) => run_error(err),
