@@ -11,6 +11,7 @@ pub mod anthropic;
 pub mod auth;
 pub mod automatic_routing;
 pub mod capabilities;
+pub mod capped_read;
 pub mod config;
 pub mod crypto;
 pub mod db;

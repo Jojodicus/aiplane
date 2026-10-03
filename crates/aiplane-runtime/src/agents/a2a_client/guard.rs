@@ -27,6 +27,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use aiplane_core::server::capped_read::{self, CappedReadError};
 use aiplane_core::server::net_guard::{IpClass, classify, is_loopback_host};
 use reqwest::Url;
 
@@ -101,33 +102,19 @@ pub async fn pin(raw: &str, allow_private: bool, timeout: Duration) -> Result<Pi
     Ok(Pinned { url, client })
 }
 
-/// The body of `resp`, refused once it is longer than `max` bytes: a
-/// declared `Content-Length` over the cap is refused before anything is read,
-/// and a body without one is read chunk by chunk and dropped the moment the
-/// running total passes the cap, so a hostile peer cannot make the gateway
-/// buffer more than `max`. `what` names the body in the error (`the agent
-/// card`).
+/// The body of `resp` through `capped_read::read_capped`, the errors worded
+/// for the agent's owner. `what` names the body (`the agent card`).
 pub async fn read_capped(
-    mut resp: reqwest::Response,
+    resp: reqwest::Response,
     max: usize,
     what: &str,
 ) -> Result<Vec<u8>, String> {
-    let too_large = || format!("{what} is larger than {} KiB", max / 1024);
-    if resp.content_length().is_some_and(|len| len > max as u64) {
-        return Err(too_large());
-    }
-    let mut body = Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
-    while let Some(chunk) = resp
-        .chunk()
+    capped_read::read_capped(resp, max as u64)
         .await
-        .map_err(|e| format!("reading {what} failed: {e}"))?
-    {
-        if body.len() + chunk.len() > max {
-            return Err(too_large());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        .map_err(|e| match e {
+            CappedReadError::TooLarge { .. } => format!("{what} is larger than {} KiB", max / 1024),
+            CappedReadError::Transport(e) => format!("reading {what} failed: {e}"),
+        })
 }
 
 /// The shape a card URL needs before anything is fetched: an absolute
@@ -229,47 +216,9 @@ mod tests {
         assert!(pin("ftp://example.com/x", true, t).await.is_err());
     }
 
-    /// A peer that answers with a chunked body and no `Content-Length`, one
-    /// 64 KiB chunk after another until the client hangs up. A raw socket
-    /// because wiremock always sends a length.
-    async fn endless_chunked_peer() -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf).await;
-            let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
-                        transfer-encoding: chunked\r\n\r\n";
-            if sock.write_all(head.as_bytes()).await.is_err() {
-                return;
-            }
-            let chunk = format!("10000\r\n{}\r\n", " ".repeat(0x10000));
-            while sock.write_all(chunk.as_bytes()).await.is_ok() {}
-        });
-        format!("http://{addr}/")
-    }
-
     async fn get(url: &str) -> reqwest::Response {
         let pinned = pin(url, true, Duration::from_secs(30)).await.unwrap();
         pinned.client.get(pinned.url).send().await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn a_body_without_a_length_is_cut_off_at_the_cap() {
-        let url = endless_chunked_peer().await;
-        let read = tokio::time::timeout(
-            Duration::from_secs(10),
-            read_capped(get(&url).await, 256 * 1024, "the agent card"),
-        )
-        .await
-        .expect("reading stopped at the cap instead of draining the stream");
-        let why = read.unwrap_err();
-        assert!(
-            why.contains("the agent card is larger than 256 KiB"),
-            "{why}"
-        );
     }
 
     #[tokio::test]
