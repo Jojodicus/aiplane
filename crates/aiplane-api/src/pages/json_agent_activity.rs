@@ -223,20 +223,29 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         .unwrap_or_else(internal)
 }
 
-/// GET /api/v0/agents/{id}/activity/verify — walk every hash chain of the
-/// agent, check each conversation against its latest anchor, and report the
-/// first thing that does not hold, with the agent chain's head for an
-/// operator to keep outside the gateway.
+/// GET /api/v0/agents/{id}/activity/verify?full= — walk every hash chain of
+/// the agent from where the last check left it (from its start with
+/// `full=true`), check each conversation against its latest anchor, and
+/// report the first thing that does not hold, with the agent chain's head
+/// for an operator to keep outside the gateway.
 pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
-    match agent_audit::verify(&state.db, &agent.principal.id).await {
+    let verified = match params(&req).get("full").map(String::as_str) {
+        None | Some("false") => agent_audit::verify(&state.db, &agent.principal.id).await,
+        Some("true") => agent_audit::verify_full(&state.db, &agent.principal.id).await,
+        Some(other) => {
+            return bad_request(format!("`full` is `{other}`; use `true` or `false`"));
+        }
+    };
+    match verified {
         Ok(v) => json_ok(
             StatusCode::OK,
             json!({
                 "ok": v.ok(),
                 "chains": v.chains,
                 "events": v.events,
+                "checked": v.checked,
                 "unanchored": v.unanchored,
                 "head": v.head,
                 "broken": v.broken,

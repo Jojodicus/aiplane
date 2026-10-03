@@ -207,6 +207,7 @@ async fn verify_reports_an_intact_log_and_then_the_link_that_was_changed() {
         "no turn ended, so nothing is anchored"
     );
     assert_eq!(body["events"], 8);
+    assert_eq!(body["checked"], 8);
 
     sqlx::query(
         "UPDATE agent_audit SET detail = '{\"message\":\"something else\"}'
@@ -216,9 +217,20 @@ async fn verify_reports_an_intact_log_and_then_the_link_that_was_changed() {
     .await
     .unwrap();
     let (_, body) = fx.get(&fx.alice, &uri).await;
+    assert_eq!(body["ok"], true, "{body}");
+    assert_eq!(
+        (body["events"].clone(), body["checked"].clone()),
+        (json!(8), json!(0)),
+        "a check resumes where the last one left each chain"
+    );
+
+    let (_, body) = fx.get(&fx.alice, &format!("{uri}?full=true")).await;
     assert_eq!(body["ok"], false);
     assert_eq!(body["broken"]["chain_key"], "conversation:s-2");
     assert_eq!(body["broken"]["seq"], 1);
+
+    let (status, body) = fx.get(&fx.alice, &format!("{uri}?full=maybe")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
 #[tokio::test]
