@@ -31,10 +31,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Cap on the produced asset we keep in memory / hand to chat attachments.
-/// Matches `image_gen::MAX_IMAGE_BYTES` so limits are uniform across the
-/// two image paths.
-pub(crate) const MAX_OUTPUT_BYTES: usize = 25 * 1024 * 1024;
+use crate::server::chat_attachments::MAX_IMAGE_BYTES;
 
 #[derive(Debug, Error)]
 pub enum ComfyuiClientError {
@@ -69,7 +66,7 @@ pub enum ComfyuiClientError {
     },
     #[error("ComfyUI produced no output for node `{node_id}` (workflow `{prompt_id}`)")]
     NoOutput { prompt_id: String, node_id: String },
-    #[error("produced asset is larger than the {} MB limit", MAX_OUTPUT_BYTES / 1024 / 1024)]
+    #[error("produced asset is larger than the {} MB limit", MAX_IMAGE_BYTES / 1024 / 1024)]
     OutputTooLarge,
     #[error("building the HTTP client")]
     ClientBuild(#[source] reqwest::Error),
@@ -413,7 +410,7 @@ impl Client {
             .map(|s| s.split(';').next().unwrap_or("").trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| sniff_mime_from_name(&asset.filename).to_string());
-        let bytes = capped_read::read_capped(resp, MAX_OUTPUT_BYTES as u64)
+        let bytes = capped_read::read_capped(resp, MAX_IMAGE_BYTES as u64)
             .await
             .map_err(|e| match e {
                 capped_read::CappedReadError::TooLarge { .. } => ComfyuiClientError::OutputTooLarge,

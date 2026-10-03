@@ -45,7 +45,9 @@ use shared::api::ToolDef;
 
 use std::sync::Arc;
 
-use aiplane_features::server::chat_attachments::{self, BinaryDisposition, PayloadLimits};
+use aiplane_features::server::chat_attachments::{
+    self, BinaryDisposition, MAX_IMAGE_BYTES, PayloadLimits,
+};
 use aiplane_features::server::file_refs::{self, FileRef};
 use aiplane_features::server::pdf::{self, PdfError};
 use aiplane_runtime::server::tools::sandbox::{SandboxClient, b64};
@@ -53,19 +55,10 @@ use aiplane_runtime::server::tools::{
     Tool, ToolContext, ToolError, ToolFuture, tool_content_parts, truncate_on_char_boundary,
 };
 
-/// Hard cap on text returned to the model — shared with `fetch_url`
-/// so both tools have the same contract. 4 MB is generous enough
-/// that essentially no real attachment is truncated in practice
-/// (modern context windows handle ~1M tokens of text), while still
-/// bounding the gateway's per-call memory footprint. The caller
-/// can request less via `max_bytes`.
-const HARD_MAX_BYTES: usize = 4 * 1024 * 1024;
+// The text ceiling is `fetch_url`'s: the two tools have the same contract.
+use crate::fetch_url::HARD_MAX_BYTES;
+
 const HARD_MAX_BYTES_DEFAULT: usize = HARD_MAX_BYTES;
-/// Image ceiling — generous enough for phone photos (typically
-/// 5–15 MB) and screenshots. Above this we surface a
-/// `kind: "image-too-large"` payload so the model knows why it
-/// didn't get the bytes inline.
-const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 
 pub struct FetchAttachment {
     /// Sandbox client for reading Office formats (docx/pptx/xlsx), which

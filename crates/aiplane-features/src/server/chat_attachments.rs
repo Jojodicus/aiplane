@@ -34,6 +34,13 @@ use tokio::sync::Mutex;
 
 use aiplane_core::server::config::S3Config;
 
+/// The largest image or other binary payload a tool or a generator hands
+/// on — inline to the model, or stored as a chat attachment: phone photos
+/// and screenshots fit. `fetch_url`, `fetch_attachment`, `load_image_url`,
+/// image generation, ComfyUI outputs and MCP spills all refuse (or degrade
+/// to metadata) past it, so "too big" means one size everywhere.
+pub const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+
 /// 30s upload timeout per file. Keeps a single misbehaving file
 /// from holding the chat composer's spinner open forever.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);

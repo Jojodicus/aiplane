@@ -37,9 +37,6 @@ use aiplane_core::server::upstreams::{
 };
 use aiplane_core::server::usage::UsageHandle;
 
-/// Cap on the decoded image we keep in memory / hand to S3. Matches the
-/// `fetch_url` / `fetch_attachment` image ceiling so limits are uniform.
-const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 /// Timeout for the generation call itself. Diffusion backends are slow; this
 /// is generous. The tool's own `max_duration` sits above it.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -84,8 +81,8 @@ pub enum ImageGenError {
     /// URL's bytes weren't a usable image.
     #[error("image backend returned an unusable response: {0}")]
     BadResponse(String),
-    /// The generated image exceeded [`MAX_IMAGE_BYTES`].
-    #[error("generated image is larger than the {} MB limit", MAX_IMAGE_BYTES / 1024 / 1024)]
+    /// The generated image exceeded [`chat_attachments::MAX_IMAGE_BYTES`].
+    #[error("generated image is larger than the {} MB limit", chat_attachments::MAX_IMAGE_BYTES / 1024 / 1024)]
     TooLarge,
     /// Editing was requested but no image backend advertises edit support.
     #[error("no configured image backend supports editing")]
@@ -368,7 +365,7 @@ impl ImageGenerator {
                                 (Some(b64), _) => chat_attachments::decode_base64(&b64)
                                     .map_err(ImageGenError::BadResponse)
                                     .and_then(|bytes| {
-                                        if bytes.len() > MAX_IMAGE_BYTES {
+                                        if bytes.len() > chat_attachments::MAX_IMAGE_BYTES {
                                             return Err(ImageGenError::TooLarge);
                                         }
                                         let mime = sniff_image_mime(&bytes)
@@ -470,7 +467,7 @@ impl ImageGenerator {
             .await
             .map_err(|e| ImageGenError::Upstream(format!("reading image url body: {e}")))?;
 
-        if bytes.len() > MAX_IMAGE_BYTES {
+        if bytes.len() > chat_attachments::MAX_IMAGE_BYTES {
             return Err(ImageGenError::TooLarge);
         }
         // Content-type from the header is the primary signal; fall back to

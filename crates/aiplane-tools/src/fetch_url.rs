@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 use shared::api::ToolDef;
 
 use crate::html_text;
-use aiplane_features::server::chat_attachments::{self, BinaryDisposition, PayloadLimits};
+use aiplane_features::server::chat_attachments::{
+    self, BinaryDisposition, MAX_IMAGE_BYTES, PayloadLimits,
+};
 use aiplane_runtime::server::tools::{
     Tool, ToolContext, ToolError, ToolFuture, tool_content_parts, truncate_on_char_boundary,
 };
@@ -37,13 +39,8 @@ use aiplane_runtime::server::tools::{
 /// don't aggressively truncate real documentation pages, while
 /// still bounding per-call memory. Shared ceiling with
 /// `fetch_attachment` so the two tools have identical limits.
-const HARD_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const HARD_MAX_BYTES: usize = 4 * 1024 * 1024;
 const HARD_MAX_BYTES_DEFAULT: usize = HARD_MAX_BYTES;
-/// Image ceiling — matches `fetch_attachment` so the model sees the
-/// same limits regardless of where bytes came from. 25 MB covers
-/// phone photos and screenshots; anything larger degrades to a
-/// `kind: "image-too-large"` metadata response.
-const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most raw bytes read for one fetch. Above the image ceiling, so an
 /// image a little too large still comes back as `image-too-large` metadata,
