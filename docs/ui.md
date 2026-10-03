@@ -558,7 +558,11 @@ are in `web/src/lib/components/agents/`.
   /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
   buffer is flagged with a Save button. Replies are plain (the turn is
   synchronous); clicking a reply shows its debug: slots with value and
-  provenance, each route's gate with what keeps it closed, a strict scope's
+  provenance, each by its label from the spec (`slotLabel`; the hand-off and
+  identity slots by catalog name) with the id in small print, each route's
+  gate with what keeps it closed (`gateHint`: the unmet condition in catalog
+  words with the slot's label, the server's message only for a condition
+  without a slot), a strict scope's
   topic-guard verdict, the routing decision, sub-agent calls with outcome, and
   tool-call decisions. "New conversation"
   drops the `session_id`.
@@ -570,7 +574,12 @@ are in `web/src/lib/components/agents/`.
   reply replaces the paused one, since the same turn continued. In a test
   conversation the resume answers with a fresh debug view too, so a verifier's
   slot or a gate the decision opened shows on the reply. In a test
-  conversation the manager may answer a `secure_input` too.
+  conversation the manager may answer a `secure_input` too. A hand-off to a
+  person (`human_answer`) shows its context under the question — the
+  visitor's last message and what the agent collected, by slot label — and a
+  line saying that in a live conversation it lands in the Inbox of the
+  agent's managers and responders. The card sits in the bubble's column of
+  the daisyUI `chat` grid (`col-start-2`).
 - **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
   /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name

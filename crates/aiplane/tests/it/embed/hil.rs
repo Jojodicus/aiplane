@@ -244,6 +244,44 @@ async fn a_responder_answers_a_handoff_from_the_inbox_and_the_visitor_receives_i
     assert_eq!(resumed.actor_id.as_deref(), Some("sam"));
 }
 
+/// The test chat shows its manager a hand-off with what the person answering
+/// would see in the Inbox, and keeps it out of the Inbox.
+#[tokio::test]
+async fn a_test_chat_handoff_carries_its_context_and_stays_out_of_the_inbox() {
+    let llm = upstream(vec![
+        call("s1", "set_issue", json!({"value": "refund for RE-1"})),
+        call("h1", "request_human", json!({"question": QUESTION})),
+    ])
+    .await;
+    let e = handing_off(&llm).await;
+    let (status, paused) =
+        e.fx.post(
+            &e.fx.alice,
+            &format!("/api/v0/agents/{}/test-turn", e.agent),
+            json!({ "message": "I was billed twice for RE-1." }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{paused}");
+    assert_eq!(paused["status"], "suspended");
+    let suspension = &paused["suspension"];
+    assert_eq!(suspension["kind"], "human_answer");
+    assert_eq!(suspension["message"], QUESTION);
+    let context = &suspension["context"];
+    assert_eq!(context["visitor_message"], "I was billed twice for RE-1.");
+    assert_eq!(
+        context["slots"],
+        json!([{ "slot": "issue", "value": "refund for RE-1" }])
+    );
+    assert_eq!(context["inbox"], "billing desk");
+
+    let (status, inbox) = e.fx.get(&e.fx.alice, "/api/v0/agents/inbox").await;
+    assert_eq!(status, StatusCode::OK, "{inbox}");
+    assert_eq!(
+        inbox["count"], 0,
+        "a test-chat pause is answered in the test chat"
+    );
+}
+
 #[tokio::test]
 async fn a_german_responder_resumes_an_english_visitor_in_english() {
     let llm = upstream(vec![

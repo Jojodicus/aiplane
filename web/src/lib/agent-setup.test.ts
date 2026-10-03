@@ -31,6 +31,7 @@ import {
 	setKnowledge,
 	slotDef,
 	slotKind,
+	slotLabel,
 	slotsForIdentity,
 	stepForPath,
 	voiceMissing,
@@ -514,6 +515,14 @@ test('a proposed tone selects its chips by id and keeps only the rest as free te
 		extra: ''
 	});
 	assert.equal(suggestedTone({ chips: ['brief'], language: null, response: '' }, { ...current, language: 'fr' }).language, 'fr');
+});
+
+test('a slot is named by its label, the managed ones from the catalog', () => {
+	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
+	assert.equal(slotLabel(spec, 'speicher_groesse', tr), 'Speichergröße');
+	assert.equal(slotLabel(spec, 'firma', tr), 'Firma');
+	assert.equal(slotLabel(spec, 'topic', tr), '«agents-slot-label-topic»');
+	assert.equal(slotLabel(spec, 'gone', tr), 'Gone');
 });
 
 test('details keep the order they were given, and unordered slots follow by name', () => {

@@ -1195,6 +1195,11 @@ agent runs pause and resume durably, sub-agent runs included.
 - **Test chat.** `test-turn` answers carry `suspension` (the full view, tool
   included) and `status: suspended`; the SPA shows what the turn waits for
   with a value field or approve/deny, and answers through the staff route.
+  A hand-off to a person also carries `suspension.context`: the handoff the
+  pause stored in its `run_context` (`visitor_message`, `slots`, `inbox`, …),
+  the same the Inbox shows staff. A test-chat pause never reaches the Inbox
+  (`inbox::staff_item` skips the draft version); the manager answers it in
+  the test chat.
 - **Tests.** `agents/run/tests/suspend.rs` (secure input to the tool and
   nowhere in the database; a paused sub-agent pausing its caller and one
   staff decision resuming both; an expired approval denied; restart

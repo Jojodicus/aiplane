@@ -108,7 +108,7 @@
 	{:else if sub === 'grants' && ws.detail}
 		<GrantsPanel agentId={ws.id} grants={ws.detail.grants} resources={ws.resources} writable={ws.writable} onchanged={() => ws.refresh(true)} />
 	{:else if sub === 'test'}
-		<TestChat agentId={ws.id} dirty={ws.dirty} onturn={(debug) => (ws.lastDebug = debug)} onsave={save} />
+		<TestChat agentId={ws.id} spec={ws.spec} dirty={ws.dirty} onturn={(debug) => (ws.lastDebug = debug)} onsave={save} />
 	{:else if sub === 'tests' && ws.detail}
 		<TestsPanel agentId={ws.id} versions={ws.versions} liveVersion={ws.detail.live_version} dirty={ws.dirty} writable={ws.writable} onsave={save} />
 	{:else if sub === 'analytics'}

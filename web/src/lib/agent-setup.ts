@@ -433,6 +433,19 @@ export function readSlots(spec: Spec): SlotRow[] {
 		}));
 }
 
+const MANAGED_LABELS: Record<string, string> = {
+	[TOPIC_SLOT]: 'agents-slot-label-topic',
+	[REQUEST_SLOT]: 'agents-slot-label-request',
+	[VERIFIED_SLOT]: 'agents-slot-label-verified'
+};
+
+/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key made readable. */
+export function slotLabel(spec: Spec, key: string, tr: (key: string) => string): string {
+	if (MANAGED_LABELS[key]) return tr(MANAGED_LABELS[key]);
+	const description = spec?.state?.[key]?.description;
+	return typeof description === 'string' && description.trim() ? description.trim() : humanize(key);
+}
+
 /** The key a row is saved under; a fresh row's follows its label. */
 export function slotKeys(rows: SlotRow[], reserved: Iterable<string>): string[] {
 	const taken = new Set(reserved);

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import type { TestDebug } from '$lib/agents';
+	import { gateHint, type Spec, type TestDebug } from '$lib/agents';
+	import { slotLabel } from '$lib/agent-setup';
 	import { t } from '$lib/i18n.svelte';
 
 	/**
@@ -7,9 +8,12 @@
 	 * with its value and who wrote it, each route's gate and what keeps it
 	 * closed, the topic guard's verdict, the router's decision, sub-agent calls
 	 * and the grant decision on each tool call. All of it is read back from the stored state and the
-	 * audit trail, not from the model's own account.
+	 * audit trail, not from the model's own account. Slots go by the labels
+	 * `spec` gives them, with the id in small print.
 	 */
-	let { debug }: { debug: TestDebug } = $props();
+	let { debug, spec = {} }: { debug: TestDebug; spec?: Spec } = $props();
+
+	const label = (slot: string) => slotLabel(spec, slot, t);
 
 	const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
 	const badge = (status: string) => (status === 'set' ? 'badge-success' : status === 'invalid' ? 'badge-error' : 'badge-ghost');
@@ -29,7 +33,10 @@
 					<tbody>
 						{#each debug.slots as slot (slot.slot)}
 							<tr>
-								<td class="font-mono">{slot.slot}</td>
+								<td>
+									{label(slot.slot)}
+									{#if label(slot.slot) !== slot.slot}<span class="block font-mono text-xs text-base-content/50">{slot.slot}</span>{/if}
+								</td>
 								<td><span class="badge badge-sm {badge(slot.status)}">{t(`agents-slot-status-${slot.status}`)}</span></td>
 								<td class="max-w-48 break-words font-mono text-xs">
 									{#if slot.status === 'missing'}<span class="text-base-content/40">—</span>{:else}{show(slot.value)}{/if}
@@ -51,12 +58,13 @@
 		{#each debug.routes as route (route.route)}
 			<div class="mb-2">
 				<div class="flex items-center gap-2">
-					<span class="font-mono">{route.route}</span>
+					<span>{route.description || route.route}</span>
+					{#if route.description}<span class="font-mono text-xs text-base-content/50">{route.route}</span>{/if}
 					<span class="badge badge-sm {route.open ? 'badge-success' : 'badge-warning'}">{route.open ? t('agents-gate-open') : t('agents-gate-closed')}</span>
 				</div>
 				{#if route.missing.length}
 					<ul class="ml-4 list-disc text-xs text-base-content/70">
-						{#each route.missing as unmet (unmet.path + unmet.message)}<li>{unmet.message}</li>{/each}
+						{#each route.missing as unmet (unmet.path + unmet.message)}<li>{gateHint(unmet, label(unmet.slot ?? ''), t)}</li>{/each}
 					</ul>
 				{/if}
 			</div>

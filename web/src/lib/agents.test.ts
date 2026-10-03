@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ApiError } from './api.ts';
 import {
+	gateHint,
 	agentIdFromName,
 	bindSource,
 	cleanSpec,
@@ -177,6 +178,17 @@ test('a test turn is labelled by how it ended', () => {
 	assert.equal(testTurnLabel('errored'), 'agents-test-status-errored');
 	assert.equal(testTurnLabel('suspended'), 'agents-test-status-suspended');
 	assert.equal(testTurnLabel('whatever'), 'agents-test-status-other');
+});
+
+test('a closed gate is said with the slot’s label, a condition without a slot in the server’s words', () => {
+	const tr = (key: string, args?: Record<string, string | number>) => `${key}(${Object.entries(args ?? {}).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${v}`).join(',')})`;
+	assert.equal(gateHint({ path: 'all[0]', slot: 'topic', kind: 'missing', message: "`topic` is missing — call set_topic" }, 'Topic', tr), 'agents-gate-missing(slot=Topic)');
+	assert.equal(
+		gateHint({ path: 'all[0]', slot: 'topic', kind: 'not_equal', expected: 'Lead', message: '' }, 'Topic', tr),
+		'agents-gate-not-equal(slot=Topic,expected=“Lead”)'
+	);
+	assert.equal(gateHint({ path: '', slot: 'plan', kind: 'not_in', expected: ['a', 1], message: '' }, 'Plan', tr), 'agents-gate-not-in(slot=Plan,expected=“a”, 1)');
+	assert.equal(gateHint({ path: '', kind: 'denied', message: 'the classifier said no' }, 'x', tr), 'the classifier said no');
 });
 
 test('a paused test turn says what it waits for', () => {
