@@ -24,7 +24,7 @@ use super::{internal, json_error, json_ok};
 use aiplane_agents::db::agents::{Access, AgentRow};
 use aiplane_core::server::db::users::User;
 use aiplane_runtime::agents::assist::{
-    AssistError, Asker, Candidates, ImproveField, ReviewContext, SuggestRequest, Target,
+    Asker, AssistError, Candidates, ImproveField, ReviewContext, SuggestRequest, Target,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 
@@ -62,10 +62,7 @@ fn refused(err: AssistError) -> Response {
         AssistError::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, "assist_rate_limited"),
         AssistError::OverBudget(_) => (StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded"),
         AssistError::Model(_) => (StatusCode::BAD_GATEWAY, "assist_model_failed"),
-        AssistError::Log(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "activity_log_unavailable",
-        ),
+        AssistError::Log(_) => (StatusCode::SERVICE_UNAVAILABLE, "activity_log_unavailable"),
         AssistError::Db(e) => return internal(e),
     };
     let mut resp = json_error(status, code, &err.to_string());
@@ -76,7 +73,11 @@ fn refused(err: AssistError) -> Response {
     resp
 }
 
-async fn candidates(state: &RamaState, user: &User, agent_id: &str) -> Result<Candidates, Response> {
+async fn candidates(
+    state: &RamaState,
+    user: &User,
+    agent_id: &str,
+) -> Result<Candidates, Response> {
     let role_ids = state.rbac.role_ids_for(&user.roles);
     let agents = visible_agents(state, user)
         .await?

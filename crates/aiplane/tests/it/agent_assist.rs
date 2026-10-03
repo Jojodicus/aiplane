@@ -251,7 +251,10 @@ impl Fx {
             .get(&self.alice, &format!("/api/v0/agents/{}", self.support))
             .await;
         let tests = self
-            .get(&self.alice, &format!("/api/v0/agents/{}/tests", self.support))
+            .get(
+                &self.alice,
+                &format!("/api/v0/agents/{}/tests", self.support),
+            )
             .await;
         json!({
             "draft": agent["agent"]["draft_spec"],
@@ -330,8 +333,11 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
         "You help Acme customers with their orders. First ask for the order number."
     );
     assert_eq!(steps["scope"]["strict"], true);
-    assert_eq!(steps["abilities"], json!([{ "id": "get_current_timestamp",
-        "name": steps["abilities"][0]["name"], "why": "delivery times" }]));
+    assert_eq!(
+        steps["abilities"],
+        json!([{ "id": "get_current_timestamp",
+        "name": steps["abilities"][0]["name"], "why": "delivery times" }])
+    );
     assert_eq!(steps["slots"][1]["def"]["type"], "enum");
     assert_eq!(steps["handoffs"].as_array().unwrap().len(), 1);
     assert_eq!(steps["handoffs"][0]["route"]["agent"], fx.billing.as_str());
@@ -346,7 +352,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
         .iter()
         .map(|d| (d["step"].as_str().unwrap(), d["item"].as_str().unwrap()))
         .collect();
-    assert_eq!(dropped, [("abilities", "run_in_sandbox"), ("handoffs", "leak")]);
+    assert_eq!(
+        dropped,
+        [("abilities", "run_in_sandbox"), ("handoffs", "leak")]
+    );
 
     // Every offered test case is one the tests route accepts as it is.
     for case in steps["tests"].as_array().unwrap() {
@@ -382,7 +391,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     let input: Value =
         serde_json::from_str(sent["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(input["scenario"], "An order assistant for Acme's web shop.");
-    assert_eq!(input["agents"], json!([{ "id": fx.billing, "name": "billing" }]));
+    assert_eq!(
+        input["agents"],
+        json!([{ "id": fx.billing, "name": "billing" }])
+    );
 
     let events = fx.assist_events().await;
     assert_eq!(events.len(), 1);
@@ -390,16 +402,20 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     assert_eq!(e["actor_id"], "alice");
     assert!(e["conversation_id"].is_null());
     assert_eq!(e["detail"]["action"], "suggest");
-    assert_eq!(e["detail"]["scenario"], "An order assistant for Acme's web shop.");
+    assert_eq!(
+        e["detail"]["scenario"],
+        "An order assistant for Acme's web shop."
+    );
     assert_eq!(e["detail"]["model"], "assist-model");
     assert_eq!(e["detail"]["usage"]["total_tokens"], 700);
     assert_eq!(e["detail"]["offered"].as_array().unwrap().len(), 8);
 
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-    let rows = sqlx::query("SELECT user_id, principal_kind, source, total_tokens FROM usage_events")
-        .fetch_all(&fx.state.db)
-        .await
-        .unwrap();
+    let rows =
+        sqlx::query("SELECT user_id, principal_kind, source, total_tokens FROM usage_events")
+            .fetch_all(&fx.state.db)
+            .await
+            .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<String, _>("user_id"), "alice");
     assert_eq!(rows[0].get::<String, _>("principal_kind"), "user");
@@ -423,8 +439,15 @@ async fn a_scenario_that_tries_to_take_over_cannot_make_the_endpoint_write_anyth
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let text = body.to_string();
-    assert!(!body["steps"]["abilities"].to_string().contains("run_in_sandbox"));
-    assert!(!body["steps"]["handoffs"].to_string().contains(&fx.secret), "{text}");
+    assert!(
+        !body["steps"]["abilities"]
+            .to_string()
+            .contains("run_in_sandbox")
+    );
+    assert!(
+        !body["steps"]["handoffs"].to_string().contains(&fx.secret),
+        "{text}"
+    );
     assert_eq!(fx.written().await, before);
     let sent = &fx.model_requests().await[0];
     assert_eq!(sent["messages"][0]["role"], "system");
@@ -448,7 +471,10 @@ async fn improve_returns_a_suggestion_and_why() {
     })))
     .await;
     let (status, body) = fx
-        .improve(&fx.alice, json!({ "field": "task", "text": "help with orders" }))
+        .improve(
+            &fx.alice,
+            json!({ "field": "task", "text": "help with orders" }),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["field"], "task");
@@ -473,7 +499,10 @@ async fn improve_returns_a_suggestion_and_why() {
 
 #[tokio::test]
 async fn the_rate_per_manager_refuses_once_spent_and_says_when_to_retry() {
-    let fx = fixture(answer(&json!({ "suggestion": "Better.", "why": "Clearer." }))).await;
+    let fx = fixture(answer(
+        &json!({ "suggestion": "Better.", "why": "Clearer." }),
+    ))
+    .await;
     let max = aiplane_runtime::agents::assist::ASSIST_RATE.max;
     for _ in 0..max {
         let (status, body) = fx
@@ -513,7 +542,12 @@ async fn the_rate_per_manager_refuses_once_spent_and_says_when_to_retry() {
 async fn bad_input_and_missing_rights_are_refused_before_the_model_is_asked() {
     let fx = fixture(answer(&json!({}))).await;
     let cases = [
-        (&fx.alice, json!({ "scenario": "  " }), StatusCode::BAD_REQUEST, "invalid_assist_input"),
+        (
+            &fx.alice,
+            json!({ "scenario": "  " }),
+            StatusCode::BAD_REQUEST,
+            "invalid_assist_input",
+        ),
         (
             &fx.alice,
             json!({ "scenario": "x".repeat(aiplane_runtime::agents::assist::MAX_SCENARIO_CHARS + 1) }),
@@ -526,8 +560,18 @@ async fn bad_input_and_missing_rights_are_refused_before_the_model_is_asked() {
             StatusCode::FORBIDDEN,
             "assist_pool_not_allowed",
         ),
-        (&fx.plain, json!({ "scenario": "shop" }), StatusCode::FORBIDDEN, ""),
-        (&fx.bob, json!({ "scenario": "shop" }), StatusCode::NOT_FOUND, ""),
+        (
+            &fx.plain,
+            json!({ "scenario": "shop" }),
+            StatusCode::FORBIDDEN,
+            "",
+        ),
+        (
+            &fx.bob,
+            json!({ "scenario": "shop" }),
+            StatusCode::NOT_FOUND,
+            "",
+        ),
     ];
     for (who, body, want, code) in cases {
         let (status, got) = fx.suggest(who, body).await;
@@ -557,5 +601,8 @@ async fn a_failed_model_call_is_a_502_and_still_recorded() {
     assert_eq!(body["error"]["code"], "assist_model_failed");
     let events = fx.assist_events().await;
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["detail"]["error"], "upstream 500 Internal Server Error");
+    assert_eq!(
+        events[0]["detail"]["error"],
+        "upstream 500 Internal Server Error"
+    );
 }

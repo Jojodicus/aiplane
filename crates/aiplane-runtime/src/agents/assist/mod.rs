@@ -308,17 +308,21 @@ impl Asker<'_> {
         )
         .await;
         self.meter(&exchange);
-        let improved = exchange.answer.as_ref().map_err(Clone::clone).and_then(|a| {
-            serde_json::from_value::<proposal::Improved>(a.clone())
-                .map_err(|e| format!("the answer does not read as an improved text ({e})"))
-                .and_then(|i| {
-                    if i.suggestion.trim().is_empty() {
-                        Err("the model returned an empty text".to_string())
-                    } else {
-                        Ok(i)
-                    }
-                })
-        });
+        let improved = exchange
+            .answer
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|a| {
+                serde_json::from_value::<proposal::Improved>(a.clone())
+                    .map_err(|e| format!("the answer does not read as an improved text ({e})"))
+                    .and_then(|i| {
+                        if i.suggestion.trim().is_empty() {
+                            Err("the model returned an empty text".to_string())
+                        } else {
+                            Ok(i)
+                        }
+                    })
+            });
         self.record(
             &pool,
             &exchange,

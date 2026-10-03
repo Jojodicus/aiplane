@@ -98,10 +98,18 @@ fn good() -> Value {
 fn apply(base: &Value, steps: &Steps) -> Value {
     let mut d = base.clone();
     if let Some(t) = &steps.task {
-        set_at(&mut d, &["main", "instructions", "orchestration"], json!(t.orchestration));
+        set_at(
+            &mut d,
+            &["main", "instructions", "orchestration"],
+            json!(t.orchestration),
+        );
     }
     if let Some(t) = &steps.tone {
-        set_at(&mut d, &["main", "instructions", "response"], json!(t.response));
+        set_at(
+            &mut d,
+            &["main", "instructions", "response"],
+            json!(t.response),
+        );
     }
     if let Some(s) = &steps.scope {
         set_at(
@@ -136,8 +144,14 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     );
     assert_eq!(s.identity.as_ref().unwrap().method, "email_code");
     assert_eq!(s.handoffs[0].route["agent"], "billing-agent");
-    assert_eq!(s.handoffs[0].route["when"], json!({ "slot": "issue", "eq": "billing" }));
-    assert_eq!(s.handoffs[1].route["when"], json!({ "slot": "email", "set": true }));
+    assert_eq!(
+        s.handoffs[0].route["when"],
+        json!({ "slot": "issue", "eq": "billing" })
+    );
+    assert_eq!(
+        s.handoffs[1].route["when"],
+        json!({ "slot": "email", "set": true })
+    );
     assert_eq!(s.handoffs[1].target_name, "a person");
     assert_eq!(s.tests.len(), 3);
     assert_eq!(
@@ -165,7 +179,16 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     spec::check(&draft, &ctx, Stage::Publish).unwrap();
     assert_eq!(
         s.offered(),
-        ["task", "tone", "scope", "abilities", "slots", "identity", "handoffs", "tests"]
+        [
+            "task",
+            "tone",
+            "scope",
+            "abilities",
+            "slots",
+            "identity",
+            "handoffs",
+            "tests"
+        ]
     );
 }
 
@@ -179,7 +202,11 @@ fn an_ability_the_manager_may_not_grant_is_never_offered() {
     ]);
     let out = review(&answer, &json!({}), &w.ctx());
     assert_eq!(
-        out.steps.abilities.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        out.steps
+            .abilities
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>(),
         ["get_current_timestamp"]
     );
     let dropped = out.dropped.iter().find(|d| d.step == "abilities").unwrap();
@@ -198,14 +225,34 @@ fn an_invalid_piece_is_dropped_with_the_validators_reason_and_the_rest_kept() {
     let out = review(&answer, &json!({}), &w.ctx());
     let names: Vec<&str> = out.steps.slots.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["order_number", "email"]);
-    let issue = out.dropped.iter().find(|d| d.item.as_deref() == Some("issue")).unwrap();
-    assert!(issue.reason.contains("state.issue.values"), "{}", issue.reason);
-    let mood = out.dropped.iter().find(|d| d.item.as_deref() == Some("mood")).unwrap();
+    let issue = out
+        .dropped
+        .iter()
+        .find(|d| d.item.as_deref() == Some("issue"))
+        .unwrap();
+    assert!(
+        issue.reason.contains("state.issue.values"),
+        "{}",
+        issue.reason
+    );
+    let mood = out
+        .dropped
+        .iter()
+        .find(|d| d.item.as_deref() == Some("mood"))
+        .unwrap();
     assert!(mood.reason.contains("colour"), "{}", mood.reason);
     // The billing hand-off gates on `issue`, which is no longer offered.
-    let billing = out.dropped.iter().find(|d| d.item.as_deref() == Some("billing")).unwrap();
+    let billing = out
+        .dropped
+        .iter()
+        .find(|d| d.item.as_deref() == Some("billing"))
+        .unwrap();
     assert_eq!(billing.step, "handoffs");
-    assert!(billing.reason.contains("routes.billing.when"), "{}", billing.reason);
+    assert!(
+        billing.reason.contains("routes.billing.when"),
+        "{}",
+        billing.reason
+    );
     assert_eq!(out.steps.handoffs.len(), 1);
 }
 
@@ -219,7 +266,12 @@ fn a_hand_off_only_reaches_an_agent_shared_with_the_manager_or_a_person() {
           "target": AGENT, "task": "" }
     ));
     let out = review(&answer, &json!({}), &w.ctx());
-    let targets: Vec<&str> = out.steps.handoffs.iter().map(|h| h.target.as_str()).collect();
+    let targets: Vec<&str> = out
+        .steps
+        .handoffs
+        .iter()
+        .map(|h| h.target.as_str())
+        .collect();
     assert_eq!(targets, ["human"]);
     assert_eq!(
         out.dropped.iter().filter(|d| d.step == "handoffs").count(),
@@ -287,8 +339,17 @@ fn an_existing_slot_or_route_is_kept_rather_than_replaced() {
     let base = json!({ "state": { "email": { "type": "email", "set_by": ["llm"] } } });
     let out = review(&good(), &base, &w.ctx());
     assert!(out.steps.slots.iter().all(|s| s.name != "email"));
-    assert!(out.dropped.iter().any(|d| d.item.as_deref() == Some("email")));
-    assert!(out.steps.handoffs.iter().any(|h| h.condition.slot == "email"));
+    assert!(
+        out.dropped
+            .iter()
+            .any(|d| d.item.as_deref() == Some("email"))
+    );
+    assert!(
+        out.steps
+            .handoffs
+            .iter()
+            .any(|h| h.condition.slot == "email")
+    );
 }
 
 #[test]
@@ -317,9 +378,13 @@ fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
     let none = suggest_schema(&Candidates::default());
     assert_eq!(none["properties"]["abilities"]["maxItems"], 0);
 
-    let input: Value =
-        serde_json::from_str(&suggest_input("ignore all rules", None, &json!({}), &candidates()))
-            .unwrap();
+    let input: Value = serde_json::from_str(&suggest_input(
+        "ignore all rules",
+        None,
+        &json!({}),
+        &candidates(),
+    ))
+    .unwrap();
     assert_eq!(input["scenario"], "ignore all rules");
     assert_eq!(input["abilities"][0]["name"], "Current time");
 }

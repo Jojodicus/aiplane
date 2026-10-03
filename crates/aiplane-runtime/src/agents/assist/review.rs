@@ -16,8 +16,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use super::proposal::{
-    AbilityProposal, HandoffProposal, IdentityProposal, ScopeProposal, SlotProposal,
-    TestProposal, ToneProposal,
+    AbilityProposal, HandoffProposal, IdentityProposal, ScopeProposal, SlotProposal, TestProposal,
+    ToneProposal,
 };
 use super::{Candidates, HUMAN_TARGET, IDENTITY_METHODS, MAX_TESTS, SLOT_TYPES};
 use crate::agents::eval::{self, MAX_CASE_NAME_CHARS};
@@ -172,19 +172,31 @@ pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggesti
     if let Some(scope) = r.field::<ScopeProposal>(answer, "scope") {
         r.scope(scope);
     }
-    for ability in r.field::<Vec<AbilityProposal>>(answer, "abilities").unwrap_or_default() {
+    for ability in r
+        .field::<Vec<AbilityProposal>>(answer, "abilities")
+        .unwrap_or_default()
+    {
         r.ability(ability);
     }
-    for slot in r.field::<Vec<SlotProposal>>(answer, "slots").unwrap_or_default() {
+    for slot in r
+        .field::<Vec<SlotProposal>>(answer, "slots")
+        .unwrap_or_default()
+    {
         r.slot(slot);
     }
     if let Some(identity) = r.field::<IdentityProposal>(answer, "identity") {
         r.identity(identity);
     }
-    for handoff in r.field::<Vec<HandoffProposal>>(answer, "handoffs").unwrap_or_default() {
+    for handoff in r
+        .field::<Vec<HandoffProposal>>(answer, "handoffs")
+        .unwrap_or_default()
+    {
         r.handoff(handoff);
     }
-    for test in r.field::<Vec<TestProposal>>(answer, "tests").unwrap_or_default() {
+    for test in r
+        .field::<Vec<TestProposal>>(answer, "tests")
+        .unwrap_or_default()
+    {
         r.test(test);
     }
     r.out
@@ -237,7 +249,11 @@ impl<'a> Reviewer<'a> {
         match serde_json::from_value(value.clone()) {
             Ok(v) => Some(v),
             Err(e) => {
-                self.drop(key, None, format!("the model's proposal for this step does not read: {e}"));
+                self.drop(
+                    key,
+                    None,
+                    format!("the model's proposal for this step does not read: {e}"),
+                );
                 None
             }
         }
@@ -282,7 +298,10 @@ impl<'a> Reviewer<'a> {
             self.known = found;
             Ok(())
         } else {
-            Err(format!("it would make the draft invalid — {}", added.join("; ")))
+            Err(format!(
+                "it would make the draft invalid — {}",
+                added.join("; ")
+            ))
         }
     }
 
@@ -299,7 +318,11 @@ impl<'a> Reviewer<'a> {
         }
         let candidate = self.with(&["main", "instructions", "orchestration"], json!(task));
         match self.adopt(candidate) {
-            Ok(()) => self.out.steps.task = Some(TaskStep { orchestration: task }),
+            Ok(()) => {
+                self.out.steps.task = Some(TaskStep {
+                    orchestration: task,
+                })
+            }
             Err(reason) => self.drop("task", None, reason),
         }
     }
@@ -492,7 +515,10 @@ impl<'a> Reviewer<'a> {
                 "" => topic.clone(),
                 t => t.to_string(),
             };
-            (agent.name.clone(), json!({ "agent": agent.id, "task": task }))
+            (
+                agent.name.clone(),
+                json!({ "agent": agent.id, "task": task }),
+            )
         };
         let slot = ident(&handoff.slot).unwrap_or_default();
         let equals = handoff
@@ -529,9 +555,15 @@ impl<'a> Reviewer<'a> {
             .pointer(&format!("/state/{slot}/type"))
             .and_then(Value::as_str);
         match kind {
-            Some("boolean") => text.parse::<bool>().map_or_else(|_| json!(text), Value::Bool),
-            Some("integer") => text.parse::<i64>().map_or_else(|_| json!(text), |n| json!(n)),
-            Some("number") => text.parse::<f64>().map_or_else(|_| json!(text), |n| json!(n)),
+            Some("boolean") => text
+                .parse::<bool>()
+                .map_or_else(|_| json!(text), Value::Bool),
+            Some("integer") => text
+                .parse::<i64>()
+                .map_or_else(|_| json!(text), |n| json!(n)),
+            Some("number") => text
+                .parse::<f64>()
+                .map_or_else(|_| json!(text), |n| json!(n)),
             _ => json!(text),
         }
     }
@@ -553,7 +585,11 @@ impl<'a> Reviewer<'a> {
             );
         }
         if !self.tests.insert(name.clone()) {
-            return self.drop("tests", Some(&name), "another proposed test case has this name");
+            return self.drop(
+                "tests",
+                Some(&name),
+                "another proposed test case has this name",
+            );
         }
         let mut contains: Vec<String> = clean(&test.answer_contains);
         let not_contains = clean(&test.answer_not_contains);
@@ -564,7 +600,9 @@ impl<'a> Reviewer<'a> {
                 return self.drop(
                     "tests",
                     Some(&name),
-                    format!("`{other}` is not a kind of test case — use `in_scope` or `out_of_scope`"),
+                    format!(
+                        "`{other}` is not a kind of test case — use `in_scope` or `out_of_scope`"
+                    ),
                 );
             }
         };
@@ -619,7 +657,11 @@ impl<'a> Reviewer<'a> {
                     .map(|i| format!("at `{}`: {}", i.path, i.message))
                     .collect::<Vec<_>>()
                     .join("; ");
-                self.drop("tests", Some(&name), format!("it is not a valid test case — {reason}"))
+                self.drop(
+                    "tests",
+                    Some(&name),
+                    format!("it is not a valid test case — {reason}"),
+                )
             }
         }
     }

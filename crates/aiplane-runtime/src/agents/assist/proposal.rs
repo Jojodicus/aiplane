@@ -123,9 +123,7 @@ clearer and more precise; keep it short) and in `why` one sentence on what you c
 /// What the improved text is for, as the model is told.
 pub fn improve_purpose(field: ImproveField) -> &'static str {
     match field {
-        ImproveField::Task => {
-            "task: instructions to the agent on what it does and in which order"
-        }
+        ImproveField::Task => "task: instructions to the agent on what it does and in which order",
         ImproveField::Tone => "tone: how the agent should answer (length, register, language)",
         ImproveField::Refusal => {
             "refusal: the one polite sentence the agent says to an off-topic question"
