@@ -31,13 +31,17 @@ pub enum Target {
     Human,
 }
 
-/// "When it is about `topic` (and the identity is confirmed), hand over to
-/// `target`."
+/// "When it is about `topic` (and all details are collected, and the
+/// identity is confirmed), hand over to `target`."
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     /// The route it was read from; `None` for a new rule.
     pub route: Option<String>,
     pub topic: String,
+    /// Only once every detail the agent collects is set: one `set` leaf per
+    /// slot of the details step ([`detail_slots`]), written afresh whenever
+    /// the rules are.
+    pub details: bool,
     pub identity: bool,
     pub target: Target,
     pub bind: Map<String, Value>,
@@ -54,6 +58,39 @@ pub struct Handoffs {
 
 fn request_set() -> Value {
     json!({ "slot": REQUEST_SLOT, "set": true })
+}
+
+fn is_managed(slot: &str) -> bool {
+    [TOPIC_SLOT, REQUEST_SLOT, VERIFIED_SLOT].contains(&slot)
+}
+
+/// The slots of the setup's details step, in its order (`readSlots`): by
+/// `order`, the rest by name.
+pub fn detail_slots(spec: &Value) -> Vec<String> {
+    let Some(state) = spec.get("state").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut slots: Vec<(u64, &String)> = state
+        .iter()
+        .filter(|(name, _)| !is_managed(name))
+        .map(|(name, def)| {
+            let order = def.get("order").and_then(Value::as_u64).unwrap_or(u64::MAX);
+            (order, name)
+        })
+        .collect();
+    slots.sort();
+    slots.into_iter().map(|(_, name)| name.clone()).collect()
+}
+
+/// A gate leaf "detail `slot` is collected".
+fn detail_leaf(leaf: &Value) -> bool {
+    leaf.as_object().is_some_and(|o| {
+        o.len() == 2
+            && o.get("set") == Some(&json!(true))
+            && o.get("slot")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !is_managed(s))
+    })
 }
 
 fn target_of(route: &Value) -> Option<Target> {
@@ -81,11 +118,16 @@ fn rule_of(name: &str, route: &Value) -> Option<Rule> {
         return None;
     }
     let all = when.get("all")?.as_array()?;
-    let (topic, request, verified) = match all.as_slice() {
-        [t, r] => (t, r, None),
-        [t, r, v] => (t, r, Some(v)),
-        _ => return None,
+    let [topic, request, rest @ ..] = all.as_slice() else {
+        return None;
     };
+    let (verified, details) = match rest {
+        [details @ .., last] if !detail_leaf(last) => (Some(last), details),
+        details => (None, details),
+    };
+    if !details.iter().all(detail_leaf) {
+        return None;
+    }
     if *request != request_set() {
         return None;
     }
@@ -109,6 +151,7 @@ fn rule_of(name: &str, route: &Value) -> Option<Rule> {
     Some(Rule {
         route: Some(name.to_string()),
         topic: topic_eq.to_string(),
+        details: !details.is_empty(),
         identity: verified.is_some(),
         target,
         bind: route
@@ -214,6 +257,7 @@ pub fn write(spec: &mut Value, h: &Handoffs) {
         .cloned()
         .unwrap_or_default();
     let writer = identity_writer(spec);
+    let details = detail_slots(spec);
     let rules: Vec<&Rule> = h
         .rules
         .iter()
@@ -232,6 +276,9 @@ pub fn write(spec: &mut Value, h: &Handoffs) {
         taken.insert(name.clone());
         rule_names.push(name.clone());
         let mut when = vec![json!({ "slot": TOPIC_SLOT, "eq": topic }), request_set()];
+        if rule.details {
+            when.extend(details.iter().map(|s| json!({ "slot": s, "set": true })));
+        }
         if let (true, Some(w)) = (rule.identity, &writer) {
             when.push(json!({ "slot": VERIFIED_SLOT, "provenance": w }));
         }
@@ -399,6 +446,7 @@ mod tests {
                 Rule {
                     route: None,
                     topic: "Invoices".into(),
+                    details: false,
                     identity: true,
                     target: Target::Agent("billing".into()),
                     bind: Map::new(),
@@ -406,6 +454,7 @@ mod tests {
                 Rule {
                     route: None,
                     topic: "Complaints".into(),
+                    details: false,
                     identity: false,
                     target: Target::Human,
                     bind: Map::new(),
@@ -433,6 +482,55 @@ mod tests {
         assert_eq!(back.custom, ["custom"]);
         assert_eq!(back.rules[0].target, Target::Agent("billing".into()));
         assert!(back.rules[0].identity && !back.rules[1].identity);
+    }
+
+    #[test]
+    fn a_rule_waiting_for_the_details_gates_on_every_detail_and_reads_back() {
+        let mut spec = json!({
+            "verifiers": { "identity": { "kind": "host_jwt" } },
+            "state": {
+                "company": { "type": "string", "set_by": ["llm"], "order": 0 },
+                "email": { "type": "email", "set_by": ["llm"], "order": 1 },
+                "verified": { "type": "object", "set_by": ["host"] },
+            },
+        });
+        let rule = |identity| Rule {
+            route: None,
+            topic: "Qualified lead".into(),
+            details: true,
+            identity,
+            target: Target::Human,
+            bind: Map::new(),
+        };
+        let h = Handoffs {
+            rules: vec![rule(false)],
+            fallback: false,
+            custom: vec![],
+        };
+        write(&mut spec, &h);
+        assert_eq!(
+            spec["routes"]["qualified_lead"]["when"]["all"],
+            json!([
+                { "slot": "topic", "eq": "Qualified lead" },
+                { "slot": "request", "set": true },
+                { "slot": "company", "set": true },
+                { "slot": "email", "set": true },
+            ])
+        );
+        let back = read(&spec);
+        assert!(back.custom.is_empty(), "{:?}", back.custom);
+        assert!(back.rules[0].details && !back.rules[0].identity);
+
+        let mut both = spec.clone();
+        write(
+            &mut both,
+            &Handoffs {
+                rules: vec![rule(true)],
+                ..h.clone()
+            },
+        );
+        let back = read(&both);
+        assert!(back.rules[0].details && back.rules[0].identity);
     }
 
     #[test]

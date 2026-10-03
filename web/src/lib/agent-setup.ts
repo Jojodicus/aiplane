@@ -445,7 +445,9 @@ export function slotKeys(rows: SlotRow[], reserved: Iterable<string>): string[] 
 	});
 }
 
+/** Writes the details; a hand-off waiting for all of them is regated on the new set. */
 export function writeSlots(spec: Spec, rows: SlotRow[]): void {
+	const handoffs = readHandoffs(spec);
 	const before = (spec.state ?? {}) as Record<string, Spec>;
 	const managed = Object.entries(before).filter(([key]) => MANAGED_SLOTS.has(key));
 	const keys = slotKeys(rows, managed.map(([k]) => k));
@@ -455,6 +457,7 @@ export function writeSlots(spec: Spec, rows: SlotRow[]): void {
 	});
 	for (const [key, def] of managed) next[key] = def;
 	spec.state = next;
+	if (handoffs.rules.some((r) => r.details)) writeHandoffs(spec, handoffs);
 }
 
 /** Slots the identity check reads, which the details step may not remove. */
@@ -628,6 +631,8 @@ export interface Rule {
 	/** The route it was read from; `null` for a new rule. */
 	route: string | null;
 	topic: string;
+	/** Only once every detail of the details step is set: one `set` leaf per slot, rewritten whenever the rules or the details are. */
+	details: boolean;
 	identity: boolean;
 	target: Target;
 	/** What the route passes the specialist, derived from its live spec ([`deriveBind`]). */
@@ -660,17 +665,22 @@ function targetOf(route: Spec): Target | null {
 	return null;
 }
 
+/** A gate leaf "detail `slot` is collected". */
+const isDetailLeaf = (leaf: Spec) =>
+	!!leaf && typeof leaf.slot === 'string' && !MANAGED_SLOTS.has(leaf.slot) && leaf.set === true && Object.keys(leaf).length === 2;
+
 /** The rule a route is, when it has exactly the shape [`writeHandoffs`] gives one. */
 export function ruleOf(name: string, route: Spec): Rule | null {
 	const target = targetOf(route ?? {});
 	const all = route?.when?.all;
 	if (!target || !Array.isArray(all) || Object.keys(route.when).length !== 1) return null;
-	const [topic, request, verified, ...rest] = all;
-	if (rest.length || !same(request, REQUEST_SET)) return null;
+	const [topic, request, ...rest] = all;
+	const verified = rest.length && !isDetailLeaf(rest[rest.length - 1]) ? rest.pop() : undefined;
+	if (!rest.every(isDetailLeaf) || !same(request, REQUEST_SET)) return null;
 	if (!topic || topic.slot !== TOPIC_SLOT || typeof topic.eq !== 'string' || Object.keys(topic).length !== 2) return null;
 	if (verified && !(verified.slot === VERIFIED_SLOT && typeof verified.provenance === 'string' && Object.keys(verified).length === 2)) return null;
 	if (target.kind === 'agent' && route.task !== HANDOFF_TASK) return null;
-	return { route: name, topic: topic.eq, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	return { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
 }
 
 const isFallback = (name: string, route: Spec) =>
@@ -697,6 +707,7 @@ export function readHandoffs(spec: Spec): Handoffs {
 export function writeHandoffs(spec: Spec, h: Handoffs): void {
 	const before = (spec.routes ?? {}) as Record<string, Spec>;
 	const writer = identityWriter(spec);
+	const details = readSlots(spec).map((row) => row.key);
 	const rules = h.rules.filter((r) => r.topic.trim());
 	const taken = new Set([...h.custom, FALLBACK_ROUTE]);
 	const routes: Record<string, Spec> = {};
@@ -708,6 +719,7 @@ export function writeHandoffs(spec: Spec, h: Handoffs): void {
 		taken.add(name);
 		ruleNames.push(name);
 		const when: Spec[] = [{ slot: TOPIC_SLOT, eq: topic }, { ...REQUEST_SET }];
+		if (rule.details) when.push(...details.map((slot) => ({ slot, set: true })));
 		if (rule.identity && writer) when.push({ slot: VERIFIED_SLOT, provenance: writer });
 		const prev = rule.route ? before[rule.route] : undefined;
 		const route: Spec = { description: topic, when: { all: when } };
@@ -1145,7 +1157,7 @@ export function suggestedSlotRows(slots: { name: string; label: string; def: Spe
 }
 
 /** Proposed hand-offs as the sentences of the hand-off step; the gate, task and slots follow from them. */
-export function suggestedRules(handoffs: { topic: string; target: string }[], existing: Rule[]): Rule[] {
+export function suggestedRules(handoffs: { topic: string; target: string; details?: boolean; identity?: boolean }[], existing: Rule[]): Rule[] {
 	const topics = new Set(existing.map((r) => r.topic.trim().toLowerCase()));
 	return handoffs
 		.filter((h) => {
@@ -1154,5 +1166,5 @@ export function suggestedRules(handoffs: { topic: string; target: string }[], ex
 			topics.add(topic);
 			return true;
 		})
-		.map((h) => ({ route: null, topic: h.topic.trim(), identity: false, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
+		.map((h) => ({ route: null, topic: h.topic.trim(), details: !!h.details, identity: !!h.identity, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
 }

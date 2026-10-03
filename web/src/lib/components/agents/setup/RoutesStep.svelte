@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { agentsApi, type Spec } from '$lib/agents';
-	import { deriveBind, identityWriter, readHandoffs, suggestedRules, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { deriveBind, identityWriter, readHandoffs, readSlots, suggestedRules, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/**
-	 * Hand-offs as sentences: "When it's about X and Y, hand over to Z". The
+	 * Hand-offs as sentences: "When it's about X and Y, hand over to Z", Y
+	 * being always, all details collected, the identity confirmed, or both. The
 	 * route, its gate, its task and what it passes the specialist are derived
 	 * (`writeHandoffs`, `deriveBind`); routes of any other shape are kept.
 	 */
@@ -19,6 +20,17 @@
 	writeOnChange(() => $state.snapshot(model), (m) => writeHandoffs(spec, m));
 
 	const hasIdentity = $derived(identityWriter(spec) !== null);
+	const hasDetails = $derived(readSlots(spec).length > 0);
+
+	type Condition = 'always' | 'details' | 'verified' | 'both';
+	const conditionOf = (rule: Rule): Condition =>
+		rule.details && rule.identity ? 'both' : rule.details ? 'details' : rule.identity ? 'verified' : 'always';
+	/** A specialist that works with confirmed customer data keeps the identity condition. */
+	const forced = (rule: Rule) => Object.keys(rule.bind).length > 0 && rule.identity;
+	function setCondition(rule: Rule, value: Condition) {
+		rule.details = value === 'details' || value === 'both';
+		rule.identity = value === 'verified' || value === 'both';
+	}
 	/** Per rule index: what the specialist needs that cannot be supplied, or `null` when its setup was unreadable. */
 	let problems = $state<Record<number, string[] | null>>({});
 
@@ -56,7 +68,7 @@
 	}
 
 	function add() {
-		model.rules = [...model.rules, { route: null, topic: '', identity: false, target: { kind: 'human' }, bind: {} }];
+		model.rules = [...model.rules, { route: null, topic: '', details: false, identity: false, target: { kind: 'human' }, bind: {} }];
 	}
 	function remove(i: number) {
 		model.rules = model.rules.filter((_, j) => j !== i);
@@ -69,7 +81,12 @@
 	<p class="m-0 text-base-content/70">{t('agents-setup-routes-lead')}</p>
 	<SuggestionBox part="handoffs" onapply={applySuggested}>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0">
-			{#each suggested as h (h.name)}<li>{h.topic} → {h.target === 'human' ? t('agents-setup-rule-person') : h.target_name}</li>{/each}
+			{#each suggested as h (h.name)}
+				<li>
+					{h.topic}{#if h.details || h.identity}<span class="text-base-content/60"> ({t(h.details && h.identity ? 'agents-setup-rule-both' : h.details ? 'agents-setup-rule-details' : 'agents-setup-rule-verified')})</span>{/if}
+					→ {h.target === 'human' ? t('agents-setup-rule-person') : h.target_name}
+				</li>
+			{/each}
 		</ul>
 	</SuggestionBox>
 
@@ -78,16 +95,17 @@
 			<li class="flex flex-col gap-2 rounded-box border border-base-300 bg-base-200 p-3">
 				<div class="flex flex-wrap items-center gap-2 font-semibold">
 					<span class="font-normal text-base-content/60">{t('agents-setup-rule-when')}</span>
-					<input class="input w-48 max-w-full" bind:value={rule.topic} placeholder={t('agents-setup-rule-topic-placeholder')} aria-label={t('agents-setup-rule-topic')} />
+					<input class="input w-auto min-w-72 max-w-full field-sizing-content" bind:value={rule.topic} placeholder={t('agents-setup-rule-topic-placeholder')} aria-label={t('agents-setup-rule-topic')} />
 					<span class="font-normal text-base-content/60">{t('agents-setup-rule-and')}</span>
 					<select
 						class="select w-auto max-w-full"
 						aria-label={t('agents-setup-rule-condition')}
-						bind:value={() => (rule.identity ? 'verified' : 'always'), (v) => (rule.identity = v === 'verified')}
-						disabled={Object.keys(rule.bind).length > 0 && rule.identity}
+						bind:value={() => conditionOf(rule), (v) => setCondition(rule, v)}
 					>
-						<option value="always">{t('agents-setup-rule-always')}</option>
+						<option value="always" disabled={forced(rule)}>{t('agents-setup-rule-always')}</option>
+						<option value="details" disabled={forced(rule) || !hasDetails}>{t('agents-setup-rule-details')}</option>
 						<option value="verified" disabled={!hasIdentity}>{t('agents-setup-rule-verified')}</option>
+						<option value="both" disabled={!hasIdentity || !hasDetails}>{t('agents-setup-rule-both')}</option>
 					</select>
 					<span class="font-normal text-base-content/60">{t('agents-setup-rule-then')}</span>
 					<select class="select w-auto max-w-full" aria-label={t('agents-setup-rule-target')} value={targetValue(rule)} onchange={(e) => setTarget(i, e.currentTarget.value)}>
@@ -101,6 +119,9 @@
 				</div>
 				{#if !hasIdentity}
 					<p class="m-0 text-xs text-base-content/60">{t('agents-setup-rule-no-identity')}</p>
+				{/if}
+				{#if !hasDetails}
+					<p class="m-0 text-xs text-base-content/60">{t('agents-setup-rule-no-details')}</p>
 				{/if}
 				{#if Object.keys(rule.bind).length && rule.identity}
 					<p class="m-0 text-xs text-base-content/60">{t('agents-setup-rule-needs-identity')}</p>

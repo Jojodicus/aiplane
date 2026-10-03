@@ -228,10 +228,16 @@ export interface AssistSuggestion {
 		/** `chips` are tone ids (`TONES`); `language` is `visitor`, an answer language code, or `null`; `response` the rest. */
 		tone?: { response: string; chips: string[]; language?: string | null } | null;
 		scope?: { topics: string[]; refusal: string; strict: boolean } | null;
+		/** Tools by id, `name` the title their card shows; knowledge search comes as `knowledge` instead. */
 		abilities?: { id: string; name: string; why: string }[];
+		/** Knowledge bases (RAG collections) by id, switched on like their cards. */
+		knowledge?: { id: string; name: string; why: string }[];
+		/** Subjects no knowledge base the manager may grant covers. */
+		missing_knowledge?: string[];
 		slots?: { name: string; label: string; type: string; def: Spec }[];
 		identity?: { method: string; why: string } | null;
-		handoffs?: { name: string; topic: string; target: string; target_name: string; condition: unknown; route: Spec }[];
+		/** Rules of the hand-off step: waiting for all details and/or a confirmed identity. */
+		handoffs?: { name: string; topic: string; target: string; target_name: string; details: boolean; identity: boolean; route: Spec }[];
 		tests?: { name: string; kind: string; script: CaseBody['script']; expect: CaseBody['expect'] }[];
 	};
 	/** What the assistant left out, and why, in words. */

@@ -83,6 +83,22 @@ pub struct Ability {
     pub description: Option<String>,
 }
 
+/// Knowledge search, offered by knowledge base ([`Knowledge`]) and never as
+/// an ability of its own: without a collection it finds nothing.
+pub const RAG_SEARCH: &str = "rag_search";
+pub const RAG_LIST: &str = "rag_list_collections";
+
+pub fn is_knowledge_tool(id: &str) -> bool {
+    id == RAG_SEARCH || id == RAG_LIST
+}
+
+/// A knowledge base (RAG collection) this manager may grant.
+#[derive(Debug, Clone)]
+pub struct Knowledge {
+    pub id: String,
+    pub name: String,
+}
+
 /// An agent this manager may hand conversations to.
 #[derive(Debug, Clone)]
 pub struct Target {
@@ -94,6 +110,7 @@ pub struct Target {
 #[derive(Debug, Clone, Default)]
 pub struct Candidates {
     pub abilities: Vec<Ability>,
+    pub knowledge: Vec<Knowledge>,
     pub agents: Vec<Target>,
     /// The chat pools this manager may use and grant, for an architect's
     /// model choice. The suggestion's schema does not offer a pool.

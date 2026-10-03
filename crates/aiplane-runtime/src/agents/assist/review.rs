@@ -17,14 +17,21 @@ use serde_json::{Map, Value, json};
 
 use super::handoffs::{self, Rule, Target};
 use super::proposal::{
-    AbilityProposal, HandoffProposal, IdentityProposal, ScopeProposal, SlotProposal, TestProposal,
-    ToneProposal,
+    AbilityProposal, HandoffProposal, IdentityProposal, KnowledgeProposal, ScopeProposal,
+    SlotProposal, TestProposal, ToneProposal,
 };
-use super::{Candidates, HUMAN_TARGET, IDENTITY_METHODS, MAX_TESTS, SLOT_TYPES, tone};
+use super::proposal::{CONDITION_DETAILS, CONDITION_IDENTITY};
+use super::{
+    Candidates, HUMAN_TARGET, IDENTITY_METHODS, Knowledge, MAX_TESTS, RAG_LIST, RAG_SEARCH,
+    SLOT_TYPES, is_knowledge_tool, tone,
+};
 use crate::agents::eval::{self, MAX_CASE_NAME_CHARS};
 use crate::agents::spec::{self, SpecContext, SpecIssue, Stage};
+use aiplane_core::server::tool_naming::prettify;
 
 const MAX_IDENT_LEN: usize = 48;
+const MAX_MISSING_KNOWLEDGE: usize = 5;
+const MAX_SUBJECT_CHARS: usize = 120;
 /// The setup's `text` shape (`SLOT_SHAPES` in `web/src/lib/agent-setup.ts`).
 const TEXT_MAX: u64 = 200;
 const LONG_TEXT_MAX: u64 = 2000;
@@ -52,6 +59,10 @@ pub struct Steps {
     pub tone: Option<ToneStep>,
     pub scope: Option<ScopeStep>,
     pub abilities: Vec<AbilityStep>,
+    pub knowledge: Vec<KnowledgeStep>,
+    /// Subjects the agent needs that no knowledge base this manager may
+    /// grant covers: an admin has to add one.
+    pub missing_knowledge: Vec<String>,
     pub slots: Vec<SlotStep>,
     pub identity: Option<IdentityStep>,
     pub handoffs: Vec<HandoffStep>,
@@ -66,6 +77,7 @@ impl Steps {
             ("tone", self.tone.is_some()),
             ("scope", self.scope.is_some()),
             ("abilities", !self.abilities.is_empty()),
+            ("knowledge", !self.knowledge.is_empty()),
             ("slots", !self.slots.is_empty()),
             ("identity", self.identity.is_some()),
             ("handoffs", !self.handoffs.is_empty()),
@@ -103,8 +115,19 @@ pub struct ScopeStep {
 }
 
 /// A tool for `main.tools`, which the UI grants to the agent when applied.
+/// `name` is the title its ability card shows.
 #[derive(Debug, Clone, Serialize)]
 pub struct AbilityStep {
+    pub id: String,
+    pub name: String,
+    pub why: String,
+}
+
+/// A knowledge base (RAG collection `id`) to search, which the UI switches
+/// on like its card: the collection and `rag_search` granted, the search
+/// bound to it ([`set_knowledge`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgeStep {
     pub id: String,
     pub name: String,
     pub why: String,
@@ -128,21 +151,19 @@ pub struct IdentityStep {
     pub why: String,
 }
 
-/// `routes.<name>` = `route`.
+/// `routes.<name>` = `route`: one rule of the setup's hand-off step
+/// ("when it is about `topic` (and all details are collected, and the
+/// identity is confirmed), hand over to `target`"), in the shape
+/// [`handoffs::write`] gives it.
 #[derive(Debug, Clone, Serialize)]
 pub struct HandoffStep {
     pub name: String,
     pub topic: String,
     pub target: String,
     pub target_name: String,
-    pub condition: Condition,
+    pub details: bool,
+    pub identity: bool,
     pub route: Value,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Condition {
-    pub slot: String,
-    pub equals: Option<Value>,
 }
 
 /// A test case in the shape `POST /api/v0/agents/{id}/tests` takes.
@@ -189,6 +210,9 @@ struct SetupHandoff {
     topic: String,
     /// An agent id, or `human`.
     target: String,
+    /// Only once every detail the agent collects is set.
+    #[serde(default)]
+    details: bool,
     /// Only once the visitor's identity is confirmed.
     #[serde(default)]
     identity: bool,
@@ -377,6 +401,16 @@ impl<'a> Reviewer<'a> {
         {
             self.ability(ability);
         }
+        if let Some(knowledge) = self.field::<Vec<KnowledgeProposal>>(answer, "knowledge") {
+            self.knowledge(knowledge);
+        }
+        if let Some(missing) = self.field::<Vec<String>>(answer, "missing_knowledge") {
+            self.out.steps.missing_knowledge = clean(&missing)
+                .into_iter()
+                .filter(|m| m.chars().count() <= MAX_SUBJECT_CHARS)
+                .take(MAX_MISSING_KNOWLEDGE)
+                .collect();
+        }
         for slot in self
             .field::<Vec<SlotProposal>>(answer, "slots")
             .unwrap_or_default()
@@ -401,83 +435,110 @@ impl<'a> Reviewer<'a> {
             .unwrap_or(0)
     }
 
+    /// A new hand-off rule, or `None` (with the reason dropped under `item`)
+    /// when it has no topic or names a target this manager may not hand off
+    /// to. A condition the draft cannot express yet is left out with a note.
+    fn rule_for(
+        &mut self,
+        topic: &str,
+        target: &str,
+        details: bool,
+        identity: bool,
+        item: &str,
+    ) -> Option<Rule> {
+        let item = Some(item).filter(|i| !i.is_empty());
+        if topic.is_empty() {
+            self.drop("handoffs", item, "a hand-off needs a topic");
+            return None;
+        }
+        let target = target.trim();
+        let target = if target == HUMAN_TARGET {
+            Target::Human
+        } else if let Some(agent) = self
+            .ctx
+            .candidates
+            .agents
+            .iter()
+            .find(|a| a.id == target && a.id != self.ctx.agent_id)
+        {
+            Target::Agent(agent.id.clone())
+        } else {
+            self.drop(
+                "handoffs",
+                item,
+                format!(
+                    "`{target}` is not an agent you may hand off to — pick one of the agents \
+                     shared with you, or a person"
+                ),
+            );
+            return None;
+        };
+        let bind = match &target {
+            Target::Agent(id) => {
+                let (bind, missing) =
+                    handoffs::derive_bind(self.ctx.live_specs.get(id), &self.draft);
+                if !missing.is_empty() {
+                    self.drop(
+                        "handoffs",
+                        item,
+                        format!(
+                            "kept, but `{id}` needs {} from a confirmed identity, which this \
+                             agent has no check for yet — the setup's checklist asks for it",
+                            missing.join(", ")
+                        ),
+                    );
+                }
+                bind
+            }
+            Target::Human => Map::new(),
+        };
+        let has_identity = handoffs::identity_writer(&self.draft).is_some();
+        if identity && !has_identity {
+            self.drop(
+                "handoffs",
+                item,
+                "kept without the identity condition: the agent has no identity check yet",
+            );
+        }
+        let has_details = !handoffs::detail_slots(&self.draft).is_empty();
+        if details && !has_details {
+            self.drop(
+                "handoffs",
+                item,
+                "kept without the details condition: the agent collects no details yet",
+            );
+        }
+        Some(Rule {
+            route: None,
+            topic: topic.to_string(),
+            details: details && has_details,
+            identity: identity && has_identity,
+            target,
+            bind,
+        })
+    }
+
     /// Add or change the setup's hand-off rules ("when it is about `topic`,
     /// hand over to `target`") and its fallback to a person, as one step.
     fn setup_handoffs(&mut self, wanted: Vec<SetupHandoff>, fallback: Option<bool>) -> bool {
         let mut h = handoffs::read(&self.draft);
-        let writer = handoffs::identity_writer(&self.draft);
         for w in wanted {
             let topic = w.topic.trim().to_string();
-            if topic.is_empty() {
-                self.drop("handoffs", None, "a hand-off needs a topic");
-                continue;
-            }
-            let target = w.target.trim();
-            let target = if target == HUMAN_TARGET {
-                Target::Human
-            } else if let Some(agent) = self
-                .ctx
-                .candidates
-                .agents
-                .iter()
-                .find(|a| a.id == target && a.id != self.ctx.agent_id)
-            {
-                Target::Agent(agent.id.clone())
-            } else {
-                self.drop(
-                    "handoffs",
-                    Some(&topic),
-                    format!(
-                        "`{target}` is not an agent you may hand off to — pick one of the agents \
-                         shared with you, or a person"
-                    ),
-                );
+            let Some(rule) = self.rule_for(&topic, &w.target, w.details, w.identity, &topic) else {
                 continue;
             };
-            let bind = match &target {
-                Target::Agent(id) => {
-                    let (bind, missing) =
-                        handoffs::derive_bind(self.ctx.live_specs.get(id), &self.draft);
-                    if !missing.is_empty() {
-                        self.drop(
-                            "handoffs",
-                            Some(&topic),
-                            format!(
-                                "kept, but `{id}` needs {} from a confirmed identity, which this \
-                                 agent has no check for yet — the setup's checklist asks for it",
-                                missing.join(", ")
-                            ),
-                        );
-                    }
-                    bind
-                }
-                Target::Human => Map::new(),
-            };
-            if w.identity && writer.is_none() {
-                self.drop(
-                    "handoffs",
-                    Some(&topic),
-                    "kept without the identity condition: the agent has no identity check yet",
-                );
-            }
-            let identity = w.identity && writer.is_some();
             match h
                 .rules
                 .iter_mut()
                 .find(|r| r.topic.trim().eq_ignore_ascii_case(&topic))
             {
-                Some(rule) => {
-                    rule.target = target;
-                    rule.identity = identity;
-                    rule.bind = bind;
+                Some(existing) => {
+                    existing.target = rule.target;
+                    existing.details = rule.details;
+                    existing.identity = rule.identity;
+                    existing.bind = rule.bind;
                 }
-                None => h.rules.push(Rule {
-                    route: None,
-                    topic,
-                    identity,
-                    target,
-                    bind,
-                }),
+                None => h.rules.push(rule),
             }
         }
         if let Some(f) = fallback {
@@ -649,6 +710,14 @@ impl<'a> Reviewer<'a> {
 
     fn ability(&mut self, ability: AbilityProposal) {
         let id = ability.id.trim();
+        if is_knowledge_tool(id) {
+            return self.drop(
+                "abilities",
+                Some(id),
+                "knowledge search comes with a knowledge base — propose the knowledge base \
+                 instead",
+            );
+        }
         let Some(known) = self.ctx.candidates.abilities.iter().find(|a| a.id == id) else {
             return self.drop(
                 "abilities",
@@ -674,12 +743,114 @@ impl<'a> Reviewer<'a> {
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.abilities.push(AbilityStep {
                 id: id.to_string(),
-                name: known.name.clone(),
+                name: if known.name == id {
+                    prettify(id)
+                } else {
+                    known.name.clone()
+                },
                 why: ability.why.trim().to_string(),
             }),
             Err(reason) => {
                 self.granted.pop();
                 self.drop("abilities", Some(id), reason)
+            }
+        }
+    }
+
+    /// The collections this draft's grants, as stored and as offered so
+    /// far, let it search, by name.
+    fn granted_collections(&self) -> Vec<String> {
+        let ids: Vec<String> = self
+            .ctx
+            .grants
+            .iter()
+            .map(|(k, r)| (k, r.to_string()))
+            .chain(self.granted.iter().cloned())
+            .filter(|(k, _)| *k == GrantKind::RagCollection)
+            .map(|(_, r)| r)
+            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for id in ids {
+            let name = self
+                .ctx
+                .candidates
+                .knowledge
+                .iter()
+                .find(|k| k.id == id)
+                .map_or(id, |k| k.name.clone());
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Switch on the knowledge bases `wanted` names, all together, the way
+    /// the abilities step's knowledge cards do.
+    fn knowledge(&mut self, wanted: Vec<KnowledgeProposal>) {
+        let offers = |id: &str| self.ctx.candidates.abilities.iter().any(|a| a.id == id);
+        let (can_search, may_list) = (offers(RAG_SEARCH), offers(RAG_LIST));
+        let mut picked: Vec<(Knowledge, String)> = Vec::new();
+        for w in wanted {
+            let name = w.name.trim();
+            let Some(k) = self
+                .ctx
+                .candidates
+                .knowledge
+                .iter()
+                .find(|k| k.name.trim().eq_ignore_ascii_case(name))
+            else {
+                self.drop(
+                    "knowledge",
+                    Some(name),
+                    "it is not a knowledge base you may give an agent — pick one of those \
+                     the abilities step lists",
+                );
+                continue;
+            };
+            if !can_search {
+                self.drop(
+                    "knowledge",
+                    Some(name),
+                    "you may not grant knowledge search, so the agent could not search it — \
+                     ask an admin for the knowledge search tool",
+                );
+                continue;
+            }
+            if !picked.iter().any(|(p, _)| p.id == k.id) {
+                picked.push((k.clone(), w.why.trim().to_string()));
+            }
+        }
+        if picked.is_empty() {
+            return;
+        }
+        let before = self.granted.len();
+        for (k, _) in &picked {
+            self.granted.push((GrantKind::RagCollection, k.id.clone()));
+        }
+        let names = self.granted_collections();
+        let can_list = names.len() > 1 && may_list;
+        self.granted.push((GrantKind::Tool, RAG_SEARCH.to_string()));
+        if can_list {
+            self.granted.push((GrantKind::Tool, RAG_LIST.to_string()));
+        }
+        let mut candidate = self.draft.clone();
+        set_knowledge(&mut candidate, &names, can_list);
+        match self.adopt(candidate) {
+            Ok(()) => {
+                for (k, why) in picked {
+                    self.out.steps.knowledge.push(KnowledgeStep {
+                        id: k.id,
+                        name: k.name,
+                        why,
+                    });
+                }
+            }
+            Err(reason) => {
+                self.granted.truncate(before);
+                for (k, _) in picked {
+                    self.drop("knowledge", Some(&k.name), reason.clone());
+                }
             }
         }
     }
@@ -747,96 +918,66 @@ impl<'a> Reviewer<'a> {
         });
     }
 
+    /// A proposed rule for the setup's hand-off step, added to the rules the
+    /// draft has; one about a topic that has a rule already is left out.
     fn handoff(&mut self, handoff: HandoffProposal) {
-        let Some(name) = ident(&handoff.name) else {
+        let item = handoff.name.trim().to_string();
+        let topic = handoff.topic.trim().to_string();
+        let mut h = handoffs::read(&self.draft);
+        if h.rules
+            .iter()
+            .any(|r| r.topic.trim().eq_ignore_ascii_case(&topic))
+        {
             return self.drop(
                 "handoffs",
-                Some(&handoff.name),
-                "its name has no letters to make a route name from",
-            );
-        };
-        if self.draft.pointer(&format!("/routes/{name}")).is_some() {
-            return self.drop(
-                "handoffs",
-                Some(&name),
-                format!("the draft already has a hand-off `{name}`; it stays as it is"),
+                Some(&item),
+                format!("the draft already hands off requests about “{topic}”; it stays as it is"),
             );
         }
-        let target = handoff.target.trim();
-        let topic = handoff.topic.trim().to_string();
-        let (target_name, mut route) = if target == HUMAN_TARGET {
-            ("a person".to_string(), json!({ "human": {} }))
-        } else {
-            let Some(agent) = self
+        let condition = handoff.condition.as_deref().map(str::trim);
+        let Some(rule) = self.rule_for(
+            &topic,
+            &handoff.target,
+            condition == Some(CONDITION_DETAILS),
+            condition == Some(CONDITION_IDENTITY),
+            &item,
+        ) else {
+            return;
+        };
+        let target_name = match &rule.target {
+            Target::Human => "a person".to_string(),
+            Target::Agent(id) => self
                 .ctx
                 .candidates
                 .agents
                 .iter()
-                .find(|a| a.id == target && a.id != self.ctx.agent_id)
-            else {
-                return self.drop(
-                    "handoffs",
-                    Some(&name),
-                    format!(
-                        "`{target}` is not an agent you may hand off to — pick one of the agents \
-                         shared with you, or a person"
-                    ),
-                );
-            };
-            let task = match handoff.task.trim() {
-                "" => topic.clone(),
-                t => t.to_string(),
-            };
-            (
-                agent.name.clone(),
-                json!({ "agent": agent.id, "task": task }),
-            )
+                .find(|a| &a.id == id)
+                .map_or_else(|| id.clone(), |a| a.name.clone()),
         };
-        let slot = ident(&handoff.slot).unwrap_or_default();
-        let equals = handoff
-            .equals
-            .as_deref()
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .map(|e| self.typed_value(&slot, e));
-        route["when"] = match &equals {
-            Some(v) => json!({ "slot": slot, "eq": v }),
-            None => json!({ "slot": slot, "set": true }),
+        let (details, identity) = (rule.details, rule.identity);
+        h.rules.push(rule);
+        let mut candidate = self.draft.clone();
+        handoffs::write(&mut candidate, &h);
+        let Some(name) = handoffs::read(&candidate)
+            .rules
+            .into_iter()
+            .find(|r| r.topic == topic)
+            .and_then(|r| r.route)
+        else {
+            return self.drop("handoffs", Some(&item), "it does not read back as a rule");
         };
-        if !topic.is_empty() {
-            route["description"] = json!(topic);
-        }
-        let candidate = self.with(&["routes", &name], route.clone());
+        let route = candidate["routes"][&name].clone();
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.handoffs.push(HandoffStep {
                 name,
                 topic,
-                target: target.to_string(),
+                target: handoff.target.trim().to_string(),
                 target_name,
-                condition: Condition { slot, equals },
+                details,
+                identity,
                 route,
             }),
-            Err(reason) => self.drop("handoffs", Some(&name), reason),
-        }
-    }
-
-    /// `text` as the slot's type would hold it, so `eq` type-checks.
-    fn typed_value(&self, slot: &str, text: &str) -> Value {
-        let kind = self
-            .draft
-            .pointer(&format!("/state/{slot}/type"))
-            .and_then(Value::as_str);
-        match kind {
-            Some("boolean") => text
-                .parse::<bool>()
-                .map_or_else(|_| json!(text), Value::Bool),
-            Some("integer") => text
-                .parse::<i64>()
-                .map_or_else(|_| json!(text), |n| json!(n)),
-            Some("number") => text
-                .parse::<f64>()
-                .map_or_else(|_| json!(text), |n| json!(n)),
-            _ => json!(text),
+            Err(reason) => self.drop("handoffs", Some(&item), reason),
         }
     }
 
@@ -937,6 +1078,47 @@ impl<'a> Reviewer<'a> {
             }
         }
     }
+}
+
+/// Knowledge search wired to the collections `names`, as `setKnowledge` in
+/// `web/src/lib/agent-setup.ts` does it: one collection is bound as a
+/// constant; several leave the choice to the model, and add the listing
+/// tool when `can_list`.
+pub fn set_knowledge(draft: &mut Value, names: &[String], can_list: bool) {
+    let mut tools: Vec<Value> = draft
+        .pointer("/main/tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut add = |id: &str| {
+        if !tools.iter().any(|t| t.as_str() == Some(id)) {
+            tools.push(json!(id));
+        }
+    };
+    add(RAG_SEARCH);
+    if names.len() > 1 && can_list {
+        add(RAG_LIST);
+    }
+    if let [one] = names {
+        tools.retain(|t| t.as_str() != Some(RAG_LIST));
+        if let Some(resources) = draft
+            .pointer_mut("/main/tool_resources")
+            .and_then(Value::as_object_mut)
+        {
+            resources.remove(RAG_LIST);
+        }
+        set_at(
+            draft,
+            &["main", "tool_resources", RAG_SEARCH, "bind", "collection"],
+            json!({ "const": one }),
+        );
+    } else if let Some(bind) = draft
+        .pointer_mut(&format!("/main/tool_resources/{RAG_SEARCH}/bind"))
+        .and_then(Value::as_object_mut)
+    {
+        bind.remove("collection");
+    }
+    set_at(draft, &["main", "tools"], Value::Array(tools));
 }
 
 fn clean(texts: &[String]) -> Vec<String> {

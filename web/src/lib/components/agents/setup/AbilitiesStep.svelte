@@ -48,13 +48,32 @@
 	}
 
 	const suggested = $derived(ws.suggestion?.steps.abilities ?? []);
+	const suggestedKnowledge = $derived(ws.suggestion?.steps.knowledge ?? []);
+	const missingKnowledge = $derived(ws.suggestion?.steps.missing_knowledge ?? []);
 
-	/** Every proposed tool, staged for granting and put into the spec like a switched-on card. */
+	/**
+	 * Every proposed tool and knowledge base, staged for granting and put
+	 * into the spec like a switched-on card: knowledge as its card's
+	 * `toggle` does it, the collection and the search granted, the search
+	 * bound to what is on.
+	 */
 	function applySuggested() {
 		for (const s of suggested) {
 			ws.stageGrant('tool', s.id);
 			setAbility(spec, { kind: 'tool', ref: s.id, tools: [s.id] }, true);
 		}
+		const off = suggestedKnowledge.filter((k) => !knowledge.some((c) => c.ref === k.id && c.on));
+		if (!off.length) return;
+		if (!offers(RAG_SEARCH)) {
+			error = t('agents-setup-grant-failed', { reason: t('agents-setup-knowledge-no-search') });
+			return;
+		}
+		for (const k of off) ws.stageGrant('rag_collection', k.id);
+		ws.stageGrant('tool', RAG_SEARCH);
+		const names = collectionNames();
+		const canList = names.length > 1 && offers(RAG_LIST);
+		if (canList) ws.stageGrant('tool', RAG_LIST);
+		setKnowledge(spec, names, canList);
 	}
 
 	/** Grants are staged, not made: the save that follows Next / Apply carries them out, Cancel drops them. */
@@ -107,10 +126,16 @@
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-abilities-lead')}</p>
 	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
-	<SuggestionBox part="abilities" onapply={applySuggested}>
+	<SuggestionBox part={['abilities', 'knowledge', 'missing_knowledge']} onapply={applySuggested}>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0">
-			{#each suggested as s (s.id)}<li><span class="font-semibold">{s.name}</span> — {s.why}</li>{/each}
+			{#each suggestedKnowledge as k (k.id)}
+				<li><span class="font-semibold">{t('agents-setup-knowledge-desc', { name: k.name })}</span>{#if k.why} — {k.why}{/if}</li>
+			{/each}
+			{#each suggested as s (s.id)}<li><span class="font-semibold">{s.name}</span>{#if s.why} — {s.why}{/if}</li>{/each}
 		</ul>
+		{#each missingKnowledge as topic (topic)}
+			<p class="m-0 mt-1.5 text-warning">{t('agents-setup-suggest-knowledge-missing', { topic })}</p>
+		{/each}
 	</SuggestionBox>
 
 	{#if !cards.length}

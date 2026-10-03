@@ -17,14 +17,14 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::json_agent_resources::{grantable_tools, usable_chat_pools};
+use super::json_agent_resources::{grantable_collections, grantable_tools, usable_chat_pools};
 use super::json_agents::{SpecWorld, agent_at, parse_spec, visible_agents};
 use super::json_principals::require_agent_manager;
 use super::{internal, json_error, json_ok};
 use aiplane_agents::db::agents::{Access, AgentRow};
 use aiplane_core::server::db::users::User;
 use aiplane_runtime::agents::assist::{
-    Asker, AssistError, Candidates, ImproveField, ReviewContext, SuggestRequest, Target,
+    Asker, AssistError, Candidates, ImproveField, Knowledge, ReviewContext, SuggestRequest, Target,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 
@@ -73,8 +73,9 @@ fn refused(err: AssistError) -> Response {
     resp
 }
 
-/// What `user` may offer agent `agent_id`: the tools they may grant, the
-/// agents shared with them, and the chat pools they may use.
+/// What `user` may offer agent `agent_id`: the tools and knowledge bases
+/// they may grant, the agents shared with them, and the chat pools they may
+/// use.
 pub(super) async fn candidates(
     state: &RamaState,
     user: &User,
@@ -92,6 +93,14 @@ pub(super) async fn candidates(
         .collect();
     Ok(Candidates {
         abilities: grantable_tools(state, &role_ids),
+        knowledge: grantable_collections(state, &role_ids)
+            .await?
+            .into_iter()
+            .map(|c| Knowledge {
+                id: c.id.to_string(),
+                name: c.name,
+            })
+            .collect(),
         agents,
         pools: usable_chat_pools(state, user),
     })
