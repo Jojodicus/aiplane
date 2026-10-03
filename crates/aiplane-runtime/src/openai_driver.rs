@@ -27,8 +27,8 @@ use session_core::driver::{SessionContext, SessionDriver, TurnError, TurnOutcome
 use session_core::workers::{SteerNote, TurnUpdate};
 
 use crate::agent_run::{Actor, AgentRun};
-use crate::budget::{Budget, Clock, Limit};
-use crate::finish::{FINISH_NUDGE, IncompleteReason, RunOutcome, gateway_summary};
+use crate::budget::{Clock, Limit};
+use crate::finish::{IncompleteReason, RunOutcome, gateway_summary};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{ToolContext, ToolPhase, ToolSource, runner};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
@@ -37,8 +37,12 @@ use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
 
 mod call_policy;
 mod resume;
+mod turn_policy;
 
 use call_policy::CallPolicy;
+#[cfg(test)]
+pub(crate) use turn_policy::CHAT_ONLY_READS;
+use turn_policy::{FinalRound, TurnPolicy};
 
 /// Reasoning tags some vLLM reasoning-parser configs leak into the *content*
 /// channel even though reasoning is delivered separately via
@@ -623,13 +627,9 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
 #[async_trait]
 impl SessionDriver for OpenAiDriver {
     async fn run_turn(&self, ctx: SessionContext) -> Result<TurnOutcome, TurnError> {
-        let end = run_one_turn(self, ctx.clone()).await;
-        if let Some(agent) = self.agent()
-            && let Some(finish) = agent.finish()
-        {
-            let cancelled = ctx.cancel.load(Ordering::SeqCst);
-            agent.settle(run_outcome(finish.result(), &end, cancelled));
-        }
+        let policy = TurnPolicy::of(self);
+        let end = run_one_turn(self, policy, ctx.clone()).await;
+        policy.settle(&end, ctx.cancel.load(Ordering::SeqCst));
         let result = end.and_then(TurnEnd::into_turn);
         // Free the turn's sandbox container (if any) here, the single choke
         // point that covers every way `run_one_turn` exits — success, error,
@@ -673,10 +673,7 @@ impl SessionDriver for OpenAiDriver {
                     aiplane_core::server::upstreams::PoolKind::Chat,
                 )
                 .unwrap_or(routing_model);
-            let access = self.agent().and_then(AgentRun::surface).map_or_else(
-                aiplane_core::server::upstreams::PoolAccess::all,
-                |surface| surface.pools().clone(),
-            );
+            let access = policy.compaction_pools();
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(&state, &session_id, &model, &access)
                     .await;
@@ -952,7 +949,11 @@ async fn classify_and_dispatch_tool_calls(
     Ok((assistant_tool_calls, call_refs, refused))
 }
 
-async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, TurnError> {
+async fn run_one_turn(
+    d: &OpenAiDriver,
+    policy: TurnPolicy<'_>,
+    ctx: SessionContext,
+) -> Result<TurnEnd, TurnError> {
     // Build the upstream message list from DB. We include every
     // completed turn before the in-progress one. Tool calls aren't
     // included in the prior-history payload — the old client-side
@@ -999,20 +1000,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
         crate::server::tools::GrantedToolSource::new(&every_tool, granted.iter().cloned());
     // An agent run's synthetic tools are no grant: they sit over the
     // grant-narrowed source, never inside it.
-    let tool_source = crate::agents::profile::RunToolSource::new(&granted_source, d.agent());
-    let surface = d.agent().and_then(AgentRun::surface);
-    let finish = d.agent().and_then(AgentRun::finish);
-    let terminal_tool = d.agent().and_then(AgentRun::terminal_tool);
-    let agent_offer = surface.map(|s| s.offered(&granted));
+    let tool_source = policy.tool_source(&granted_source);
     let tool_ctx = ToolContext {
-        granted_tools: Some(Arc::new(granted.into_iter().collect())),
+        granted_tools: Some(Arc::new(granted.iter().cloned().collect())),
         ..d.tool_ctx.clone()
     };
 
-    let access = match surface {
-        Some(surface) => surface.pools().clone(),
-        None => d.state.pool_access_for_principal(&d.tool_ctx.principal),
-    };
+    let access = policy.pools(d);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;
@@ -1035,49 +1029,17 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
     );
     enrich_current_message_with_ocr(d, &ctx, &mut messages).await;
 
-    // Prepend a SINGLE leading system message combining:
-    //   - the standing turn-discipline rule (`TURN_DISCIPLINE`) — the turn ends
-    //     the moment a round comes back without tool calls, so a model that
-    //     announces work and stops leaves the user waiting on nothing; and
-    //   - the auto-provided request context (caller's real connection IP, a
-    //     coarse IP-based location, timezone) — lets the model answer "what's my
-    //     IP / where am I" directly instead of flailing through tools, and
-    //     reflects the *true* source IP (correct behind a load balancer); and
-    //   - the compaction summary standing in for the folded-out oldest turns.
-    // These must be merged into one message, not inserted as separate `system`
-    // turns: some backends (e.g. the Qwen3 vLLM chat template) reject a request
-    // with more than one leading system message ("System message must be at the
-    // beginning"). See `leading_system_message`.
+    // One leading system message, from the turn's policy — see
+    // `TurnPolicy::system_message` for what goes into it and why it is one.
     let summary = compaction.as_ref().map(|c| c.summary.as_str());
-    let leading = match surface {
-        Some(surface) => {
-            surface
-                .system_message(&d.state.db, &ctx.session_id, summary)
-                .await
-        }
-        None => {
-            let request_context = build_request_context(d, &user_mcp).await;
-            let voice_directive = d.voice_mode.then_some(VOICE_DIRECTIVE);
-            leading_system_message(voice_directive, request_context, summary)
-        }
-    };
-    messages.insert(0, leading);
-    if let Some(run) = finish {
-        runner::merge_into_leading_system_message(&mut messages, run.contract().instructions());
-    }
+    messages.insert(
+        0,
+        policy
+            .system_message(d, &ctx.session_id, &user_mcp, summary)
+            .await,
+    );
 
-    let routing_has_tools = !d
-        .state
-        .allowed_tools_for_session(&d.tool_ctx.principal, &ctx.session_id)
-        .await
-        .is_empty()
-        || !aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(
-            &d.state.db,
-            &ctx.session_id,
-        )
-        .await
-        .unwrap_or_default()
-        .is_empty();
+    let routing_has_tools = policy.routing_has_tools(d, &ctx.session_id, &granted).await;
     let routing_state = serde_json::json!({
         "messages": &messages,
         "tools": if routing_has_tools { serde_json::json!([{}]) } else { serde_json::json!([]) },
@@ -1155,15 +1117,8 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
             serving.dialect,
         )
         .await;
-    let budget = d
-        .agent()
-        .and_then(AgentRun::budget)
-        .unwrap_or_else(|| Budget::from_effort(effort));
-    let injection = d
-        .agent()
-        .map(AgentRun::injection)
-        .cloned()
-        .unwrap_or_default();
+    let budget = policy.budget(effort);
+    let injection = policy.injection();
     let max_rounds = budget.rounds();
     // A resumed run continues against what it had spent before the pause.
     let run_started = resume::started_at((d.clock)(), d.resume.as_ref());
@@ -1187,18 +1142,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
     // carry no API token, so token fields stay `None`. Skipped entirely when
     // metrics are disabled — no extra DB read on the kill-switched path.
     let metrics_on = d.state.usage.is_enabled();
-    let user_email = match (metrics_on, d.agent()) {
-        (false, _) => String::new(),
-        (true, Some(run)) => run.system_principal().name.clone(),
-        (true, None) => aiplane_core::server::db::users::find_by_id(
-            &d.state.db,
-            d.tool_ctx.principal.subject_id(),
-        )
-        .await
-        .ok()
-        .flatten()
-        .map(|u| u.email)
-        .unwrap_or_default(),
+    let user_email = if metrics_on {
+        policy.usage_name(d).await
+    } else {
+        String::new()
     };
     if metrics_on && let Some(decision) = automatic_decision.as_ref() {
         emit_selector_usage(d, &user_email, decision);
@@ -1308,21 +1255,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
         // does not cost the user their interjection.
         unsettled_steers.extend(fold_in_steers(&ctx, &mut messages));
 
-        // A slot set last round must show in this round's system message,
-        // or the model would ask for it again. So must one the resumed call
+        // State set last round must show in this round's system message, or
+        // the model would ask for it again. So must state the resumed call
         // just set — a verifier writes its slots exactly there.
-        if (round > start_round || d.resume.is_some())
-            && let Some(surface) = surface.filter(|s| s.has_conversation_state())
-        {
-            messages[0] = surface
-                .system_message(&d.state.db, &ctx.session_id, summary)
+        if round > start_round || d.resume.is_some() {
+            policy
+                .refresh_system_message(d, &ctx.session_id, &user_mcp, summary, &mut messages)
                 .await;
-            if let Some(run) = finish {
-                runner::merge_into_leading_system_message(
-                    &mut messages,
-                    run.contract().instructions(),
-                );
-            }
         }
 
         // On the final allowed round, withhold tools so the model is forced
@@ -1366,62 +1305,18 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
         if let Some(obj) = request_body.as_object_mut() {
             obj.insert("model".into(), serde_json::json!(real_model.clone()));
         }
-        // Re-resolve the per-conversation tool overlay each round so a
-        // mid-turn `enable_tools` call surfaces the newly-enabled schemas
-        // on the next round. Cheap (sub-ms SQLite hit) and the only way
-        // to make the model-driven enablement loop work.
-        let mut allowed_tools = d
-            .state
-            .allowed_tools_for_session(&d.tool_ctx.principal, &ctx.session_id)
-            .await;
-        // Union only the per-user MCP tools whose connector this conversation
-        // has turned on (via `enable_tools` or the composer's "+" menu). Unlike
-        // the registry tools, connected MCP connectors used to be injected
-        // unconditionally; gating them behind the same per-conversation overlay
-        // makes them progressive too — the model sees the connectors it *could*
-        // enable in the system context, and only the enabled ones cost schema
-        // tokens. From the SAME layer the executor uses, so an advertised tool
-        // is always dispatchable (no advertise/execute drift).
-        let enabled_keys = aiplane_core::server::db::chat_session_tools::enabled_keys_for_session(
-            &d.state.db,
-            &ctx.session_id,
-        )
-        .await
-        .unwrap_or_default();
-        d.state.union_enabled_mcp_tool_ids(
-            &mut allowed_tools,
-            &user_mcp,
-            &enabled_keys,
-            &d.state.mcp_grant_for_principal(&d.tool_ctx.principal),
-        );
-        if let Some(offer) = &agent_offer {
-            allowed_tools = offer.clone();
-        }
-        allowed_tools.extend(terminal_tool.iter().map(|t| t.id().to_string()));
-        // A contracted run's last round offers only what can end it.
-        let terminal_only = final_round && !closing && finish.is_some();
-        if terminal_only {
-            allowed_tools.retain(|id| tool_source.phase(id) == ToolPhase::Terminal);
+        // Resolved every round: a person's mid-turn `enable_tools` call
+        // surfaces the newly-enabled schemas on the next one.
+        let mut allowed_tools = policy.offer(d, &ctx.session_id, &user_mcp, &granted).await;
+        if final_round && !closing {
+            policy.narrow_final_offer(&mut allowed_tools, &tool_source);
         }
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
         if closing {
             runner::prepare_closing_round(&mut request_body);
-        } else if terminal_only && let Some(run) = finish {
-            run.contract().prepare_final_round(&mut request_body);
-            tracing::info!(
-                max_rounds,
-                "tool-round budget reached; offering only finish for the final round"
-            );
         } else if final_round {
-            // Whether the definitions may stay depends on whether this backend
-            // can be trusted with `tool_choice` at all.
-            runner::prepare_final_round(&mut request_body, serving.honors_tool_choice);
-            tracing::info!(
-                max_rounds,
-                tools_withheld = !serving.honors_tool_choice,
-                "tool-round budget reached; requesting final answer with tool choice none"
-            );
+            policy.prepare_final_round(&mut request_body, serving.honors_tool_choice, max_rounds);
         }
         // Fill in admin-configured sampling defaults (temperature,
         // top_p, etc.) for keys the chat-page composer didn't set.
@@ -1750,9 +1645,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
             .or_else(|| Some(round_tokens.0.unwrap_or(0) + round_tokens.1.unwrap_or(0)))
             .map_or(0, |t| t.max(0) as u64);
         tokens_used += spent;
-        if let Some(surface) = surface {
-            surface.record_spend(spent);
-        }
+        policy.record_spend(spent);
 
         // Track the context size for the compaction trigger. Persisted only
         // when it grows, so a tool-using turn writes at most once per round
@@ -1838,25 +1731,28 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
             }));
         }
 
-        // On a contracted run's final round only a terminal call can still
-        // run; anything else the model called there never does.
-        if final_round && finish.is_some() {
-            tool_acc.retain(|_, acc| tool_source.phase(&acc.name) == ToolPhase::Terminal);
-            if tool_acc.is_empty() {
-                return Ok(incomplete_on_final_round(
-                    &ctx.model,
-                    &round_content,
-                    gateway_summary(round + 1, &tools_run),
-                    budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
-                    None,
-                ));
-            }
+        let final_calls = if ends_turn {
+            policy.final_round_calls(&mut tool_acc, &tool_source)
+        } else {
+            FinalRound::Answers
+        };
+        if final_calls == FinalRound::Incomplete {
+            return Ok(incomplete_on_final_round(
+                &ctx.model,
+                &round_content,
+                gateway_summary(round + 1, &tools_run),
+                budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
+                None,
+            ));
         }
 
         // The model called a tool on the round that had to end the turn. The
         // call never runs; what it wrote alongside is the answer, and with
         // nothing written it gets the closing round, as on `/v1`.
-        if ends_turn && finish.is_none() && (wrote_out_call || !tool_acc.is_empty()) {
+        if ends_turn
+            && final_calls == FinalRound::Answers
+            && (wrote_out_call || !tool_acc.is_empty())
+        {
             let answered = !round_content.trim().is_empty();
             if answered || closing {
                 if !wrote_any_content {
@@ -1894,11 +1790,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
             continue;
         }
 
-        // A contracted run is not over because the model stopped calling
-        // tools: it gets the text back with a nudge, and the round is spent.
-        if tool_acc.is_empty() && finish.is_some() {
-            messages.push(serde_json::json!({"role": "assistant", "content": round_content}));
-            messages.push(serde_json::json!({"role": "user", "content": FINISH_NUDGE}));
+        if tool_acc.is_empty() && policy.nudge_toward_finish(&round_content, &mut messages) {
             continue;
         }
 
@@ -1946,16 +1838,8 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
         // conversation. The model never sees their schemas (they're not in
         // `allowed_tools`), but it can still hallucinate a direct call from
         // training priors — refuse those without executing, so an Off toggle
-        // is a hard block, not a soft default. A DB hiccup degrades open.
-        let disabled_keys = match d.tool_ctx.session_id.as_deref() {
-            Some(sid) => aiplane_core::server::db::chat_session_tools::disabled_keys_for_session(
-                &d.state.db,
-                sid,
-            )
-            .await
-            .unwrap_or_default(),
-            None => Default::default(),
-        };
+        // is a hard block, not a soft default.
+        let disabled_keys = policy.disabled_keys(d).await;
         let (assistant_tool_calls, call_refs, refused) = classify_and_dispatch_tool_calls(
             d,
             &ctx,
@@ -2114,8 +1998,8 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
             }));
         }
 
-        // A terminal call that ran ends the run; on a contracted run's final
-        // round, one that did not leaves it incomplete.
+        // A terminal call that ran ends the run; on the final round, where
+        // only terminal calls run, one that did not leaves it incomplete.
         let terminal: Vec<(&runner::ToolCallRef, &runner::ToolResultRecord)> = call_refs
             .iter()
             .zip(results.iter())
@@ -2124,7 +2008,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, 
         if terminal.iter().any(|(_, result)| !result.failed) {
             return Ok(TurnOutcome::default().into());
         }
-        if final_round && finish.is_some() {
+        if final_calls == FinalRound::RunsTerminal {
             let rejection = terminal.last().map(|(call, result)| {
                 let reason = result.body["error"].as_str().unwrap_or_default();
                 format!("The last {} call was rejected: {reason}", call.name)

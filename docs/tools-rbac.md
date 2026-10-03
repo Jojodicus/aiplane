@@ -728,7 +728,11 @@ the `RunOutcome` in one place (`run_outcome`) and settles it on the
 
 So a new exit path settles by construction: returning an error or a plain
 `TurnOutcome` already maps to an outcome, and only a richer reason needs a
-`CutShort`. `drive` takes the settled outcome (`AgentRun::take_outcome`); a
+`CutShort`. Every contract-specific step of the loop — narrowing the final
+round's offer, shaping its request, keeping only its terminal calls, the
+nudge, the settling — is a method of the turn's `TurnPolicy`
+(`openai_driver/turn_policy.rs`), so the loop itself never asks whether a
+contract applies. `drive` takes the settled outcome (`AgentRun::take_outcome`); a
 run whose turn panicked before `run_turn` returned was never settled and reads
 as `failed` ("interrupted").
 

@@ -957,6 +957,12 @@ mod tests {
     /// A sub-agent `billing`, called by the main agent `support-website` for
     /// visitor `v-42`, runs `deltas` headlessly as its own principal.
     async fn agent_run(deltas: Vec<Value>) -> SubAgentRun {
+        agent_run_switched_off(deltas, &[]).await
+    }
+
+    /// [`agent_run`], in a conversation whose `off` tool families are
+    /// switched off the way a person switches them off in their chat.
+    async fn agent_run_switched_off(deltas: Vec<Value>, off: &[&str]) -> SubAgentRun {
         let upstream = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1009,6 +1015,17 @@ mod tests {
         )
         .await
         .unwrap();
+        for key in off {
+            aiplane_core::server::db::chat_session_tools::set(
+                &state.db,
+                &session_id,
+                key,
+                false,
+                "test",
+            )
+            .await
+            .unwrap();
+        }
         let run = AgentRun::new(billing.clone(), chain.clone()).unwrap();
         drive(
             &state,
@@ -1109,6 +1126,35 @@ mod tests {
             .unwrap()
             .is_empty(),
             "a refused call must not auto-enable anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chat_switch_does_not_reach_an_agent_run() {
+        let key = crate::server::tools::catalog::entry_key_for("company_echo");
+        let r =
+            agent_run_switched_off(vec![calls(&[("c1", "company_echo")]), text("done")], &[key])
+                .await;
+        let call = &r.turn.tool_calls[0];
+        assert_eq!(
+            call.status,
+            chat::ToolCallStatus::Completed,
+            "{:?}",
+            call.output_json
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_run_makes_no_chat_only_reads() {
+        let reads = || crate::openai_driver::CHAT_ONLY_READS.with(std::cell::Cell::get);
+        let before = reads();
+        agent_run(vec![calls(&[("c1", "company_echo")]), text("done")]).await;
+        assert_eq!(reads(), before, "an agent run read a chat-only overlay");
+
+        run(vec![text("ok")], None, "standard").await;
+        assert!(
+            reads() > before,
+            "the control: a person's turn does read it"
         );
     }
 

@@ -790,7 +790,13 @@ grants.
   and `drive_params` wraps that in `DriveParams { actor: Actor::Agent(..) }`;
   both fail with `MismatchedRun` for a chain whose running frame is another
   agent. The `AgentRun` rides the tool context into the ordinary headless
-  loop. There is no second driver.
+  loop. There is no second driver: the round loop asks the turn's
+  `TurnPolicy` (`openai_driver/turn_policy.rs`, `Chat` or `Agent(&AgentRun)`)
+  for the system message, the offer, the pools, the budget and how the turn
+  ends, and holds no agent branch of its own. An agent run therefore never
+  reads a person's conversation overlay or "off" switches
+  (`chat_session_tools`); a run with no spec surface gets the turn-discipline
+  rule as its system message and every grant as its offer.
   - *Compiled once*: a published version is immutable, so its typed spec
     ([`AgentSpec`](#the-typed-spec-107)), `StateSchema`, `RouteGates` and
     `OutputFilter` are built once per
