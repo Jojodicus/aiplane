@@ -32,7 +32,6 @@ use aiplane_runtime::agents::profile::RunOptions;
 use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 
-const MAX_NAME_CHARS: usize = 120;
 const RUN_LIST_LIMIT: i64 = 50;
 
 #[derive(Deserialize)]
@@ -80,9 +79,10 @@ fn invalid_case(issues: &[EvalIssue]) -> Response {
 /// refused here rather than failing on every run.
 fn checked_case(body: &CaseDto) -> Result<(String, Option<String>), Response> {
     let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
+    if name.is_empty() || name.chars().count() > eval::MAX_CASE_NAME_CHARS {
         return Err(bad_request(format!(
-            "a test case needs a name of 1 to {MAX_NAME_CHARS} characters"
+            "a test case needs a name of 1 to {} characters",
+            eval::MAX_CASE_NAME_CHARS
         )));
     }
     if let Err(issues) = eval::parse_case(&body.script, &body.expect) {

@@ -16,6 +16,7 @@
 //! `/api/v0/system-principals/{id}/grants` with the grant-time cap (`docs/agents.md` §1);
 //! those routes check the share here too ([`guard_principal`]).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
@@ -174,27 +175,46 @@ async fn spec_check(
     spec: &Value,
     stage: Stage,
 ) -> Result<Result<AgentSpec, Vec<SpecIssue>>, Response> {
-    let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
-    let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
-    let agents = agents_db::publication_status(&state.db)
-        .await
-        .map_err(internal)?;
-    let live_specs = agents_db::live_specs(&state.db)
-        .await
-        .map_err(internal)?
-        .into_iter()
-        .map(|(id, text)| (id, parse_spec(&text)))
-        .collect();
+    let world = SpecWorld::load(state, agent_id).await?;
     Ok(spec::check(
         spec,
         &SpecContext {
             agent_id,
-            grants: &grants,
-            agents: &agents,
-            live_specs: &live_specs,
+            grants: &world.grants,
+            agents: &world.agents,
+            live_specs: &world.live_specs,
         },
         stage,
     ))
+}
+
+/// What a spec of agent `agent_id` is checked against: its grants as
+/// stored now, every agent's publication status and every live spec.
+pub(super) struct SpecWorld {
+    pub grants: GrantSet,
+    pub agents: HashMap<String, bool>,
+    pub live_specs: HashMap<String, Value>,
+}
+
+impl SpecWorld {
+    pub(super) async fn load(state: &RamaState, agent_id: &str) -> Result<Self, Response> {
+        let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
+        let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
+        let agents = agents_db::publication_status(&state.db)
+            .await
+            .map_err(internal)?;
+        let live_specs = agents_db::live_specs(&state.db)
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .map(|(id, text)| (id, parse_spec(&text)))
+            .collect();
+        Ok(Self {
+            grants,
+            agents,
+            live_specs,
+        })
+    }
 }
 
 /// Seal every verifier secret and A2A route credential once the spec is
@@ -246,20 +266,26 @@ async fn require_valid(
 /// an admin.
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
-    let groups = group_ids(&state, &user);
-    let rows = if state.rbac.is_admin(&groups) {
+    let rows = or_return!(visible_agents(&state, &user).await);
+    let agents: Vec<Value> = rows.iter().map(|(a, acc)| agent_json(a, *acc)).collect();
+    json_ok(StatusCode::OK, json!({ "agents": agents }))
+}
+
+/// The agents shared with `user`, with their access; every agent for an
+/// admin.
+pub(super) async fn visible_agents(
+    state: &RamaState,
+    user: &users::User,
+) -> Result<Vec<(agents_db::AgentRow, Access)>, Response> {
+    let groups = group_ids(state, user);
+    if state.rbac.is_admin(&groups) {
         agents_db::list_all(&state.db)
             .await
             .map(|rows| rows.into_iter().map(|a| (a, Access::Write)).collect())
     } else {
         agents_db::list_shared_with(&state.db, &user.id, &groups).await
-    };
-    let rows: Vec<(agents_db::AgentRow, Access)> = match rows {
-        Ok(rows) => rows,
-        Err(err) => return internal(err),
-    };
-    let agents: Vec<Value> = rows.iter().map(|(a, acc)| agent_json(a, *acc)).collect();
-    json_ok(StatusCode::OK, json!({ "agents": agents }))
+    }
+    .map_err(internal)
 }
 
 #[derive(Deserialize)]

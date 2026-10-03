@@ -16,6 +16,7 @@
 pub mod a2a;
 pub mod a2a_client;
 pub mod approval;
+pub mod assist;
 pub mod audit;
 pub mod bind;
 pub mod embed;

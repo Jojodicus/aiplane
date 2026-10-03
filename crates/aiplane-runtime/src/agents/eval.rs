@@ -44,6 +44,9 @@ use super::spec_cache::CompiledSpec;
 use super::state::{AgentState, StateSchema, TrustedWriter, write_trusted};
 use crate::rama_server::state::RamaState;
 
+/// The longest name a test case may have.
+pub const MAX_CASE_NAME_CHARS: usize = 120;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EvalIssue {
     pub path: String,

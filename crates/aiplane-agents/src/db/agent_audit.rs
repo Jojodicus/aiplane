@@ -89,6 +89,10 @@ pub enum AuditKind {
     AgentShareSet,
     AgentShareRemoved,
     AgentDeleted,
+    /// A manager asked the prompt assistant to suggest a setup or improve a
+    /// text: who, the scenario or text, pool, model, token counts, and
+    /// which steps were offered or dropped. Nothing it suggests is applied.
+    AssistSuggested,
     EmbedKeyCreated,
     EmbedKeyRevoked,
     /// A visitor request refused by a rate limit or the agent's budget.
@@ -168,6 +172,7 @@ impl AuditKind {
         Self::AgentShareSet,
         Self::AgentShareRemoved,
         Self::AgentDeleted,
+        Self::AssistSuggested,
         Self::EmbedKeyCreated,
         Self::EmbedKeyRevoked,
         Self::LimitRefused,
@@ -216,6 +221,7 @@ impl AuditKind {
             Self::AgentShareSet => "agent_share_set",
             Self::AgentShareRemoved => "agent_share_removed",
             Self::AgentDeleted => "agent_deleted",
+            Self::AssistSuggested => "assist_suggested",
             Self::EmbedKeyCreated => "embed_key_created",
             Self::EmbedKeyRevoked => "embed_key_revoked",
             Self::LimitRefused => "limit_refused",

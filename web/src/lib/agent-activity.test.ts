@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+	KIND_GROUPS,
 	activityQuery,
 	conversationsOf,
 	exportQuery,
@@ -38,6 +39,22 @@ const event = (over: Partial<ActivityEvent>): ActivityEvent => ({
 });
 
 const none: ActivityFilter = { conversation: '', group: 'all', from: '', to: '' };
+
+test('the topic guard decision is filed once, with the routing decisions', () => {
+	assert.ok((KIND_GROUPS.routing as readonly string[]).includes('scope_decision'));
+	const filed = Object.values(KIND_GROUPS)
+		.flat()
+		.filter((kind) => kind === 'scope_decision');
+	assert.equal(filed.length, 1);
+});
+
+test('a prompt-assistant call is filed once, with the management events', () => {
+	assert.ok((KIND_GROUPS.management as readonly string[]).includes('assist_suggested'));
+	const filed = Object.values(KIND_GROUPS)
+		.flat()
+		.filter((kind) => kind === 'assist_suggested');
+	assert.equal(filed.length, 1);
+});
 
 test('the query names only the filters set, and a conversation reads oldest first', () => {
 	assert.equal(activityQuery(none), '');
