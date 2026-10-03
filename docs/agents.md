@@ -275,6 +275,8 @@ state:                                  # slot name -> definition
   issue:    { type: enum, values: [billing, technical, sales], set_by: [llm] }
   verified: { type: subject, set_by: ["verifier:otp", host] }
   issue_summary: { type: string, max_length: 2000, set_by: [llm] }
+  # any slot may carry `order: <n>` (n ≥ 0): its place in the setup's list
+  # of details (#116); nothing at run time reads it
 verifiers:
   otp: { kind: mcp_code, connector: erp, send_tool: send_code, check_tool: check_code,
          input: secure_field, max_attempts: 5, code_ttl: 10m }
@@ -2937,6 +2939,13 @@ in that table, and leaves the rest alone.
   template in all six languages through `POST /api/v0/agents`, so the
   validator accepts each as a draft; `resources_name_the_pool_behind_each_model_choice_an_admin_mapped`
   covers `tiers`.
+- **Slot `order`.** A slot may carry `order` (a whole number ≥ 0, checked
+  like `max_length`; `Slot::order` in the typed spec). The details step writes
+  each row's position there and sorts by it, because a JSON object's key
+  order does not survive a save (`serde_json` without `preserve_order` keeps
+  object keys sorted, and turning that feature on workspace-wide would change
+  every `to_string()` of a map — `agent_tests::spec_hash` among them — so it
+  was not). Slots without one follow, by name. The run ignores it.
 - **Reserved names the assistant owns.** The verifier `identity`, the slots
   `verified`, `topic` and `request`, and the route `fallback`. A route is the
   assistant's when it has exactly the hand-off shape; anything else under

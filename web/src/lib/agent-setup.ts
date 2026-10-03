@@ -392,6 +392,7 @@ export function slotKind(def: Spec): SlotKind | 'custom' {
 	const rest: Spec = { ...def };
 	delete rest.set_by;
 	delete rest.description;
+	delete rest.order;
 	if (rest.type === 'enum') {
 		delete rest.values;
 		return Object.keys(rest).length === 1 ? 'choice' : 'custom';
@@ -408,9 +409,16 @@ export function slotDef(kind: SlotKind, label: string, values: string[] = []): S
 	};
 }
 
+/**
+ * The details in the order the person gave them: by each slot's `order`
+ * (a JSON object's key order does not survive a save — the server hands keys
+ * back sorted), slots without one after, by name.
+ */
 export function readSlots(spec: Spec): SlotRow[] {
+	const position = (def: Spec) => (Number.isInteger(def?.order) ? (def.order as number) : Number.MAX_SAFE_INTEGER);
 	return Object.entries((spec.state ?? {}) as Record<string, Spec>)
 		.filter(([key]) => !MANAGED_SLOTS.has(key))
+		.sort(([a, da], [b, db]) => position(da) - position(db) || a.localeCompare(b))
 		.map(([key, def]) => ({
 			key,
 			label: typeof def?.description === 'string' && def.description ? def.description : humanize(key),
@@ -437,7 +445,7 @@ export function writeSlots(spec: Spec, rows: SlotRow[]): void {
 	const keys = slotKeys(rows, managed.map(([k]) => k));
 	const next: Record<string, Spec> = {};
 	rows.forEach((row, i) => {
-		next[keys[i]] = row.kind === 'custom' ? before[row.key] : slotDef(row.kind, row.label, row.values);
+		next[keys[i]] = { ...(row.kind === 'custom' ? before[row.key] : slotDef(row.kind, row.label, row.values)), order: i };
 	});
 	for (const [key, def] of managed) next[key] = def;
 	spec.state = next;

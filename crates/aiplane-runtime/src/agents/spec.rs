@@ -131,6 +131,7 @@ const SLOT_KEYS: &[&str] = &[
     "maximum",
     "pattern",
     "schema",
+    "order",
 ];
 /// Constraint keys and the slot types they apply to. A constraint on a type it
 /// cannot apply to would be silently unenforced, so it is an error instead.
@@ -1001,7 +1002,7 @@ impl<'a> Check<'a> {
                 ),
                 _ => {}
             }
-            for key in ["min_length", "max_length"] {
+            for key in ["min_length", "max_length", "order"] {
                 if let Some(x) = map.get(key)
                     && x.as_u64().is_none()
                 {
@@ -2326,7 +2327,9 @@ mod tests {
                 "a": { "set_by": ["llm"] },
                 "b": { "type": "enum", "set_by": ["llm"] },
                 "c": { "type": "string", "set_by": [], "values": ["x"], "pattern": "(" },
-                "d": { "type": "date", "set_by": ["robot"] }
+                "d": { "type": "date", "set_by": ["robot"] },
+                "e": { "type": "string", "set_by": ["llm"], "order": -1 },
+                "f": { "type": "string", "set_by": ["llm"], "order": 3 }
             } }),
             Stage::Draft,
         );
@@ -2339,7 +2342,8 @@ mod tests {
                 "state.c.values",
                 "state.c.pattern",
                 "state.d.type",
-                "state.d.set_by[0]"
+                "state.d.set_by[0]",
+                "state.e.order"
             ]
         );
     }
