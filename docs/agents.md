@@ -3023,10 +3023,11 @@ route name the draft already has is kept as it is, not replaced. Names are
 made spec identifiers (`Order Number` → `order_number`). A step whose JSON
 does not read is dropped whole; the others stand.
 
-**Pool.** *Chosen, until #116's Fast/Balanced/Thorough mapping lands:* the
-request's `pool` when the manager may use it (`403 assist_pool_not_allowed`
-otherwise), else the draft's `main.pool` when the manager may use it and it
-serves a model, else the first chat pool (by name) the manager may use that
+**Pool.** The request's `pool` when the manager may use it (`403
+assist_pool_not_allowed` otherwise), else the draft's `main.pool` when the
+manager may use it and it serves a model, else the admin's *Balanced* model
+choice (`agents.pool_balanced`, [#116](#what-116-built)) on the same terms,
+else the first chat pool (by name) the manager may use that
 serves one; `503 assist_no_model` when none does. The manager's pool access
 decides, not the agent's grants: it is the manager's call.
 

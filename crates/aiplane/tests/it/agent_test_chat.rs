@@ -672,8 +672,7 @@ fn templates_in(lang: session_core::i18n::Lang) -> Vec<(String, Value)> {
         }
     }
     let all: Value =
-        serde_json::from_str(include_str!("../../../../web/src/lib/agent-templates.json"))
-            .unwrap();
+        serde_json::from_str(include_str!("../../../../web/src/lib/agent-templates.json")).unwrap();
     all.as_object()
         .unwrap()
         .iter()
