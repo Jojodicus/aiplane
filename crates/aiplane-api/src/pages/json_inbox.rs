@@ -39,15 +39,6 @@ use aiplane_runtime::agents::inbox::{self, Standing, Viewer};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim};
 use aiplane_runtime::rama_server::state::RamaState;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 /// How often the event stream looks for a change.
 const EVENT_POLL: Duration = Duration::from_secs(3);
 /// A comment at this interval keeps proxies from closing a quiet stream.

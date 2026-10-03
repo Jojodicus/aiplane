@@ -37,15 +37,6 @@ use aiplane_runtime::agents::run::{AgentReply, AgentTurn};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::db as chat;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 #[derive(Deserialize)]
 pub struct TestTurnBody {
     pub message: String,

@@ -49,15 +49,6 @@ use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 use tokio::time::Instant;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
 /// Largest request body a public embed route reads. A message is capped at

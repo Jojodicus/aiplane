@@ -24,6 +24,17 @@ use aiplane_core::rama_server::session::Session;
 use aiplane_core::server::db::users;
 use aiplane_runtime::rama_server::state::RamaState;
 
+/// The value of an `Ok`, or return the `Err`, which is already the response:
+/// the shape of every handler step that refuses with a ready response.
+macro_rules! or_return {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        }
+    };
+}
+
 /// Resolve the caller's session or bail out of the handler. Expands to the
 /// `require_session_or_redirect` match that early-`return`s the redirect
 /// `Response` on failure — replacing the ~45 hand-written copies of that

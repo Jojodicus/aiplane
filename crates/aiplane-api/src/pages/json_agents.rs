@@ -32,15 +32,6 @@ use aiplane_core::server::principal::GrantSet;
 use aiplane_runtime::agents::spec::{self, AgentSpec, SpecContext, SpecIssue, Stage};
 use aiplane_runtime::rama_server::state::RamaState;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
     state.rbac.role_ids_for(&user.roles)
 }

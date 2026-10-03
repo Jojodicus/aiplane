@@ -32,15 +32,6 @@ use aiplane_agents::db::agent_audit::{self, ActivityQuery, AuditKind, Order, Rec
 use aiplane_agents::db::agents::Access;
 use aiplane_runtime::rama_server::state::RamaState;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 /// A page stops once this much event detail is on it, so a page of model

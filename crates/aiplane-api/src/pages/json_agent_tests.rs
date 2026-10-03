@@ -32,15 +32,6 @@ use aiplane_runtime::agents::profile::RunOptions;
 use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 const MAX_NAME_CHARS: usize = 120;
 const RUN_LIST_LIMIT: i64 = 50;
 
