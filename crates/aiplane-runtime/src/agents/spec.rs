@@ -168,6 +168,7 @@ const PUBLISH_KEYS: &[&str] = &[
     "origins",
     "idle_ttl",
     "retention_days",
+    "audit_retention_days",
     "rate_limits",
     "budget",
     "output_filter",
@@ -1494,6 +1495,26 @@ impl<'a> Check<'a> {
         if let Some(x) = map.get("retention_days") {
             self.positive_int(x, "publish.retention_days", None);
         }
+        if let Some(x) = map.get("audit_retention_days") {
+            self.positive_int(x, "publish.audit_retention_days", None);
+            let conversations = map
+                .get("retention_days")
+                .and_then(Value::as_u64)
+                .unwrap_or(crate::agents::retention::DEFAULT_RETENTION_DAYS as u64);
+            if let Some(days) = x.as_u64()
+                && days >= 1
+                && days < conversations
+            {
+                self.issue(
+                    "publish.audit_retention_days",
+                    format!(
+                        "is {days} days, shorter than the {conversations} days conversations are \
+                         kept (`publish.retention_days`); the activity log must outlive the \
+                         conversations it records — raise it to at least {conversations}"
+                    ),
+                );
+            }
+        }
         if let Some(x) = map.get("a2a") {
             self.a2a(x);
         }
@@ -2591,6 +2612,25 @@ mod tests {
     }
 
     #[test]
+    fn the_activity_log_must_outlive_the_conversations_it_records() {
+        let audit = |publish: Value| check(json!({ "publish": publish }), Stage::Draft);
+        let short = audit(json!({ "retention_days": 90, "audit_retention_days": 60 }));
+        assert_eq!(paths(&short), ["publish.audit_retention_days"]);
+        assert!(
+            short[0].message.contains("at least 90"),
+            "{}",
+            short[0].message
+        );
+        assert_eq!(
+            paths(&audit(json!({ "audit_retention_days": 20 }))),
+            ["publish.audit_retention_days"],
+            "against the 30-day default of conversations too"
+        );
+        assert!(audit(json!({ "retention_days": 90, "audit_retention_days": 90 })).is_empty());
+        assert!(audit(json!({ "audit_retention_days": 3650 })).is_empty());
+    }
+
+    #[test]
     fn budgets_finish_schemas_and_publish_settings_are_checked() {
         let issues = check(
             json!({
@@ -2601,6 +2641,7 @@ mod tests {
                     "origins": ["https://example.com/", "example.com", "https://ok.example:8443"],
                     "idle_ttl": "30",
                     "retention_days": 0,
+                    "audit_retention_days": 0,
                     "output_filter": { "patterns": { "bad": "[" }, "action": "shrug" }
                 },
                 "router": { "kind": "classifier" }
@@ -2620,6 +2661,7 @@ mod tests {
                 "publish.origins[1]",
                 "publish.idle_ttl",
                 "publish.retention_days",
+                "publish.audit_retention_days",
                 "publish.output_filter.patterns.bad",
                 "publish.output_filter.action"
             ]

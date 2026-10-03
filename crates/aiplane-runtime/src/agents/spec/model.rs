@@ -40,7 +40,7 @@ use crate::agents::bind::BindSource;
 use crate::agents::embed::{DEFAULT_IDLE_TTL, DEFAULT_IP_RATE, DEFAULT_VISITOR_RATE};
 use crate::agents::human::DEFAULT_HUMAN_TIMEOUT;
 use crate::agents::output_filter::Action;
-use crate::agents::retention::DEFAULT_RETENTION_DAYS;
+use crate::agents::retention::{DEFAULT_AUDIT_RETENTION_DAYS, DEFAULT_RETENTION_DAYS};
 use crate::agents::router::loop_route::{DEFAULT_ITERATIONS, MAX_ITERATIONS};
 use crate::agents::verifier::host_jwt::ClaimMap;
 use crate::agents::verifier::{
@@ -655,6 +655,7 @@ pub struct Publish {
     pub origins: Option<Vec<String>>,
     pub idle_ttl: Option<SpecDuration>,
     pub retention_days: Option<NonZeroU64>,
+    pub audit_retention_days: Option<NonZeroU64>,
     #[serde(default)]
     pub rate_limits: RateLimits,
     #[serde(default)]
@@ -696,6 +697,16 @@ impl Publish {
         self.retention_days.map_or(DEFAULT_RETENTION_DAYS, |d| {
             i64::try_from(d.get()).unwrap_or(i64::MAX)
         })
+    }
+
+    /// How many days the activity log keeps a conversation's events after
+    /// its last one; [`DEFAULT_AUDIT_RETENTION_DAYS`] when unset. The
+    /// validator keeps it at least [`Self::retention_days`].
+    pub fn audit_retention_days(&self) -> i64 {
+        self.audit_retention_days
+            .map_or(DEFAULT_AUDIT_RETENTION_DAYS, |d| {
+                i64::try_from(d.get()).unwrap_or(i64::MAX)
+            })
     }
 
     /// Whether the agent is served over A2A. Off unless the spec says so.
@@ -780,6 +791,10 @@ mod tests {
         let spec = read(json!({}));
         assert_eq!(spec.publish.idle_ttl(), DEFAULT_IDLE_TTL);
         assert_eq!(spec.publish.retention_days(), DEFAULT_RETENTION_DAYS);
+        assert_eq!(
+            spec.publish.audit_retention_days(),
+            DEFAULT_AUDIT_RETENTION_DAYS
+        );
         assert_eq!(spec.publish.visitor_rates().visitor, DEFAULT_VISITOR_RATE);
         assert_eq!(spec.publish.visitor_rates().ip, DEFAULT_IP_RATE);
         assert!(spec.publish.allows_origin("https://any.example"));

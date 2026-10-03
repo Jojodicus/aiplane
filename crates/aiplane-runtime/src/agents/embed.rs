@@ -356,6 +356,7 @@ pub async fn limits_view(
     json!({
         "rate_limits": { "visitor": rate(rates.visitor), "ip": rate(rates.ip) },
         "retention_days": spec.publish.retention_days(),
+        "audit_retention_days": spec.publish.audit_retention_days(),
         "budget": budget,
         "available": exhausted.is_none(),
         "unavailable_reason": exhausted.as_ref().map(budget_detail),
