@@ -48,8 +48,8 @@ get it: sqlx wraps every migration in a transaction, and inside one
 the pragma is a no-op.
 
 Why it matters: rebuilding a table that others reference
-(`chat_sessions`, migration 0081) means `DROP TABLE` on the old one.
-With foreign keys on, that drop first deletes every row, and every
+(`chat_sessions`, in migration `0077_agent_builder.sql`) means
+`DROP TABLE` on the old one. With foreign keys on, that drop first deletes every row, and every
 `ON DELETE CASCADE` child goes with it — silently, inside a migration
 that otherwise succeeds. With them off, the children keep naming the
 table, and after the rename that name is the new table again.
@@ -62,7 +62,7 @@ Consequences for writing a migration:
   the children need no rebuild.
 - A rebuild that loses rows is the failure the check cannot see.
   Write a test that migrates a populated file database from the
-  previous release (`tests/migration_0081.rs` is the template).
+  previous release (`tests/migration_0077.rs` is the template).
 
 ### What enforces this
 
@@ -81,6 +81,15 @@ every migration's sqlx checksum in
 on every test run, so the same mistake fails in CI rather than at
 an operator's next restart. A new migration appends one line —
 the test prints it. Nothing else in that file is ever edited.
+
+The one exception is a migration that has never been pushed: no
+database outside a developer's machine has it, so a run of them may
+be squashed into one, as `0077_agent_builder.sql` squashed 22
+unpushed migrations. Their lines go with them. The squash has to
+prove it is the same schema (`tests/migration_0077.rs` compares a
+fresh database with a dump of the chain it replaced, in
+`tests/fixtures/`) and the same lossless upgrade from the last
+pushed migration.
 
 ### Recovering from an accidental edit
 

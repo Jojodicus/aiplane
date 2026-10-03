@@ -31,7 +31,7 @@
 //! the chains and reports the first link that does not hold, and an event
 //! outside every chain as one inserted behind the gateway's back.
 //!
-//! **No foreign keys** (`migrations/0077_system_principals.sql`): the log
+//! **No foreign keys** (`migrations/0077_agent_builder.sql`): the log
 //! outlives the principal, the acting user and the conversation, until the
 //! retention sweep removes whole conversation chains ([`sweep_conversation_chains`]).
 

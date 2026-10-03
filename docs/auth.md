@@ -131,7 +131,7 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
 
 - **Own tables.** `system_principals` (a slug `name`, `display`,
   `description`, `created_by`, `disabled_at`), `principal_grants` and
-  `system_tokens` (migration `0077`). Not a `kind` on `users`: none of the
+  `system_tokens` (migration `0077_agent_builder.sql`). Not a `kind` on `users`: none of the
   person paths — default groups, the OIDC upsert, per-user MCP, memory — can
   reach a principal by accident.
 - **Own prefix.** System tokens are `gws_<64 hex>`, stored as SHA-256 hex

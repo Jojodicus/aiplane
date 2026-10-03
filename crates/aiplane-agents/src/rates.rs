@@ -12,7 +12,7 @@
 //! the write lock the event is then written under, so parallel requests
 //! queue instead of all passing the check before any of them is counted. A
 //! refused event writes nothing and so never counts. The events are rows of
-//! `rate_events`, one per window (`migrations/0098_rate_events.sql`).
+//! `rate_events`, one per window (`migrations/0077_agent_builder.sql`).
 
 use jiff::{SignedDuration, Timestamp};
 use sqlx::Row;

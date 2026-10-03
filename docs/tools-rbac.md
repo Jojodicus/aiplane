@@ -758,7 +758,7 @@ call only while the turn lives in memory; this pause is durable.
 
 - **Pausing.** After the round's tools ran, the chat driver records every other
   call's result as usual, leaves the waiting call's row `running`, and writes a
-  `chat_turn_suspensions` row (migration 0078): the call, the turn's round
+  `chat_turn_suspensions` row (migration `0077_agent_builder.sql`): the call, the turn's round
   messages so far (`tail`), the budget spent (`{rounds, seconds, tokens}`), a
   fresh `request_id`, and the deadline. The turn becomes `suspended` in the
   same transaction, the worker ends without finalizing, and the stream emits
