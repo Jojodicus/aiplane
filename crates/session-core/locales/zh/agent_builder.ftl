@@ -3,14 +3,16 @@
 # tabs, and the internal test chat with its debug view.
 
 agents-heading = 智能体
-agents-intro = 创建智能体：带有类型化状态、硬性闸门和专用子智能体的对话式主智能体，可嵌入访客与之交谈的位置。发布前请先在此测试每个草稿。
+agents-intro = 智能体是负责某项具体工作的 AI 助手，例如在您的网站上回答客户的问题。在这里设置、试用，满意后再发布。
 agents-create = 新建智能体
 agents-create-name = 名称
 agents-create-name-hint = 小写字母、数字和连字符。它同时也是该智能体的系统主体名称，之后无法更改。
-agents-create-name-help = 智能体叫什么名字？访客会看到这个名字，例如“Harald”或“croit Support”。
+agents-create-name-help = 智能体叫什么名字？访客会看到这个名字，例如“客服助手”或“croit Support”。
+agents-create-name-placeholder = 例如：客服助手
 agents-create-id = 标识
 agents-create-id-change = 修改
-agents-create-description = 描述
+agents-create-description = 描述（可选）
+agents-create-description-help = 简短说明这个智能体的用途。它显示在此列表中该智能体的卡片上，不会出现在与访客的聊天中。
 agents-create-submit = 创建智能体
 agents-list-empty = 还没有与你共享的智能体。请使用上方按钮创建。
 agents-updated = 更新于 { $date }
