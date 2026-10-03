@@ -23,7 +23,7 @@ use super::{DbError, Pool};
 /// an already-loaded skill just refreshes `loaded_at`, so the model calling
 /// `read_skill` again on a later turn is harmless.
 pub async fn record(pool: &Pool, session_id: &str, skill_name: &str) -> Result<(), DbError> {
-    let now = Timestamp::now().to_string();
+    let now = loaded_at_text(Timestamp::now());
     sqlx::query(
         r#"INSERT INTO chat_session_skills (session_id, skill_name, loaded_at)
            VALUES (?, ?, ?)
@@ -36,6 +36,17 @@ pub async fn record(pool: &Pool, session_id: &str, skill_name: &str) -> Result<(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// `loaded_at` with nine fractional digits always: the reads order by it as
+/// text, and `Timestamp`'s own form drops trailing zeros, so `…01.5Z` would
+/// sort before `…01.123Z`.
+fn loaded_at_text(ts: Timestamp) -> String {
+    format!(
+        "{}.{:09}Z",
+        ts.strftime("%Y-%m-%dT%H:%M:%S"),
+        ts.subsec_nanosecond()
+    )
 }
 
 /// Unload `skill_name` from `session_id` (the user un-pinned it in the
@@ -101,6 +112,15 @@ mod tests {
         let pool = fresh().await;
         seed_session(&pool, "s1").await;
         assert!(loaded_for_session(&pool, "s1").await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn loaded_at_sorts_as_text_in_time_order() {
+        let earlier: Timestamp = "2026-10-03T20:00:01.123Z".parse().unwrap();
+        let later: Timestamp = "2026-10-03T20:00:01.5Z".parse().unwrap();
+        let whole: Timestamp = "2026-10-03T20:00:01Z".parse().unwrap();
+        assert!(loaded_at_text(whole) < loaded_at_text(earlier));
+        assert!(loaded_at_text(earlier) < loaded_at_text(later));
     }
 
     #[tokio::test]
