@@ -25,7 +25,8 @@ use aiplane_core::server::run_chain::RunChain;
 
 use crate::agents::profile::AgentSurface;
 use crate::budget::Budget;
-use crate::finish::{FinishContract, FinishRun};
+use crate::finish::{FinishContract, FinishTool};
+use crate::server::tools::Tool;
 use crate::server::tools::injection::InjectionScan;
 
 /// A call chain and a principal that name two different agents.
@@ -44,7 +45,7 @@ pub struct MismatchedRun {
 pub struct AgentRun {
     principal: SystemPrincipal,
     chain: Arc<RunChain>,
-    finish: Option<Arc<FinishRun>>,
+    finish: Option<Arc<FinishTool>>,
     budget: Option<Budget>,
     injection: InjectionScan,
     surface: Option<Arc<AgentSurface>>,
@@ -85,7 +86,7 @@ impl AgentRun {
 
     /// The run ends only through a schema-valid `finish`, or incomplete.
     pub fn with_contract(mut self, contract: FinishContract) -> Self {
-        self.finish = Some(FinishRun::new(contract));
+        self.finish = Some(Arc::new(FinishTool::new(contract)));
         self
     }
 
@@ -119,11 +120,17 @@ impl AgentRun {
     }
 
     pub fn contract(&self) -> Option<&FinishContract> {
-        self.finish.as_deref().map(FinishRun::contract)
+        self.finish.as_deref().map(FinishTool::contract)
     }
 
-    pub fn finish(&self) -> Option<&FinishRun> {
+    pub fn finish(&self) -> Option<&FinishTool> {
         self.finish.as_deref()
+    }
+
+    /// The run-scoped tool that ends this run, under a contract: its
+    /// `finish`, in [`ToolPhase::Terminal`](crate::server::tools::ToolPhase).
+    pub fn terminal_tool(&self) -> Option<Arc<dyn Tool>> {
+        self.finish.clone().map(|tool| tool as Arc<dyn Tool>)
     }
 
     /// `None` takes the round cap of the conversation's effort level.

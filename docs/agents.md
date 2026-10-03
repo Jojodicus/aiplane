@@ -570,14 +570,15 @@ registered for that run, need no grant, and do not exist anywhere else.
 | `forward_request()` | main agent | evaluates the router over open gates (§4). On no open route it returns the failing conditions as a structured list. Otherwise it runs the sub-agent and returns its `finish` result |
 | `request_human(question)` | main agent, when a `human` route exists | hands the conversation to a person on an open human route and waits for their answer ([#96](#what-96-built)) |
 | `verify_<id>_request_code()`, `verify_<id>_submit_code()`, `verify_<id>()` | main agent | the verifier flows ([#95](#what-95-built)); no arguments |
-| `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
+| `finish(result)` | agent runs under a finish contract (routed sub-agents) | ends the run. `result` is checked against the finish schema |
 
 **Order within a round.** A model batches calls, so `set_issue` and
 `forward_request` often arrive in one round. A round's calls normally run
 concurrently, which would let the forward read the state before the write
 landed. Each synthetic tool is therefore tagged with a `ToolPhase` where the run
-builds it (`AgentSurface` in `agents/profile.rs`, the only place a tool leaves
-the default), and the runner (`execute_tool_calls`) runs the phases in turn:
+builds it (`AgentSurface` in `agents/profile.rs`; the run's `finish` tool is
+the one other tool that leaves the default), and the runner
+(`execute_tool_calls`) runs the phases in turn:
 
 1. **Writes state**: `set_<slot>` and every verifier tool, one at a time in the
    order the model made the calls (a lookup reads the slots a `set_<slot>`
@@ -586,6 +587,9 @@ the default), and the runner (`execute_tool_calls`) runs the phases in turn:
    be read from state, so these too run after the writers.
 3. **Acts on state**: `forward_request` and `request_human`, one at a time in
    call order, on the state the round left.
+4. **Terminal**: `finish`. The driver runs it only as the one call of its
+   round, and a call that succeeds ends the run ([finish
+   contract](tools-rbac.md#finish-contract)).
 
 Each result still answers its own `tool_call_id`, in call order. Outside an
 agent run every tool is `Concurrent`, so chat and `/v1` are unchanged.

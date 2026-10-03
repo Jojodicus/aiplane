@@ -172,9 +172,10 @@ pub trait ToolSource: Send + Sync {
 /// finished before the next starts; every result still answers its own call,
 /// in the order the model made the calls.
 ///
-/// Only an agent run's synthetic tools leave [`ToolPhase::Concurrent`]: they
-/// write the run's state or act on it, and a model batches them freely, so a
-/// forward made in the round that fills its slots must see them filled.
+/// Only an agent run's run-scoped tools leave [`ToolPhase::Concurrent`]: they
+/// write the run's state, act on it or end the run, and a model batches them
+/// freely, so a forward made in the round that fills its slots must see them
+/// filled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ToolPhase {
     /// Writes the run's state (`set_<slot>`, a verifier). Runs first, one call
@@ -186,12 +187,23 @@ pub enum ToolPhase {
     #[default]
     Concurrent,
     /// Acts on the state as the round left it (`forward_request`,
-    /// `request_human`). Runs last, one call at a time in call order.
+    /// `request_human`). Runs one call at a time in call order.
     ActsOnState,
+    /// Ends the run (`finish`). The driver runs such a call only as the one
+    /// call of its round — next to others it is refused, since ending the
+    /// run would throw their results away unread — and offers nothing else on
+    /// a contracted run's final round. A call that succeeds ends the turn; one
+    /// that fails is answered like any failed call, and the run goes on.
+    Terminal,
 }
 
 impl ToolPhase {
-    pub const ORDER: [ToolPhase; 3] = [Self::WritesState, Self::Concurrent, Self::ActsOnState];
+    pub const ORDER: [ToolPhase; 4] = [
+        Self::WritesState,
+        Self::Concurrent,
+        Self::ActsOnState,
+        Self::Terminal,
+    ];
 
     /// Whether the calls of this phase run one at a time.
     pub fn is_sequential(self) -> bool {

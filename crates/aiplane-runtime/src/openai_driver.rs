@@ -28,11 +28,9 @@ use session_core::workers::{SteerNote, TurnUpdate};
 
 use crate::agent_run::{Actor, AgentRun};
 use crate::budget::{Budget, Clock, Limit};
-use crate::finish::{
-    FINISH_NUDGE, FINISH_TOOL_NAME, FinishRun, IncompleteReason, RunOutcome, gateway_summary,
-};
+use crate::finish::{FINISH_NUDGE, FinishTool, IncompleteReason, RunOutcome, gateway_summary};
 use crate::rama_server::state::RamaState;
-use crate::server::tools::{ToolContext, runner};
+use crate::server::tools::{ToolContext, ToolPhase, ToolSource, runner};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::db::user_memories::KindCounts;
 use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
@@ -696,97 +694,51 @@ fn assistant_tool_call(acc: &ToolCallAcc) -> serde_json::Value {
     })
 }
 
-/// The answer to a `finish` call made alongside other calls. Running the
-/// others and ending the run in the same breath would throw their results
-/// away unread.
-const FINISH_NOT_ALONE: &str = "finish was not accepted: call it on its own, after the results \
-                                of your other tool calls have come back.";
+/// The answer to a terminal call (`finish`) made alongside other calls.
+/// Running the others and ending the run in the same breath would throw their
+/// results away unread.
+fn terminal_not_alone(tool: &str) -> String {
+    format!(
+        "{tool} was not accepted: call it on its own, after the results of your other tool calls \
+         have come back."
+    )
+}
 
 /// Shown on a contracted run's turn when it stopped without a valid `finish`.
 /// English-only for the same reason as `TRUNCATED_MESSAGE`.
 const INCOMPLETE_MESSAGE: &str = "This run spent its round budget without the model calling \
                                   `finish` with a valid result, so it was recorded as incomplete.";
 
-/// Put a `finish` call on the turn's tool rows, settled at once: it runs no
-/// tool, so there is nothing to wait for.
-async fn record_finish_call(
-    d: &OpenAiDriver,
-    ctx: &SessionContext,
-    call: &ToolCallAcc,
-    status: ToolCallStatus,
-    output: &str,
-) -> Result<(), TurnError> {
-    chat::insert_running_tool_call(
-        &d.state.db,
-        &ctx.assistant_turn_id,
-        &call.id,
-        &call.name,
-        &call.arguments,
-    )
-    .await
-    .map_err(persist_err(
-        "insert_running_tool_call",
-        &ctx.assistant_turn_id,
-    ))?;
-    chat::complete_tool_call(
-        &d.state.db,
-        &ctx.assistant_turn_id,
-        &call.id,
-        output,
-        status,
-    )
-    .await
-    .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
-    let _ = ctx.broadcast.send(TurnUpdate::Tick);
-    Ok(())
-}
-
-/// End a contracted run on its final round: a valid `finish` finishes it,
-/// anything else leaves it incomplete. No closing round follows — the account
-/// of what was done is the model's own text, or the gateway's when it wrote
-/// none.
-async fn close_contracted_run(
-    d: &OpenAiDriver,
-    ctx: &SessionContext,
-    run: &FinishRun,
-    collected: &[ToolCallAcc],
+/// How a contracted run's final round ends when no terminal call was
+/// accepted on it: incomplete, with the model's own text as the account of
+/// what was done, or the gateway's when it wrote none. No closing round
+/// follows.
+fn incomplete_on_final_round(
+    model: &str,
+    run: &FinishTool,
     round_content: &str,
     gateway_account: String,
     reason: IncompleteReason,
-) -> Result<TurnOutcome, TurnError> {
-    let mut rejection = None;
-    if let Some(call) = collected.iter().find(|c| c.name == FINISH_TOOL_NAME) {
-        match run.contract().check_call(&call.arguments) {
-            Ok(result) => {
-                record_finish_call(d, ctx, call, ToolCallStatus::Completed, &result.to_string())
-                    .await?;
-                run.settle(RunOutcome::Finished { result });
-                return Ok(TurnOutcome::default());
-            }
-            Err(reason) => {
-                record_finish_call(d, ctx, call, ToolCallStatus::Errored, &reason).await?;
-                rejection = Some(reason);
-            }
-        }
-    }
+    rejection: Option<String>,
+) -> TurnOutcome {
     let text = round_content.trim();
     let mut summary = if text.is_empty() {
         gateway_account
     } else {
         text.to_string()
     };
-    if let Some(reason) = rejection {
-        summary.push_str(&format!("\n\nThe last finish call was rejected: {reason}"));
+    if let Some(rejection) = rejection {
+        summary.push_str(&format!("\n\n{rejection}"));
     }
     tracing::warn!(
-        model = %ctx.model,
+        model,
         ?reason,
         "contracted run spent its budget without a valid finish; recording it as incomplete"
     );
     run.settle(RunOutcome::Incomplete { reason, summary });
-    Ok(TurnOutcome {
+    TurnOutcome {
         notice: Some(INCOMPLETE_MESSAGE.to_string()),
-    })
+    }
 }
 
 async fn classify_and_dispatch_tool_calls(
@@ -811,6 +763,7 @@ async fn classify_and_dispatch_tool_calls(
     // still needs a `tool` message so the assistant turn's tool_calls all
     // resolve — appended after the assistant message below.
     let mut refused: Vec<(String, String)> = Vec::new();
+    let alone = collected.len() == 1;
     for acc in collected {
         chat::insert_running_tool_call(
             &d.state.db,
@@ -839,6 +792,11 @@ async fn classify_and_dispatch_tool_calls(
         );
         call_policy::audit(&d.tool_ctx, &acc.id, &acc.name, policy).await;
         let refusal = match policy {
+            CallPolicy::Granted
+                if !alone && tool_source.phase(&acc.name) == ToolPhase::Terminal =>
+            {
+                Some(terminal_not_alone(&acc.name))
+            }
             CallPolicy::Granted => None,
             // Implicit miss-recovery: the model called a granted tool
             // whose schema wasn't in this round's tools array — it's
@@ -969,6 +927,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     let tool_source = crate::agents::profile::RunToolSource::new(&granted_source, d.agent());
     let surface = d.agent().and_then(AgentRun::surface);
     let finish = d.agent().and_then(AgentRun::finish);
+    let terminal_tool = d.agent().and_then(AgentRun::terminal_tool);
     let agent_offer = surface.map(|s| s.offered(&granted));
     let tool_ctx = ToolContext {
         granted_tools: Some(Arc::new(granted.into_iter().collect())),
@@ -1363,14 +1322,17 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         if let Some(offer) = &agent_offer {
             allowed_tools = offer.clone();
         }
+        allowed_tools.extend(terminal_tool.iter().map(|t| t.id().to_string()));
+        // A contracted run's last round offers only what can end it.
+        let terminal_only = final_round && !closing && finish.is_some();
+        if terminal_only {
+            allowed_tools.retain(|id| tool_source.phase(id) == ToolPhase::Terminal);
+        }
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
-        if let Some(run) = finish {
-            run.contract().inject(&mut request_body);
-        }
         if closing {
             runner::prepare_closing_round(&mut request_body);
-        } else if final_round && let Some(run) = finish {
+        } else if terminal_only && let Some(run) = finish {
             run.contract().prepare_final_round(&mut request_body);
             tracing::info!(
                 max_rounds,
@@ -1803,25 +1765,26 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             });
         }
 
+        // On a contracted run's final round only a terminal call can still
+        // run; anything else the model called there never does.
         if final_round && let Some(run) = finish {
-            let mut collected: Vec<ToolCallAcc> = tool_acc.into_values().collect();
-            ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
-            return close_contracted_run(
-                d,
-                &ctx,
-                run,
-                &collected,
-                &round_content,
-                gateway_summary(round + 1, &tools_run),
-                budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
-            )
-            .await;
+            tool_acc.retain(|_, acc| tool_source.phase(&acc.name) == ToolPhase::Terminal);
+            if tool_acc.is_empty() {
+                return Ok(incomplete_on_final_round(
+                    &ctx.model,
+                    run,
+                    &round_content,
+                    gateway_summary(round + 1, &tools_run),
+                    budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
+                    None,
+                ));
+            }
         }
 
         // The model called a tool on the round that had to end the turn. The
         // call never runs; what it wrote alongside is the answer, and with
         // nothing written it gets the closing round, as on `/v1`.
-        if ends_turn && (wrote_out_call || !tool_acc.is_empty()) {
+        if ends_turn && finish.is_none() && (wrote_out_call || !tool_acc.is_empty()) {
             let answered = !round_content.trim().is_empty();
             if answered || closing {
                 if !wrote_any_content {
@@ -1905,50 +1868,6 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // Guarantee unique, non-empty ids before they hit the DB (PK),
         // the replayed assistant message, and the tool results.
         ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
-        let mut finish_refusals: Vec<ToolCallAcc> = Vec::new();
-        if let Some(run) = finish {
-            if let [call] = collected.as_slice()
-                && call.name == FINISH_TOOL_NAME
-            {
-                match run.contract().check_call(&call.arguments) {
-                    Ok(result) => {
-                        record_finish_call(
-                            d,
-                            &ctx,
-                            call,
-                            ToolCallStatus::Completed,
-                            &result.to_string(),
-                        )
-                        .await?;
-                        run.settle(RunOutcome::Finished { result });
-                        return Ok(TurnOutcome::default());
-                    }
-                    Err(reason) => {
-                        record_finish_call(d, &ctx, call, ToolCallStatus::Errored, &reason).await?;
-                        messages.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": serde_json::Value::Null,
-                            "tool_calls": [assistant_tool_call(call)],
-                        }));
-                        messages.push(serde_json::json!({
-                            "role": "tool",
-                            "tool_call_id": &call.id,
-                            "content": reason,
-                        }));
-                        continue;
-                    }
-                }
-            }
-            let (finish_calls, rest): (Vec<_>, Vec<_>) = collected
-                .into_iter()
-                .partition(|call| call.name == FINISH_TOOL_NAME);
-            collected = rest;
-            for call in &finish_calls {
-                record_finish_call(d, &ctx, call, ToolCallStatus::Errored, FINISH_NOT_ALONE)
-                    .await?;
-            }
-            finish_refusals = finish_calls;
-        }
         // Tool groups the user explicitly switched **off** for this
         // conversation. The model never sees their schemas (they're not in
         // `allowed_tools`), but it can still hallucinate a direct call from
@@ -1963,7 +1882,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             .unwrap_or_default(),
             None => Default::default(),
         };
-        let (mut assistant_tool_calls, call_refs, mut refused) = classify_and_dispatch_tool_calls(
+        let (assistant_tool_calls, call_refs, refused) = classify_and_dispatch_tool_calls(
             d,
             &ctx,
             &tool_source,
@@ -1973,10 +1892,6 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &disabled_keys,
         )
         .await?;
-        for call in &finish_refusals {
-            assistant_tool_calls.push(assistant_tool_call(call));
-            refused.push((call.id.clone(), FINISH_NOT_ALONE.to_string()));
-        }
         if call_refs.is_empty() && refused.is_empty() {
             return Ok(TurnOutcome::default());
         }
@@ -2022,7 +1937,12 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 return Err(TurnError::Aborted { message });
             }
         };
-        tools_run.extend(call_refs.iter().map(|call| call.name.clone()));
+        tools_run.extend(
+            call_refs
+                .iter()
+                .filter(|call| tool_source.phase(&call.name) != ToolPhase::Terminal)
+                .map(|call| call.name.clone()),
+        );
         let pause = resume::take_pause(d, &call_refs, &mut results);
         messages.push(serde_json::json!({
             "role": "assistant",
@@ -2120,6 +2040,36 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 "tool_call_id": &call.id,
                 "content": content,
             }));
+        }
+
+        // A terminal call that ran ends the run; on a contracted run's final
+        // round, one that did not leaves it incomplete.
+        let terminal: Vec<(&runner::ToolCallRef, &runner::ToolResultRecord)> = call_refs
+            .iter()
+            .zip(results.iter())
+            .filter(|(call, _)| tool_source.phase(&call.name) == ToolPhase::Terminal)
+            .collect();
+        if terminal.iter().any(|(_, result)| !result.failed) {
+            if let Some(run) = finish
+                && let Some(result) = run.result()
+            {
+                run.settle(RunOutcome::Finished { result });
+            }
+            return Ok(TurnOutcome::default());
+        }
+        if final_round && let Some(run) = finish {
+            let rejection = terminal.last().map(|(call, result)| {
+                let reason = result.body["error"].as_str().unwrap_or_default();
+                format!("The last {} call was rejected: {reason}", call.name)
+            });
+            return Ok(incomplete_on_final_round(
+                &ctx.model,
+                run,
+                &round_content,
+                gateway_summary(round + 1, &tools_run),
+                budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
+                rejection,
+            ));
         }
 
         if let Some((call, request)) = pause {

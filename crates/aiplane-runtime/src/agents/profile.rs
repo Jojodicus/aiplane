@@ -368,8 +368,10 @@ struct Conversation {
     now: state::Clock,
 }
 
-/// A run-scoped tool, and when it runs among the calls of its round: the one
-/// place a tool is tagged with a [`ToolPhase`] other than the default.
+/// A run-scoped tool of the spec, and when it runs among the calls of its
+/// round. With the run's `finish` tool ([`ToolPhase::Terminal`], from
+/// [`AgentRun::terminal_tool`]) the only tools tagged with a phase other than
+/// the default.
 struct Synthetic {
     tool: Arc<dyn Tool>,
     phase: ToolPhase,
@@ -485,6 +487,7 @@ impl AgentSurface {
         RunToolSource {
             inner,
             run: Some(self),
+            terminal: None,
         }
     }
 }
@@ -527,11 +530,13 @@ fn route_summary(
     out
 }
 
-/// A turn's tool source with an agent run layered over it. With no run it is
+/// A turn's tool source with an agent run layered over it: the spec's
+/// surface, and the run's `finish` tool under a contract. With no run it is
 /// `inner` unchanged.
 pub struct RunToolSource<'a> {
     inner: &'a dyn ToolSource,
     run: Option<&'a AgentSurface>,
+    terminal: Option<Arc<dyn Tool>>,
 }
 
 impl<'a> RunToolSource<'a> {
@@ -539,6 +544,28 @@ impl<'a> RunToolSource<'a> {
         Self {
             inner,
             run: run.and_then(AgentRun::surface),
+            terminal: run.and_then(AgentRun::terminal_tool),
+        }
+    }
+
+    fn terminal(&self, id: &str) -> Option<&Arc<dyn Tool>> {
+        self.terminal.as_ref().filter(|t| t.id() == id)
+    }
+
+    fn def_for(&self, id: &str) -> Option<ToolDef> {
+        if let Some(terminal) = self.terminal(id) {
+            return Some(terminal.schema());
+        }
+        let ids = [id.to_string()];
+        let Some(run) = self.run else {
+            return self.inner.defs_for(&ids).into_iter().next();
+        };
+        match run.synthetic.get(id) {
+            Some(synthetic) => Some(synthetic.tool.schema()),
+            None => self.inner.defs_for(&ids).into_iter().next().and_then(|def| {
+                let binds = run.binds.for_tool(id, &def).ok()?;
+                Some(without_bound(def, &binds))
+            }),
         }
     }
 
@@ -563,6 +590,9 @@ impl<'a> RunToolSource<'a> {
 
 impl ToolSource for RunToolSource<'_> {
     fn get(&self, id: &str) -> Option<Arc<dyn Tool>> {
+        if let Some(terminal) = self.terminal(id) {
+            return Some(terminal.clone());
+        }
         let Some(run) = self.run else {
             return self.inner.get(id);
         };
@@ -573,24 +603,10 @@ impl ToolSource for RunToolSource<'_> {
     }
 
     fn defs_for(&self, allowed: &[String]) -> Vec<ToolDef> {
-        let Some(run) = self.run else {
+        if self.run.is_none() && self.terminal.is_none() {
             return self.inner.defs_for(allowed);
-        };
-        allowed
-            .iter()
-            .filter_map(|id| match run.synthetic.get(id) {
-                Some(synthetic) => Some(synthetic.tool.schema()),
-                None => self
-                    .inner
-                    .defs_for(std::slice::from_ref(id))
-                    .into_iter()
-                    .next()
-                    .and_then(|def| {
-                        let binds = run.binds.for_tool(id, &def).ok()?;
-                        Some(without_bound(def, &binds))
-                    }),
-            })
-            .collect()
+        }
+        allowed.iter().filter_map(|id| self.def_for(id)).collect()
     }
 
     fn ids(&self) -> Vec<String> {
@@ -598,14 +614,20 @@ impl ToolSource for RunToolSource<'_> {
         if let Some(run) = self.run {
             ids.extend(run.synthetic.keys().cloned());
         }
+        ids.extend(self.terminal.iter().map(|t| t.id().to_string()));
         ids
     }
 
     fn contains(&self, id: &str) -> bool {
-        self.run.is_some_and(|r| r.synthetic.contains_key(id)) || self.inner.contains(id)
+        self.terminal(id).is_some()
+            || self.run.is_some_and(|r| r.synthetic.contains_key(id))
+            || self.inner.contains(id)
     }
 
     fn phase(&self, id: &str) -> ToolPhase {
+        if self.terminal(id).is_some() {
+            return ToolPhase::Terminal;
+        }
         self.run
             .and_then(|r| r.synthetic.get(id))
             .map_or(ToolPhase::Concurrent, |s| s.phase)

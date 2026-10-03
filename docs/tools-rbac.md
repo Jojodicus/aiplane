@@ -384,10 +384,10 @@ does not is `not_granted` for a system principal (audited as such in an agent
 run) and `unknown_tool` for a person — one check, so the audit row and what
 actually ran can never disagree.
 
-Run-scoped synthetic tools are not grants and sit outside the filter: `finish`
-is intercepted by name before dispatch, and an agent run's `set_<slot>` and
-`forward_request` tools come from `RunToolSource`, which the driver layers
-*over* the `GrantedToolSource`, never inside it. Their existence for the run is
+Run-scoped synthetic tools are not grants and sit outside the filter: an agent
+run's `set_<slot>`, `forward_request` and `finish` tools come from
+`RunToolSource`, which the driver layers *over* the `GrantedToolSource`, never
+inside it. Their existence for the run is
 the permission; nothing a person or principal is granted can reach them, and
 they reach nothing outside the run. A bound tool is still a granted tool: the
 binding wraps what the grant filter returned and can only narrow its arguments.
@@ -557,8 +557,9 @@ client tool in one turn.
   `ToolSource::phase` tags each call with a `ToolPhase`, and the runner runs the
   state writers (`set_<slot>`, verifiers) first and one at a time, then the
   concurrent rest, then the tools that act on state (`forward_request`,
-  `request_human`) one at a time. Only `RunToolSource` returns anything but
-  `Concurrent`. Results keep call order whatever order the calls ran in
+  `request_human`) one at a time, then the `Terminal` one (`finish`), which
+  the driver only lets run as the round's sole call. Only `RunToolSource`
+  returns anything but `Concurrent`. Results keep call order whatever order the calls ran in
   ([`agents.md`](agents.md#synthetic-tools)).
 - **Tool-result context budget** — once cumulative `role:"tool"` content passes
   128 KB (`/v1` loop) or the turn's allowance derived from the model's context
@@ -672,20 +673,33 @@ sub-agent), and `headless::drive` returns the outcome. Runs without a
 contract — every chat turn, every scheduled action and webhook, every `/v1`
 request — are unchanged, and no `finish` tool is offered to them.
 
+`finish` is a real tool: `finish::FinishTool`, owned by the run's `AgentRun`
+and offered through `RunToolSource` in the `ToolPhase::Terminal` phase. It is
+dispatched, audited, guarded against repeats and recorded on the turn's tool
+rows like any other call. The driver has no name-based case for it; it knows
+the terminal phase:
+
+- A terminal call made next to other calls is refused ("call it on its own").
+- A terminal call that succeeds ends the turn.
+- A contracted run's final round offers only terminal tools.
+
 Inside the chat driver, with a contract:
 
 - Every round offers `finish` alongside the run's tools, and the leading
   system message says the run ends only through it.
 - A round of text without `finish` does not end the run. The text is replayed
   with a user-role nudge, and the round counts against the budget.
-- A `finish` call on its own is validated. A valid one ends the run. An
-  invalid one is answered in its tool slot with every validation error
-  (location and cause), and the run continues. A `finish` made in the same
+- A `finish` call on its own is validated (`FinishContract::check_args`). A
+  valid one ends the run, and the tool keeps its result. An invalid one fails
+  like any tool, so its tool slot is answered with every validation error
+  (location and cause), and the run continues. Arguments that are not a JSON
+  object reach the tool as `{}` (the runner normalises them) and read as a
+  missing `result`. A `finish` made in the same
   round as other calls is refused ("call it on its own"), because ending
   there would throw away the other calls' results unread.
-- The final round offers *only* `finish` (the rest of the tool list is
-  replaced, `tool_choice` dropped: `"none"` would forbid the one call that
-  matters). The model is told to call it or write what is left undone.
+- The final round offers *only* `finish` (the round's tool list is narrowed
+  to the terminal phase and `tool_choice` dropped: `"none"` would forbid the
+  one call that matters). Any other call the model makes there never runs. The model is told to call it or write what is left undone.
   Anything but a valid `finish` there ends the run as
   `Incomplete { reason: round_budget_exhausted { rounds } }` (or the
   `seconds_exhausted` / `tokens_exhausted` of a [run budget](#run-budgets)), with the model's
