@@ -9,6 +9,11 @@
 //! picker never offers what the grant would refuse. The grant stays the
 //! authority: a resource that changed between listing and granting is still
 //! refused there, with its reason.
+//!
+//! `tiers` names the pool behind each of the setup assistant's model choices
+//! (`[agents] pool_fast/_balanced/_thorough`, set by an admin), whether or not
+//! the caller holds it: the assistant says why a choice it cannot grant is
+//! unavailable instead of hiding it.
 
 use std::sync::Arc;
 
@@ -117,10 +122,19 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         .map(|c| json!({ "id": c.id, "name": c.name }))
         .collect();
 
+    let config = state.config();
+    let agents = &config.agents;
+    let tiers = json!({
+        "fast": agents.pool_fast,
+        "balanced": agents.pool_balanced,
+        "thorough": agents.pool_thorough,
+    });
+
     json_ok(
         StatusCode::OK,
         json!({
             "pools": pools,
+            "tiers": tiers,
             "tools": tools,
             "connectors": connectors,
             "skills": skills,

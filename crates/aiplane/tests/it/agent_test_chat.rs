@@ -618,3 +618,89 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn resources_name_the_pool_behind_each_model_choice_an_admin_mapped() {
+    use aiplane_core::server::settings;
+
+    let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
+    let (status, body) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["tiers"],
+        json!({ "fast": null, "balanced": null, "thorough": null })
+    );
+
+    settings::store(
+        &fx.state.db,
+        &fx.state.crypto,
+        &[
+            ("agents.pool_fast".into(), "guard-pool".into()),
+            ("agents.pool_balanced".into(), "main-pool".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    fx.state.reload_settings().await;
+
+    let (_, body) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
+        .await;
+    assert_eq!(
+        body["tiers"],
+        json!({ "fast": "guard-pool", "balanced": "main-pool", "thorough": null })
+    );
+}
+
+/// The setup assistant's starter templates (`web/src/lib/agent-templates.json`)
+/// with every `@key` string translated, as the SPA sends them.
+fn templates_in(lang: session_core::i18n::Lang) -> Vec<(String, Value)> {
+    fn resolve(v: &Value, lang: session_core::i18n::Lang) -> Value {
+        match v {
+            Value::String(s) => match s.strip_prefix('@') {
+                Some(key) => Value::String(session_core::i18n::t(lang, key)),
+                None => v.clone(),
+            },
+            Value::Array(items) => items.iter().map(|i| resolve(i, lang)).collect(),
+            Value::Object(map) => map
+                .iter()
+                .map(|(k, v)| (k.clone(), resolve(v, lang)))
+                .collect(),
+            other => other.clone(),
+        }
+    }
+    let all: Value =
+        serde_json::from_str(include_str!("../../../../web/src/lib/agent-templates.json")).unwrap();
+    all.as_object()
+        .unwrap()
+        .iter()
+        .filter(|(name, _)| !name.starts_with('_'))
+        .map(|(name, spec)| (name.clone(), resolve(spec, lang)))
+        .collect()
+}
+
+#[tokio::test]
+async fn every_setup_template_is_a_valid_draft_in_every_language() {
+    let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
+    for lang in session_core::i18n::Lang::ALL {
+        let templates = templates_in(lang);
+        assert_eq!(templates.len(), 5, "faq, support, leads, internal, blank");
+        for (name, spec) in templates {
+            let text = spec.to_string();
+            assert!(
+                !text.contains("\"@"),
+                "{name} ({lang:?}) kept a key: {text}"
+            );
+            let (status, body) = fx
+                .post(
+                    &fx.alice,
+                    "/api/v0/agents",
+                    json!({ "name": format!("{name}-{}", lang.code()), "spec": spec }),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CREATED, "{name} ({lang:?}): {body}");
+        }
+    }
+}

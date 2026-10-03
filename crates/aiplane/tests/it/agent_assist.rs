@@ -102,8 +102,10 @@ async fn fixture(reply: ResponseTemplate) -> Fx {
     let llm = model(reply).await;
     let mut pools = HashMap::new();
     pools.insert("assist-pool".to_string(), chat_pool(&llm));
+    pools.insert("zz-balanced".to_string(), chat_pool(&llm));
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "assist-pool", 0, &["assist-model"]);
+    common::seed_pool_models(&registry, "zz-balanced", 0, &["balanced-model"]);
     let app = AppState::new(
         common::test_config(),
         pool.clone(),
@@ -495,6 +497,38 @@ async fn improve_returns_a_suggestion_and_why() {
         .improve(&fx.alice, json!({ "field": "orchestration", "text": "x" }))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+/// Without a pool in the request or the draft, the assistant runs on the
+/// admin's "Balanced" model choice (#116) before falling back to the first
+/// chat pool by name.
+#[tokio::test]
+async fn without_a_pool_the_assistant_prefers_the_balanced_model_choice() {
+    use aiplane_core::server::settings;
+
+    let fx = fixture(answer(
+        &json!({ "suggestion": "Better.", "why": "Clearer." }),
+    ))
+    .await;
+    let (_, body) = fx
+        .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
+        .await;
+    assert_eq!(body["pool"], "assist-pool", "the first chat pool by name");
+
+    settings::store(
+        &fx.state.db,
+        &fx.state.crypto,
+        &[("agents.pool_balanced".into(), "zz-balanced".into())],
+    )
+    .await
+    .unwrap();
+    fx.state.reload_settings().await;
+    let (status, body) = fx
+        .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["pool"], "zz-balanced");
+    assert_eq!(body["model"], "balanced-model");
 }
 
 #[tokio::test]
