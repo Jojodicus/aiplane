@@ -584,7 +584,7 @@ export const en: Catalog = {
  "agents-test-deny": "Deny",
  "agents-test-empty": "Say something to start a conversation with the draft.",
  "agents-test-expires": "Expires {at}",
- "agents-test-intro": "Talk to the saved draft the way a visitor would. Its tools really run, as this agent. Click a reply to see what happened behind it.",
+ "agents-test-intro": "Talk to the saved draft the way a visitor would. Its tools really run, as this agent. Use “Show what happened” under a reply to see what happened behind it.",
  "agents-test-new": "New conversation",
  "agents-test-placeholder": "Message as a visitor…",
  "agents-test-send": "Send",

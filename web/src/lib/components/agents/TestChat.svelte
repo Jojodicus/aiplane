@@ -11,6 +11,7 @@
 		type TestTurn
 	} from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
+	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DebugPanel from './DebugPanel.svelte';
 
 	/**
@@ -78,6 +79,15 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let selected = $state<number | null>(null);
+	let scroller = $state<HTMLElement | null>(null);
+
+	// The newest exchange is what the manager is looking at; keep it in view
+	// as replies arrive instead of letting them grow below the fold.
+	$effect(() => {
+		void messages.length;
+		void busy;
+		scroller?.scrollTo({ top: scroller.scrollHeight });
+	});
 
 	const shown = $derived(
 		selected !== null && messages[selected]?.debug
@@ -129,24 +139,31 @@
 		</div>
 	{/if}
 
-	<div class="grid gap-4 lg:grid-cols-[3fr_2fr]">
-		<div class="flex min-h-96 flex-col rounded-box border border-base-300">
-			<div class="flex-1 space-y-2 overflow-y-auto p-3" aria-live="polite">
+	<div class="grid gap-4 lg:h-[calc(100dvh-16rem)] lg:min-h-96 lg:grid-cols-[3fr_2fr]">
+		<div class="flex h-[70dvh] min-h-80 flex-col rounded-box border border-base-300 lg:h-auto lg:min-h-0">
+			<div class="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" aria-live="polite" bind:this={scroller}>
 				{#each messages as message, i (i)}
 					<div class="chat {message.role === 'visitor' ? 'chat-end' : 'chat-start'}">
 						<div class="chat-header text-xs opacity-60">
 							{message.role === 'visitor' ? t('agents-test-visitor') : t('agents-test-agent')}
 						</div>
 						{#if message.role === 'agent'}
-							<button
-								class="chat-bubble cursor-pointer text-left whitespace-pre-wrap {message.error ? 'chat-bubble-error' : 'chat-bubble-primary'} {selected === i ? 'outline-2 outline-offset-2 outline-base-content/40' : ''}"
-								type="button"
-								onclick={() => (selected = i)}
-								title={t('agents-test-show-debug')}
-							>{message.text || (message.error ? '' : '…')}{#if message.error}{message.error}{/if}</button>
-							{#if message.status && message.status !== 'completed'}
-								<div class="chat-footer text-xs opacity-70">{t(testTurnLabel(message.status))}</div>
-							{/if}
+							<div
+								class="chat-bubble {message.error ? 'chat-bubble-error' : 'chat-bubble-primary'} {selected === i ? 'outline-2 outline-offset-2 outline-base-content/40' : ''}"
+							>
+								{#if message.text}
+									<Markdown content={message.text.trim()} class="prose prose-sm max-w-none text-inherit" />
+								{:else if !message.error}…{/if}
+								{#if message.error}<p class="whitespace-pre-wrap">{message.error}</p>{/if}
+							</div>
+							<div class="chat-footer flex items-center gap-2 text-xs opacity-70">
+								{#if message.status && message.status !== 'completed'}<span>{t(testTurnLabel(message.status))}</span>{/if}
+								{#if message.debug}
+									<button class="btn btn-ghost btn-xs" type="button" aria-pressed={selected === i} onclick={() => (selected = i)}>
+										{t('agents-test-show-debug')}
+									</button>
+								{/if}
+							</div>
 							{#if message.status === 'suspended' && message.suspension}
 								{@const waiting = message.suspension}
 								<div class="card card-border bg-base-200 mt-1 w-full max-w-md">
@@ -214,7 +231,7 @@
 			</form>
 		</div>
 
-		<div class="rounded-box border border-base-300 p-3">
+		<div class="min-h-0 overflow-y-auto rounded-box border border-base-300 p-3">
 			<h3 class="mb-3 font-semibold">{t('agents-debug-heading')}</h3>
 			{#if shown}
 				<DebugPanel debug={shown} />
