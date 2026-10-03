@@ -652,10 +652,22 @@ that every step round-trips through the advanced editor's
 - **Model choice.** *Fast / Balanced / Thorough* is a `SegmentedControl` over
   the pools an admin mapped in `/admin/settings` → Chat → *Agent model choices*
   (`agents.pool_fast`, `…_balanced`, `…_thorough`), which
-  `GET /api/v0/agent-resources` returns as `tiers`. Choosing one grants the pool
-  and sets `main.pool`; a choice whose pool the manager does not hold says so.
-  Without a mapping the step lists the pools the manager may grant by a
-  readable name.
+  `GET /api/v0/agent-resources` returns as `tiers`; once any is mapped, an
+  unmapped Balanced is the gateway's default chat model. Choosing one grants the
+  pool and sets `main.pool`; a choice whose pool the manager does not hold says
+  so. Without a mapping the step lists the pools the manager may grant by a
+  readable name. An agent without a pool starts on the pool of the gateway's
+  default chat model (`defaults.chat`, staged for granting) —
+  [`agents.md`](agents.md#default-models).
+- **Voice.** Switching a direction on in the *Website* step names the pool of
+  the gateway's default transcription / speech model the manager holds
+  (`defaults.transcription` / `.speech`) and stages its grant. A direction the
+  manager holds no pool for shows why instead of a switch.
+- **Errors.** `setupErrorMessage` (`agent-setup.ts`) turns a failed call into a
+  catalog message — the assistant unavailable (404/405/501/503), its model
+  failing (502), a network failure, a rate refusal with its `Retry-After` — and
+  keeps the server's own envelope message otherwise. A raw status line such as
+  "405 Method Not Allowed" is never shown.
 - **Strings.** Everything a person reads is in `agent_setup.ftl` (six
   languages), the templates' texts too (`@key` strings in
   `agent-templates.json`, which `tests/it/agent_test_chat.rs` creates in every

@@ -2927,11 +2927,14 @@ in that table, and leaves the rest alone.
 
 - **Model choices.** Settings `agents.pool_fast`, `agents.pool_balanced`,
   `agents.pool_thorough` (`aiplane-core::server::settings`, section `agents`,
-  Chat tab; `Config::agents`). `GET /api/v0/agent-resources` returns them as
-  `tiers: {fast, balanced, thorough}` (each a pool name or `null`), whether or
-  not the caller holds that pool, so the assistant can say why a choice is
-  unavailable instead of hiding it. Choosing a tier grants the pool through
-  the ordinary grant route, so the manager's cap applies unchanged.
+  Chat tab; `Config::agents`), all optional. `GET /api/v0/agent-resources`
+  returns them as `tiers: {fast, balanced, thorough}` (each a pool name or
+  `null`), whether or not the caller holds that pool, so the assistant can say
+  why a choice is unavailable instead of hiding it. With none set the choice is
+  not offered (all `null`); once one is, an unset Balanced is the gateway's
+  default chat model ([Default models](#default-models)). Choosing a tier
+  grants the pool through the ordinary grant route, so the manager's cap
+  applies unchanged.
 - **Templates.** `web/src/lib/agent-templates.json`: five starter drafts
   (FAQ, customer support with an e-mail-code identity check and a fallback to
   a person, lead qualification, internal helper, blank). A string `@<key>` is
@@ -3035,10 +3038,9 @@ does not read is dropped whole; the others stand.
 
 **Pool.** The request's `pool` when the manager may use it (`403
 assist_pool_not_allowed` otherwise), else the draft's `main.pool` when the
-manager may use it and it serves a model, else the admin's *Balanced* model
-choice (`agents.pool_balanced`, [#116](#what-116-built)) on the same terms,
-else the first chat pool (by name) the manager may use that
-serves one; `503 assist_no_model` when none does. The manager's pool access
+manager may use it and it serves a model, else the agents' chat default for
+the manager ([Default models](#default-models)); `503 assist_no_model` when
+none serves one. The manager's pool access
 decides, not the agent's grants: it is the manager's call.
 
 **Recording.** *Chosen:* a manager's call, not an agent run.
@@ -3095,10 +3097,12 @@ Voice in the embed widget: a visitor may speak a message and hear answers.
 
 **Spec.** `publish.voice: { input, output, voice?, transcription_pool?,
 speech_pool? }` (`spec::model::VoiceSpec`). Both directions are off by
-default. A pool named here must be granted to the agent; publishing with a
-direction on requires its pool (`input` → `transcription_pool`, `output` →
-`speech_pool`), the same rule as `main.pool`: an agent reaches only pools its
-spec names. `voice` is the TTS voice; unset, the speech pool's voice for the
+default. A pool named here must be granted to the agent. A direction that is
+on and names none runs on the pool of the gateway's default transcription or
+speech model among the agent's grants ([Default models](#default-models));
+publishing one that neither can serve is refused (`422`, at
+`publish.voice.transcription_pool` / `speech_pool`, naming the setup's
+*Website* step). Either way an agent reaches only pools granted to it. `voice` is the TTS voice; unset, the speech pool's voice for the
 visitor's language (its `voices` map) applies. `VoiceSpec::{input_pool,
 output_pool}` return a pool only for a direction that is on. `profile.color`
 is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
@@ -3147,7 +3151,9 @@ into Web Audio, so no `blob:` URL is needed. Animations stop under
 
 **Builder.** The setup's *Website* step binds the colour and `publish.voice`
 (`readColor`/`writeColor`, `readVoice`/`writeVoice` in `agent-setup.ts`);
-choosing a pool grants it to the agent. `GET /api/v0/agent-resources`
+choosing a pool stages its grant. Switching a direction on preselects the
+pool of the gateway's default model for it; a direction the manager holds no
+pool for is explained instead of offered. `GET /api/v0/agent-resources`
 lists `voice_pools: {speech, transcription}` the manager holds.
 
 **Tests.** `tests/it/embed/voice.rs` (transcript returned and not sent, no
@@ -3157,6 +3163,41 @@ answer of this visitor spoken from the stored text, cache, owner's voice,
 `describe`, worklet, voice pools); `spec.rs` and `spec/model.rs`;
 `web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color}.test.ts`,
 `web/src/lib/agent-setup.test.ts`.
+
+### Default models
+
+Agents have no model settings of their own. Where a spec names no pool, the
+gateway's admin *Default models* (`/admin/models`, `app_settings`
+`default_model.{chat,transcription,speech,image,embedding}`,
+`aiplane-core::server::feature_defaults`) decide, through one resolver:
+`feature_defaults::default_pool(db, upstreams, feature, access)` takes the
+configured model, resolves it against the models of the pools of that kind
+`access` reaches (the configured one when served, else the first — the same
+`resolve` every other default uses), and returns the first such pool (by
+name) serving it, with the model.
+
+| Who asks | Access | Feature |
+|---|---|---|
+| A voice direction without a pool (`agents::defaults::voice_pool`, the embed `transcribe`/`speak`) | the agent's pool grants | `transcription` / `speech` |
+| The publish check of that direction (`SpecContext::voice_defaults`, `defaults::granted_default`) | the agent's pool grants | `transcription` / `speech` |
+| The prompt assistant without a pool, an unset *Balanced* (`agents::defaults::chat_pool`) | the manager's groups | `chat`, after `agents.pool_balanced` when set |
+| `GET /api/v0/agent-resources` → `defaults: {chat, transcription, speech}` (`{pool, model}` or `null`) | the manager's groups | all three |
+
+What the setup preselects (a new agent's `main.pool`, a voice direction
+switched on) is therefore always a pool the manager holds, and it is staged
+for granting like any other choice, so the grant route's cap applies on save.
+`default_model.speech` (*Voice (speech output)*, added for this) also picks
+the session read-aloud's model (`UpstreamRegistry::speech_target`).
+
+Tests: `feature_defaults` (`pick_pool_*`), `registry`
+(`speech_target_follows_the_admins_default_speech_model`), `spec.rs`
+(`a_voice_direction_without_a_pool_runs_on_the_granted_default_or_names_the_step`),
+`tests/it/embed/voice.rs` (`without_a_pool_of_its_own_voice_runs_on_the_gateways_default_models`,
+`voice_without_a_granted_pool_is_refused_at_publish_naming_the_step`,
+`the_setup_defaults_follow_the_gateway_but_stay_within_what_the_manager_holds`),
+`tests/it/agent_assist.rs` (`without_a_pool_the_assistant_follows_the_gateway_default_chat_model`),
+`tests/it/agent_test_chat.rs` (`resources_name_the_pool_behind_each_model_choice_an_admin_mapped`),
+`web/src/lib/agent-setup.test.ts` (the preselection and `setupErrorMessage`).
 
 ## 6. Crate placement
 
