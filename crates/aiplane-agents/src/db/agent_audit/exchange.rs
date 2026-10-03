@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! How the log keeps a model exchange's request small, and how it gives the
-//! whole request back (`docs/agents.md` → "What #111 built", "Storage").
+//! How the log keeps a model exchange's request small, and gives the whole
+//! request back (`docs/agents.md` → "What #111 built", "Storage").
 //!
-//! **Deltas.** A round's request repeats the whole conversation so far. The
-//! first round of a turn is stored whole (`request`); every later one as
-//! `request_delta` against the round before it: `prev` (that event's id),
+//! **Deltas**, because a round's request repeats the whole conversation so
+//! far. The stored format, which every signed event already holds and so
+//! cannot change: the first round of a turn keeps `request`; every later one
+//! `request_delta` against the round before — `prev` (that event's id),
 //! `keep` (how many of its messages this request starts with), the
 //! `messages` after them, the `system` message when it changed, `tools` when
 //! the offer changed (`null` when it was dropped), and `rest`, every other
-//! key. [`request_delta`] makes one, [`apply_delta`] undoes it, and
-//! [`Reconstructor`] follows `prev` back to a whole request.
+//! key.
 //!
-//! **Blobs.** A base64 `data:` URL of at least [`BLOB_MIN_BYTES`] in an
-//! exchange is stored once per chain in `activity_blobs`, by its SHA-256,
-//! and the detail holds [`BLOB_REF`]`<hash>` in its place ([`take_blobs`]).
-//! The reference is inside the event's signed hash; a blob whose content no
-//! longer matches it is not served.
+//! **Blobs**, because a base64 image is re-sent every round: a `data:` URL of
+//! at least [`BLOB_MIN_BYTES`] is stored once per chain in `activity_blobs`,
+//! by its SHA-256, and the detail holds [`BLOB_REF`]`<hash>`. The reference
+//! is inside the event's signed hash, so a blob whose content no longer
+//! matches it is not served.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
