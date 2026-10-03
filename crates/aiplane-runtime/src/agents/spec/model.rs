@@ -56,6 +56,7 @@ use crate::budget::Budget;
 pub struct AgentSpec {
     #[serde(default)]
     pub profile: Profile,
+    pub scope: Option<Scope>,
     #[serde(default)]
     pub main: Main,
     #[serde(default)]
@@ -149,6 +150,41 @@ impl Profile {
     }
 }
 
+/// `scope`: what the agent talks about. The topics and the refusal go into
+/// the system message as guidance; `strict` adds the topic guard
+/// ([`crate::agents::topic_guard`]), which refuses an out-of-scope message
+/// before the main model sees it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scope {
+    #[serde(default)]
+    pub topics: Vec<String>,
+    pub refusal: Option<String>,
+    #[serde(default)]
+    pub strict: bool,
+    /// The pool the guard classifies on; `main.pool` when unset.
+    pub classifier_pool: Option<String>,
+}
+
+impl Scope {
+    /// `refusal`, unless it is blank.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+    }
+
+    /// The topics, trimmed, blank ones left out.
+    pub fn topics(&self) -> Vec<&str> {
+        self.topics
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Main {
@@ -170,19 +206,6 @@ pub struct Main {
 pub struct Instructions {
     pub orchestration: Option<String>,
     pub response: Option<String>,
-}
-
-impl Instructions {
-    /// Both instructions, trimmed, blank ones left out, as one text.
-    pub fn text(&self) -> String {
-        [&self.orchestration, &self.response]
-            .into_iter()
-            .flatten()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]

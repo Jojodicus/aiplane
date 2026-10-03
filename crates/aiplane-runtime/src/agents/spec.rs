@@ -97,6 +97,7 @@ pub struct SpecContext<'a> {
 const TOP_KEYS: &[&str] = &[
     "profile",
     "main",
+    "scope",
     "state",
     "verifiers",
     "router",
@@ -106,6 +107,7 @@ const TOP_KEYS: &[&str] = &[
     "publish",
 ];
 const PROFILE_KEYS: &[&str] = &["display", "avatar", "color"];
+const SCOPE_KEYS: &[&str] = &["topics", "refusal", "strict", "classifier_pool"];
 const MAIN_KEYS: &[&str] = &[
     "pool",
     "instructions",
@@ -643,6 +645,9 @@ impl<'a> Check<'a> {
         if let Some(v) = top.get("profile") {
             self.profile(v);
         }
+        if let Some(v) = top.get("scope") {
+            self.scope(v);
+        }
         match top.get("main") {
             Some(v) => self.main(v),
             None if self.stage == Stage::Publish => self.issue(
@@ -681,6 +686,62 @@ impl<'a> Check<'a> {
             if let Some(x) = map.get(key) {
                 self.nullable_string(x, &join("profile", key));
             }
+        }
+    }
+
+    /// Checked on every save, not only on publish: the test chat runs a
+    /// draft, and a strict scope without topics or a refusal cannot run.
+    fn scope(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "scope", SCOPE_KEYS) else {
+            return;
+        };
+        let mut topics = 0;
+        if let Some(list) = map.get("topics") {
+            for (p, topic) in self.string_list(list, "scope.topics") {
+                if topic.trim().is_empty() {
+                    self.issue(
+                        &p,
+                        "a topic must not be blank — name it or remove the entry",
+                    );
+                } else {
+                    topics += 1;
+                }
+            }
+        }
+        let refusal = map
+            .get("refusal")
+            .and_then(|r| self.string(r, "scope.refusal"))
+            .is_some_and(|r| !r.trim().is_empty());
+        let strict = match map.get("strict") {
+            Some(Value::Bool(b)) => *b,
+            Some(_) => {
+                self.issue(
+                    "scope.strict",
+                    "must be true or false: true lets a classifier refuse every message outside \
+                     the topics before the agent's model sees it",
+                );
+                false
+            }
+            None => false,
+        };
+        if let Some(pool) = map.get("classifier_pool")
+            && let Some(name) = self.string(pool, "scope.classifier_pool")
+        {
+            self.require_grant("scope.classifier_pool", GrantKind::Pool, name, "pool");
+        }
+        if strict && topics == 0 {
+            self.issue(
+                "scope.topics",
+                "a strict scope must list the topics the agent covers — a message is judged \
+                 against them; add at least one, or set `strict` to false",
+            );
+        }
+        if strict && !refusal {
+            self.issue(
+                "scope.refusal",
+                "a strict scope needs the `refusal` the visitor gets as the reply to a message \
+                 outside the topics — write it, or set `strict` to false",
+            );
         }
     }
 
@@ -1621,6 +1682,12 @@ mod tests {
     fn full() -> Value {
         json!({
             "profile": { "display": "croit Support", "avatar": null, "color": null },
+            "scope": {
+                "topics": ["croit products", "Ceph storage"],
+                "refusal": "I can only help with croit products and Ceph storage.",
+                "strict": true,
+                "classifier_pool": "small"
+            },
             "main": {
                 "pool": "chat",
                 "instructions": {
@@ -1695,6 +1762,10 @@ mod tests {
         };
         let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
         assert_eq!(typed.main_pool(), Some("chat"));
+        let scope = typed.scope.as_ref().expect("the layout declares a scope");
+        assert!(scope.strict);
+        assert_eq!(scope.topics, ["croit products", "Ceph storage"]);
+        assert_eq!(scope.classifier_pool.as_deref(), Some("small"));
         assert_eq!(typed.main.budget.budget().rounds(), 12);
         assert!(matches!(
             &typed.routes["billing"].target,
@@ -1711,6 +1782,55 @@ mod tests {
         );
         let issues = super::check(&json!({ "mian": {} }), &ctx, Stage::Draft).unwrap_err();
         assert_eq!(issues, check(json!({ "mian": {} }), Stage::Draft));
+    }
+
+    #[test]
+    fn a_strict_scope_needs_topics_and_a_refusal_even_in_a_draft() {
+        let issues = check(json!({ "scope": { "strict": true } }), Stage::Draft);
+        assert_eq!(paths(&issues), ["scope.topics", "scope.refusal"]);
+        assert!(issues[0].message.contains("list the topics"), "{issues:?}");
+        assert!(issues[1].message.contains("reply"), "{issues:?}");
+        assert_eq!(
+            paths(&check(
+                json!({ "scope": { "strict": true, "topics": [], "refusal": "  " } }),
+                Stage::Draft
+            )),
+            ["scope.topics", "scope.refusal"]
+        );
+        assert_eq!(
+            check(json!({ "scope": { "topics": ["Ceph"] } }), Stage::Publish)
+                .iter()
+                .filter(|i| i.path.starts_with("scope"))
+                .count(),
+            0,
+            "a scope that is not strict is guidance and needs no refusal"
+        );
+    }
+
+    #[test]
+    fn a_scope_is_checked_for_its_shape_and_its_classifier_pool_grant() {
+        let issues = check(
+            json!({ "scope": {
+                "topic": [],
+                "topics": ["Ceph", "Ceph", " "],
+                "refusal": 3,
+                "strict": "yes",
+                "classifier_pool": "gpu-big"
+            } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "scope.topic",
+                "scope.topics[1]",
+                "scope.topics[2]",
+                "scope.refusal",
+                "scope.strict",
+                "scope.classifier_pool"
+            ]
+        );
+        assert!(issues[5].message.contains("not granted"), "{issues:?}");
     }
 
     #[test]

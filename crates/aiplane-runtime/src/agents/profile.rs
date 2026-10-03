@@ -4,10 +4,14 @@
 //! The `RunProfile` of an agent run (`docs/agents.md` §3): everything that
 //! makes a headless turn the run of one agent's live version.
 //!
-//! - **System message**: the spec's `orchestration` and `response`
-//!   instructions, the slot view and each route's gate status. No chat rules,
-//!   no person's memory, location or connectors. Rebuilt every round, so a
-//!   slot the model just set shows up on the next one.
+//! - **System message**: the owner's brief in sections — `## Role` (the
+//!   agent's display name), `## Task` (`orchestration`), `## Scope` (the
+//!   topics and the refusal) and `## Tone` (`response`) — then the slot view
+//!   and each route's gate status. No chat rules, no person's memory,
+//!   location or connectors. Rebuilt every round, so a slot the model just
+//!   set shows up on the next one.
+//! - **Topic guard** (main agent, strict scope only): the
+//!   [`TopicGuard`] the turn consults before its first model call.
 //! - **Tools**: the principal's grants that the spec lists, plus the run's
 //!   synthetic tools (`set_<slot>`, `forward_request`, `request_human`, the
 //!   verifiers' `verify_<id>…`). The synthetic ones are layered over the
@@ -38,9 +42,10 @@ use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
 use super::spec::AgentSpec;
-use super::spec::model::Route;
+use super::spec::model::{Instructions, Route, Scope};
 use super::spec_cache::CompiledSpec;
 use super::state::{self, StateSchema, StateSnapshot, render_view};
+use super::topic_guard::TopicGuard;
 use super::verifier::{self, VerifierRun, Verifiers};
 use crate::agent_run::{Actor, AgentRun, MismatchedRun};
 use crate::budget::{Budget, SpendMeter};
@@ -224,6 +229,18 @@ impl RunProfile {
             .main_pool()
             .ok_or_else(|| bad("it names no `main.pool`".into()))?
             .to_string();
+        let guard = match role {
+            Role::Main => TopicGuard::from_spec(spec, &pool),
+            Role::SubAgent { .. } => None,
+        };
+        let display = match spec.profile.display() {
+            Some(display) => display.to_string(),
+            None => sp::get(&state.db, agent_id)
+                .await?
+                .map(|row| row.display)
+                .filter(|d| !d.trim().is_empty())
+                .unwrap_or_else(|| principal.name.clone()),
+        };
         let pools = PoolAccess::for_system_pools(&principal, [pool.as_str()]);
         let model = pool_model(state, &pool, &pools).ok_or_else(|| AgentRunError::NoModel {
             agent: principal.name.clone(),
@@ -290,8 +307,12 @@ impl RunProfile {
             Role::SubAgent { route_binds } => ToolBinds::from_spec(spec).with_route(route_binds),
         };
         let surface = AgentSurface {
-            name: principal.name.clone(),
-            instructions: spec.main.instructions.text(),
+            brief: Brief {
+                display,
+                instructions: spec.main.instructions.clone(),
+                scope: spec.scope.clone(),
+            },
+            guard,
             conversation,
             tools: spec.main.tools.clone(),
             synthetic,
@@ -383,8 +404,8 @@ struct Synthetic {
 /// permissions, the conversation state, and the pools its model calls use.
 /// Part of the run's [`AgentRun`].
 pub struct AgentSurface {
-    name: String,
-    instructions: String,
+    brief: Brief,
+    guard: Option<TopicGuard>,
     conversation: Option<Conversation>,
     tools: Vec<String>,
     synthetic: BTreeMap<String, Synthetic>,
@@ -432,6 +453,11 @@ impl AgentSurface {
             .collect()
     }
 
+    /// The topic guard of a main agent with a strict scope.
+    pub fn topic_guard(&self) -> Option<&TopicGuard> {
+        self.guard.as_ref()
+    }
+
     /// Whether the system message changes within a turn (it carries state).
     pub fn has_conversation_state(&self) -> bool {
         self.conversation.is_some()
@@ -444,13 +470,7 @@ impl AgentSurface {
         session_id: &str,
         summary: Option<&str>,
     ) -> Value {
-        let mut parts = vec![format!(
-            "You are the agent `{}`. Follow these instructions from its owner.",
-            self.name
-        )];
-        if !self.instructions.is_empty() {
-            parts.push(self.instructions.clone());
-        }
+        let mut parts = vec![self.brief.render()];
         if let Some(c) = &self.conversation {
             let state = self
                 .snapshot
@@ -491,6 +511,62 @@ impl AgentSurface {
             terminal: None,
         }
     }
+}
+
+/// What the owner wrote for the model, as the sections that open the
+/// system message. They never change within a run.
+struct Brief {
+    /// The agent's display name: what it is called in front of visitors,
+    /// never its id or slug.
+    display: String,
+    instructions: Instructions,
+    scope: Option<Scope>,
+}
+
+impl Brief {
+    fn render(&self) -> String {
+        let mut sections = vec![format!(
+            "## Role\n\nYou are {}. The sections below are your owner's instructions.",
+            self.display
+        )];
+        let written = |s: &Option<String>| {
+            s.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        if let Some(task) = written(&self.instructions.orchestration) {
+            sections.push(format!("## Task\n\n{task}"));
+        }
+        if let Some(scope) = self.scope.as_ref().and_then(scope_section) {
+            sections.push(format!("## Scope\n\n{scope}"));
+        }
+        if let Some(tone) = written(&self.instructions.response) {
+            sections.push(format!("## Tone\n\n{tone}"));
+        }
+        sections.join("\n\n")
+    }
+}
+
+/// The body of `## Scope`, written whether or not the scope is strict: for
+/// a strict one it says what the guard enforces anyway.
+fn scope_section(scope: &Scope) -> Option<String> {
+    let topics = scope.topics();
+    let mut lines = Vec::new();
+    if !topics.is_empty() {
+        lines.push("You cover only these topics:".to_string());
+        lines.extend(topics.iter().map(|t| format!("- {t}")));
+    }
+    match scope.refusal() {
+        Some(refusal) => lines.push(format!(
+            "If asked about anything else, reply exactly: {refusal}"
+        )),
+        None if !topics.is_empty() => {
+            lines.push("Politely decline anything outside them.".to_string())
+        }
+        None => {}
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn route_summary(
@@ -659,8 +735,12 @@ mod tests {
             "lookup": { "bind": { "message": "route.customer" } }
         } } });
         AgentSurface {
-            name: "billing".into(),
-            instructions: String::new(),
+            brief: Brief {
+                display: "Billing".into(),
+                instructions: Instructions::default(),
+                scope: None,
+            },
+            guard: None,
             conversation: None,
             tools: vec!["company_echo".into()],
             synthetic: BTreeMap::new(),
@@ -672,6 +752,56 @@ mod tests {
             pools: PoolAccess::all(),
             spend: None,
         }
+    }
+
+    fn brief(spec: Value) -> String {
+        let spec = AgentSpec::from_value(&spec).unwrap();
+        Brief {
+            display: "croit Support".into(),
+            instructions: spec.main.instructions,
+            scope: spec.scope,
+        }
+        .render()
+    }
+
+    #[test]
+    fn the_brief_keeps_role_task_scope_and_tone_apart() {
+        let rendered = brief(json!({
+            "scope": { "topics": ["Ceph storage", "croit products"],
+                       "refusal": "I can only help with Ceph and croit." },
+            "main": { "instructions": { "orchestration": "Collect the issue, then forward it.",
+                                        "response": "Short and friendly." } }
+        }));
+        assert_eq!(
+            rendered,
+            "## Role\n\nYou are croit Support. The sections below are your owner's instructions.\n\n\
+             ## Task\n\nCollect the issue, then forward it.\n\n\
+             ## Scope\n\nYou cover only these topics:\n- Ceph storage\n- croit products\n\
+             If asked about anything else, reply exactly: I can only help with Ceph and croit.\n\n\
+             ## Tone\n\nShort and friendly."
+        );
+    }
+
+    #[test]
+    fn a_section_the_owner_left_empty_is_left_out() {
+        assert_eq!(
+            brief(json!({ "main": { "instructions": { "response": "  " } } })),
+            "## Role\n\nYou are croit Support. The sections below are your owner's instructions."
+        );
+        let topics_only = brief(json!({ "scope": { "topics": ["Ceph"] } }));
+        assert!(
+            topics_only.ends_with(
+                "## Scope\n\nYou cover only these topics:\n- Ceph\n\
+                 Politely decline anything outside them."
+            ),
+            "{topics_only}"
+        );
+        let refusal_only = brief(json!({ "scope": { "refusal": "Not my area." } }));
+        assert!(
+            refusal_only
+                .ends_with("## Scope\n\nIf asked about anything else, reply exactly: Not my area."),
+            "{refusal_only}"
+        );
     }
 
     #[tokio::test]
