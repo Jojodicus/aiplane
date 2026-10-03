@@ -618,3 +618,38 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn resources_name_the_pool_behind_each_model_choice_an_admin_mapped() {
+    use aiplane_core::server::settings;
+
+    let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
+    let (status, body) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["tiers"],
+        json!({ "fast": null, "balanced": null, "thorough": null })
+    );
+
+    settings::store(
+        &fx.state.db,
+        &fx.state.crypto,
+        &[
+            ("agents.pool_fast".into(), "guard-pool".into()),
+            ("agents.pool_balanced".into(), "main-pool".into()),
+        ],
+    )
+    .await
+    .unwrap();
+    fx.state.reload_settings().await;
+
+    let (_, body) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
+        .await;
+    assert_eq!(
+        body["tiers"],
+        json!({ "fast": "guard-pool", "balanced": "main-pool", "thorough": null })
+    );
+}
