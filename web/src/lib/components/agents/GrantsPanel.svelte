@@ -88,18 +88,18 @@
 		<form class="flex flex-wrap items-end gap-3" onsubmit={(e) => { e.preventDefault(); void add(); }}>
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-grants-kind')}</span>
-				<select class="select select-sm w-40" bind:value={kind} onchange={() => (ref = '')}>
+				<select class="select w-40" bind:value={kind} onchange={() => (ref = '')}>
 					{#each GRANT_KINDS as k (k)}<option value={k}>{t(`agents-grant-kind-${k}`)}</option>{/each}
 				</select>
 			</label>
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-grants-ref')}</span>
-				<input class="input input-sm w-72 font-mono" list="agent-grant-options" bind:value={ref} required />
+				<input class="input w-72 font-mono" list="agent-grant-options" bind:value={ref} required />
 				<datalist id="agent-grant-options">
 					{#each options as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
 				</datalist>
 			</label>
-			<button class="btn btn-primary btn-sm" type="submit" disabled={busy || !ref.trim()}>{t('agents-grants-add')}</button>
+			<button class="btn btn-primary" type="submit" disabled={busy || !ref.trim()}>{t('agents-grants-add')}</button>
 		</form>
 		<p class="text-xs text-base-content/60">{t('agents-grants-hint')}</p>
 	{/if}

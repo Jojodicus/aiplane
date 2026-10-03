@@ -1,4 +1,5 @@
 <script lang="ts">
+	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto, replaceState } from '$app/navigation';
@@ -197,12 +198,12 @@
 				<p class="font-mono text-xs text-base-content/60">{detail.name}</p>
 			</div>
 			{#if detail.live_version === null}
-				<span class="badge badge-ghost">{t('agents-never-published')}</span>
+				<StatusPill>{t('agents-never-published')}</StatusPill>
 			{:else}
-				<span class="badge badge-success">{t('agents-live-badge', { version: detail.live_version })}</span>
+				<StatusPill tone="ok">{t('agents-live-badge', { version: detail.live_version })}</StatusPill>
 			{/if}
-			{#if dirty}<span class="badge badge-warning">{t('agents-unsaved')}</span>{/if}
-			{#if !writable}<span class="badge badge-outline">{t('agents-read-only')}</span>{/if}
+			{#if dirty}<StatusPill tone="warn">{t('agents-unsaved')}</StatusPill>{/if}
+			{#if !writable}<StatusPill>{t('agents-read-only')}</StatusPill>{/if}
 			{#if writable}
 				<div class="ml-auto flex flex-wrap gap-2">
 					<button class="btn btn-primary btn-sm" type="button" disabled={busy || !dirty} onclick={() => void save()}>{t('agents-save')}</button>
@@ -228,7 +229,7 @@
 		{/if}
 		{#if notice}<div class="alert alert-success text-sm"><span>{notice}</span></div>{/if}
 
-		<div role="tablist" class="tabs tabs-border w-full overflow-x-auto">
+		<div role="tablist" class="tabs tabs-border w-full overflow-x-auto border-b border-base-300">
 			{#each TABS as name (name)}
 				<button role="tab" type="button" class="tab whitespace-nowrap" class:tab-active={tab === name} aria-selected={tab === name} onclick={() => selectTab(name)}>
 					{t(`agents-tab-${name}`)}

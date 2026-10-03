@@ -19,7 +19,7 @@
 <div class="flex flex-wrap items-end gap-3">
 	<label class="flex flex-col gap-1">
 		<span class="label-text">{t('agents-router-kind')}</span>
-		<select class="select select-sm w-72" value={router.kind ?? ''} onchange={(e) => setRouter('kind', e.currentTarget.value)}>
+		<select class="select w-72" value={router.kind ?? ''} onchange={(e) => setRouter('kind', e.currentTarget.value)}>
 			<option value="">{t('agents-router-default')}</option>
 			<option value="rules">{t('agents-router-rules')}</option>
 			<option value="classifier">{t('agents-router-classifier')}</option>
@@ -29,7 +29,7 @@
 	{#if router.kind === 'classifier'}
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-router-pool')}</span>
-			<select class="select select-sm w-48" value={router.pool ?? ''} onchange={(e) => setRouter('pool', e.currentTarget.value)}>
+			<select class="select w-48" value={router.pool ?? ''} onchange={(e) => setRouter('pool', e.currentTarget.value)}>
 				<option value="">{t('agents-router-pool-main')}</option>
 				{#each pools as pool (pool)}<option value={pool}>{pool}</option>{/each}
 			</select>
@@ -40,7 +40,7 @@
 		<label class="flex min-w-60 flex-col gap-1">
 			<span class="label-text">{t('agents-router-order')}</span>
 			<input
-				class="input input-sm w-full font-mono"
+				class="input w-full font-mono"
 				value={(router.order ?? []).join(', ')}
 				onchange={(e) => {
 					spec.router.order = splitList(e.currentTarget.value);

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { agentsApi, type AgentError, type AgentVersion, type SpecIssue } from '$lib/agents';
 	import { locale, t } from '$lib/i18n.svelte';
 
@@ -44,8 +45,8 @@
 	<div class="card card-border">
 		<div class="card-body gap-2 p-4">
 			<div class="flex flex-wrap items-center gap-2">
-				<span class="badge badge-warning">{t('agents-draft')}</span>
-				{#if dirty}<span class="badge badge-ghost">{t('agents-unsaved')}</span>{/if}
+				<StatusPill tone="warn">{t('agents-draft')}</StatusPill>
+				{#if dirty}<StatusPill>{t('agents-unsaved')}</StatusPill>{/if}
 				<span class="text-sm text-base-content/60">
 					{liveVersion === null ? t('agents-never-published') : t('agents-live-is', { version: liveVersion })}
 				</span>
@@ -72,7 +73,7 @@
 				<input type="checkbox" aria-label={t('agents-version-label', { version: version.version })} />
 				<div class="collapse-title flex flex-wrap items-center gap-2">
 					<span class="font-semibold">{t('agents-version-label', { version: version.version })}</span>
-					{#if version.version === liveVersion}<span class="badge badge-success badge-sm">{t('agents-live')}</span>{/if}
+					{#if version.version === liveVersion}<StatusPill tone="ok" size="sm">{t('agents-live')}</StatusPill>{/if}
 					<span class="text-xs font-normal text-base-content/60">{t('agents-version-by', { by: version.published_by, at: when(version.published_at) })}</span>
 				</div>
 				<div class="collapse-content space-y-2">

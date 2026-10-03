@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Modal from '$lib/components/ui/Modal.svelte';
+	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
@@ -9,7 +11,7 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	let dialog = $state<HTMLDialogElement>();
+	let creating = $state(false);
 	let name = $state('');
 	let display = $state('');
 	let description = $state('');
@@ -48,7 +50,7 @@
 			<h1 class="text-2xl font-bold">{t('agents-heading')}</h1>
 			<p class="mt-2 max-w-3xl text-sm text-base-content/60">{t('agents-intro')}</p>
 		</div>
-		<button class="btn btn-primary btn-sm" type="button" onclick={() => dialog?.showModal()}>{t('agents-create')}</button>
+		<button class="btn btn-primary btn-sm" type="button" onclick={() => (creating = true)}>{t('agents-create')}</button>
 	</header>
 
 	{#if error}<div class="alert alert-error"><span>{error}</span></div>{/if}
@@ -60,14 +62,14 @@
 	{:else}
 		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 			{#each agents as agent (agent.id)}
-				<a class="card card-border bg-base-100 transition hover:border-primary" href="{base}/agents/{agent.id}">
+				<a class="card card-border transition-colors hover:border-primary" href="{base}/agents/{agent.id}">
 					<div class="card-body gap-2 p-4">
 						<div class="flex items-start justify-between gap-2">
 							<h2 class="card-title text-base">{agent.display || agent.name}</h2>
 							{#if agent.live_version === null}
-								<span class="badge badge-ghost badge-sm">{t('agents-never-published')}</span>
+								<StatusPill size="sm">{t('agents-never-published')}</StatusPill>
 							{:else}
-								<span class="badge badge-success badge-sm">{t('agents-live-badge', { version: agent.live_version })}</span>
+								<StatusPill tone="ok" size="sm">{t('agents-live-badge', { version: agent.live_version })}</StatusPill>
 							{/if}
 						</div>
 						<p class="font-mono text-xs text-base-content/60">{agent.name}</p>
@@ -84,9 +86,13 @@
 	{/if}
 </div>
 
-<dialog class="modal" bind:this={dialog}>
-	<form class="modal-box space-y-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
-		<h3 class="text-lg font-bold">{t('agents-create')}</h3>
+{#snippet createActions()}
+	<button class="btn btn-ghost" type="button" onclick={() => (creating = false)}>{t('admin-cancel')}</button>
+	<button class="btn btn-primary" type="submit" form="agent-create" disabled={busy || !name.trim()}>{t('agents-create-submit')}</button>
+{/snippet}
+
+<Modal bind:open={creating} title={t('agents-create')} footer={createActions}>
+	<form id="agent-create" class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
 		{#if createError}<div class="alert alert-error text-sm" role="alert"><span>{createError}</span></div>{/if}
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-name')}</span>
@@ -101,10 +107,5 @@
 			<span class="label-text">{t('agents-create-description')}</span>
 			<textarea class="textarea w-full" bind:value={description}></textarea>
 		</label>
-		<div class="modal-action">
-			<button class="btn" type="button" onclick={() => dialog?.close()}>{t('admin-cancel')}</button>
-			<button class="btn btn-primary" type="submit" disabled={busy || !name.trim()}>{t('agents-create-submit')}</button>
-		</div>
 	</form>
-	<form method="dialog" class="modal-backdrop"><button aria-label={t('admin-cancel')}>close</button></form>
-</dialog>
+</Modal>

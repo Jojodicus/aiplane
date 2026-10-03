@@ -211,7 +211,7 @@
 		</div>
 
 		{#if selected}
-			<section class="card card-border min-w-0 bg-base-100" aria-labelledby="canvas-panel-title">
+			<section class="card card-border min-w-0" aria-labelledby="canvas-panel-title">
 				<div class="card-body gap-3 p-4">
 					<div class="flex items-start gap-2">
 						<div class="min-w-0 flex-1">

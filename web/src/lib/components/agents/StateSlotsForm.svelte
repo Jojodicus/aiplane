@@ -34,11 +34,11 @@
 				<div class="flex flex-wrap items-end gap-3">
 					<label class="flex flex-col gap-1">
 						<span class="label-text">{t('agents-slot-name')}</span>
-						<input class="input input-sm w-44 font-mono" value={name} onchange={(e) => rename(name, e.currentTarget.value)} />
+						<input class="input w-44 font-mono" value={name} onchange={(e) => rename(name, e.currentTarget.value)} />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="label-text">{t('agents-slot-type')}</span>
-						<select class="select select-sm w-36" bind:value={slot.type}>
+						<select class="select w-36" bind:value={slot.type}>
 							<option value="">{t('agents-pick')}</option>
 							{#each TYPES as type (type)}<option value={type}>{type}</option>{/each}
 						</select>
@@ -63,7 +63,7 @@
 
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-slot-description')}</span>
-					<input class="input input-sm w-full" bind:value={slot.description} />
+					<input class="input w-full" bind:value={slot.description} />
 					<FieldIssues {issues} path="state.{name}.description" />
 				</label>
 
@@ -71,40 +71,40 @@
 					{#if slot.type === 'enum'}
 						<label class="flex min-w-60 flex-col gap-1">
 							<span class="label-text">{t('agents-slot-values')}</span>
-							<input class="input input-sm w-full" value={(slot.values ?? []).join(', ')} onchange={(e) => (slot.values = splitList(e.currentTarget.value))} placeholder={t('agents-slot-values-hint')} />
+							<input class="input w-full" value={(slot.values ?? []).join(', ')} onchange={(e) => (slot.values = splitList(e.currentTarget.value))} placeholder={t('agents-slot-values-hint')} />
 							<FieldIssues {issues} path="state.{name}.values" />
 						</label>
 					{/if}
 					{#if slot.type === 'string'}
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-slot-min-length')}</span>
-							<input class="input input-sm w-28" type="number" min="0" value={slot.min_length ?? ''} onchange={(e) => setNumber(slot, 'min_length', e.currentTarget.value)} />
+							<input class="input w-28" type="number" min="0" value={slot.min_length ?? ''} onchange={(e) => setNumber(slot, 'min_length', e.currentTarget.value)} />
 							<FieldIssues {issues} path="state.{name}.min_length" />
 						</label>
 					{/if}
 					{#if slot.type === 'string' || slot.type === 'email'}
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-slot-max-length')}</span>
-							<input class="input input-sm w-28" type="number" min="0" value={slot.max_length ?? ''} onchange={(e) => setNumber(slot, 'max_length', e.currentTarget.value)} />
+							<input class="input w-28" type="number" min="0" value={slot.max_length ?? ''} onchange={(e) => setNumber(slot, 'max_length', e.currentTarget.value)} />
 							<FieldIssues {issues} path="state.{name}.max_length" />
 						</label>
 					{/if}
 					{#if slot.type === 'string'}
 						<label class="flex min-w-48 flex-col gap-1">
 							<span class="label-text">{t('agents-slot-pattern')}</span>
-							<input class="input input-sm w-full font-mono" bind:value={slot.pattern} />
+							<input class="input w-full font-mono" bind:value={slot.pattern} />
 							<FieldIssues {issues} path="state.{name}.pattern" />
 						</label>
 					{/if}
 					{#if slot.type === 'integer' || slot.type === 'number'}
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-slot-minimum')}</span>
-							<input class="input input-sm w-28" type="number" value={slot.minimum ?? ''} onchange={(e) => setNumber(slot, 'minimum', e.currentTarget.value)} />
+							<input class="input w-28" type="number" value={slot.minimum ?? ''} onchange={(e) => setNumber(slot, 'minimum', e.currentTarget.value)} />
 							<FieldIssues {issues} path="state.{name}.minimum" />
 						</label>
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-slot-maximum')}</span>
-							<input class="input input-sm w-28" type="number" value={slot.maximum ?? ''} onchange={(e) => setNumber(slot, 'maximum', e.currentTarget.value)} />
+							<input class="input w-28" type="number" value={slot.maximum ?? ''} onchange={(e) => setNumber(slot, 'maximum', e.currentTarget.value)} />
 							<FieldIssues {issues} path="state.{name}.maximum" />
 						</label>
 					{/if}

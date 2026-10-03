@@ -30,7 +30,7 @@
 
 <div class="space-y-3">
 	{#each sections as section (section.id)}
-		<div class="collapse collapse-arrow border border-base-300 bg-base-100">
+		<div class="collapse collapse-arrow rounded-box border border-base-300 bg-base-200">
 			<input type="checkbox" checked={section.id === 'main'} aria-label={t(section.title)} />
 			<div class="collapse-title flex items-center gap-2">
 				<span class="font-semibold">{t(section.title)}</span>

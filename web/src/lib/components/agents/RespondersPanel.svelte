@@ -43,7 +43,7 @@
 		});
 </script>
 
-<section class="card card-border bg-base-100">
+<section class="card card-border">
 	<div class="card-body gap-4 p-4">
 		<h2 class="card-title text-base">{t('agents-responders-heading')}</h2>
 		<p class="text-sm text-base-content/70">{t('agents-responders-intro')}</p>
@@ -67,16 +67,16 @@
 			<form class="flex flex-wrap items-end gap-3" onsubmit={(e) => { e.preventDefault(); void add(); }}>
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-share-subject-kind')}</span>
-					<select class="select select-sm w-32" bind:value={kind}>
+					<select class="select w-32" bind:value={kind}>
 						<option value="user">{t('agents-share-kind-user')}</option>
 						<option value="group">{t('agents-share-kind-group')}</option>
 					</select>
 				</label>
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{kind === 'user' ? t('agents-share-user-id') : t('agents-share-group-name')}</span>
-					<input class="input input-sm w-64 max-w-full font-mono" bind:value={subject} required />
+					<input class="input w-64 max-w-full font-mono" bind:value={subject} required />
 				</label>
-				<button class="btn btn-primary btn-sm" type="submit" disabled={busy || !subject.trim()}>{t('agents-responders-add')}</button>
+				<button class="btn btn-primary" type="submit" disabled={busy || !subject.trim()}>{t('agents-responders-add')}</button>
 			</form>
 		{/if}
 	</div>

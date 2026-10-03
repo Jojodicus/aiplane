@@ -53,12 +53,12 @@
 		<div class="flex flex-wrap gap-3">
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-profile-display')}</span>
-				<input class="input input-sm w-56" value={spec.profile?.display ?? ''} onchange={(e) => setProfile('display', e.currentTarget.value)} />
+				<input class="input w-56" value={spec.profile?.display ?? ''} onchange={(e) => setProfile('display', e.currentTarget.value)} />
 				<FieldIssues {issues} path="profile.display" />
 			</label>
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-profile-color')}</span>
-				<input class="input input-sm w-36 font-mono" value={spec.profile?.color ?? ''} onchange={(e) => setProfile('color', e.currentTarget.value)} placeholder="#2563eb" />
+				<input class="input w-36 font-mono" value={spec.profile?.color ?? ''} onchange={(e) => setProfile('color', e.currentTarget.value)} placeholder="#2563eb" />
 				<FieldIssues {issues} path="profile.color" />
 			</label>
 		</div>
@@ -94,7 +94,7 @@
 
 	<section class="space-y-2">
 		<h4 class="font-semibold">{t('agents-on-unavailable')}</h4>
-		<select class="select select-sm w-72" value={spec.on_tool_unavailable ?? ''} onchange={(e) => (spec.on_tool_unavailable = e.currentTarget.value)} aria-label={t('agents-on-unavailable')}>
+		<select class="select w-72" value={spec.on_tool_unavailable ?? ''} onchange={(e) => (spec.on_tool_unavailable = e.currentTarget.value)} aria-label={t('agents-on-unavailable')}>
 			<option value="">{t('agents-on-unavailable-default')}</option>
 			<option value="reject">{t('agents-on-unavailable-reject')}</option>
 			<option value="skip">{t('agents-on-unavailable-skip')}</option>
@@ -119,12 +119,12 @@
 		<div class="flex flex-wrap gap-3">
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-publish-idle-ttl')}</span>
-				<input class="input input-sm w-28 font-mono" value={spec.publish?.idle_ttl ?? ''} onchange={(e) => (publish().idle_ttl = e.currentTarget.value)} placeholder="30m" />
+				<input class="input w-28 font-mono" value={spec.publish?.idle_ttl ?? ''} onchange={(e) => (publish().idle_ttl = e.currentTarget.value)} placeholder="30m" />
 				<FieldIssues {issues} path="publish.idle_ttl" />
 			</label>
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-publish-retention')}</span>
-				<input class="input input-sm w-28" type="number" min="1" value={spec.publish?.retention_days ?? ''} onchange={(e) => setNumber('retention_days', e.currentTarget.value)} />
+				<input class="input w-28" type="number" min="1" value={spec.publish?.retention_days ?? ''} onchange={(e) => setNumber('retention_days', e.currentTarget.value)} />
 				<FieldIssues {issues} path="publish.retention_days" />
 			</label>
 		</div>
@@ -139,8 +139,8 @@
 			<p class="text-xs text-base-content/60">{t('agents-publish-filter-hint')}</p>
 			{#each Object.entries(spec.publish?.output_filter?.patterns ?? {}) as [name, pattern], i (i)}
 				<div class="flex flex-wrap items-center gap-2">
-					<input class="input input-sm w-36 font-mono" value={name} onchange={(e) => { const next = e.currentTarget.value.trim(); if (next) spec.publish.output_filter.patterns = renameKey(spec.publish.output_filter.patterns, name, next); }} aria-label={t('agents-publish-filter-name')} />
-					<input class="input input-sm w-64 font-mono" value={pattern as string} onchange={(e) => (patterns()[name] = e.currentTarget.value)} aria-label={t('agents-publish-filter-regex')} />
+					<input class="input w-36 font-mono" value={name} onchange={(e) => { const next = e.currentTarget.value.trim(); if (next) spec.publish.output_filter.patterns = renameKey(spec.publish.output_filter.patterns, name, next); }} aria-label={t('agents-publish-filter-name')} />
+					<input class="input w-64 font-mono" value={pattern as string} onchange={(e) => (patterns()[name] = e.currentTarget.value)} aria-label={t('agents-publish-filter-regex')} />
 					<button class="btn btn-ghost btn-sm" type="button" onclick={() => delete spec.publish.output_filter.patterns[name]} aria-label={t('agents-remove')}>✕</button>
 				</div>
 				<FieldIssues {issues} path="publish.output_filter.patterns.{name}" />
