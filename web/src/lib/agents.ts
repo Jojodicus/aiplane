@@ -76,6 +76,21 @@ export interface NotifyChannel {
 	created_at: string;
 }
 
+/** A key a website embeds the agent with (`docs/embed.md`). The key itself is shown once, when it is created. */
+export interface EmbedKey {
+	id: string;
+	name: string;
+	origins: string[];
+	created_by: string;
+	created_at: string;
+	revoked_at: string | null;
+}
+
+/** The script tag a website owner pastes before `</body>`. */
+export function embedSnippet(scriptUrl: string, key: string): string {
+	return `<script src="${scriptUrl}" data-agent-key="${key}" async></script>`;
+}
+
 export interface NewChannel {
 	kind: ChannelKind;
 	name: string;
@@ -278,6 +293,12 @@ export const agentsApi = {
 		call<{ channel: NotifyChannel }>(`/api/v0/agents/${id}/channels`, json('POST', channel)).then((r) => r.channel),
 	removeChannel: (id: string, channelId: string) =>
 		call<void>(`/api/v0/agents/${id}/channels/${channelId}`, json('DELETE')),
+	embedKeys: (id: string) =>
+		call<{ embed_keys: EmbedKey[] }>(`/api/v0/agents/${id}/embed-keys`).then((r) => r.embed_keys),
+	createEmbedKey: (id: string, body: { name: string; origins: string[] }) =>
+		call<{ embed_key: EmbedKey; key: string }>(`/api/v0/agents/${id}/embed-keys`, json('POST', body)),
+	revokeEmbedKey: (id: string, keyId: string) =>
+		call<void>(`/api/v0/agents/${id}/embed-keys/${keyId}/revoke`, json('POST')),
 	grant: (id: string, kind: GrantKind, ref: string) =>
 		call<{ added: boolean }>(`/api/v0/system-principals/${id}/grants`, json('POST', { kind, ref })),
 	revokeGrant: (id: string, kind: GrantKind, ref: string) =>

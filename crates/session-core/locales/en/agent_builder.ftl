@@ -266,3 +266,17 @@ agents-test-expires = Expires { $at }
 # The test chat's debug view: which loop iteration (#103) a worker or critic run was.
 agents-debug-loop-worker = worker, iteration { $iteration }
 agents-debug-loop-critic = critic, iteration { $iteration }
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = Embed keys
+agents-embed-intro = A website shows this agent with an embed key and one script tag. The key works only on the origins listed with it (and, when the published version sets allowed origins, only on those too), and visitors always talk to the live version.
+agents-embed-empty = No embed keys yet.
+agents-embed-name = Name
+agents-embed-name-hint = www.example.com
+agents-embed-origins = Allowed origins (one per line)
+agents-embed-origins-help = Exactly what the browser sends: https://www.example.com, with the port if it is not the default, without a path.
+agents-embed-create = Create key
+agents-embed-created = Copy the snippet now: the key is shown only this once. Paste it before </body> on the pages of the listed origins.
+agents-embed-revoke = Revoke
+agents-embed-revoked = Revoked
+agents-embed-created-by = Created by { $user } on { $at }

@@ -7,6 +7,7 @@ import {
 	cleanSpec,
 	condKind,
 	describeBindSource,
+	embedSnippet,
 	ensureShape,
 	issuesAt,
 	issuesUnder,
@@ -214,6 +215,13 @@ test('renaming or removing a route keeps the router order naming routes that exi
 	removeRoute(spec, 'people');
 	assert.deepEqual(spec.router, { kind: 'rules' }, 'an empty order is no order');
 	assert.deepEqual(spec.routes, {});
+});
+
+test('the embed snippet loads the widget from the gateway with the new key', () => {
+	assert.equal(
+		embedSnippet('https://gw.example.com/embed.js', 'gwe_abc'),
+		'<script src="https://gw.example.com/embed.js" data-agent-key="gwe_abc" async></script>'
+	);
 });
 
 test('a fresh name skips the ones in use', () => {

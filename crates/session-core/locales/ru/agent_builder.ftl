@@ -265,3 +265,17 @@ agents-test-expires = Истекает { $at }
 
 agents-debug-loop-worker = исполнитель, итерация { $iteration }
 agents-debug-loop-critic = критик, итерация { $iteration }
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = Ключи встраивания
+agents-embed-intro = Сайт показывает этого агента с ключом встраивания и одним тегом script. Ключ работает только на указанных для него источниках (а если опубликованная версия задаёт разрешённые источники, то и только на них), и посетители всегда общаются с действующей версией.
+agents-embed-empty = Ключей встраивания пока нет.
+agents-embed-name = Название
+agents-embed-name-hint = www.example.com
+agents-embed-origins = Разрешённые источники (по одному в строке)
+agents-embed-origins-help = Ровно то, что отправляет браузер: https://www.example.com, с портом, если он не стандартный, без пути.
+agents-embed-create = Создать ключ
+agents-embed-created = Скопируйте фрагмент сейчас: ключ показывается только один раз. Вставьте его перед </body> на страницах указанных источников.
+agents-embed-revoke = Отозвать
+agents-embed-revoked = Отозван
+agents-embed-created-by = Создан пользователем { $user } { $at }

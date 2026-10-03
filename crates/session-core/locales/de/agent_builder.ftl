@@ -265,3 +265,17 @@ agents-test-expires = Läuft ab { $at }
 
 agents-debug-loop-worker = Bearbeiter, Durchlauf { $iteration }
 agents-debug-loop-critic = Prüfer, Durchlauf { $iteration }
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = Einbettungsschlüssel
+agents-embed-intro = Eine Website zeigt diesen Agenten mit einem Einbettungsschlüssel und einem Script-Tag. Der Schlüssel funktioniert nur auf den bei ihm eingetragenen Origins (und, wenn die veröffentlichte Version erlaubte Origins festlegt, nur auf diesen), und Besucher sprechen immer mit der Live-Version.
+agents-embed-empty = Noch keine Einbettungsschlüssel.
+agents-embed-name = Name
+agents-embed-name-hint = www.example.com
+agents-embed-origins = Erlaubte Origins (eine pro Zeile)
+agents-embed-origins-help = Genau das, was der Browser sendet: https://www.example.com, mit Port, wenn es nicht der Standardport ist, ohne Pfad.
+agents-embed-create = Schlüssel erstellen
+agents-embed-created = Kopieren Sie das Snippet jetzt: Der Schlüssel wird nur dieses eine Mal angezeigt. Fügen Sie es vor </body> in die Seiten der eingetragenen Origins ein.
+agents-embed-revoke = Widerrufen
+agents-embed-revoked = Widerrufen
+agents-embed-created-by = Erstellt von { $user } am { $at }

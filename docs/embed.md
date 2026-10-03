@@ -14,9 +14,10 @@ why a token in `sessionStorage` and not cookies) is
   async></script>
 ```
 
-1. In the agent builder, create an **embed key** for the agent and list the
-   exact origins that may use it (`https://www.example.com`, scheme and host,
-   plus the port if it is not the default). The key is shown once.
+1. In the agent builder's **Sharing** tab, create an **embed key** for the
+   agent and list the exact origins that may use it (`https://www.example.com`, scheme and host,
+   plus the port if it is not the default). The key is shown once, already
+   inside the snippet below.
 2. Paste the snippet before `</body>` on those pages.
 
 A launcher button appears in the bottom corner. The visitor's conversation

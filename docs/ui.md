@@ -555,9 +555,16 @@ are in `web/src/lib/components/agents/`.
   conversation the resume answers with a fresh debug view too, so a verifier's
   slot or a gate the decision opened shows on the reply. In a test
   conversation the manager may answer a `secure_input` too.
-- **Not built yet.** Embed keys and the visitor widget (#91, #94), a `state`
-  or `gate` SSE event so the debug view could stream, and conversation
-  history for test sessions (they are stored with `agent_version = 0`).
+- **Embed keys.** The Sharing tab's *Embed keys* card lists the agent's keys
+  (name, origins, who created them, revoked or not) from `GET
+  /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name
+  and an origin per line. The server returns the key only in the create
+  response, so the card shows the ready-to-paste `<script>` tag
+  (`embedSnippet`, pointing at this gateway's `/embed.js`) once, right then.
+  The widget itself is [`embed.md`](embed.md).
+- **Not built yet.** A `state` or `gate` SSE event so the debug view could
+  stream, and conversation history for test sessions (they are stored with
+  `agent_version = 0`).
 
 ## Inbox
 

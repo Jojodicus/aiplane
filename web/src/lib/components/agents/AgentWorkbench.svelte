@@ -27,6 +27,7 @@
 	import SharingPanel from './SharingPanel.svelte';
 	import RespondersPanel from './RespondersPanel.svelte';
 	import ChannelsPanel from './ChannelsPanel.svelte';
+	import EmbedKeysPanel from './EmbedKeysPanel.svelte';
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
 	import TestChat from './TestChat.svelte';
 	import VersionsPanel from './VersionsPanel.svelte';
@@ -265,6 +266,7 @@
 					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
 					<RespondersPanel agentId={id} {writable} />
 					<ChannelsPanel agentId={id} {writable} />
+					<EmbedKeysPanel agentId={id} {writable} />
 				</div>
 			{/if}
 		</div>
