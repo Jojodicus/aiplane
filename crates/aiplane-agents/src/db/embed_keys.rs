@@ -95,12 +95,14 @@ pub async fn create(
     .bind(Timestamp::now().to_string())
     .execute(&mut *tx)
     .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::EmbedKeyCreated,
-        new.principal_id,
-        actor_id,
-        json!({ "embed_key_id": id, "name": new.name, "origins": new.origins }),
+        agent_audit::NewEvent::new(
+            AuditKind::EmbedKeyCreated,
+            new.principal_id,
+            json!({ "embed_key_id": id, "name": new.name, "origins": new.origins }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -162,12 +164,14 @@ pub async fn revoke(
     if changed == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::EmbedKeyRevoked,
-        principal_id,
-        actor_id,
-        json!({ "embed_key_id": key_id }),
+        agent_audit::NewEvent::new(
+            AuditKind::EmbedKeyRevoked,
+            principal_id,
+            json!({ "embed_key_id": key_id }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;

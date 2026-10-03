@@ -6,11 +6,12 @@
 //! principal, in the `agent_audit` table.
 //!
 //! **Two kinds of writer, one insert.** A management change (a grant, a
-//! share, a publish) is recorded with [`record`] on the caller's own
-//! transaction, so the change can never exist without its event. A run event
-//! (a model exchange, a tool call, a gate) is recorded with [`append_now`],
-//! which takes the database's write lock for exactly one event. Both end in
-//! [`append`], the only `INSERT` into the table; the runtime reaches it
+//! share, a publish) is recorded with [`append`] on the caller's own
+//! transaction, naming its actor ([`NewEvent::by`]), so the change can never
+//! exist without its event. A run event (a model exchange, a tool call, a
+//! gate) is recorded with [`append_now`], which takes the database's write
+//! lock for exactly one event. Both end in [`append`], the only `INSERT`
+//! into the table; the runtime reaches it
 //! through `aiplane_runtime::agents::audit`, which bounds the wait and fails
 //! a run closed when an event cannot be written.
 //!
@@ -534,23 +535,6 @@ pub struct Appended {
     pub chain_key: String,
     pub seq: i64,
     pub hash: String,
-}
-
-/// Record a management change on `conn` — the caller's transaction, so the
-/// event commits or rolls back with the change it records.
-pub async fn record(
-    conn: &mut WriteTx,
-    kind: AuditKind,
-    principal_id: &str,
-    actor_id: &str,
-    detail: Value,
-) -> Result<(), DbError> {
-    append(
-        conn,
-        NewEvent::new(kind, principal_id, detail).by(Some(actor_id)),
-    )
-    .await
-    .map(|_| ())
 }
 
 /// A chain's newest event. Answered from `idx_agent_audit_chain_head`

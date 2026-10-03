@@ -978,17 +978,12 @@ fn activity_events_are_written_only_through_the_activity_log() {
         "SQL changes agent_audit outside the activity log. Every event is appended by \
          agent_audit::append so it takes its place in a hash chain, and the log is never edited \
          in place; record an event through aiplane_runtime::agents::audit (or \
-         agent_audit::record on a management change's transaction) instead.",
+         agent_audit::append on a management change's transaction) instead.",
         ACTIVITY_LOG_SQL,
         &sql,
     );
     let writers = scan(
-        &[
-            "agent_audit::append",
-            "append_now",
-            "agent_audit::record(",
-            "agent_audit::anchor",
-        ],
+        &["agent_audit::append", "append_now", "agent_audit::anchor"],
         |s| s.code.as_str(),
     );
     assert_within(

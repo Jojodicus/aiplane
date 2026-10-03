@@ -151,12 +151,14 @@ pub(crate) async fn insert(
     if inserted == 0 {
         return Ok(None);
     }
-    agent_audit::record(
+    agent_audit::append(
         conn,
-        AuditKind::PrincipalCreated,
-        &id,
-        actor_id,
-        json!({ "name": new.name }),
+        agent_audit::NewEvent::new(
+            AuditKind::PrincipalCreated,
+            &id,
+            json!({ "name": new.name }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     Ok(Some(id))
@@ -205,12 +207,14 @@ pub async fn disable(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbEr
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::PrincipalDisabled,
-        id,
-        actor_id,
-        json!({ "tokens_revoked": revoked }),
+        agent_audit::NewEvent::new(
+            AuditKind::PrincipalDisabled,
+            id,
+            json!({ "tokens_revoked": revoked }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -268,12 +272,14 @@ pub async fn add_grant(
     if inserted == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::GrantAdded,
-        principal_id,
-        actor_id,
-        json!({ "kind": kind.as_str(), "ref": reference }),
+        agent_audit::NewEvent::new(
+            AuditKind::GrantAdded,
+            principal_id,
+            json!({ "kind": kind.as_str(), "ref": reference }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -300,12 +306,14 @@ pub async fn remove_grant(
     if removed == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::GrantRemoved,
-        principal_id,
-        actor_id,
-        json!({ "kind": kind.as_str(), "ref": reference }),
+        agent_audit::NewEvent::new(
+            AuditKind::GrantRemoved,
+            principal_id,
+            json!({ "kind": kind.as_str(), "ref": reference }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -351,12 +359,14 @@ pub async fn insert_token(
     .bind(expires_at.to_string())
     .execute(&mut *tx)
     .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::TokenIssued,
-        principal_id,
-        actor_id,
-        json!({ "token_id": id, "name": name }),
+        agent_audit::NewEvent::new(
+            AuditKind::TokenIssued,
+            principal_id,
+            json!({ "token_id": id, "name": name }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -401,12 +411,14 @@ pub async fn revoke_token(
     if changed == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::TokenRevoked,
-        principal_id,
-        actor_id,
-        json!({ "token_id": token_id }),
+        agent_audit::NewEvent::new(
+            AuditKind::TokenRevoked,
+            principal_id,
+            json!({ "token_id": token_id }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;

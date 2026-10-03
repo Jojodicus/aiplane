@@ -134,13 +134,15 @@ pub async fn create(
     if !inserted {
         return Ok(None);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::ChannelCreated,
-        agent_id,
-        actor_id,
-        json!({ "channel_id": id, "kind": new.kind.as_str(), "name": new.name,
+        agent_audit::NewEvent::new(
+            AuditKind::ChannelCreated,
+            agent_id,
+            json!({ "channel_id": id, "kind": new.kind.as_str(), "name": new.name,
                 "url_host": new.url_host, "details": new.details }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -208,12 +210,14 @@ pub async fn delete(
             .rows_affected()
             > 0;
     if removed {
-        agent_audit::record(
+        agent_audit::append(
             &mut tx,
-            AuditKind::ChannelDeleted,
-            agent_id,
-            actor_id,
-            json!({ "channel_id": channel_id }),
+            agent_audit::NewEvent::new(
+                AuditKind::ChannelDeleted,
+                agent_id,
+                json!({ "channel_id": channel_id }),
+            )
+            .by(Some(actor_id)),
         )
         .await?;
     }

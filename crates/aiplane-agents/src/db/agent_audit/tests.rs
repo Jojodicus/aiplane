@@ -111,21 +111,22 @@ async fn a_management_event_extends_its_agents_own_chain_on_the_callers_transact
     let pool = memory().await;
     for n in 0..3 {
         let mut tx = WriteTx::begin(&pool).await.unwrap();
-        record(
+        append(
             &mut tx,
-            AuditKind::GrantAdded,
-            "p1",
-            "alice",
-            json!({"kind": "tool", "n": n}),
+            NewEvent::new(AuditKind::GrantAdded, "p1", json!({"kind": "tool", "n": n}))
+                .by(Some("alice")),
         )
         .await
         .unwrap();
         tx.commit().await.unwrap();
     }
     let mut tx = WriteTx::begin(&pool).await.unwrap();
-    record(&mut tx, AuditKind::GrantAdded, "p1", "alice", json!({}))
-        .await
-        .unwrap();
+    append(
+        &mut tx,
+        NewEvent::new(AuditKind::GrantAdded, "p1", json!({})).by(Some("alice")),
+    )
+    .await
+    .unwrap();
     drop(tx);
 
     let rows = chain_rows(&pool, "agent:p1").await;
