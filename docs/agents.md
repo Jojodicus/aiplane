@@ -254,6 +254,11 @@ only for readability.
 
 ```yaml
 profile: { display: "croit Support", avatar: null, color: null }
+scope:                                  # #115; all optional
+  topics: [croit products, Ceph storage]
+  refusal: "I can only help with croit products and Ceph storage."
+  strict: true                          # a topic guard refuses everything else
+  classifier_pool: small-fast           # the guard's pool; default main.pool, must be granted
 main:
   pool: chat-conversational             # must be in grants[pool]
   instructions:
@@ -345,12 +350,15 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
   `finish.schema`.
 - Every gate must type-check against the slots (§4).
 - The sub-agent graph must be acyclic and at most 3 levels deep.
+- A `strict` scope lists at least one topic and has a non-blank `refusal`;
+  its `classifier_pool` must be granted. Checked on every save, not only on
+  publish, because the test chat runs the draft.
 
 ### The typed spec (#107)
 
 Runtime code never reads the spec's JSON. It reads `AgentSpec`
 (`aiplane-runtime::agents::spec::model`): serde structs and enums for every
-part above — `profile`, `main` (with `tool_resources`, their `bind`,
+part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 `permission` and `approval_timeout`, and `budget`), `state` slots,
 `verifiers` (tagged by `kind`), `router`, `routes` (each with exactly one
 `RouteTarget`: `agent`, `human`, `a2a` or `loop`), `finish`,
@@ -2665,7 +2673,8 @@ logged and the request goes on as it would have.
 | Event | Written by | Detail |
 |---|---|---|
 | `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` or, after a turn's first round, `request_delta` (see "Storage") (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
-| `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
+| `llm_exchange` | a constrained choice on a pool (`agents::pool_choice`): the route classifier, the topic guard (#115) | `purpose: route_classifier` or `scope_guard`, `pool`, `model`, `backend`, `request`, `response`, `answer`, `error` |
+| `scope_decision` | the topic guard (`agents::topic_guard`, #115) | `verdict` (`in_scope`, `out_of_scope`, `failed`), `topics`, `pool`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
 | `state_written` | `agent_state::put`, on the write's transaction, in the chain of the written session's root conversation (a sub-agent's slot in its child session included, whichever door wrote it) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance` (who wrote it: `llm`, `verifier:<id>` or `host`), `set_at` |
@@ -2827,6 +2836,85 @@ the next round); `agents/retention.rs` (the sweep and its marker);
 `tests/it/agent_activity.rs` (the API: timeline, filters, cursor, export,
 verify, who may read it); `web/src/lib/agent-activity.test.ts`.
 
+### What #115 built
+
+**Problem.** An owner wrote "you do not answer questions outside your scope
+and deny them politely" with no scope defined; asked about a diesel engine,
+the agent answered in detail. A rule in the instructions is a request the
+model may ignore, and without topics it cannot even tell what is out of
+scope. The system message also named the agent by its slug
+(`` You are the agent `website` ``) and ran orchestration and response
+instructions together.
+
+**Spec.** `scope: { topics, refusal, strict, classifier_pool }`
+(`spec::model::Scope`), all optional. The validator's rules are under
+"Checks when a spec is validated" above.
+
+**Structured system prompt.** Every agent run's system message opens with
+the owner's brief (`profile::Brief`), each section only when it has
+content:
+
+```
+## Role
+You are <profile.display, else the principal's display name>. The sections below are your owner's instructions.
+
+## Task
+<main.instructions.orchestration>
+
+## Scope
+You cover only these topics:
+- <topic>
+If asked about anything else, reply exactly: <refusal>
+
+## Tone
+<main.instructions.response>
+```
+
+The slot view, the route summary and a compaction summary follow, each
+after a `---` as before. `## Scope` is written whether or not the scope is
+strict: without `strict` it is guidance and nothing else.
+
+**Topic guard** (`agents::topic_guard`). Under `strict`, a main agent's turn
+asks the guard before its first model call (`TurnPolicy::guard_topic`, the
+one place, in `run_one_turn`; never on a resume and never for a routed
+sub-agent, whose input is a task, not a visitor's message).
+- *Input:* the topics, the latest visitor message and the exchange before
+  it (the previous visitor message and answer), each clipped to 2000
+  characters. The exchange is what lets "and what about the price?" after an
+  in-scope question stay in scope; older history is left out to keep the
+  call small. Greetings, thanks and "what can you do?" count as in scope.
+- *Call:* `agents::pool_choice::PoolChoice`, the mechanism the route
+  classifier uses too: one non-streaming request to `classifier_pool` (else
+  `main.pool`) under the principal's pool grant, `response_format` an enum
+  of `in_scope` / `out_of_scope`, and the answer checked again in code. It
+  is a usage row of the run (so it counts against `publish.budget` and the
+  pool's limits), its tokens count against the turn's `main.budget.tokens`,
+  and it is an `llm_exchange` with `purpose: scope_guard`.
+- *Verdict:* recorded as `scope_decision`. Only a clean `in_scope` lets the
+  turn continue (trust rule 1: the model may only deny). `out_of_scope`
+  makes the owner's `refusal`, verbatim and untranslated, the turn's answer;
+  the main model is not called. The answer still passes the output filter
+  like any other.
+- *Chosen: fail closed.* When the guard cannot decide (no model, a non-2xx,
+  an answer that is not a verdict), the visitor gets the refusal and the
+  `scope_decision` carries `verdict: failed` with the `error`. A strict scope
+  promises that off-topic messages never reach the main model; failing open
+  would break that promise exactly when the guard pool is down and nobody is
+  watching. The cost is an in-scope visitor refused during an outage, which
+  the error in the log makes visible.
+
+**Test chat.** The debug payload carries `scope: {verdict, topics, error?}`
+from the turn's `scope_decision`, and the DebugPanel shows it.
+
+**Tests.** `agents/run/tests/topic_guard.rs` (the diesel question refused
+with a scripted guard upstream and metered, an in-scope question under the
+structured prompt, a follow-up judged with its exchange, a non-strict scope
+as prompt guidance only, a failing guard refusing and recording why, no
+guard for a sub-agent); `agents/topic_guard.rs` (which specs get a guard,
+what the guard is shown); `agents/profile.rs` (the brief's sections);
+`spec.rs` (scope validation); `tests/it/agent_test_chat.rs` (the 422 for a
+strict scope without a refusal, the verdict in the debug view).
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2881,6 +2969,7 @@ use `regex`, and hashing uses the token helpers.
 | #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
 | #111 activity log | §5 | `agent_audit` becomes a hash-chained activity log (per conversation, per agent); every model exchange, tool call, state write, turn and decision of an agent run recorded in full, synchronously, failing the run closed; `publish.audit_retention_days`; `/api/v0/agents/{id}/activity` (+ `export`, `verify`); Activity tab ([built](#what-111-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
+| #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred

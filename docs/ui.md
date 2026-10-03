@@ -543,8 +543,9 @@ are in `web/src/lib/components/agents/`.
   /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
   buffer is flagged with a Save button. Replies are plain (the turn is
   synchronous); clicking a reply shows its debug: slots with value and
-  provenance, each route's gate with what keeps it closed, the routing decision,
-  sub-agent calls with outcome, and tool-call decisions. "New conversation"
+  provenance, each route's gate with what keeps it closed, a strict scope's
+  topic-guard verdict, the routing decision, sub-agent calls with outcome, and
+  tool-call decisions. "New conversation"
   drops the `session_id`.
 - **A paused test turn.** A reply with `status: suspended` shows what it
   waits for (`suspensionLabel` per kind, the tool's message, the deadline)
