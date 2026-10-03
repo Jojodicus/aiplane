@@ -7,6 +7,7 @@
 		agentsApi,
 		cleanSpec,
 		ensureShape,
+		liveIssues,
 		type AgentDetail,
 		type AgentError,
 		type AgentResources,
@@ -27,6 +28,7 @@
 	import SharingPanel from './SharingPanel.svelte';
 	import RespondersPanel from './RespondersPanel.svelte';
 	import ChannelsPanel from './ChannelsPanel.svelte';
+	import EmbedKeysPanel from './EmbedKeysPanel.svelte';
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
 	import TestChat from './TestChat.svelte';
 	import VersionsPanel from './VersionsPanel.svelte';
@@ -52,6 +54,9 @@
 	let savedJson = $state('');
 	let formKey = $state(0);
 	let issues = $state<SpecIssue[]>([]);
+	/** Only what still points into the draft: removing the route a refusal was about clears it. */
+	const shownIssues = $derived(liveIssues(issues, spec));
+	const staleRefusal = $derived(issues.length > 0 && shownIssues.length === 0);
 	let loading = $state(true);
 	let loadError = $state<string | null>(null);
 	let error = $state<string | null>(null);
@@ -136,6 +141,13 @@
 		}
 	}
 
+	/** A rollback (or roll forward) publishes nothing, so it replaces whatever the last save or publish said. */
+	async function madeLive(version: number) {
+		error = null;
+		notice = t('agents-live-is', { version });
+		await refresh(true);
+	}
+
 	async function publish() {
 		if (dirty && !(await save())) return;
 		busy = true;
@@ -200,13 +212,13 @@
 			{/if}
 		</header>
 
-		{#if error}
+		{#if error && !staleRefusal}
 			<div class="alert alert-error text-sm" role="alert">
 				<div>
 					<p>{error}</p>
-					{#if issues.length > 1}
+					{#if shownIssues.length > 1}
 						<ul class="mt-1 list-inside list-disc">
-							{#each issues as issue (issue.path + issue.message)}
+							{#each shownIssues as issue (issue.path + issue.message)}
 								<li><span class="font-mono">{issue.path || t('agents-issue-root')}</span>: {issue.message}</li>
 							{/each}
 						</ul>
@@ -228,16 +240,16 @@
 			{#if tab === 'edit'}
 				{#key formKey}
 					<fieldset disabled={!writable} class="min-w-0">
-						<AgentEditor bind:spec {issues} {granted} {agents} ongrants={() => selectTab('grants')} />
+						<AgentEditor bind:spec issues={shownIssues} {granted} {agents} ongrants={() => selectTab('grants')} />
 					</fieldset>
 				{/key}
 			{:else if tab === 'canvas'}
 				<fieldset disabled={!writable} class="min-w-0">
-					<AgentCanvas bind:spec {issues} {granted} {agents} {lastDebug} ongrants={() => selectTab('grants')} />
+					<AgentCanvas bind:spec issues={shownIssues} {granted} {agents} {lastDebug} ongrants={() => selectTab('grants')} />
 				</fieldset>
 			{:else if tab === 'json'}
 				{#key formKey}
-					<SpecJsonEditor {spec} {issues} onapply={applyJson} />
+					<SpecJsonEditor {spec} issues={shownIssues} onapply={applyJson} />
 				{/key}
 			{:else if tab === 'grants'}
 				<GrantsPanel agentId={id} grants={detail.grants} {resources} {writable} onchanged={() => refresh(true)} />
@@ -254,7 +266,7 @@
 					{dirty}
 					{writable}
 					onpublish={publish}
-					onchanged={() => refresh(true)}
+					onlive={madeLive}
 				/>
 			{:else if tab === 'analytics'}
 				<AnalyticsPanel agentId={id} {versions} />
@@ -265,6 +277,7 @@
 					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />
 					<RespondersPanel agentId={id} {writable} />
 					<ChannelsPanel agentId={id} {writable} />
+					<EmbedKeysPanel agentId={id} {writable} />
 				</div>
 			{/if}
 		</div>

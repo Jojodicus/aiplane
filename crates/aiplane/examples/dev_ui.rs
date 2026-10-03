@@ -90,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         })))
         .mount(&chat_mock)
         .await;
+    mount_agent_model(&chat_mock).await;
     Mock::given(method("POST"))
         .and(path("/systemone"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -676,7 +677,8 @@ async fn main() -> anyhow::Result<()> {
     // --- Seed representative (non-croit) demo data so the README pages
     // render populated instead of empty "create your first…" states.
     seed_demo_data(&state).await?;
-    seed_embed_agent(&state).await?;
+    let erp_mock = erp_mock().await;
+    seed_embed_agent(&state, &erp_mock.uri()).await?;
 
     let session = state.sessions.create("dev").await?;
     let cookie = state.sessions.sign(&session.id);
@@ -692,6 +694,10 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("embed widget: key {DEV_EMBED_KEY}");
     eprintln!("    serve examples/embed on :8000 (python3 -m http.server 8000 -d examples/embed)");
     eprintln!("    and open http://localhost:8000/?gateway=http://127.0.0.1:8080");
+    eprintln!("    scripted agent model: mention an invoice, an email address or a human;");
+    eprintln!(
+        "    the demo ERP accepts the code {DEV_ERP_CODE}; eng@example.com answers the inbox"
+    );
     eprintln!("seed cookie (paste into playwright / curl):");
     eprintln!("    id={cookie}");
     eprintln!("non-admin (engineering) seed cookie:");
@@ -709,6 +715,7 @@ async fn main() -> anyhow::Result<()> {
     router::serve(Arc::new(state), addr).await?;
     drop(chat_mock);
     drop(voice_mock);
+    drop(erp_mock);
     Ok(())
 }
 
@@ -716,18 +723,109 @@ async fn main() -> anyhow::Result<()> {
 /// sits in page source), fixed so the example works without copy-pasting.
 const DEV_EMBED_KEY: &str = "gwe_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// A published agent on the `chat` pool with an embed key for the example
-/// page, served from `localhost:8000` or `127.0.0.1:8000`.
-async fn seed_embed_agent(state: &RamaState) -> anyhow::Result<()> {
-    use aiplane_agents::db::{agents, embed_keys, system_principals};
+/// The one-time code the dev ERP accepts for any address.
+const DEV_ERP_CODE: &str = "123456";
+
+/// A published support agent on the `chat` pool with an embed key for the
+/// example page, served from `localhost:8000` or `127.0.0.1:8000`, wired so
+/// every agent flow can be clicked through against [`mount_agent_model`]:
+/// an `otp` verifier on the dev ERP connector, a `billing` route to a
+/// published sub-agent behind that verifier, and a `staff` handoff route
+/// answered by the `eng` user as a responder.
+async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()> {
+    use aiplane_agents::db::agents::SubjectKind;
+    use aiplane_agents::db::{agent_responders, agents, embed_keys, system_principals};
     use aiplane_core::server::auth::token;
+    use aiplane_core::server::db::mcp_catalog;
     use aiplane_core::server::principal::GrantKind;
+
+    mcp_catalog::create(
+        &state.db,
+        mcp_catalog::ConnectorInput {
+            key: "erp".into(),
+            name: "Demo ERP".into(),
+            description: Some(format!(
+                "Dev-only ERP: sends verification codes; accepts {DEV_ERP_CODE}."
+            )),
+            icon: None,
+            category: None,
+            url: erp_url.to_string(),
+            auth: mcp_catalog::AuthKind::None,
+            scope: mcp_catalog::Scope::Agent,
+            audit: true,
+            use_dcr: false,
+            client_id: None,
+            client_secret_ct: None,
+            client_secret_nonce: None,
+            authorize_url: None,
+            token_url: None,
+            registration_url: None,
+            scopes: vec![],
+            allowed_groups: vec![],
+        },
+    )
+    .await?;
+    mcp_catalog::set_enabled(&state.db, "erp", true).await?;
+
+    let billing_spec = serde_json::json!({
+        "main": {
+            "pool": "chat",
+            "instructions": { "orchestration": "Explain the customer's open invoices." },
+            "tools": []
+        },
+        "finish": { "schema": {
+            "type": "object",
+            "required": ["answer"],
+            "properties": { "answer": { "type": "string" } }
+        } }
+    })
+    .to_string();
+    let billing = agents::create(
+        &state.db,
+        &system_principals::NewPrincipal {
+            name: "billing-helper",
+            display: "Billing helper",
+            description: "Sub-agent: answers invoice questions for a verified customer.",
+        },
+        &billing_spec,
+        "dev",
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("the dev billing agent already exists"))?;
+    let billing_id = &billing.principal.id;
+    system_principals::add_grant(&state.db, billing_id, GrantKind::Pool, "chat", "dev").await?;
+    agents::publish(&state.db, billing_id, &billing_spec, "dev").await?;
 
     let spec = serde_json::json!({
         "main": {
             "pool": "chat",
-            "instructions": { "orchestration": "Answer visitors briefly and politely." },
+            "instructions": { "orchestration": "Answer visitors briefly and politely. \
+                Verify the visitor's email before forwarding an invoice question." },
             "tools": []
+        },
+        "state": {
+            "email": { "type": "email", "set_by": ["llm"] },
+            "issue": { "type": "enum", "values": ["billing", "other"], "set_by": ["llm"] },
+            "verified": { "type": "subject", "set_by": ["verifier:otp"] }
+        },
+        "verifiers": {
+            "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "email",
+                     "writes": { "verified": "result" } }
+        },
+        "router": { "kind": "rules", "order": ["billing", "staff"] },
+        "routes": {
+            "billing": {
+                "when": { "all": [
+                    { "slot": "issue", "eq": "billing" },
+                    { "slot": "verified", "provenance": "verifier:otp" }
+                ] },
+                "agent": billing_id,
+                "task": "Invoice question from customer {verified.customer_id}"
+            },
+            "staff": {
+                "when": { "slot": "issue", "eq": "other" },
+                "human": { "inbox": "support", "timeout": "30m" }
+            }
         }
     })
     .to_string();
@@ -745,7 +843,9 @@ async fn seed_embed_agent(state: &RamaState) -> anyhow::Result<()> {
     .ok_or_else(|| anyhow::anyhow!("the dev embed agent already exists"))?;
     let id = &agent.principal.id;
     system_principals::add_grant(&state.db, id, GrantKind::Pool, "chat", "dev").await?;
+    system_principals::add_grant(&state.db, id, GrantKind::Connector, "erp", "dev").await?;
     agents::publish(&state.db, id, &spec, "dev").await?;
+    agent_responders::add(&state.db, id, SubjectKind::User, "eng", "dev").await?;
     let key_hash = token::hash_embed_key(DEV_EMBED_KEY)
         .ok_or_else(|| anyhow::anyhow!("DEV_EMBED_KEY is not a well-formed embed key"))?;
     embed_keys::create(
@@ -763,6 +863,251 @@ async fn seed_embed_agent(state: &RamaState) -> anyhow::Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// The dev ERP: an MCP server with `send_code` and `check_code` that
+/// accepts [`DEV_ERP_CODE`] for every address.
+async fn erp_mock() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(|request: &wiremock::Request| {
+            let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
+                return ResponseTemplate::new(400);
+            };
+            let answer = |v: serde_json::Value| {
+                serde_json::json!({"content": [{"type": "text", "text": v.to_string()}]})
+            };
+            let result = match body["method"].as_str() {
+                Some("initialize") => serde_json::json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "demo-erp", "version": "1"},
+                }),
+                Some("tools/list") => serde_json::json!({"tools": [
+                    {"name": "send_code", "description": "Mail a one-time code.",
+                     "inputSchema": {"type": "object"}},
+                    {"name": "check_code", "description": "Check a one-time code.",
+                     "inputSchema": {"type": "object"}},
+                ]}),
+                Some("tools/call") => {
+                    let args = &body["params"]["arguments"];
+                    match body["params"]["name"].as_str() {
+                        Some("send_code") => answer(serde_json::json!({"sent": true})),
+                        _ if args["code"] == DEV_ERP_CODE => {
+                            answer(serde_json::json!({"valid": true, "customer_id": "K-10042"}))
+                        }
+                        _ => answer(serde_json::json!({"valid": false})),
+                    }
+                }
+                _ => return ResponseTemplate::new(202),
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(
+                    serde_json::json!({"jsonrpc": "2.0", "id": body["id"], "result": result}),
+                )
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+/// A scripted model for agent runs, so the builder's flows run end to end
+/// without a real LLM. It answers only requests that carry an agent's
+/// synthetic tools (or the test-case judge), acts on keywords of the
+/// visitor's last message and calls only the tools the request offers:
+///
+/// - an email address: `set_email` + `verify_otp_request_code`, and
+///   `verify_otp_submit_code` after a wrong code;
+/// - "invoice" / "billing" / "Rechnung": `set_issue(billing)` + `forward_request`;
+/// - "human" / "person" / "staff" / "Mensch": `set_issue(other)` + `request_human`;
+/// - a routed sub-agent (offered `finish`): `finish({answer})`.
+///
+/// Once the round's tools answered, it says what they returned.
+async fn mount_agent_model(chat_mock: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(|request: &wiremock::Request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body)
+                .is_ok_and(|body| is_judge(&body) || !agent_tools(&body).is_empty())
+        })
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).unwrap_or_default();
+            if is_judge(&body) {
+                return completion(
+                    &body,
+                    serde_json::json!({ "content":
+                        "{\"passed\": true, \"reason\": \"The agent answered the visitor politely.\"}" }),
+                );
+            }
+            completion(&body, scripted_step(&body))
+        })
+        .mount(chat_mock)
+        .await;
+}
+
+fn is_judge(body: &serde_json::Value) -> bool {
+    body["messages"][0]["content"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("You grade a conversation"))
+}
+
+fn agent_tools(body: &serde_json::Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .filter(|n| {
+            n.starts_with("set_")
+                || n.starts_with("verify_")
+                || ["forward_request", "request_human", "finish"].contains(n)
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+fn scripted_step(body: &serde_json::Value) -> serde_json::Value {
+    let offered = agent_tools(body);
+    let has = |t: &str| offered.iter().any(|o| o == t);
+    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+    let last_user = messages
+        .iter()
+        .rposition(|m| m["role"] == "user")
+        .unwrap_or(0);
+    let said = messages
+        .get(last_user)
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let results: Vec<serde_json::Value> = messages[last_user..]
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            let text = m["content"].as_str().unwrap_or_default();
+            serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!(text))
+        })
+        .collect();
+    if has("finish") {
+        return if results.is_empty() {
+            calls(&[(
+                "finish",
+                serde_json::json!({ "result": {
+                    "answer": "Invoice 2026-0815 over 120.00 EUR is open, due on 31 October."
+                } }),
+            )])
+        } else {
+            serde_json::json!({ "content": "Done." })
+        };
+    }
+    if let Some(last) = results.last() {
+        if last["reason"] == "wrong_code" && has("verify_otp_submit_code") {
+            return calls(&[("verify_otp_submit_code", serde_json::json!({}))]);
+        }
+        return serde_json::json!({ "content": summarise(last) });
+    }
+    let lower = said.to_lowercase();
+    let email = said
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.'))
+        .map(|w| w.trim_end_matches('.'))
+        .find(|w| w.contains('@') && w.contains('.'));
+    let mut plan = Vec::new();
+    if let Some(email) = email.filter(|_| has("set_email")) {
+        plan.push(("set_email", serde_json::json!({ "value": email })));
+        if has("verify_otp_request_code") {
+            plan.push(("verify_otp_request_code", serde_json::json!({})));
+        }
+    } else if ["invoice", "billing", "rechnung"]
+        .iter()
+        .any(|k| lower.contains(k))
+    {
+        if has("set_issue") {
+            plan.push(("set_issue", serde_json::json!({ "value": "billing" })));
+        }
+        if has("forward_request") {
+            plan.push(("forward_request", serde_json::json!({})));
+        }
+    } else if ["human", "person", "staff", "mensch"]
+        .iter()
+        .any(|k| lower.contains(k))
+    {
+        if has("set_issue") {
+            plan.push(("set_issue", serde_json::json!({ "value": "other" })));
+        }
+        if has("request_human") {
+            plan.push(("request_human", serde_json::json!({ "question": said })));
+        }
+    }
+    if plan.is_empty() {
+        return serde_json::json!({
+            "content": "Hi! How can I help? Ask me about an **invoice**, or for a person."
+        });
+    }
+    calls(&plan)
+}
+
+/// What the scripted model says once its round's tools answered.
+fn summarise(result: &serde_json::Value) -> String {
+    fn find_answer(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::Object(map) => map
+                .get("answer")
+                .and_then(|a| a.as_str().map(str::to_string))
+                .or_else(|| map.values().find_map(find_answer)),
+            serde_json::Value::Array(items) => items.iter().find_map(find_answer),
+            _ => None,
+        }
+    }
+    if let Some(answer) = find_answer(result) {
+        return format!("Here is the answer: {answer}");
+    }
+    if result["reason"] == "no_open_route" {
+        return "I can look at invoices once your email address is verified. \
+                What is your email address?"
+            .into();
+    }
+    if result["verified"] == true || result["valid"] == true {
+        return "Thanks, you are verified. What would you like to know about your invoices?".into();
+    }
+    format!("Done: {result}")
+}
+
+fn calls(plan: &[(&str, serde_json::Value)]) -> serde_json::Value {
+    let stamp = Timestamp::now().as_millisecond();
+    let tool_calls: Vec<serde_json::Value> = plan
+        .iter()
+        .enumerate()
+        .map(|(i, (name, args))| {
+            serde_json::json!({
+                "index": i,
+                "id": format!("dev_{stamp}_{i}"),
+                "type": "function",
+                "function": { "name": name, "arguments": args.to_string() },
+            })
+        })
+        .collect();
+    serde_json::json!({ "tool_calls": tool_calls })
+}
+
+/// One answer in the shape the request asked for: an SSE stream of one
+/// delta, or a whole completion.
+fn completion(body: &serde_json::Value, delta: serde_json::Value) -> ResponseTemplate {
+    if body["stream"] == true {
+        let sse = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices": [{"index": 0, "delta": delta}]})
+        );
+        return ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream");
+    }
+    let mut message = delta;
+    message["role"] = serde_json::json!("assistant");
+    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "id": "dev-agent",
+        "object": "chat.completion",
+        "choices": [{ "index": 0, "message": message, "finish_reason": "stop" }],
+    }))
 }
 
 /// Seed a handful of realistic, **non-croit** rows so the README

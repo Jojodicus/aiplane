@@ -20,7 +20,7 @@
 <div class="space-y-4">
 	<RouterFields bind:spec {issues} {pools} />
 
-	{#each Object.keys(spec.routes) as name (name)}
+	{#each Object.keys(spec.routes) as name (spec.routes[name])}
 		<div class="card card-border">
 			<div class="card-body gap-3 p-4">
 				<RouteEditor bind:spec {name} {issues} {agents} onremove={() => removeRoute(spec, name)} />

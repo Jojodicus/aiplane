@@ -125,8 +125,8 @@ export class Widget {
 		const side = options.position === 'left' ? 'left-4 items-start' : 'right-4 items-end';
 
 		this.heading = h('h2', 'font-semibold truncate', { id: 'croit-aiplane-title' }, this.title);
-		this.newConversation = h('button', 'btn btn-ghost btn-sm', { type: 'button' }, t('embed-new-conversation'));
-		this.closeButton = h('button', 'btn btn-ghost btn-sm btn-circle', { type: 'button', 'aria-label': t('embed-launcher-close') }, svg(ICON_CLOSE));
+		this.newConversation = h('button', 'btn btn-ghost btn-sm text-primary-content', { type: 'button' }, t('embed-new-conversation'));
+		this.closeButton = h('button', 'btn btn-ghost btn-sm btn-circle text-primary-content', { type: 'button', 'aria-label': t('embed-launcher-close') }, svg(ICON_CLOSE));
 		this.log = h('div', 'flex-1 overflow-y-auto p-4 space-y-3', { role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions', tabindex: '0', 'aria-labelledby': 'croit-aiplane-title' });
 		this.input = h('textarea', 'textarea flex-1 resize-none text-base min-h-10 py-2', { id: 'croit-aiplane-input', rows: '1', maxlength: String(MAX_MESSAGE_CHARS), placeholder: t('embed-input-placeholder'), autocomplete: 'off' });
 		this.send = h('button', 'btn btn-primary', { type: 'submit' }, t('embed-send'));
@@ -233,7 +233,8 @@ export class Widget {
 		this.syncInput();
 		this.renderLog();
 		try {
-			const { restarted } = await this.o.api.send(text);
+			const { restarted, agent } = await this.o.api.send(text);
+			if (agent) this.setTitle(agent.display);
 			if (restarted) {
 				this.state.messages = this.state.messages.slice(-1);
 				this.notice = this.o.t('embed-session-restarted');

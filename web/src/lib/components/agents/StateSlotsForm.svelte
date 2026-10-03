@@ -28,7 +28,7 @@
 </script>
 
 <div class="space-y-3">
-	{#each Object.entries(spec.state as Record<string, Spec>) as [name, slot] (name)}
+	{#each Object.entries(spec.state as Record<string, Spec>) as [name, slot] (slot)}
 		<div class="card card-border">
 			<div class="card-body gap-3 p-4">
 				<div class="flex flex-wrap items-end gap-3">

@@ -137,7 +137,7 @@
 		<div class="space-y-2">
 			<span class="label-text">{t('agents-publish-filter')}</span>
 			<p class="text-xs text-base-content/60">{t('agents-publish-filter-hint')}</p>
-			{#each Object.entries(spec.publish?.output_filter?.patterns ?? {}) as [name, pattern] (name)}
+			{#each Object.entries(spec.publish?.output_filter?.patterns ?? {}) as [name, pattern], i (i)}
 				<div class="flex flex-wrap items-center gap-2">
 					<input class="input input-sm w-36 font-mono" value={name} onchange={(e) => { const next = e.currentTarget.value.trim(); if (next) spec.publish.output_filter.patterns = renameKey(spec.publish.output_filter.patterns, name, next); }} aria-label={t('agents-publish-filter-name')} />
 					<input class="input input-sm w-64 font-mono" value={pattern as string} onchange={(e) => (patterns()[name] = e.currentTarget.value)} aria-label={t('agents-publish-filter-regex')} />

@@ -7,18 +7,23 @@ import {
 	cleanSpec,
 	condKind,
 	describeBindSource,
+	embedSnippet,
 	ensureShape,
 	issuesAt,
+	liveIssues,
 	issuesUnder,
 	parseBindSource,
 	parseSpecError,
 	renameKey,
+	renameRoute,
+	removeRoute,
 	freshName,
 	writerOptions,
 	slotValueFromText,
 	splitList,
 	slotInfos,
 	suspensionLabel,
+	answerField,
 	testTurnLabel,
 	type SpecIssue
 } from './agents.ts';
@@ -179,10 +184,69 @@ test('a paused test turn says what it waits for', () => {
 	assert.equal(suspensionLabel('human_answer'), 'agents-test-waiting-human');
 });
 
+test('a staff answer is typed in the clear, a visitor secret masked', () => {
+	assert.deepEqual(answerField('human_answer'), {
+		secret: false,
+		label: 'inbox-answer-label',
+		submit: 'inbox-send-answer'
+	});
+	assert.deepEqual(answerField('secure_input'), {
+		secret: true,
+		label: 'agents-test-value-label',
+		submit: 'agents-test-answer'
+	});
+});
+
 test('renaming a key keeps its place and refuses a taken name', () => {
 	assert.deepEqual(Object.keys(renameKey({ a: 1, b: 2, c: 3 }, 'b', 'x')), ['a', 'x', 'c']);
 	assert.deepEqual(renameKey({ a: 1, b: 2 }, 'a', 'b'), { a: 1, b: 2 });
 	assert.deepEqual(renameKey({ a: 1 }, 'zz', 'y'), { a: 1 });
+});
+
+test('renaming or removing a route keeps the router order naming routes that exist', () => {
+	const spec = {
+		routes: { billing: { agent: 'a' }, staff: { human: {} } },
+		router: { kind: 'rules', order: ['billing', 'staff'] }
+	};
+	assert.equal(renameRoute(spec, 'staff', 'people'), 'people');
+	assert.deepEqual(Object.keys(spec.routes), ['billing', 'people']);
+	assert.deepEqual(spec.router.order, ['billing', 'people']);
+	removeRoute(spec, 'billing');
+	assert.deepEqual(spec.router.order, ['people']);
+	removeRoute(spec, 'people');
+	assert.deepEqual(spec.router, { kind: 'rules' }, 'an empty order is no order');
+	assert.deepEqual(spec.routes, {});
+});
+
+test('the embed snippet loads the widget from the gateway with the new key', () => {
+	assert.equal(
+		embedSnippet('https://gw.example.com/embed.js', 'gwe_abc'),
+		'<script src="https://gw.example.com/embed.js" data-agent-key="gwe_abc" async></script>'
+	);
+});
+
+test('issues about an entry the draft no longer has are dropped, others kept', () => {
+	const spec = {
+		main: { tools: ['a'] },
+		state: { issue: { type: 'enum' } },
+		routes: { billing: { when: { slot: 'issue' } } },
+		publish: { output_filter: { patterns: {} } }
+	};
+	const issues: SpecIssue[] = [
+		{ path: 'routes.route_1.when.slot', message: 'gone route, deep' },
+		{ path: 'routes.route_1', message: 'gone route' },
+		{ path: 'state.topic', message: 'gone slot' },
+		{ path: 'publish.output_filter.patterns.p1', message: 'gone pattern' },
+		{ path: 'main.tools[3]', message: 'gone tool' },
+		{ path: 'routes.billing.when.slot', message: 'still there' },
+		{ path: 'state.issue.values', message: 'missing key of a live slot' },
+		{ path: 'main.tools[0]', message: 'live tool' },
+		{ path: '', message: 'root' }
+	];
+	assert.deepEqual(
+		liveIssues(issues, spec).map((i) => i.message),
+		['still there', 'missing key of a live slot', 'live tool', 'root']
+	);
 });
 
 test('a fresh name skips the ones in use', () => {

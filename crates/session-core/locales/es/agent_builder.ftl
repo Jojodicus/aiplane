@@ -265,3 +265,17 @@ agents-test-expires = Caduca { $at }
 
 agents-debug-loop-worker = redactor, iteración { $iteration }
 agents-debug-loop-critic = revisor, iteración { $iteration }
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = Claves de inserción
+agents-embed-intro = Un sitio web muestra este agente con una clave de inserción y una etiqueta script. La clave solo funciona en los orígenes indicados con ella (y, si la versión publicada fija orígenes permitidos, también solo en esos), y los visitantes siempre hablan con la versión publicada.
+agents-embed-empty = Todavía no hay claves de inserción.
+agents-embed-name = Nombre
+agents-embed-name-hint = www.example.com
+agents-embed-origins = Orígenes permitidos (uno por línea)
+agents-embed-origins-help = Exactamente lo que envía el navegador: https://www.example.com, con el puerto si no es el predeterminado, sin ruta.
+agents-embed-create = Crear clave
+agents-embed-created = Copie el fragmento ahora: la clave solo se muestra esta vez. Péguelo antes de </body> en las páginas de los orígenes indicados.
+agents-embed-revoke = Revocar
+agents-embed-revoked = Revocada
+agents-embed-created-by = Creada por { $user } el { $at }

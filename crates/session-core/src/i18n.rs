@@ -309,4 +309,55 @@ mod tests {
     fn t_resolves_seeded_chrome_key() {
         assert_eq!(t(Lang::En, "chrome-theme-toggle-title"), "Toggle theme");
     }
+
+    /// The agent pages, the inbox and the widget say "Sie". A page that
+    /// switches to "du" from one tab to the next reads as two products.
+    #[test]
+    fn german_agent_pages_address_the_reader_formally() {
+        const FILES: [&str; 8] = [
+            "agents",
+            "agent_builder",
+            "agent_canvas",
+            "agent_tests",
+            "agent_activity",
+            "inbox",
+            "hil",
+            "embed",
+        ];
+        const INFORMAL: [&str; 21] = [
+            "du",
+            "Du",
+            "dir",
+            "dich",
+            "dein",
+            "deine",
+            "deinen",
+            "deinem",
+            "deiner",
+            "deines",
+            "Sprich",
+            "Klicke",
+            "Wähle",
+            "Weise",
+            "Schreibe",
+            "Sende",
+            "Gib",
+            "Füge",
+            "Erstelle",
+            "Teste",
+            "Speichere",
+        ];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales/de");
+        let mut informal = Vec::new();
+        for file in FILES {
+            let text = std::fs::read_to_string(dir.join(format!("{file}.ftl"))).unwrap();
+            for line in text.lines().filter(|l| !l.starts_with('#')) {
+                let words = line.split(|c: char| !c.is_alphabetic());
+                if words.into_iter().any(|w| INFORMAL.contains(&w)) {
+                    informal.push(format!("{file}.ftl: {line}"));
+                }
+            }
+        }
+        assert!(informal.is_empty(), "say \"Sie\": {informal:#?}");
+    }
 }

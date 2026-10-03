@@ -265,3 +265,17 @@ agents-test-expires = 过期时间 { $at }
 
 agents-debug-loop-worker = 执行者，第 { $iteration } 轮
 agents-debug-loop-critic = 评审者，第 { $iteration } 轮
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = 嵌入密钥
+agents-embed-intro = 网站通过一个嵌入密钥和一个 script 标签展示此智能体。密钥只在为它列出的来源上有效（若已发布版本设置了允许的来源，也仅限这些来源），访客始终与上线版本对话。
+agents-embed-empty = 还没有嵌入密钥。
+agents-embed-name = 名称
+agents-embed-name-hint = www.example.com
+agents-embed-origins = 允许的来源（每行一个）
+agents-embed-origins-help = 与浏览器发送的完全一致：https://www.example.com，非默认端口需带端口，不含路径。
+agents-embed-create = 创建密钥
+agents-embed-created = 请立即复制代码片段：密钥只显示这一次。将其粘贴到所列来源页面的 </body> 之前。
+agents-embed-revoke = 吊销
+agents-embed-revoked = 已吊销
+agents-embed-created-by = 由 { $user } 于 { $at } 创建

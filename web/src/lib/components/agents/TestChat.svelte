@@ -2,6 +2,7 @@
 	import {
 		agentsApi,
 		suspensionLabel,
+		answerField,
 		testTurnLabel,
 		type AgentError,
 		type ResumeDecision,
@@ -66,7 +67,7 @@
 				waiting.suspension.request_id,
 				decision
 			);
-			messages[i] = agentMessage(turn, waiting.debug);
+			messages[i] = agentMessage(turn, turn.debug ?? waiting.debug);
 			secret = '';
 		} catch (err) {
 			error = (err as AgentError).message;
@@ -156,20 +157,25 @@
 											{t('agents-test-expires', { at: new Date(waiting.expires_at).toLocaleString() })}
 										</p>
 										{#if waiting.options.includes('value')}
+											{@const field = answerField(waiting.kind)}
 											<form
-												class="join w-full"
+												class={field.secret ? 'join w-full' : 'flex w-full flex-col gap-2'}
 												onsubmit={(e) => { e.preventDefault(); void answer(i, { decision: 'value', value: secret }); }}
 											>
-												<input
-													class="input input-sm join-item w-full"
-													type="password"
-													autocomplete="off"
-													bind:value={secret}
-													aria-label={t('agents-test-value-label')}
-													placeholder={t('agents-test-value-label')}
-												/>
-												<button class="btn btn-sm btn-primary join-item" type="submit" disabled={busy || !secret}>
-													{t('agents-test-answer')}
+												{#if field.secret}
+													<input
+														class="input input-sm join-item w-full"
+														type="password"
+														autocomplete="off"
+														bind:value={secret}
+														aria-label={t(field.label)}
+														placeholder={t(field.label)}
+													/>
+												{:else}
+													<textarea class="textarea textarea-sm w-full" rows="3" bind:value={secret} aria-label={t(field.label)} placeholder={t(field.label)}></textarea>
+												{/if}
+												<button class={field.secret ? 'btn btn-sm btn-primary join-item' : 'btn btn-sm btn-primary self-end'} type="submit" disabled={busy || !secret}>
+													{t(field.submit)}
 												</button>
 											</form>
 										{/if}

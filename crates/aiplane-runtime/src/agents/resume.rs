@@ -130,6 +130,11 @@ impl ClaimedResume {
     pub fn session_id(&self) -> &str {
         &self.levels[0].session.id
     }
+
+    /// The version the conversation runs; `DRAFT_VERSION` for the test chat.
+    pub fn agent_version(&self) -> Option<i64> {
+        self.levels[0].session.agent_version
+    }
 }
 
 fn not_suspended() -> AgentResumeError {

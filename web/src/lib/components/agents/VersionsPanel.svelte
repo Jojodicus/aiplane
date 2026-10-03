@@ -7,7 +7,7 @@
 	 * version and makes it live; going back is making an older snapshot live.
 	 * Grants are not versioned, so a rolled-back version meets today's grants.
 	 */
-	let { agentId, liveVersion, versions, publishIssues, dirty, writable, onpublish, onchanged }: {
+	let { agentId, liveVersion, versions, publishIssues, dirty, writable, onpublish, onlive }: {
 		agentId: string;
 		liveVersion: number | null;
 		versions: AgentVersion[];
@@ -15,7 +15,7 @@
 		dirty: boolean;
 		writable: boolean;
 		onpublish: () => Promise<void>;
-		onchanged: () => void | Promise<void>;
+		onlive: (version: number) => void | Promise<void>;
 	} = $props();
 
 	let error = $state<string | null>(null);
@@ -29,7 +29,7 @@
 		error = null;
 		try {
 			await agentsApi.setLive(agentId, version);
-			await onchanged();
+			await onlive(version);
 		} catch (err) {
 			error = (err as AgentError).message;
 		} finally {

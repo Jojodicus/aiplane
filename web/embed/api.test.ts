@@ -60,17 +60,17 @@ test('a message goes out with the bearer token and the chosen language', async (
 	const storage = new MemoryStorage();
 	storage.setItem('slot', 'gwv_1');
 	const t = api(storage, [json(202, { turn_id: 'a', user_turn_id: 'u' })]);
-	assert.deepEqual(await t.api.send('hello'), { restarted: false });
+	assert.deepEqual(await t.api.send('hello'), { restarted: false, agent: null });
 	assert.equal(header(t.seen[0], 'authorization'), 'Bearer gwv_1');
 	assert.equal(header(t.seen[0], 'accept-language'), 'de');
 });
 
-test('a first message starts the session by itself', async () => {
+test('a first message starts the session by itself and names the agent', async () => {
 	const t = api(new MemoryStorage(), [
 		json(201, { token: 'gwv_new', agent: { display: 'Ada' } }),
 		json(202, {})
 	]);
-	await t.api.send('hello');
+	assert.deepEqual(await t.api.send('hello'), { restarted: false, agent: { display: 'Ada' } });
 	assert.equal(header(t.seen[1], 'authorization'), 'Bearer gwv_new');
 });
 
@@ -82,7 +82,7 @@ test('an expired session on send starts fresh and sends once more', async () => 
 		json(201, { token: 'gwv_fresh', agent: { display: 'Ada' } }),
 		json(202, {})
 	]);
-	assert.deepEqual(await t.api.send('hello'), { restarted: true });
+	assert.deepEqual(await t.api.send('hello'), { restarted: true, agent: { display: 'Ada' } });
 	assert.equal(storage.getItem('slot'), 'gwv_fresh');
 	assert.equal(header(t.seen[2], 'authorization'), 'Bearer gwv_fresh');
 });

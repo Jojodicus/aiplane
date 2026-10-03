@@ -265,3 +265,17 @@ agents-test-expires = Expire { $at }
 
 agents-debug-loop-worker = rédacteur, itération { $iteration }
 agents-debug-loop-critic = relecteur, itération { $iteration }
+
+# The Sharing tab's embed keys (docs/embed.md).
+agents-embed-heading = Clés d'intégration
+agents-embed-intro = Un site web affiche cet agent avec une clé d'intégration et une balise script. La clé ne fonctionne que sur les origines indiquées avec elle (et, si la version publiée fixe des origines autorisées, seulement sur celles-ci aussi), et les visiteurs parlent toujours à la version en ligne.
+agents-embed-empty = Aucune clé d'intégration pour l'instant.
+agents-embed-name = Nom
+agents-embed-name-hint = www.example.com
+agents-embed-origins = Origines autorisées (une par ligne)
+agents-embed-origins-help = Exactement ce qu'envoie le navigateur : https://www.example.com, avec le port s'il n'est pas celui par défaut, sans chemin.
+agents-embed-create = Créer la clé
+agents-embed-created = Copiez l'extrait maintenant : la clé n'est affichée qu'une seule fois. Collez-le avant </body> dans les pages des origines indiquées.
+agents-embed-revoke = Révoquer
+agents-embed-revoked = Révoquée
+agents-embed-created-by = Créée par { $user } le { $at }

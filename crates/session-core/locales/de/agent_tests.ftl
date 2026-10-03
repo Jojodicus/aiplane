@@ -53,6 +53,7 @@ agents-tests-add-bound = Gebundener Wert
 agents-tests-bound-name = Name
 agents-tests-rubric-field = Rubrik (optional)
 agents-tests-rubric-hint = Ein Modell bewertet die Antworten anhand dieses Textes im Haupt-Pool des Agenten. Das Ergebnis wird getrennt gemeldet und ändert nie bestanden oder durchgefallen.
+agents-tests-save = Testfall speichern
 agents-tests-cancel = Abbrechen
 agents-tests-results = Ergebnisse
 agents-tests-source = Ausführen gegen

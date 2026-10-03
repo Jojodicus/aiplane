@@ -53,6 +53,7 @@ agents-tests-add-bound = 绑定值
 agents-tests-bound-name = 名称
 agents-tests-rubric-field = 评分标准（可选）
 agents-tests-rubric-hint = 由智能体主池中的模型按此文本为回答打分。结果单独报告，绝不改变是否通过。
+agents-tests-save = 保存测试用例
 agents-tests-cancel = 取消
 agents-tests-results = 结果
 agents-tests-source = 运行对象

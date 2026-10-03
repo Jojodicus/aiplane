@@ -76,6 +76,21 @@ export interface NotifyChannel {
 	created_at: string;
 }
 
+/** A key a website embeds the agent with (`docs/embed.md`). The key itself is shown once, when it is created. */
+export interface EmbedKey {
+	id: string;
+	name: string;
+	origins: string[];
+	created_by: string;
+	created_at: string;
+	revoked_at: string | null;
+}
+
+/** The script tag a website owner pastes before `</body>`. */
+export function embedSnippet(scriptUrl: string, key: string): string {
+	return `<script src="${scriptUrl}" data-agent-key="${key}" async></script>`;
+}
+
 export interface NewChannel {
 	kind: ChannelKind;
 	name: string;
@@ -278,6 +293,12 @@ export const agentsApi = {
 		call<{ channel: NotifyChannel }>(`/api/v0/agents/${id}/channels`, json('POST', channel)).then((r) => r.channel),
 	removeChannel: (id: string, channelId: string) =>
 		call<void>(`/api/v0/agents/${id}/channels/${channelId}`, json('DELETE')),
+	embedKeys: (id: string) =>
+		call<{ embed_keys: EmbedKey[] }>(`/api/v0/agents/${id}/embed-keys`).then((r) => r.embed_keys),
+	createEmbedKey: (id: string, body: { name: string; origins: string[] }) =>
+		call<{ embed_key: EmbedKey; key: string }>(`/api/v0/agents/${id}/embed-keys`, json('POST', body)),
+	revokeEmbedKey: (id: string, keyId: string) =>
+		call<void>(`/api/v0/agents/${id}/embed-keys/${keyId}/revoke`, json('POST')),
 	grant: (id: string, kind: GrantKind, ref: string) =>
 		call<{ added: boolean }>(`/api/v0/system-principals/${id}/grants`, json('POST', { kind, ref })),
 	revokeGrant: (id: string, kind: GrantKind, ref: string) =>
@@ -307,6 +328,29 @@ export function issuesUnder(issues: SpecIssue[], path: string): SpecIssue[] {
 	return issues.filter(
 		(i) => i.path === path || i.path.startsWith(`${path}.`) || i.path.startsWith(`${path}[`)
 	);
+}
+
+/**
+ * The issues of the last refused save that still point into `spec`. One
+ * under an entry of a named map (a route, slot, verifier, pattern, …) or a
+ * list item the manager has since removed is dropped; one naming a key
+ * missing from an entry that still exists (`state.issue.values`) is kept,
+ * since that is what it asks to add.
+ */
+export function liveIssues(issues: SpecIssue[], spec: Spec): SpecIssue[] {
+	return issues.filter((issue) => {
+		const parts = issue.path.match(/[^.[\]]+/g) ?? [];
+		let node: unknown = spec;
+		for (const [i, part] of parts.entries()) {
+			const container = node as Record<string, unknown> | null;
+			if (container !== null && typeof container === 'object' && part in container) {
+				node = container[part];
+				continue;
+			}
+			return i === parts.length - 1 && !/^\d+$/.test(part) && !NAMED_MAPS.has(parts[i - 1]);
+		}
+		return true;
+	});
 }
 
 /* ---- the spec as an editing buffer ---------------------------------- */
@@ -440,6 +484,17 @@ export function suspensionLabel(kind: Suspension['kind']): string {
 	}
 }
 
+/**
+ * How the test chat takes a pause's `value`: a code the visitor would type is
+ * masked, a staff member's answer to a handoff is plain text they read back,
+ * labelled as in the inbox.
+ */
+export function answerField(kind: Suspension['kind']): { secret: boolean; label: string; submit: string } {
+	return kind === 'human_answer'
+		? { secret: false, label: 'inbox-answer-label', submit: 'inbox-send-answer' }
+		: { secret: true, label: 'agents-test-value-label', submit: 'agents-test-answer' };
+}
+
 export function testTurnLabel(status: string): string {
 	switch (status) {
 		case 'completed':
@@ -501,16 +556,26 @@ export function addRoute(spec: Spec): string {
 	return name;
 }
 
+/** Removes route `name`, and its place in `router.order`: the server refuses an order naming a route that does not exist. */
 export function removeRoute(spec: Spec, name: string): void {
 	delete spec.routes?.[name];
+	setRouterOrder(spec, (order) => order.filter((r) => r !== name));
 }
 
-/** Renames route `from` to `to` (trimmed), keeping its position. A blank or taken name changes nothing. Returns the name the route has afterwards. */
+/** Renames route `from` to `to` (trimmed), keeping its position, in `router.order` too. A blank or taken name changes nothing. Returns the name the route has afterwards. */
 export function renameRoute(spec: Spec, from: string, to: string): string {
 	const name = to.trim();
 	if (!name || name === from || name in spec.routes || !(from in spec.routes)) return from;
 	spec.routes = renameKey(spec.routes, from, name);
+	setRouterOrder(spec, (order) => order.map((r) => (r === from ? name : r)));
 	return name;
+}
+
+function setRouterOrder(spec: Spec, edit: (order: string[]) => string[]): void {
+	if (!Array.isArray(spec.router?.order)) return;
+	const order = edit(spec.router.order);
+	if (order.length) spec.router.order = order;
+	else delete spec.router.order;
 }
 
 /** What the agent's principal has been granted, for the editor's pickers. */
