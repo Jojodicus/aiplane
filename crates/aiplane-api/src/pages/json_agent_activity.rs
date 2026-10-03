@@ -195,7 +195,7 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         )
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from_stream(rx))
-        .unwrap_or_else(|err| internal(err))
+        .unwrap_or_else(internal)
 }
 
 /// GET /api/v0/agents/{id}/activity/verify — walk every hash chain of the

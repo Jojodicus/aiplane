@@ -2644,11 +2644,17 @@ plus every tool result once. A 20-round conversation with a 40 KB prompt is
 about 0.5 MB; image parts sent to a vision model count at their base64
 size. SQLite stores rows that large on overflow pages, which the hourly
 sweep frees whole chain by chain; the file does not shrink without a
-`VACUUM`, but freed pages are reused. Indexes: `(chain_key, seq)` unique —
-chain order and verification; `(agent_id)` and `(conversation_id)` — the
-API pages by rowid within either, which those single-column indexes are
-ordered by; `(principal_id, kind, created_at)` from #100 — the decision
-trail and analytics.
+`VACUUM`, but freed pages are reused. The columns #111 added sit after
+`detail` in the row, and reading a column behind an overflowing `detail`
+means walking its overflow chain, so every query that does not need the
+payload is answered from an index alone (a test checks the plans).
+Indexes: `(chain_key, seq)` unique — chain order, the fork guard and
+verification; `(chain_key, seq, hash)` — the chain head every append
+reads; `(agent_id)` and `(conversation_id)` — the API pages by rowid
+within either, which those single-column indexes are ordered by;
+`(agent_id, chain_key, conversation_id, created_at)` — the retention
+sweep; `(principal_id, kind, created_at)` from #100 — the decision trail
+and analytics.
 
 **UI.** An *Activity* tab on `/agents/{id}` ([`ui.md`](ui.md#agent-builder)).
 

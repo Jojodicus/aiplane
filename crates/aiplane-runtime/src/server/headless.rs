@@ -322,17 +322,15 @@ async fn turn_finished(state: &Arc<RamaState>, run: &AgentRun, session_id: &str,
         && turn
             .as_ref()
             .is_some_and(|t| t.status != chat::TurnStatus::Errored)
-    {
-        if let Err(err) = chat::finalize_turn(
+        && let Err(err) = chat::finalize_turn(
             &state.db,
             turn_id,
             chat::TurnStatus::Errored,
             Some(crate::agents::audit::LOG_UNAVAILABLE),
         )
         .await
-        {
-            tracing::error!(error = %err, turn = turn_id, "erroring a turn whose log failed");
-        }
+    {
+        tracing::error!(error = %err, turn = turn_id, "erroring a turn whose log failed");
     }
 }
 

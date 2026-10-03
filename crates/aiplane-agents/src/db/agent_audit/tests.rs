@@ -335,13 +335,6 @@ async fn the_decision_trail_leaves_the_content_events_out() {
         .map(|e| e.kind)
         .collect();
     assert_eq!(kinds, ["tool_call"]);
-    assert_eq!(
-        for_conversation(&pool, "s1", &[AuditKind::LlmExchange])
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
 }
 
 #[tokio::test]
@@ -419,6 +412,24 @@ async fn the_sweep_takes_whole_chains_of_gone_conversations_only() {
         "the agent's own chain is never swept"
     );
     assert!(verify(&pool, &agent.id).await.unwrap().ok());
+}
+
+#[tokio::test]
+async fn the_head_and_the_sweep_never_read_a_row_behind_its_payload() {
+    let pool = memory().await;
+    for sql in [HEAD_SQL, SWEEP_SQL] {
+        let plan: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .bind("x")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            plan.iter()
+                .any(|(_, _, _, step)| step.contains("COVERING INDEX")),
+            "{sql}\n{plan:?}"
+        );
+    }
 }
 
 #[test]

@@ -27,9 +27,20 @@ UPDATE agent_audit
        session_id = json_extract(detail, '$.session_id'),
        turn_id = json_extract(detail, '$.turn_id');
 
+-- The new columns sit after `detail`, which for a model exchange spills onto
+-- overflow pages; reading a column behind it from the table means walking
+-- that chain. So every query that does not need `detail` is answered from an
+-- index instead.
+--
 -- The chain's order, and the guard against two writers forking it.
 CREATE UNIQUE INDEX idx_agent_audit_chain ON agent_audit (chain_key, seq);
+-- The chain's head (seq and hash) for every append, without the row.
+CREATE INDEX idx_agent_audit_chain_head ON agent_audit (chain_key, seq, hash);
 -- The activity API pages through one agent's events, or one conversation's,
 -- by rowid: an index on the one column is ordered by (column, rowid).
 CREATE INDEX idx_agent_audit_agent ON agent_audit (agent_id);
 CREATE INDEX idx_agent_audit_conversation ON agent_audit (conversation_id);
+-- The retention sweep: each conversation chain of an agent and its newest
+-- event.
+CREATE INDEX idx_agent_audit_sweep
+    ON agent_audit (agent_id, chain_key, conversation_id, created_at);

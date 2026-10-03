@@ -445,6 +445,19 @@ pub async fn record(
     .map(|_| ())
 }
 
+/// A chain's newest event. Answered from `idx_agent_audit_chain_head`
+/// alone: the row's own `hash` sits behind `detail`, which may span
+/// overflow pages.
+const HEAD_SQL: &str =
+    "SELECT seq, hash FROM agent_audit WHERE chain_key = ? ORDER BY seq DESC LIMIT 1";
+
+/// Each conversation chain of an agent with its conversation and newest
+/// event, from `idx_agent_audit_sweep` alone.
+const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at, 'Z'))
+                           FROM agent_audit
+                          WHERE agent_id = ? AND chain_key LIKE 'conversation:%'
+                          GROUP BY chain_key";
+
 /// Append one event on `conn`, which must hold the database's write lock
 /// for the rest of its transaction (a write already made in it, or
 /// `BEGIN IMMEDIATE`): the chain's head is read and extended under it, so
@@ -459,12 +472,10 @@ pub async fn append(
         Some(c) => conversation_chain(c),
         None => agent_chain(event.principal_id),
     };
-    let head: Option<(i64, Option<String>)> = sqlx::query_as(
-        "SELECT seq, hash FROM agent_audit WHERE chain_key = ? ORDER BY seq DESC LIMIT 1",
-    )
-    .bind(&chain_key)
-    .fetch_optional(&mut *conn)
-    .await?;
+    let head: Option<(i64, Option<String>)> = sqlx::query_as(HEAD_SQL)
+        .bind(&chain_key)
+        .fetch_optional(&mut *conn)
+        .await?;
     let (seq, prev_hash) = match head {
         Some((seq, hash)) => (seq + 1, hash),
         None => (1, None),
@@ -634,26 +645,6 @@ pub async fn for_principal(pool: &Pool, principal_id: &str) -> Result<Vec<AuditE
         content_kinds()
     );
     let rows = sqlx::query(&sql).bind(principal_id).fetch_all(pool).await?;
-    rows.iter().map(|r| AuditEvent::of(stored(r)?)).collect()
-}
-
-/// The decision trail of one conversation (sub-agent runs included), oldest
-/// first, narrowed to `kinds`.
-pub async fn for_conversation(
-    pool: &Pool,
-    conversation_id: &str,
-    kinds: &[AuditKind],
-) -> Result<Vec<AuditEvent>, DbError> {
-    let mut sql = format!("SELECT {COLUMNS} FROM agent_audit WHERE conversation_id = ?");
-    if !kinds.is_empty() {
-        let list: Vec<String> = kinds.iter().map(|k| format!("'{}'", k.as_str())).collect();
-        sql.push_str(&format!(" AND kind IN ({})", list.join(", ")));
-    }
-    sql.push_str(" ORDER BY rowid");
-    let rows = sqlx::query(&sql)
-        .bind(conversation_id)
-        .fetch_all(pool)
-        .await?;
     rows.iter().map(|r| AuditEvent::of(stored(r)?)).collect()
 }
 
@@ -902,20 +893,22 @@ pub async fn sweep_conversation_chains(
     agent_id: &str,
     before: Timestamp,
 ) -> Result<SweptChains, DbError> {
-    let candidates: Vec<(String, String)> = sqlx::query_as(
-        "SELECT chain_key, MAX(rtrim(created_at, 'Z')) FROM agent_audit
-          WHERE agent_id = ? AND chain_key LIKE 'conversation:%'
-            AND NOT EXISTS (SELECT 1 FROM chat_sessions s
-                             WHERE s.id = agent_audit.conversation_id)
-          GROUP BY chain_key",
-    )
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await?;
+    let candidates: Vec<(String, Option<String>, String)> = sqlx::query_as(SWEEP_SQL)
+        .bind(agent_id)
+        .fetch_all(pool)
+        .await?;
     let cutoff = super::window_key(before);
     let mut out = SweptChains::default();
-    for (key, newest) in candidates {
+    for (key, conversation, newest) in candidates {
         if newest >= cutoff {
+            continue;
+        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)")
+                .bind(&conversation)
+                .fetch_one(pool)
+                .await?;
+        if exists {
             continue;
         }
         let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
