@@ -22,7 +22,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiplane_agents::db::agent_audit::{self, AuditKind, Correlation, NewEvent};
+use aiplane_agents::db::agent_audit::{self, AuditKind, Correlation, NewEvent, Redaction};
 use aiplane_core::server::db::Pool;
 use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::run_chain::{Frame, RunChain};
@@ -30,106 +30,10 @@ use serde_json::{Value, json};
 
 use crate::agent_run::AgentRun;
 use crate::server::tools::ToolContext;
-use crate::suspend::{ResumeFrom, Suspend};
-use session_core::db::{Decision, SuspensionKind};
+use crate::suspend::Suspend;
 
 /// The longest a run waits for one event to be written.
 pub const WRITE_BOUND: Duration = Duration::from_secs(5);
-
-/// What the log leaves out of a run's tool calls, the same wherever a call
-/// appears — its `tool_result` and every `llm_exchange` that carries it: the
-/// arguments of a tool that declares them sensitive (`sensitive_args`), and
-/// a secure input a resume brought, which the run's tool may have repeated.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Redaction<'a> {
-    /// The secure input the turn was resumed with, withheld wherever it
-    /// appears.
-    pub decided: Option<&'a Value>,
-}
-
-impl<'a> Redaction<'a> {
-    /// The one rule for what a decision leaves out of everything but the
-    /// tool that asked: the value of a secure input. An approval carries no
-    /// value, and a human's answer is the run's own content (`run_resumed`
-    /// records it), so neither is withheld.
-    pub fn decided(kind: SuspensionKind, decision: &'a Decision) -> Self {
-        Self {
-            decided: match (kind, decision) {
-                (SuspensionKind::SecureInput, Decision::Value { value }) => Some(value),
-                _ => None,
-            },
-        }
-    }
-
-    /// What the call `ctx` runs is withheld from: the secure input it is
-    /// running again with, if any.
-    pub fn for_ctx(ctx: &'a ToolContext) -> Self {
-        match &ctx.suspend {
-            Suspend::Decided(kind, decision) => Self::decided(*kind, decision),
-            Suspend::Available | Suspend::Unavailable => Self::default(),
-        }
-    }
-
-    /// What a resumed turn is withheld from: the secure input it resumes.
-    pub fn for_resume(from: &'a ResumeFrom) -> Self {
-        Self::decided(from.suspension.kind, &from.decision)
-    }
-
-    /// What stands in for the arguments of a tool that declares them
-    /// sensitive.
-    pub fn redacted_arguments() -> Value {
-        json!({ "redacted": true })
-    }
-
-    /// The arguments of a call as the log keeps them, from what the model
-    /// wrote.
-    pub fn arguments(raw: &str, sensitive: bool) -> Value {
-        if sensitive {
-            return Self::redacted_arguments();
-        }
-        serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
-    }
-
-    /// `body` with the decided value withheld.
-    pub fn body(&self, body: Value) -> Value {
-        match self.decided {
-            Some(value) => crate::suspend::withhold_secret(body, value),
-            None => body,
-        }
-    }
-
-    /// A model exchange as the log keeps it: in `request.messages`' assistant
-    /// tool calls and in the answer's `tool_calls`, the arguments of every
-    /// call to a tool `sensitive` names replaced by the marker the call's
-    /// `tool_result` keeps; then the decided value withheld from both.
-    pub fn exchange(
-        &self,
-        request: &mut Value,
-        tool_calls: &mut [Value],
-        sensitive: impl Fn(&str) -> bool,
-    ) {
-        let redact = |call: &mut Value| {
-            let name = call["function"]["name"].as_str().unwrap_or_default();
-            if sensitive(name) {
-                call["function"]["arguments"] = Self::redacted_arguments();
-            }
-        };
-        if let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) {
-            for message in messages {
-                if let Some(calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) {
-                    calls.iter_mut().for_each(redact);
-                }
-            }
-        }
-        tool_calls.iter_mut().for_each(redact);
-        if self.decided.is_some() {
-            *request = self.body(std::mem::take(request));
-            for call in tool_calls {
-                *call = self.body(std::mem::take(call));
-            }
-        }
-    }
-}
 
 /// Why an event did not reach the log.
 #[derive(Debug, thiserror::Error)]
@@ -281,6 +185,7 @@ pub struct RunLog {
     principal_id: String,
     chain: Arc<RunChain>,
     at: Correlation,
+    redaction: Redaction,
 }
 
 impl RunLog {
@@ -291,6 +196,7 @@ impl RunLog {
             principal_id: run.system_principal().id.clone(),
             chain: run.chain().clone(),
             at: ctx.correlation(),
+            redaction: ctx.redaction(),
         })
     }
 
@@ -308,6 +214,7 @@ impl RunLog {
                 session_id: Some(conversation.to_string()),
                 ..Correlation::default()
             },
+            redaction: Redaction::default(),
         }
     }
 
@@ -326,13 +233,28 @@ impl RunLog {
         }
         let mut event = NewEvent::new(AuditKind::LlmExchange, &self.principal_id, detail)
             .in_run(Some(&self.chain))
-            .at(self.at.clone());
+            .at(self.at.clone())
+            .redacted(self.redaction.clone());
         event.duration_ms = Some(latency);
         let _ = record_event(db, event).await;
     }
 }
 
 impl ToolContext {
+    /// What this call's events leave out: its run's redaction, and the
+    /// secure input the call is running again with, if any
+    /// ([`Redaction::decided`]).
+    pub(crate) fn redaction(&self) -> Redaction {
+        let decided = match &self.suspend {
+            Suspend::Decided(kind, decision) => Redaction::decided(*kind, decision),
+            Suspend::Available | Suspend::Unavailable => Redaction::default(),
+        };
+        match self.agent.as_deref() {
+            Some(run) => decided.and(&run.redaction()),
+            None => decided,
+        }
+    }
+
     /// Where this call sits in its run: its conversation, turn, the round
     /// the driver is in, and the tool call.
     pub(crate) fn correlation(&self) -> Correlation {
@@ -368,7 +290,8 @@ impl ToolContext {
     ) -> Option<String> {
         let mut event = NewEvent::new(kind, self.principal.subject_id(), detail)
             .in_run(self.chain())
-            .at(self.correlation());
+            .at(self.correlation())
+            .redacted(self.redaction());
         event.duration_ms = duration_ms;
         record_for_run(&self.db, self.agent.as_deref(), event).await
     }
@@ -377,11 +300,11 @@ impl ToolContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use session_core::db::DenyReason;
+    use session_core::db::{Decision, DenyReason, SuspensionKind};
 
-    /// The driver (`for_resume`), the resumed call and the verifier
-    /// (`for_ctx`) and the runner all take what to withhold from one rule:
-    /// a secure input's value, and nothing of any other decision.
+    /// The driver, the resumed call, the verifier and the runner all take
+    /// what to withhold from one rule (`Redaction::decided`): a secure
+    /// input's value, and nothing of any other decision.
     #[tokio::test]
     async fn every_path_withholds_a_secure_input_and_nothing_else() {
         let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
@@ -407,15 +330,74 @@ mod tests {
                     (SuspensionKind::SecureInput, Decision::Value { .. })
                 )
                 .then_some(&value);
-                assert_eq!(Redaction::decided(kind, &decision).decided, expected);
+                assert_eq!(
+                    Redaction::decided(kind, &decision).secret.as_ref(),
+                    expected
+                );
                 let ctx = ToolContext {
                     suspend: Suspend::Decided(kind, decision.clone()),
                     ..ToolContext::for_test(pool.clone())
                 };
-                assert_eq!(Redaction::for_ctx(&ctx).decided, expected, "{kind:?}");
+                assert_eq!(ctx.redaction().secret.as_ref(), expected, "{kind:?}");
             }
         }
         let ctx = ToolContext::for_test(pool);
-        assert_eq!(Redaction::for_ctx(&ctx).decided, None);
+        assert_eq!(ctx.redaction().secret, None);
+    }
+
+    /// A writer hands the log the raw call: the run's redaction rides along
+    /// on every event its context writes, and the log applies it, so a
+    /// `tool_result` written outside the runner (a resume's denial) keeps a
+    /// sensitive tool's arguments out as well as the runner's own does.
+    #[tokio::test]
+    async fn every_event_of_a_run_carries_its_redaction_to_the_log() {
+        use aiplane_agents::db::agent_audit::redaction::redacted_arguments;
+        use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let principal = SystemPrincipal {
+            id: "p1".into(),
+            name: "support".into(),
+            grants: Arc::new(GrantSet::default()),
+        };
+        let chain = Arc::new(RunChain::root(
+            "s1",
+            None,
+            Frame::for_principal(&principal, None),
+        ));
+        let run = Arc::new(AgentRun::new(principal.clone(), chain).unwrap());
+        run.note_sensitive("secretive");
+        run.redact(&Redaction::decided(
+            SuspensionKind::SecureInput,
+            &Decision::Value {
+                value: json!("code-4711"),
+            },
+        ));
+        let ctx = ToolContext {
+            principal: run.principal(),
+            agent: Some(run),
+            session_id: Some("s1".into()),
+            ..ToolContext::for_test(pool.clone())
+        };
+        ctx.audit_event(
+            AuditKind::ToolResult,
+            None,
+            json!({
+                "tool": "secretive",
+                "arguments": { "pin": "1234" },
+                "status": "denied",
+                "result": { "said": "code-4711" },
+            }),
+        )
+        .await
+        .unwrap();
+        let detail: String = sqlx::query_scalar("SELECT detail FROM agent_audit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let detail: Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["arguments"], redacted_arguments());
+        assert!(!detail.to_string().contains("code-4711"), "{detail}");
     }
 }

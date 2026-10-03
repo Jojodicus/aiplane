@@ -39,7 +39,6 @@
 use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
-use crate::agents::audit::Redaction;
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use aiplane_agents::db::agent_audit::AuditKind;
 
@@ -1060,12 +1059,12 @@ struct CallResult<'a> {
     elapsed: Duration,
 }
 
-/// The `tool_result` event of a call in an agent run: the full arguments
-/// (or a marker, for a tool that declares them sensitive), the full result,
-/// how it ended, how long it took and what the injection scan found. A
-/// secure input the call is running again with is withheld from the result
-/// even when the tool repeats it ([`Redaction::for_ctx`]). A person's turn
-/// records nothing.
+/// The `tool_result` event of a call in an agent run: the full arguments,
+/// the full result, how it ended, how long it took and what the injection
+/// scan found. A tool that declares its arguments sensitive is noted on the
+/// run, and the log replaces them (`agent_audit::Redaction`), as it withholds
+/// a secure input the call is running again with even when the tool repeats
+/// it. A person's turn records nothing.
 async fn record_call(
     ctx: &ToolContext,
     call: &ToolCallRef,
@@ -1073,11 +1072,14 @@ async fn record_call(
     scan: &InjectionScan,
     result: CallResult<'_>,
 ) {
-    if ctx.agent.is_none() {
+    let Some(run) = ctx.agent.as_deref() else {
         return;
+    };
+    if sensitive {
+        run.note_sensitive(&call.name);
     }
-    let arguments = Redaction::arguments(&call.arguments_raw, sensitive);
-    let body = Redaction::for_ctx(ctx).body(result.body.clone());
+    let arguments = serde_json::from_str::<Value>(&call.arguments_raw)
+        .unwrap_or_else(|_| Value::String(call.arguments_raw.clone()));
     let signals: Vec<&str> = result.signals.iter().map(|s| s.as_str()).collect();
     ctx.audit_event(
         AuditKind::ToolResult,
@@ -1086,7 +1088,7 @@ async fn record_call(
             "tool": call.name,
             "arguments": arguments,
             "status": result.status,
-            "result": body,
+            "result": result.body,
             "injection": {
                 "policy": format!("{:?}", scan.policy).to_lowercase(),
                 "signals": signals,
@@ -2110,7 +2112,7 @@ mod tests {
         assert!(results[0].contains("approved-4711"), "{results:?}");
         assert!(!results[1].contains("code-4711"), "{results:?}");
         assert!(
-            results[1].contains(crate::suspend::SECURE_INPUT_WITHHELD),
+            results[1].contains(aiplane_agents::db::agent_audit::redaction::SECURE_INPUT_WITHHELD),
             "{results:?}"
         );
     }

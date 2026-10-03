@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use session_core::driver::TurnError;
 
 use super::OpenAiDriver;
-use crate::agents::audit::Redaction;
+use crate::agent_run::AgentRun;
 use crate::server::tools::{ToolContext, ToolSource};
 
 /// Which backend took the request.
@@ -90,16 +90,14 @@ pub(super) async fn record_vision_fallback(
 pub(super) struct ExchangeLog<'a> {
     /// The turn's tools: which of them declare their arguments sensitive.
     tools: &'a dyn ToolSource,
-    redaction: Redaction<'a>,
     /// The last round recorded: its event's id and its request as stored.
     previous: Mutex<Option<(String, Value)>>,
 }
 
 impl<'a> ExchangeLog<'a> {
-    pub fn new(tools: &'a dyn ToolSource, redaction: Redaction<'a>) -> Self {
+    pub fn new(tools: &'a dyn ToolSource) -> Self {
         Self {
             tools,
-            redaction,
             previous: Mutex::new(None),
         }
     }
@@ -117,15 +115,11 @@ impl<'a> ExchangeLog<'a> {
         answer: Answer,
         started: Instant,
     ) {
-        if d.agent().is_none() {
+        let Some(run) = d.agent() else {
             return;
-        }
-        let mut request = request.clone();
-        let mut answer = answer;
-        self.redaction
-            .exchange(&mut request, &mut answer.tool_calls, |name| {
-                self.tools.get(name).is_some_and(|t| t.sensitive_args())
-            });
+        };
+        let request = request.clone();
+        self.note_sensitive(run, &request, &answer.tool_calls);
         let previous = self
             .previous
             .lock()
@@ -142,6 +136,27 @@ impl<'a> ExchangeLog<'a> {
         };
         let id = record(tool_ctx, round, stored, served, answer, started).await;
         *self.previous.lock().unwrap_or_else(|p| p.into_inner()) = id.map(|id| (id, request));
+    }
+}
+
+impl ExchangeLog<'_> {
+    /// Note on `run` every tool called in this round's request history or
+    /// answer that declares its arguments sensitive, so the log redacts
+    /// them in this exchange and every later event of the run.
+    fn note_sensitive(&self, run: &AgentRun, request: &Value, tool_calls: &[Value]) {
+        let history = request["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m["tool_calls"].as_array())
+            .flatten();
+        for call in history.chain(tool_calls) {
+            if let Some(name) = call["function"]["name"].as_str()
+                && self.tools.get(name).is_some_and(|t| t.sensitive_args())
+            {
+                run.note_sensitive(name);
+            }
+        }
     }
 }
 

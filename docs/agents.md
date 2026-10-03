@@ -2666,25 +2666,30 @@ view and the evaluation read — leaves out the content kinds
 (`AuditKind::is_content`: `llm_exchange`, `tool_result`, `turn_started`,
 `turn_finished`); they are read through the activity API.
 
-**Secrets never enter it.** A one-time code reaches the verifier through
-`Suspend::Decided(SecureInput, Value)` only — the decision carries the kind
-of pause it settles, and one rule, `agents::audit::Redaction::decided`,
-says what is withheld: a secure input's value, never an approval or a
-human's answer (which `run_resumed` records). The runner's `tool_result`,
-the driver's exchanges (`Redaction::for_resume`), the resumed call's result
-and the verifier's connector answer (`Redaction::for_ctx`) all take it
-from there. The runner withholds that value from the `tool_result` it
-records whatever the tool did with it, the run's resume
-records `secure_input_received` instead of it, the verifier's MCP check is
-redacted as before (#95), and the model never saw it, so no
-`llm_exchange` carries it. Both writers redact through one
-`agents::audit::Redaction`, so a call looks the same in its `tool_result`
-and in every `llm_exchange` that carries it: the arguments of a tool that
-declares `sensitive_args` are `{redacted: true}` — in the answer's
-`tool_calls` and in the assistant `tool_calls` of every later request — and
-a turn resumed with a secure input has that value withheld
-(`[secure input withheld]`) from each of its exchanges too. A stored
-request therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
+**Secrets never enter it.** The log redacts at its one choke point:
+`agent_audit::append` applies `agent_audit::Redaction` to every event's
+detail before it is hashed, by event kind — the arguments of a call to a
+tool that declares `sensitive_args` become `{redacted: true}` in a
+`tool_result` or `tool_call`, and in every tool call an `llm_exchange`
+carries (the answer's `tool_calls`, and the assistant `tool_calls` of
+every later request or request delta); a turn's secure input becomes
+`[secure input withheld]` in an event of any kind. No writer redacts for
+itself, so none can forget to: each event of a run carries the run's
+`Redaction` (`ToolContext::redaction`, attached by `ToolContext::audit` /
+`audit_event` and `RunLog`), which the run collects as it goes — the
+driver adds the secure input a turn resumes with, and the runner, the
+exchange log and the resume path note every tool they meet that declares
+its arguments sensitive (`AgentRun::note_sensitive`). A one-time code
+reaches the verifier through `Suspend::Decided(SecureInput, Value)` only —
+the decision carries the kind of pause it settles, and one rule,
+`Redaction::decided`, says what is withheld: a secure input's value, never
+an approval or a human's answer (which `run_resumed` records). The same
+rule withholds it from what goes elsewhere than the log
+(`Redaction::withhold`: the resumed call's result the model reads, the
+verifier's connector answer). The run's resume records
+`secure_input_received` instead of it, the verifier's MCP check is
+redacted as before (#95), and the model never saw it. A stored request
+therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
 sent only as a header, which no event records. Tokens, embed keys and
 client secrets are hashed or sealed where they are stored and never part
 of an event. `activity::a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret`

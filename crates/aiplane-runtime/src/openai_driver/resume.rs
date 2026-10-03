@@ -21,7 +21,6 @@ use session_core::workers::TurnUpdate;
 
 use super::{OpenAiDriver, ToolResultBudget, cap_tool_result, persist_err};
 use crate::agent_run::AgentRun;
-use crate::agents::audit::Redaction;
 use crate::server::tools::runner::{self, ToolCallRef, ToolResultRecord};
 use crate::server::tools::{ToolContext, ToolSource, extract_content_parts};
 use crate::suspend::{ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend};
@@ -217,6 +216,11 @@ pub(super) async fn resume_into(
         arguments_raw: suspension.tool_call.arguments.clone(),
     };
 
+    if let Some(run) = d.agent()
+        && tools.get(&call.name).is_some_and(|t| t.sensitive_args())
+    {
+        run.note_sensitive(&call.name);
+    }
     let call_ctx = ToolContext {
         call_id: Some(call.id.clone()),
         ..tool_ctx.clone()
@@ -263,7 +267,7 @@ pub(super) async fn resume_into(
                             json!({ "error": "the tool produced no result" }),
                         )
                     });
-                    let body = Redaction::for_ctx(&tool_ctx).body(body);
+                    let body = tool_ctx.redaction().withhold(body);
                     (body, status)
                 }
             };
@@ -711,26 +715,6 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("expired")
-        );
-    }
-
-    #[test]
-    fn a_tool_that_repeats_a_secure_input_has_it_withheld() {
-        use crate::suspend::SECURE_INPUT_WITHHELD as W;
-        let body = json!({"echo": "you typed 481516", "n": 481516, "ok": true});
-        assert_eq!(
-            crate::suspend::withhold_secret(body.clone(), &json!("481516")),
-            json!({"echo": format!("you typed {W}"), "n": W, "ok": true})
-        );
-        assert_eq!(
-            crate::suspend::withhold_secret(body.clone(), &json!(" 481516 ")),
-            json!({"echo": format!("you typed {W}"), "n": W, "ok": true}),
-            "typed with spaces around it, as the verifier trims it"
-        );
-        assert_eq!(
-            crate::suspend::withhold_secret(body.clone(), &json!("")),
-            body,
-            "an empty value matches nothing"
         );
     }
 

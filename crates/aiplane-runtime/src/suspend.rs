@@ -218,48 +218,6 @@ pub async fn claim_for_resume(
     })
 }
 
-/// What stands in a tool's result wherever it repeated a secure input: the
-/// value goes to the tool that asked, never to the model, the stored
-/// transcript or a log.
-pub const SECURE_INPUT_WITHHELD: &str = "[secure input withheld]";
-
-/// `body` with every repetition of the secure input `value` replaced by
-/// [`SECURE_INPUT_WITHHELD`], the value trimmed of surrounding whitespace. A
-/// well-behaved tool never repeats the value;
-/// this makes sure a careless one cannot hand it to the model or the
-/// transcript either.
-pub fn withhold_secret(body: Value, value: &Value) -> Value {
-    // Trimmed, as the tool that asked reads it: a code typed with a space
-    // around it is still the code.
-    let secret = match value {
-        Value::String(s) => s.trim().to_string(),
-        other => other.to_string(),
-    };
-    if secret.is_empty() {
-        return body;
-    }
-    fn walk(v: Value, secret: &str) -> Value {
-        match v {
-            Value::String(s) if s.contains(secret) => {
-                Value::String(s.replace(secret, SECURE_INPUT_WITHHELD))
-            }
-            Value::Number(n) if n.to_string() == secret => {
-                Value::String(SECURE_INPUT_WITHHELD.into())
-            }
-            Value::Array(items) => {
-                Value::Array(items.into_iter().map(|i| walk(i, secret)).collect())
-            }
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .map(|(k, v)| (k.replace(secret, SECURE_INPUT_WITHHELD), walk(v, secret)))
-                    .collect(),
-            ),
-            other => other,
-        }
-    }
-    walk(body, &secret)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -864,12 +864,37 @@ const ACTIVITY_LOG_SQL: &[Allowed] = &[Allowed {
           whole chains",
 }];
 
-/// Who may call the log's writers.
+/// Who may call the log's writers. Each management module records its own
+/// changes on their transaction; none of them redacts anything, because
+/// `append` does, by event kind.
 const ACTIVITY_LOG_WRITERS: &[Allowed] = &[
     Allowed {
-        path: "aiplane-agents/src/db/",
-        why: "management changes and state writes record their event on the change's own \
-              transaction (`agent_audit::record`, `agent_audit::append`)",
+        path: "aiplane-agents/src/db/agent_audit.rs",
+        why: "the log itself: `append_now`, the anchor, the sweep's markers",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/agent_state.rs",
+        why: "a slot write records `state_written` on the write's transaction",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/agents.rs",
+        why: "agent create, draft, publish, live version, shares and delete",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/system_principals.rs",
+        why: "principal create and disable, grants, tokens",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/embed_keys.rs",
+        why: "embed key create and revoke",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/agent_responders.rs",
+        why: "inbox responders added and removed",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/agent_channels.rs",
+        why: "notification channels created and deleted",
     },
     Allowed {
         path: "aiplane-runtime/src/agents/audit.rs",

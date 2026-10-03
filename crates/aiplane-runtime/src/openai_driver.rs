@@ -1238,13 +1238,13 @@ async fn run_one_turn(
     // Everything from here on is this turn's own rounds — what a suspension
     // stores as its tail, and what a resume appends after the rebuilt history.
     let prefix_len = messages.len();
-    let exchange_log = exchange::ExchangeLog::new(
-        &tool_source,
-        d.resume
-            .as_ref()
-            .map(crate::agents::audit::Redaction::for_resume)
-            .unwrap_or_default(),
-    );
+    if let (Some(run), Some(from)) = (d.agent(), d.resume.as_ref()) {
+        run.redact(&aiplane_agents::db::agent_audit::Redaction::decided(
+            from.suspension.kind,
+            &from.decision,
+        ));
+    }
+    let exchange_log = exchange::ExchangeLog::new(&tool_source);
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {
         match resume::resume_into(

@@ -48,7 +48,9 @@ use aiplane_core::server::crypto::{ActivityKey, sha256_hex};
 use aiplane_core::server::run_chain::RunChain;
 
 pub mod exchange;
+pub mod redaction;
 pub use exchange::Reconstructor;
+pub use redaction::Redaction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
@@ -270,6 +272,8 @@ pub struct NewEvent<'a> {
     pub at: Correlation,
     pub duration_ms: Option<u64>,
     pub detail: Value,
+    /// What [`append`] leaves out of `detail` before storing it.
+    pub redaction: Redaction,
 }
 
 impl<'a> NewEvent<'a> {
@@ -282,7 +286,13 @@ impl<'a> NewEvent<'a> {
             at: Correlation::default(),
             duration_ms: None,
             detail,
+            redaction: Redaction::default(),
         }
+    }
+
+    pub fn redacted(mut self, redaction: Redaction) -> Self {
+        self.redaction = redaction;
+        self
     }
 
     pub fn by(mut self, actor_id: Option<&'a str>) -> Self {
@@ -535,10 +545,13 @@ const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at
                           GROUP BY chain_key";
 
 /// Append one event on `conn`, which holds the database's write lock for the
-/// rest of its transaction ([`WriteTx`]): the chain's head is read and
+/// rest of its transaction ([`WriteTx`]), its detail redacted first
+/// ([`Redaction::apply`]: whatever the writer, a sensitive tool's arguments
+/// and a secure input never reach the table): the chain's head is read and
 /// extended under it, so two writers cannot both take the same place. The
 /// unique index on `(chain_key, seq)` refuses a fork should one try.
 pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appended, DbError> {
+    std::mem::take(&mut event.redaction).apply(event.kind, &mut event.detail);
     let root = match &event.at.session_id {
         Some(session) => Some(root_conversation(conn, session).await?),
         None => None,

@@ -43,7 +43,6 @@ use super::{
     McpCode, VerifierRun, answer_object, apply_writes, audit, call_connector, confirms, email_hash,
     no_args, session_of,
 };
-use crate::agents::audit::Redaction;
 use crate::agents::state::{AgentState, TrustedWriter};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
@@ -462,7 +461,7 @@ impl Flow<'_> {
         .await;
         let answer = answer
             .ok()
-            .map(|body| Redaction::for_ctx(self.ctx).body(body))
+            .map(|body| self.ctx.redaction().withhold(body))
             .as_ref()
             .and_then(answer_object);
         if !confirms(answer.as_ref()) {
