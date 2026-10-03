@@ -49,15 +49,6 @@ use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 use tokio::time::Instant;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
 /// Largest request body a public embed route reads. A message is capped at
@@ -549,7 +540,7 @@ fn queued_message(turns: &[TurnWithTools]) -> Option<String> {
 }
 
 /// A message sent while the conversation waits for a decision is stored and
-/// runs after the decision, as the #96 decision on suspend/resume says — it
+/// runs after the decision, as "What #96 built" decided for suspend/resume — it
 /// neither cancels the pending request nor answers it. One message waits at
 /// a time.
 async fn queue_behind_decision(

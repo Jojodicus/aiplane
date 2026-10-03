@@ -104,6 +104,29 @@ fn every_migration_is_pinned() {
 }
 
 #[test]
+fn the_embedded_set_is_the_directory() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut files: Vec<i64> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            name.strip_suffix(".sql")?.split('_').next()?.parse().ok()
+        })
+        .collect();
+    files.sort_unstable();
+    let embedded: Vec<i64> = on_disk().into_keys().collect();
+
+    assert_eq!(
+        embedded,
+        files,
+        "the migrations compiled into this binary are not the ones in {}. `build.rs` must \
+         keep `cargo:rerun-if-changed=migrations`, or a new migration leaves every build on \
+         the old schema until something else touches the crate.",
+        dir.display()
+    );
+}
+
+#[test]
 fn nothing_pinned_has_disappeared() {
     let on_disk = on_disk();
     let vanished: Vec<_> = frozen()

@@ -1334,6 +1334,7 @@ pub async fn update_collection(
         tracing::warn!(error = %err, %id, "updating rag collection access");
         return internal_error("updating collection access failed");
     }
+    state.grant_caps.invalidate();
     let after = match rag_db::find_collection_by_id(&state.db, id).await {
         Ok(Some(c)) => c,
         Ok(None) => return not_found(&format!("no collection with id {id}")),
@@ -1527,7 +1528,7 @@ fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// Refs + sync tokens (issue #22 P5 — the SPA's collection browser)
+// Refs + sync tokens (the SPA's collection browser)
 
 #[derive(Serialize)]
 struct RefView {

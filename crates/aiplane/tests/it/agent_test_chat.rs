@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The agent builder's internal test chat end to end (issue #90,
-//! `docs/agents.md` §3): `POST /api/v0/agents/{id}/test-turn` runs the
+//! The agent builder's internal test chat end to end
+//! (`docs/agents.md` "What #90 built"): `POST /api/v0/agents/{id}/test-turn` runs the
 //! **draft** through the real run path on wiremock upstreams and returns the
 //! answer with the debug view only a manager gets.
 //!

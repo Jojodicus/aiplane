@@ -26,9 +26,6 @@ use shared::api::ToolDef;
 use aiplane_features::server::chat_attachments;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
-/// Storage ceiling for a fetched image. Matches `fetch_url`'s inline cap
-/// (25 MB) so the two image-from-web tools agree on what's "too big".
-const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
@@ -177,9 +174,10 @@ impl Tool for LoadImageUrl {
                      This tool only stores images; use `fetch_url` for other content."
                 )));
             }
-            let bytes = capped_read::read_capped_for(resp, MAX_IMAGE_BYTES, "the image")
-                .await
-                .map_err(ToolError::Failed)?;
+            let bytes =
+                capped_read::read_capped_for(resp, chat_attachments::MAX_IMAGE_BYTES, "the image")
+                    .await
+                    .map_err(ToolError::Failed)?;
             if bytes.is_empty() {
                 return Err(ToolError::Failed("image response was empty".into()));
             }

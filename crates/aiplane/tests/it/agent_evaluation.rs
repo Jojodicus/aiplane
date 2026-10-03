@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Agent evaluation end to end (issue #99, `docs/agents.md` §5, "What #99
+//! Agent evaluation end to end (`docs/agents.md` §5, "What #99
 //! built"): stored test cases run through the real run path on wiremock
 //! upstreams, a Goal-Plan-Action report per case, and the publish guard.
 //!

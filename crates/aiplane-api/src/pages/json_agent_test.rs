@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents/{id}/test-turn` — the internal test chat (`docs/agents.md`
-//! §3, #90): a manager sends a message to the agent's **draft** and gets the
+//! §3, "What #90 built"): a manager sends a message to the agent's **draft** and gets the
 //! answer plus what a visitor never sees — slot values and provenance, each
 //! route's gate, the routing decision, sub-agent calls and tool-call
 //! decisions.
@@ -36,15 +36,6 @@ use aiplane_runtime::agents::run::draft::{DRAFT_VERSION, collect_debug, run_draf
 use aiplane_runtime::agents::run::{AgentReply, AgentTurn};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::db as chat;
-
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
 
 #[derive(Deserialize)]
 pub struct TestTurnBody {

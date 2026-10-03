@@ -183,12 +183,10 @@ pub async fn create(
     .bind(actor_id)
     .execute(&mut *tx)
     .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentCreated,
-        &id,
-        actor_id,
-        json!({ "name": new.name }),
+        agent_audit::NewEvent::new(AuditKind::AgentCreated, &id, json!({ "name": new.name }))
+            .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -320,12 +318,14 @@ pub async fn update_draft(
     if changed == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentDraftUpdated,
-        id,
-        actor_id,
-        json!({ "bytes": draft_spec.len() }),
+        agent_audit::NewEvent::new(
+            AuditKind::AgentDraftUpdated,
+            id,
+            json!({ "bytes": draft_spec.len() }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -377,12 +377,10 @@ pub async fn publish(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentPublished,
-        id,
-        actor_id,
-        json!({ "version": version }),
+        agent_audit::NewEvent::new(AuditKind::AgentPublished, id, json!({ "version": version }))
+            .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -484,12 +482,14 @@ pub async fn set_live(
     if changed == 0 {
         return Ok(false);
     }
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentLiveVersionSet,
-        id,
-        actor_id,
-        json!({ "version": version }),
+        agent_audit::NewEvent::new(
+            AuditKind::AgentLiveVersionSet,
+            id,
+            json!({ "version": version }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -576,13 +576,7 @@ pub async fn set_share(
     .bind(access.as_str())
     .execute(&mut *tx)
     .await?;
-    agent_audit::record(
-        &mut tx,
-        AuditKind::AgentShareSet,
-        id,
-        actor_id,
-        json!({ "subject_kind": kind.as_str(), "subject_id": subject_id, "access": access.as_str() }),
-    )
+    agent_audit::append(&mut tx, agent_audit::NewEvent::new(AuditKind::AgentShareSet, id, json!({ "subject_kind": kind.as_str(), "subject_id": subject_id, "access": access.as_str() })).by(Some(actor_id)))
     .await?;
     tx.commit().await?;
     Ok(ShareChange::Changed)
@@ -610,12 +604,14 @@ pub async fn remove_share(
     .bind(subject_id)
     .execute(&mut *tx)
     .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentShareRemoved,
-        id,
-        actor_id,
-        json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+        agent_audit::NewEvent::new(
+            AuditKind::AgentShareRemoved,
+            id,
+            json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+        )
+        .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -643,12 +639,10 @@ pub async fn delete(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbErr
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    agent_audit::record(
+    agent_audit::append(
         &mut tx,
-        AuditKind::AgentDeleted,
-        id,
-        actor_id,
-        json!({ "name": name }),
+        agent_audit::NewEvent::new(AuditKind::AgentDeleted, id, json!({ "name": name }))
+            .by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;

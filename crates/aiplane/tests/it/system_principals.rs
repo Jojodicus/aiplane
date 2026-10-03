@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! System principals and `gws_` tokens, end to end (issue #77,
-//! `docs/agents.md` §1).
+//! System principals and `gws_` tokens, end to end
+//! (`docs/agents.md` §1, "Principals").
 //!
 //! The fixture is deliberately generous to *people*: a default group grants
 //! tools, skills and both MCP connectors to everyone, a global connector is
@@ -734,6 +734,46 @@ async fn a_managers_token_is_capped_at_the_managers_current_rights() {
     );
     assert_eq!(fx.chat(&admins).await, StatusCode::OK);
     assert_eq!(fx.offered_tools().await, [TIME]);
+}
+
+/// The cap is reused between requests, but never past a change: a revoked
+/// grant is gone from the next request, and so is a right the minter lost.
+#[tokio::test]
+async fn a_reused_cap_never_outlives_a_revoked_grant_or_a_minters_lost_right() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    fx.grant(&fx.manager, &id, "pool", "pool").await;
+    fx.grant(&fx.manager, &id, "tool", TIME).await;
+    let (managers, _) = fx.token(&fx.manager, &id).await;
+    assert_eq!(fx.chat(&managers).await, StatusCode::OK);
+    assert_eq!(fx.offered_tools().await, [TIME], "the cap is now warm");
+
+    let (status, _) = fx
+        .post(
+            &fx.admin,
+            &format!("/api/v0/system-principals/{id}/grants/revoke"),
+            json!({"kind": "tool", "ref": TIME}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(fx.chat(&managers).await, StatusCode::OK);
+    assert!(
+        fx.offered_tools().await.is_empty(),
+        "a revoked grant is not served from the cached cap"
+    );
+
+    fx.grant(&fx.admin, &id, "tool", TIME).await;
+    assert_eq!(fx.chat(&managers).await, StatusCode::OK);
+    assert_eq!(fx.offered_tools().await, [TIME]);
+    gateway_groups::set_tools_for_group(&fx.state.db, "everyone", &[])
+        .await
+        .unwrap();
+    fx.state.reload_rbac().await;
+    assert_eq!(fx.chat(&managers).await, StatusCode::OK);
+    assert!(
+        fx.offered_tools().await.is_empty(),
+        "the minter lost the tool, and the reload let go of the cap"
+    );
 }
 
 #[tokio::test]

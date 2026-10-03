@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! `/api/v0/agents/{id}/activity` — the agent's activity log (#111,
-//! `docs/agents.md` → "What #111 built"): every event of its conversations,
+//! `/api/v0/agents/{id}/activity` — the agent's activity log
+//! (`docs/agents.md` → "What #111 built"): every event of its conversations,
 //! sub-agent runs included, and of the agent itself, page by page, as a
 //! JSONL export, and the hash-chain check.
 //!
@@ -27,19 +27,10 @@ use serde_json::json;
 
 use super::json_agents::{agent_at, analytics_bound};
 use super::json_principals::require_agent_manager;
-use super::{bad_request, internal, json_ok};
+use super::{bad_request, internal, json_ok, parse_cursor, parse_limit, query_map};
 use aiplane_agents::db::agent_audit::{self, ActivityQuery, AuditKind, Order, Reconstructor};
 use aiplane_agents::db::agents::Access;
 use aiplane_runtime::rama_server::state::RamaState;
-
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
@@ -91,17 +82,13 @@ fn query_of(agent_id: &str, query: &HashMap<String, String>) -> Result<ActivityQ
     })
 }
 
-fn params(req: &Request) -> HashMap<String, String> {
-    serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default()
-}
-
 /// GET /api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=
 /// — one page of events, newest first unless `order=asc`, with a
 /// `next_cursor` to pass back while there are more.
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    let params = params(&req);
+    let params = query_map(&req);
     let mut query = or_return!(query_of(&agent.principal.id, &params));
     query.order = match params.get("order").map(String::as_str) {
         None | Some("desc") => Order::Desc,
@@ -110,28 +97,8 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
             return bad_request(format!("`order` is `{other}`; use `asc` or `desc`"));
         }
     };
-    query.cursor = match params.get("cursor").filter(|c| !c.is_empty()) {
-        None => None,
-        Some(c) => match c.parse::<i64>() {
-            Ok(c) => Some(c),
-            Err(_) => {
-                return bad_request(format!(
-                    "`cursor` is `{c}`; pass back the `next_cursor` of the previous page"
-                ));
-            }
-        },
-    };
-    query.limit = match params.get("limit") {
-        None => DEFAULT_LIMIT,
-        Some(l) => match l.parse::<usize>() {
-            Ok(n) if (1..=MAX_LIMIT).contains(&n) => n,
-            _ => {
-                return bad_request(format!(
-                    "`limit` is `{l}`; it must be a whole number from 1 to {MAX_LIMIT}"
-                ));
-            }
-        },
-    };
+    query.cursor = or_return!(parse_cursor(&params));
+    query.limit = or_return!(parse_limit(&params, DEFAULT_LIMIT, MAX_LIMIT));
     query.max_bytes = PAGE_BYTES;
     let page = match agent_audit::page(&state.db, &query).await {
         Ok(page) => page,
@@ -162,7 +129,7 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
 pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
-    let mut query = or_return!(query_of(&agent.principal.id, &params(&req)));
+    let mut query = or_return!(query_of(&agent.principal.id, &query_map(&req)));
     query.order = Order::Asc;
     query.limit = MAX_LIMIT;
     query.max_bytes = EXPORT_BATCH_BYTES;
@@ -223,21 +190,29 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         .unwrap_or_else(internal)
 }
 
-/// GET /api/v0/agents/{id}/activity/verify — walk every hash chain of the
-/// agent, check each conversation against its latest anchor, and report the
-/// first thing that does not hold, with the agent chain's head for an
-/// operator to keep outside the gateway.
+/// GET /api/v0/agents/{id}/activity/verify?full= — walk every hash chain of
+/// the agent from where the last check left it (from its start with
+/// `full=true`), check each conversation against its latest anchor, and
+/// report the first thing that does not hold, with the agent chain's head
+/// for an operator to keep outside the gateway.
 pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
-    match agent_audit::verify(&state.db, &agent.principal.id).await {
+    let verified = match query_map(&req).get("full").map(String::as_str) {
+        None | Some("false") => agent_audit::verify(&state.db, &agent.principal.id).await,
+        Some("true") => agent_audit::verify_full(&state.db, &agent.principal.id).await,
+        Some(other) => {
+            return bad_request(format!("`full` is `{other}`; use `true` or `false`"));
+        }
+    };
+    match verified {
         Ok(v) => json_ok(
             StatusCode::OK,
             json!({
                 "ok": v.ok(),
                 "chains": v.chains,
                 "events": v.events,
-                "unchained": v.unchained,
+                "checked": v.checked,
                 "unanchored": v.unanchored,
                 "head": v.head,
                 "broken": v.broken,

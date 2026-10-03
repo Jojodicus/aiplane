@@ -3,7 +3,7 @@
 
 //! The gateway's chat turn machinery, shared by every submit surface.
 //!
-//! Not a page any more — issue #22 moved rendering to the SPA. What lives
+//! Not a page any more — rendering moved to the SPA. What lives
 //! here is [`submit_turn`] (the rate/quota gate, worker-slot reservation,
 //! turn persistence and worker spawn that the JSON API calls), the
 //! attachment plumbing, and the attachment byte-streaming handler.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! A `loop` route (#103, `docs/agents.md` "What #103 built"): draft,
+//! A `loop` route (`docs/agents.md` "What #103 built"): draft,
 //! critique, revise.
 //!
 //! ```yaml

@@ -1287,7 +1287,7 @@ impl<'a> Check<'a> {
     }
 
     /// The gate condition tree (`docs/agents.md` §4). Only its shape and the
-    /// slots it names; type checks are #86.
+    /// slots it names; the gate checks the types (`docs/agents.md` "What #86 built").
     fn cond(&mut self, v: &Value, path: &str) {
         let Value::Object(map) = v else {
             self.issue(

@@ -10,7 +10,9 @@
 //! authentication time ([`capped_to_minter`], from `require_bearer`). It is
 //! the same rule that decides the person's own access to each resource.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agents::{self as agents_db, Access};
 use aiplane_core::server::db::{DbError, mcp_catalog, rag as rag_db, users};
@@ -185,4 +187,173 @@ pub async fn capped_to_minter(
         grants: Arc::new(GrantSet::new(kept)),
         ..principal
     })
+}
+
+/// How long a token's capped grants are reused before they are worked out
+/// again. Every in-process change that can shrink them — a login that
+/// changes the minter's roles, an RBAC, settings or runtime reload, a
+/// connector, a RAG collection's groups, an agent share — calls
+/// [`GrantCaps::invalidate`], so the TTL only bounds what this process
+/// cannot see: a skill directory edited on disk, a second gateway writing
+/// the same database.
+pub const CAP_TTL: Duration = Duration::from_secs(30);
+
+/// A system token's `last_used_at` is written at most this often.
+pub const TOUCH_EVERY: Duration = Duration::from_secs(60);
+
+/// More tokens than this in either map and the stale entries are dropped.
+const CAPS_PRUNE_AT: usize = 4096;
+
+/// What [`capped_to_minter`] decided per system token, and when each token's
+/// last use was written (`docs/auth.md` → "System principal tokens").
+#[derive(Default)]
+pub struct GrantCaps {
+    capped: Mutex<CappedTokens>,
+    touched: Mutex<HashMap<String, Instant>>,
+}
+
+#[derive(Default)]
+struct CappedTokens {
+    /// Bumped by every invalidation, so a cap worked out from what held
+    /// before one is not stored after it.
+    epoch: u64,
+    by_token: HashMap<String, Capped>,
+}
+
+struct Capped {
+    at: Instant,
+    minted_by: String,
+    /// The principal's own grants the cap was taken from: a grant added or
+    /// removed since makes the entry miss, with no invalidation needed.
+    granted: Arc<GrantSet>,
+    capped: Arc<GrantSet>,
+}
+
+impl GrantCaps {
+    /// Forget every cap: something the minters' rights depend on changed.
+    pub fn invalidate(&self) {
+        let mut caps = self.capped.lock().unwrap_or_else(|p| p.into_inner());
+        caps.epoch += 1;
+        caps.by_token.clear();
+    }
+
+    /// Whether `token_id`'s `last_used_at` is due a write; if so, it counts
+    /// as written now.
+    pub fn touch_due(&self, token_id: &str) -> bool {
+        let mut touched = self.touched.lock().unwrap_or_else(|p| p.into_inner());
+        if touched
+            .get(token_id)
+            .is_some_and(|at| at.elapsed() < TOUCH_EVERY)
+        {
+            return false;
+        }
+        if touched.len() >= CAPS_PRUNE_AT {
+            touched.retain(|_, at| at.elapsed() < TOUCH_EVERY);
+        }
+        touched.insert(token_id.to_string(), Instant::now());
+        true
+    }
+
+    fn get(
+        &self,
+        token_id: &str,
+        minted_by: &str,
+        granted: &GrantSet,
+    ) -> (u64, Option<Arc<GrantSet>>) {
+        let caps = self.capped.lock().unwrap_or_else(|p| p.into_inner());
+        let hit = caps
+            .by_token
+            .get(token_id)
+            .filter(|c| {
+                c.at.elapsed() < CAP_TTL && c.minted_by == minted_by && *c.granted == *granted
+            })
+            .map(|c| c.capped.clone());
+        (caps.epoch, hit)
+    }
+
+    fn put(&self, epoch: u64, token_id: &str, entry: Capped) {
+        let mut caps = self.capped.lock().unwrap_or_else(|p| p.into_inner());
+        if caps.epoch != epoch {
+            return;
+        }
+        if caps.by_token.len() >= CAPS_PRUNE_AT {
+            caps.by_token.retain(|_, c| c.at.elapsed() < CAP_TTL);
+        }
+        caps.by_token.insert(token_id.to_string(), entry);
+    }
+}
+
+/// [`capped_to_minter`] for system token `token_id`, reusing the cap worked
+/// out for it within [`CAP_TTL`] while the principal's grants, the minter
+/// and everything [`GrantCaps::invalidate`] watches stay as they were.
+pub async fn capped_for_token(
+    state: &RamaState,
+    token_id: &str,
+    principal: SystemPrincipal,
+    minted_by: &str,
+) -> Result<SystemPrincipal, DbError> {
+    let (epoch, hit) = state.grant_caps.get(token_id, minted_by, &principal.grants);
+    if let Some(grants) = hit {
+        return Ok(SystemPrincipal {
+            grants,
+            ..principal
+        });
+    }
+    let granted = principal.grants.clone();
+    let capped = capped_to_minter(state, principal, minted_by).await?;
+    state.grant_caps.put(
+        epoch,
+        token_id,
+        Capped {
+            at: Instant::now(),
+            minted_by: minted_by.to_string(),
+            granted,
+            capped: capped.grants.clone(),
+        },
+    );
+    Ok(capped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(granted: &GrantSet) -> Capped {
+        Capped {
+            at: Instant::now(),
+            minted_by: "m".into(),
+            granted: Arc::new(granted.clone()),
+            capped: Arc::new(GrantSet::default()),
+        }
+    }
+
+    #[test]
+    fn a_cap_worked_out_before_an_invalidation_is_not_kept_after_it() {
+        let caps = GrantCaps::default();
+        let granted = GrantSet::new([(GrantKind::Tool, "time".to_string())]);
+        let (epoch, hit) = caps.get("t1", "m", &granted);
+        assert!(hit.is_none());
+        caps.invalidate();
+        caps.put(epoch, "t1", entry(&granted));
+        assert!(caps.get("t1", "m", &granted).1.is_none());
+
+        let (epoch, _) = caps.get("t1", "m", &granted);
+        caps.put(epoch, "t1", entry(&granted));
+        assert!(caps.get("t1", "m", &granted).1.is_some());
+        assert!(
+            caps.get("t1", "m", &GrantSet::default()).1.is_none(),
+            "a changed grant set misses"
+        );
+        assert!(caps.get("t1", "other", &granted).1.is_none());
+        caps.invalidate();
+        assert!(caps.get("t1", "m", &granted).1.is_none());
+    }
+
+    #[test]
+    fn a_tokens_last_use_is_written_at_most_once_a_minute() {
+        let caps = GrantCaps::default();
+        assert!(caps.touch_due("t1"));
+        assert!(!caps.touch_due("t1"));
+        assert!(caps.touch_due("t2"));
+    }
 }

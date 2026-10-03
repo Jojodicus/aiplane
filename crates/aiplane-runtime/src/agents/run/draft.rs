@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The internal test chat's half of the run path (#90): one turn of an
+//! The internal test chat's half of the run path (`docs/agents.md` "What #90
+//! built"): one turn of an
 //! agent's **draft**, and what a manager may see of it that a visitor never
 //! does.
 //!

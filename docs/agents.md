@@ -2562,8 +2562,10 @@ hash of the one before (`prev_hash`) and its own `hash` = HMAC-SHA256 over
 its canonical JSON — every column except `hash` and the rowid, keys sorted,
 no whitespace, `chain` and `detail` as the exact stored text — under the
 log key its `key_id` names. A unique index on `(chain_key, seq)` refuses a
-fork. Rows from before #111 have no chain; `verify` counts them as
-`unchained`.
+fork. Every event has a chain: the rows written before chains existed were
+never released and migration `0099_drop_unchained_activity.sql` deletes them,
+so `verify` reports an event outside every chain as inserted outside the
+gateway.
 
 **The log key.** No new secret: the key is derived from the gateway's
 at-rest key (`Crypto`, `$AIPLANE_ENCRYPTION_KEY` or the session secret) as
@@ -2578,7 +2580,11 @@ outright keeps no old key — sealed secrets stop opening too — and `verify`
 then reports the older events as signed with a key the gateway does not
 hold. The ring is installed process-wide when the gateway's state is built
 (`AppState::new`, `with_crypto`), because every writer, the management
-changes in `aiplane-agents` included, extends the same chains. An event
+changes in `aiplane-agents` included, extends the same chains — and those
+record on a caller's transaction with a connection, not the gateway's state,
+so passing the ring explicitly would thread it through every management
+accessor and its handler. The ring is shared (`Arc<[ActivityKey]>`) and each
+key holds its keyed HMAC state, so a signature costs no key schedule. An event
 written by a process without a ring (a unit test, a CLI) carries `key_id =
 unkeyed` and a plain SHA-256; where a ring is installed, `verify` refuses
 it, so rewriting a chain "unkeyed" does not pass either.
@@ -2603,9 +2609,27 @@ or re-hashed without the key), an unkeyed or unknown-key event, a
 conversation chain that ends before its anchored `seq` or whose event at
 that `seq` is not the anchored one (its tail was cut or rewritten), and an
 anchored chain that is gone without a sweep marker (a conversation's log
-deleted inside its retention). It also reports `unanchored` (conversation
-events newer than their chain's latest anchor) and the agent chain's
-`head` (`seq`, `hash`).
+deleted inside its retention), and an event outside every chain. It also
+reports `unanchored` (conversation events newer than their chain's latest
+anchor) and the agent chain's `head` (`seq`, `hash`). The anchored event is
+read by its `(chain_key, seq)` index, not found by walking.
+
+**Verification watermarks** (`agent_audit::verification`, migration
+`0100_activity_verified.sql`). *Chosen over re-walking every time:* a
+chain that checked out is remembered in `activity_verified` — its `seq`
+and `hash` and, for the agent's own chain, the anchors and sweep markers
+read so far — signed under the log key like an event (`key_id`, `mac`).
+`verify` resumes every chain from its watermark, so a check hashes what
+was written since the last one (`checked`), while `events` still counts
+everything the chains hold; `verify_full` (`?full=true`) walks every chain
+from its start. A watermark that is unsigned, signed with a key the ring
+lacks or not matching its signature — one the database alone moved — is
+ignored, and so is one whose event is gone or no longer has the stored
+hash (a chain cut or rewritten at it); either way the chain is walked
+whole. The cost: a change *below* a watermark (an event rewritten with its
+hash column untouched, one deleted from the middle) shows only on a full
+walk — run `?full=true` periodically, as with the pinned `head`. The
+sweep deletes a conversation chain's watermark with the chain.
 
 *Residual limits.* Someone holding the at-rest key (or the session secret
 it is derived from) can forge anything — the key protects against a
@@ -2626,7 +2650,7 @@ chain queue on SQLite's lock instead of racing for its head) or — for a
 management change and a state write — on the change's own transaction, so
 the change and its event commit together or not at all. Either way the
 transaction is a `db::WriteTx`, which only `WriteTx::begin` (`BEGIN
-IMMEDIATE`) makes and which `agent_audit::append` and `record` require: a
+IMMEDIATE`) makes and which `agent_audit::append` requires: a
 chain head, a slot's old value or a rate window is read under the write
 lock it is then written under, never in a deferred transaction that takes
 the lock only at its first write. WAL with
@@ -2725,7 +2749,7 @@ event is older than that, never part of a chain, and appends an
 `activity_swept` marker per chain to the agent's own chain, in the same
 transaction. The validator refuses a
 value below `publish.retention_days` (default 30), so a conversation's log
-always outlives the conversation. Events from before #111 go by their age.
+always outlives the conversation.
 
 The agent's own chain honours the same retention, so it does not grow for
 ever with anchors, sweep markers and management events: before the
@@ -2751,7 +2775,7 @@ handoffs without a share, cannot read it (`403`).
 |---|---|---|
 | GET | `/api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=` | A page of events (`limit` 1–500, default 100, and at most ~4 MiB of detail), newest first or `order=asc`; `kind` is a comma list; `from`/`to` RFC 3339 or `YYYY-MM-DD`; `{events, next_cursor, order}`. A conversation's events include its sub-agent runs |
 | GET | `/api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=` | Every matching event, oldest first, one JSON object per line (`application/x-ndjson`), streamed a ~1 MiB batch at a time with backpressure |
-| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unchained, unanchored, head: {chain_key, seq, hash} \| null, broken: {chain_key, seq, event_id, reason} \| null}` — keep `head` outside the gateway to detect a log cut back to an earlier one |
+| GET | `/api/v0/agents/{id}/activity/verify?full=` | From each chain's watermark, or from the start with `full=true`; `{ok, chains, events, checked, unanchored, head: {chain_key, seq, hash} \| null, broken: {chain_key, seq, event_id, reason} \| null}` — keep `head` outside the gateway to detect a log cut back to an earlier one |
 
 An event reads `{cursor, id, kind, ts, principal_id, actor_id, agent_id,
 version, conversation_id, session_id, turn_id, round, call_id, visitor_id,

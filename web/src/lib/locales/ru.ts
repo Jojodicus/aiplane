@@ -287,7 +287,6 @@ export const ru: Catalog = {
  "agents-act-took": "{ms} мс",
  "agents-act-turn": "Ход {turn}",
  "agents-act-unanchored": "{count} более новых событий ещё не закреплены: они записаны после окончания последнего хода.",
- "agents-act-unchained": "{count} более старых событий записаны до появления цепочки.",
  "agents-act-verified": "{events} событий в {chains} цепочках не изменены.",
  "agents-act-verify": "Проверить цепочку",
  "agents-an-chart-empty": "За этот период активности не было.",

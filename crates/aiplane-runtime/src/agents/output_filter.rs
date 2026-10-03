@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The agent output filter (#89): an answer may only mention identifiers
+//! The agent output filter (`docs/agents.md` "What #89 built"): an answer may only mention identifiers
 //! (customer, invoice, ticket numbers) that the run itself established.
 //!
 //! The spec names the identifier shapes (`publish.output_filter.patterns`).

@@ -6,11 +6,12 @@
 //! principal, in the `agent_audit` table.
 //!
 //! **Two kinds of writer, one insert.** A management change (a grant, a
-//! share, a publish) is recorded with [`record`] on the caller's own
-//! transaction, so the change can never exist without its event. A run event
-//! (a model exchange, a tool call, a gate) is recorded with [`append_now`],
-//! which takes the database's write lock for exactly one event. Both end in
-//! [`append`], the only `INSERT` into the table; the runtime reaches it
+//! share, a publish) is recorded with [`append`] on the caller's own
+//! transaction, naming its actor ([`NewEvent::by`]), so the change can never
+//! exist without its event. A run event (a model exchange, a tool call, a
+//! gate) is recorded with [`append_now`], which takes the database's write
+//! lock for exactly one event. Both end in [`append`], the only `INSERT`
+//! into the table; the runtime reaches it
 //! through `aiplane_runtime::agents::audit`, which bounds the wait and fails
 //! a run closed when an event cannot be written.
 //!
@@ -27,15 +28,14 @@
 //! database alone cannot forge a consistent chain. Each turn's end anchors
 //! its conversation's head in the agent's own chain ([`anchor_conversation`]),
 //! so a cut tail or a deleted conversation chain shows too. [`verify`] walks
-//! the chains and reports the first link that does not hold. Rows written
-//! before #111 have no chain and are reported as unchained.
+//! the chains and reports the first link that does not hold, and an event
+//! outside every chain as one inserted behind the gateway's back.
 //!
 //! **No foreign keys** (`migrations/0077_system_principals.sql`): the log
 //! outlives the principal, the acting user and the conversation, until the
 //! retention sweep removes whole conversation chains ([`sweep_conversation_chains`]).
 
-use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -49,8 +49,11 @@ use aiplane_core::server::run_chain::RunChain;
 
 pub mod exchange;
 pub mod redaction;
+mod verification;
 pub use exchange::Reconstructor;
 pub use redaction::Redaction;
+use verification::AnchorBook;
+pub use verification::{BrokenLink, ChainHead, Verification, verify, verify_full};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
@@ -69,7 +72,7 @@ pub enum AuditKind {
     SubAgentDispatched,
     /// A sub-agent run ended, with its outcome.
     SubAgentFinished,
-    /// The output filter (#89) redacted or withheld a main agent's answer.
+    /// The output filter redacted or withheld a main agent's answer.
     OutputBlocked,
     /// A run paused for a decision (an approval, a secure input). Never the
     /// value a resume brings.
@@ -90,7 +93,7 @@ pub enum AuditKind {
     /// The retention sweeper deleted conversations; counts only.
     ConversationsSwept,
     /// The main agent handed the conversation to a human (`request_human`
-    /// or a `human` route), with the run chain. #100's analytics count it.
+    /// or a `human` route), with the run chain. The analytics count it.
     HumanHandoff,
     /// A responder was added to or removed from an agent's inbox.
     ResponderAdded,
@@ -99,25 +102,25 @@ pub enum AuditKind {
     /// URL is never in the detail.
     ChannelCreated,
     ChannelDeleted,
-    /// A verifier step (#95): a code sent, a code checked, a lookup made, and
+    /// A verifier step: a code sent, a code checked, a lookup made, and
     /// the outcome. Never the code, the address or a looked-up value.
     VerifierOutcome,
-    /// A host identity token was accepted or refused (#95). Never a claim value.
+    /// A host identity token was accepted or refused. Never a claim value.
     HostIdentity,
-    /// An A2A caller started, answered or cancelled a task (#102): which
+    /// An A2A caller started, answered or cancelled a task: which
     /// caller, token, context and task. Never the message text.
     A2aTask,
-    /// One iteration of a `loop` route (#103): the worker's and the critic's
+    /// One iteration of a `loop` route: the worker's and the critic's
     /// child runs, and whether the critic accepted.
     LoopIteration,
     /// A `loop` route ended: how many iterations, and why it stopped.
     LoopFinished,
-    /// One request to a model and its whole answer (#111): the body sent,
+    /// One request to a model and its whole answer: the body sent,
     /// the assembled text, reasoning, tool calls, finish reason, usage,
     /// latency, or the error.
     LlmExchange,
     /// One tool call's full arguments and full result, before the prompt's
-    /// byte budget trims it (#111).
+    /// byte budget trims it.
     ToolResult,
     /// A turn of an agent run began: the message it answers.
     TurnStarted,
@@ -246,6 +249,25 @@ impl AuditKind {
             Self::LlmExchange | Self::ToolResult | Self::TurnStarted | Self::TurnFinished
         )
     }
+
+    /// The kinds the agent's own chain keeps about its conversation chains —
+    /// an anchor, a sweep, a checkpoint — which a check and a cut read back.
+    pub fn is_marker(self) -> bool {
+        matches!(
+            self,
+            Self::ChainAnchored | Self::ActivitySwept | Self::ChainCheckpoint
+        )
+    }
+}
+
+/// `kinds` as the list of an SQL `kind IN (…)`. Each is the enum's own name,
+/// never input, so it is inlined rather than bound.
+pub fn sql_kinds(kinds: impl IntoIterator<Item = AuditKind>) -> String {
+    kinds
+        .into_iter()
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Where in a run an event happened, beyond what its [`RunChain`] says.
@@ -351,18 +373,28 @@ async fn root_conversation(
 /// a ring is installed, [`verify`] refuses such an event.
 pub const UNKEYED: &str = "unkeyed";
 
-static KEY_RING: RwLock<Vec<ActivityKey>> = RwLock::new(Vec::new());
+static KEY_RING: RwLock<Option<Arc<[ActivityKey]>>> = RwLock::new(None);
 
 /// The keys the log signs with (the first) and verifies with (any, by
 /// `key_id`). Installed by the gateway's state from its at-rest key
-/// (`Crypto::activity_keys`): process-wide, because every writer — the
-/// management changes in this crate included — writes into the same chains.
+/// (`Crypto::activity_keys`).
+///
+/// Process-wide rather than passed in, because the management writers —
+/// a grant, a share, a publish, each recording on its own transaction in
+/// this crate's DB modules — take a connection, not the gateway's state, and
+/// they extend the same chains a run does. Threading the ring through every
+/// one of them and their handlers would add a parameter to some twenty
+/// functions that only ever forward it.
 pub fn install_key_ring(keys: Vec<ActivityKey>) {
-    *KEY_RING.write().unwrap_or_else(|p| p.into_inner()) = keys;
+    *KEY_RING.write().unwrap_or_else(|p| p.into_inner()) = Some(keys.into());
 }
 
-fn key_ring() -> Vec<ActivityKey> {
-    KEY_RING.read().unwrap_or_else(|p| p.into_inner()).clone()
+fn key_ring() -> Arc<[ActivityKey]> {
+    KEY_RING
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .unwrap_or_else(|| Arc::new([]))
 }
 
 /// The chain key of a conversation.
@@ -443,14 +475,7 @@ impl StoredEvent {
     /// `key_id` names, or plain SHA-256 for an unkeyed one. `None` when the
     /// ring does not hold that key.
     pub fn expected_hash(&self, ring: &[ActivityKey]) -> Option<String> {
-        let canonical = self.canonical();
-        match self.key_id.as_deref() {
-            None | Some(UNKEYED) => Some(sha256_hex(canonical.as_bytes())),
-            Some(id) => ring
-                .iter()
-                .find(|k| k.id == id)
-                .map(|k| k.sign(canonical.as_bytes())),
-        }
+        sign_with(ring, self.key_id.as_deref(), &self.canonical())
     }
 
     /// The event as the API and the export show it: the stored JSON parsed.
@@ -484,6 +509,23 @@ impl StoredEvent {
     }
 }
 
+/// `text` signed under the ring key `key_id` names — plain SHA-256 for
+/// [`UNKEYED`] — or `None` when the ring does not hold that key.
+fn sign_with(ring: &[ActivityKey], key_id: Option<&str>, text: &str) -> Option<String> {
+    match key_id {
+        None | Some(UNKEYED) => Some(sha256_hex(text.as_bytes())),
+        Some(id) => ring
+            .iter()
+            .find(|k| k.id == id)
+            .map(|k| k.sign(text.as_bytes())),
+    }
+}
+
+/// The key the log signs with now: the ring's first, or [`UNKEYED`].
+fn signing_key_id(ring: &[ActivityKey]) -> &str {
+    ring.first().map_or(UNKEYED, |k| k.id.as_str())
+}
+
 /// JSON with every object's keys sorted and no whitespace, whatever order
 /// `serde_json`'s map keeps — the hash must not depend on a crate feature.
 fn canonical_json(v: &Value) -> String {
@@ -512,23 +554,6 @@ pub struct Appended {
     pub chain_key: String,
     pub seq: i64,
     pub hash: String,
-}
-
-/// Record a management change on `conn` — the caller's transaction, so the
-/// event commits or rolls back with the change it records.
-pub async fn record(
-    conn: &mut WriteTx,
-    kind: AuditKind,
-    principal_id: &str,
-    actor_id: &str,
-    detail: Value,
-) -> Result<(), DbError> {
-    append(
-        conn,
-        NewEvent::new(kind, principal_id, detail).by(Some(actor_id)),
-    )
-    .await
-    .map(|_| ())
 }
 
 /// A chain's newest event. Answered from `idx_agent_audit_chain_head`
@@ -567,6 +592,19 @@ pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appen
     if event.kind == AuditKind::LlmExchange {
         let created_at = Timestamp::now().to_string();
         for (hash, data) in exchange::take_blobs(&mut event.detail) {
+            // Every round of a turn re-sends the conversation's images, so
+            // nearly every blob is already stored: probe the primary key
+            // rather than ship a multi-megabyte payload to be ignored.
+            let stored: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM activity_blobs WHERE chain_key = ? AND hash = ?)",
+            )
+            .bind(&chain_key)
+            .bind(&hash)
+            .fetch_one(&mut **conn)
+            .await?;
+            if stored {
+                continue;
+            }
             sqlx::query(
                 "INSERT INTO activity_blobs (chain_key, hash, data, created_at)
                  VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -625,42 +663,36 @@ pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appen
         key_id: None,
     };
     let ring = key_ring();
-    row.key_id = Some(ring.first().map_or(UNKEYED, |k| k.id.as_str()).to_string());
+    row.key_id = Some(signing_key_id(&ring).to_string());
     let hash = row
         .expected_hash(&ring)
         .expect("the signing key is the ring's own");
     row.hash = Some(hash.clone());
-    sqlx::query(
-        "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at,
-                                  chain_key, seq, prev_hash, hash, agent_id, version,
-                                  conversation_id, session_id, turn_id, round, call_id,
-                                  visitor_id, caller_id, duration_ms, key_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&row.id)
-    .bind(&row.kind)
-    .bind(&row.principal_id)
-    .bind(&row.actor_id)
-    .bind(&row.chain)
-    .bind(&row.detail)
-    .bind(&row.created_at)
-    .bind(&row.chain_key)
-    .bind(row.seq)
-    .bind(&row.prev_hash)
-    .bind(&row.hash)
-    .bind(&row.agent_id)
-    .bind(row.version)
-    .bind(&row.conversation_id)
-    .bind(&row.session_id)
-    .bind(&row.turn_id)
-    .bind(row.round)
-    .bind(&row.call_id)
-    .bind(&row.visitor_id)
-    .bind(&row.caller_id)
-    .bind(row.duration_ms)
-    .bind(&row.key_id)
-    .execute(&mut **conn)
-    .await?;
+    sqlx::query(INSERT_SQL)
+        .bind(&row.id)
+        .bind(&row.kind)
+        .bind(&row.principal_id)
+        .bind(&row.actor_id)
+        .bind(&row.agent_id)
+        .bind(row.version)
+        .bind(&row.conversation_id)
+        .bind(&row.session_id)
+        .bind(&row.turn_id)
+        .bind(row.round)
+        .bind(&row.call_id)
+        .bind(&row.visitor_id)
+        .bind(&row.caller_id)
+        .bind(row.duration_ms)
+        .bind(&row.chain)
+        .bind(&row.detail)
+        .bind(&row.created_at)
+        .bind(&row.chain_key)
+        .bind(row.seq)
+        .bind(&row.prev_hash)
+        .bind(&row.hash)
+        .bind(&row.key_id)
+        .execute(&mut **conn)
+        .await?;
     Ok(Appended {
         id: row.id,
         chain_key,
@@ -711,10 +743,24 @@ pub async fn anchor_conversation(
     Ok(Some(appended))
 }
 
-const COLUMNS: &str = "rowid, id, kind, principal_id, actor_id, agent_id, version, \
-                       conversation_id, session_id, turn_id, round, call_id, visitor_id, \
-                       caller_id, duration_ms, chain, detail, created_at, chain_key, seq, \
-                       prev_hash, hash, key_id";
+/// Every stored column of an event, in the order [`append`] binds them and
+/// [`COLUMNS`] reads them.
+macro_rules! event_columns {
+    () => {
+        "id, kind, principal_id, actor_id, agent_id, version, conversation_id, session_id, \
+         turn_id, round, call_id, visitor_id, caller_id, duration_ms, chain, detail, \
+         created_at, chain_key, seq, prev_hash, hash, key_id"
+    };
+}
+
+const COLUMNS: &str = concat!("rowid, ", event_columns!());
+
+/// The one `INSERT` of an event: a placeholder per [`event_columns`].
+const INSERT_SQL: &str = concat!(
+    "INSERT INTO agent_audit (",
+    event_columns!(),
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+);
 
 fn stored(row: &sqlx::sqlite::SqliteRow) -> Result<StoredEvent, DbError> {
     Ok(StoredEvent {
@@ -773,15 +819,6 @@ impl AuditEvent {
     }
 }
 
-fn content_kinds() -> String {
-    AuditKind::ALL
-        .iter()
-        .filter(|k| k.is_content())
-        .map(|k| format!("'{}'", k.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// `principal_id`'s decision trail, newest first: every event attributed to
 /// it except the content kinds ([`AuditKind::is_content`]).
 pub async fn for_principal(pool: &Pool, principal_id: &str) -> Result<Vec<AuditEvent>, DbError> {
@@ -789,7 +826,7 @@ pub async fn for_principal(pool: &Pool, principal_id: &str) -> Result<Vec<AuditE
         "SELECT {COLUMNS} FROM agent_audit
           WHERE principal_id = ? AND kind NOT IN ({})
           ORDER BY rowid DESC",
-        content_kinds()
+        sql_kinds(AuditKind::ALL.iter().copied().filter(|k| k.is_content()))
     );
     let rows = sqlx::query(&sql).bind(principal_id).fetch_all(pool).await?;
     rows.iter().map(|r| AuditEvent::of(stored(r)?)).collect()
@@ -869,12 +906,10 @@ async fn batch(
         sql.push_str(" AND conversation_id = ?");
     }
     if !q.kinds.is_empty() {
-        let list: Vec<String> = q
-            .kinds
-            .iter()
-            .map(|k| format!("'{}'", k.as_str()))
-            .collect();
-        sql.push_str(&format!(" AND kind IN ({})", list.join(", ")));
+        sql.push_str(&format!(
+            " AND kind IN ({})",
+            sql_kinds(q.kinds.iter().copied())
+        ));
     }
     if q.from.is_some() {
         sql.push_str(" AND rtrim(created_at, 'Z') >= ?");
@@ -910,350 +945,6 @@ async fn batch(
     rows.iter().map(stored).collect()
 }
 
-/// The first link of a chain that does not hold.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct BrokenLink {
-    pub chain_key: String,
-    /// The `seq` the walk expected next.
-    pub seq: i64,
-    pub event_id: Option<String>,
-    pub reason: String,
-}
-
-/// A chain's newest event, for an operator to keep outside the gateway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ChainHead {
-    pub chain_key: String,
-    pub seq: i64,
-    pub hash: Option<String>,
-}
-
-/// What [`verify`] found for one agent.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct Verification {
-    pub chains: u64,
-    pub events: u64,
-    /// Events recorded before #111, which belong to no chain.
-    pub unchained: u64,
-    /// Conversation events newer than their chain's latest anchor: written
-    /// after the last turn ended (or by a turn whose anchor failed), so a
-    /// removal of them would not show yet.
-    pub unanchored: u64,
-    /// The agent's own chain's newest event. Its `seq` and `hash` pin every
-    /// anchor, so keeping them outside the gateway pins the whole log.
-    pub head: Option<ChainHead>,
-    pub broken: Option<BrokenLink>,
-}
-
-impl Verification {
-    pub fn ok(&self) -> bool {
-        self.broken.is_none()
-    }
-}
-
-/// Rows read per query during [`verify`], so a long chain is walked in
-/// bounded memory.
-const VERIFY_BATCH: i64 = 256;
-
-/// Where a walk of one chain ended.
-struct Walked {
-    last_seq: i64,
-    last_hash: Option<String>,
-}
-
-/// Where a walk starts: after `seq`, whose hash is `hash` — `(0, None)` for a
-/// chain that was never cut.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Base {
-    seq: i64,
-    hash: Option<String>,
-}
-
-/// Walk chain `key` link by link from `base`, handing every event to `on`.
-/// `None` when a link does not hold; `out.broken` then says which.
-async fn walk(
-    pool: &Pool,
-    key: &str,
-    base: Base,
-    ring: &[ActivityKey],
-    out: &mut Verification,
-    mut on: impl FnMut(&StoredEvent),
-) -> Result<Option<Walked>, DbError> {
-    out.chains += 1;
-    let mut expected = base.seq + 1;
-    let mut prev: Option<String> = base.hash;
-    loop {
-        let sql = format!(
-            "SELECT {COLUMNS} FROM agent_audit WHERE chain_key = ? AND seq >= ?
-              ORDER BY seq LIMIT ?"
-        );
-        let rows = sqlx::query(&sql)
-            .bind(key)
-            .bind(expected)
-            .bind(VERIFY_BATCH)
-            .fetch_all(pool)
-            .await?;
-        let done = (rows.len() as i64) < VERIFY_BATCH;
-        for row in &rows {
-            let event = stored(row)?;
-            out.events += 1;
-            let mut broken = |reason: String| {
-                out.broken = Some(BrokenLink {
-                    chain_key: key.to_string(),
-                    seq: expected,
-                    event_id: Some(event.id.clone()),
-                    reason,
-                });
-            };
-            if event.seq != Some(expected) {
-                broken(format!(
-                    "event {expected} of the chain is missing: the next one stored is {}",
-                    event.seq.unwrap_or_default()
-                ));
-                return Ok(None);
-            }
-            if event.prev_hash != prev {
-                broken("its prev_hash is not the hash of the event before it".into());
-                return Ok(None);
-            }
-            let unkeyed = matches!(event.key_id.as_deref(), None | Some(UNKEYED));
-            if unkeyed && !ring.is_empty() {
-                broken(
-                    "it is not signed with the gateway's log key: it was written or rewritten \
-                     outside the gateway"
-                        .into(),
-                );
-                return Ok(None);
-            }
-            match event.expected_hash(ring) {
-                Some(hash) if event.hash.as_deref() == Some(hash.as_str()) => {}
-                Some(_) => {
-                    broken(
-                        "its content does not match its hash: it was changed after it was \
-                         written"
-                            .into(),
-                    );
-                    return Ok(None);
-                }
-                None => {
-                    broken(format!(
-                        "it is signed with log key {}, which this gateway does not hold: the \
-                         at-rest key was replaced without keeping the old one, or the event \
-                         was forged",
-                        event.key_id.as_deref().unwrap_or_default()
-                    ));
-                    return Ok(None);
-                }
-            }
-            on(&event);
-            prev = event.hash.clone();
-            expected += 1;
-        }
-        if done {
-            break;
-        }
-    }
-    Ok(Some(Walked {
-        last_seq: expected - 1,
-        last_hash: prev,
-    }))
-}
-
-/// Walk every chain of `agent_id` — its own first, then each conversation —
-/// and check each link: `seq` counts up from 1 without a gap, `prev_hash` is
-/// the hash of the event before, and `hash` is the HMAC of the event as
-/// stored under the key it names. Then check each conversation chain
-/// against its latest anchor in the agent's chain: it must still reach the
-/// anchored `seq` with the anchored `hash`, and an anchored chain must exist
-/// unless the retention sweep recorded removing it. Stops at the first
-/// thing that does not hold.
-///
-/// What it cannot show: events removed from the tail of the agent's own
-/// chain together with the conversation tails they anchored — compare
-/// [`Verification::head`] with a copy kept elsewhere for that — nor
-/// anything forged by someone holding the gateway's at-rest key.
-pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError> {
-    let ring = key_ring();
-    let mut out = Verification {
-        unchained: sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM agent_audit WHERE agent_id = ? AND chain_key IS NULL",
-        )
-        .bind(agent_id)
-        .fetch_one(pool)
-        .await?
-        .max(0) as u64,
-        ..Verification::default()
-    };
-    let own = agent_chain(agent_id);
-    let checkpoint: Option<String> = sqlx::query_scalar(LATEST_CHECKPOINT_SQL)
-        .bind(&own)
-        .fetch_optional(pool)
-        .await?;
-    let checkpoint: Value = checkpoint
-        .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or(Value::Null);
-    let base = Base {
-        seq: checkpoint["base_seq"].as_i64().unwrap_or(0),
-        hash: checkpoint["base_hash"].as_str().map(str::to_string),
-    };
-    let base_seq = base.seq;
-    let mut book = AnchorBook::default();
-    book.carry(&checkpoint);
-    let walked = walk(pool, &own, base, &ring, &mut out, |e| book.read(e)).await?;
-    let AnchorBook { mut anchors, swept } = book;
-    let Some(walked) = walked else {
-        return Ok(out);
-    };
-    if walked.last_seq == base_seq {
-        out.chains -= 1;
-    } else {
-        out.head = Some(ChainHead {
-            chain_key: own.clone(),
-            seq: walked.last_seq,
-            hash: walked.last_hash,
-        });
-    }
-    let mut keys: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT chain_key FROM agent_audit
-          WHERE agent_id = ? AND chain_key IS NOT NULL AND chain_key != ?",
-    )
-    .bind(agent_id)
-    .bind(&own)
-    .fetch_all(pool)
-    .await?;
-    keys.sort();
-    for key in &keys {
-        let anchor = anchors.remove(key).filter(|_| !swept.contains(key));
-        let mut at_anchor: Option<Option<String>> = None;
-        let anchored_seq = anchor.as_ref().map_or(0, |(seq, _)| *seq);
-        let Some(walked) = walk(pool, key, Base::default(), &ring, &mut out, |e| {
-            if e.seq == Some(anchored_seq) {
-                at_anchor = Some(e.hash.clone());
-            }
-        })
-        .await?
-        else {
-            return Ok(out);
-        };
-        out.unanchored += (walked.last_seq - anchored_seq).max(0) as u64;
-        if let Some((seq, hash)) = anchor {
-            let problem = if walked.last_seq < seq {
-                Some(format!(
-                    "the chain ends at event {} but was anchored at event {seq}: its newest \
-                     events were removed",
-                    walked.last_seq
-                ))
-            } else if at_anchor != Some(hash) {
-                Some(format!(
-                    "event {seq} is not the event that was anchored: the chain was rewritten \
-                     from there"
-                ))
-            } else {
-                None
-            };
-            if let Some(reason) = problem {
-                out.broken = Some(BrokenLink {
-                    chain_key: key.clone(),
-                    seq,
-                    event_id: None,
-                    reason,
-                });
-                return Ok(out);
-            }
-        }
-    }
-    let mut missing: Vec<(String, i64)> = anchors
-        .into_iter()
-        .filter(|(key, _)| !swept.contains(key))
-        .map(|(key, (seq, _))| (key, seq))
-        .collect();
-    missing.sort();
-    if let Some((key, seq)) = missing.into_iter().next() {
-        out.broken = Some(BrokenLink {
-            chain_key: key,
-            seq,
-            event_id: None,
-            reason: format!(
-                "the chain is gone, though it was anchored at event {seq} and no retention sweep \
-                 removed it"
-            ),
-        });
-    }
-    Ok(out)
-}
-
-/// The newest checkpoint of a chain: where its stored part begins.
-const LATEST_CHECKPOINT_SQL: &str = "SELECT detail FROM agent_audit
-                                      WHERE chain_key = ? AND kind = 'chain_checkpoint'
-                                      ORDER BY seq DESC LIMIT 1";
-
-/// What an agent's own chain says about its conversation chains, read in
-/// chain order: the latest anchor of each and which ones the sweep removed.
-/// [`verify`] reads the whole stored chain into one; a cut reads the prefix
-/// it removes, and its checkpoint carries the anchors that still matter.
-#[derive(Default)]
-struct AnchorBook {
-    anchors: HashMap<String, (i64, Option<String>)>,
-    swept: HashSet<String>,
-}
-
-impl AnchorBook {
-    fn read(&mut self, e: &StoredEvent) {
-        let detail: Value = serde_json::from_str(&e.detail).unwrap_or(Value::Null);
-        match e.kind.as_str() {
-            "chain_anchored" => {
-                if let Some(chain) = detail["chain_key"].as_str() {
-                    self.anchors.insert(
-                        chain.to_string(),
-                        (
-                            detail["seq"].as_i64().unwrap_or(0),
-                            detail["hash"].as_str().map(str::to_string),
-                        ),
-                    );
-                }
-            }
-            "activity_swept" => {
-                if let Some(chain) = detail["chain_key"].as_str() {
-                    self.swept.insert(chain.to_string());
-                }
-            }
-            "chain_checkpoint" => self.carry(&detail),
-            _ => {}
-        }
-    }
-
-    /// The anchors a checkpoint carried. They are older than any anchor the
-    /// chain holds after the cut they were carried over, so they never
-    /// replace one already read.
-    fn carry(&mut self, checkpoint: &Value) {
-        let Some(carried) = checkpoint["anchors"].as_object() else {
-            return;
-        };
-        for (chain, anchor) in carried {
-            self.anchors.entry(chain.clone()).or_insert((
-                anchor["seq"].as_i64().unwrap_or(0),
-                anchor["hash"].as_str().map(str::to_string),
-            ));
-        }
-    }
-
-    /// The anchors of chains not swept, as a checkpoint carries them.
-    fn still_guarding(self) -> Value {
-        let mut carried: Vec<_> = self
-            .anchors
-            .into_iter()
-            .filter(|(chain, _)| !self.swept.contains(chain))
-            .collect();
-        carried.sort();
-        Value::Object(
-            carried
-                .into_iter()
-                .map(|(chain, (seq, hash))| (chain, json!({ "seq": seq, "hash": hash })))
-                .collect(),
-        )
-    }
-}
-
 /// Cut the prefix of `agent_id`'s own chain written before `before`, so the
 /// chain honours the same retention as its conversations: one transaction
 /// appends a `chain_checkpoint` — the last removed event's `seq` and `hash`,
@@ -1286,9 +977,9 @@ async fn cut_agent_chain(pool: &Pool, agent_id: &str, before: Timestamp) -> Resu
     }
     let sql = format!(
         "SELECT {COLUMNS} FROM agent_audit
-          WHERE chain_key = ? AND seq <= ?
-            AND kind IN ('chain_anchored', 'activity_swept', 'chain_checkpoint')
-          ORDER BY seq"
+          WHERE chain_key = ? AND seq <= ? AND kind IN ({})
+          ORDER BY seq",
+        sql_kinds(AuditKind::ALL.iter().copied().filter(|k| k.is_marker()))
     );
     let mut book = AnchorBook::default();
     for row in sqlx::query(&sql)
@@ -1347,8 +1038,7 @@ pub struct SweptChains {
 
 /// Delete the conversation chains of `agent_id` whose newest event is older
 /// than `before` and whose conversation no longer exists — whole chains
-/// only, so no chain is ever left with a hole — and the agent's events from
-/// before #111 (unchained) older than `before`. Each chain goes in its own
+/// only, so no chain is ever left with a hole. Each chain goes in its own
 /// transaction, together with an `activity_swept` event in the agent's chain
 /// that names it, so [`verify`] knows its anchors were let go on purpose.
 /// First the agent's own chain is cut back to `before` behind a checkpoint
@@ -1387,10 +1077,12 @@ pub async fn sweep_conversation_chains(
             .execute(&mut *tx)
             .await?
             .rows_affected();
-        sqlx::query("DELETE FROM activity_blobs WHERE chain_key = ?")
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
+        for table in ["activity_blobs", "activity_verified"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE chain_key = ?"))
+                .bind(&key)
+                .execute(&mut *tx)
+                .await?;
+        }
         append(
             &mut tx,
             NewEvent::new(
@@ -1404,15 +1096,6 @@ pub async fn sweep_conversation_chains(
         out.chains += 1;
         out.events += gone;
     }
-    out.events += sqlx::query(
-        "DELETE FROM agent_audit
-          WHERE agent_id = ? AND chain_key IS NULL AND rtrim(created_at, 'Z') < ?",
-    )
-    .bind(agent_id)
-    .bind(&cutoff)
-    .execute(pool)
-    .await?
-    .rows_affected();
     Ok(out)
 }
 

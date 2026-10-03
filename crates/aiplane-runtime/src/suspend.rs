@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Durable suspend and resume of a turn (#82).
+//! Durable suspend and resume of a turn (`docs/agents.md` "Suspend and resume").
 //!
 //! A tool that needs a decision from outside the model — an approval, a value
 //! only the user may type, a human's answer — returns [`tool_suspend`] instead

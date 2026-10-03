@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `GET /api/v0/agent-resources` — what the calling manager holds and so may
-//! grant to an agent, for the builder's pickers (#90).
+//! grant to an agent, for the builder's pickers (`docs/agents.md` "What #90 built").
 //!
 //! It lists with the same predicates `POST /system-principals/{id}/grants`
 //! checks one reference against (`json_principals::manager_holds`), so the

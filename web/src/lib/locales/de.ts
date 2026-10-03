@@ -287,7 +287,6 @@ export const de: Catalog = {
  "agents-act-took": "{ms} ms",
  "agents-act-turn": "Runde {turn}",
  "agents-act-unanchored": "{count} neuere Ereignisse sind noch nicht verankert: Sie wurden nach dem Ende der letzten Runde geschrieben.",
- "agents-act-unchained": "{count} ältere Ereignisse wurden vor der Verkettung aufgezeichnet.",
  "agents-act-verified": "{events} Ereignisse in {chains} Ketten sind unverändert.",
  "agents-act-verify": "Kette prüfen",
  "agents-an-chart-empty": "In diesem Zeitraum gab es keine Aktivität.",

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! A route to an external agent that speaks A2A v1.0 (#101,
-//! `docs/agents.md` "What #101 built").
+//! A route to an external agent that speaks A2A v1.0
+//! (`docs/agents.md` "What #101 built").
 //!
 //! ```yaml
 //! routes:

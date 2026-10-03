@@ -3,8 +3,8 @@
 
 //! The `/api/v0` JSON handlers the SvelteKit SPA calls.
 //!
-//! Despite the module name, nothing here renders a page any more: issue #22
-//! replaced the server-rendered UI with the SPA in `web/`, and what survived
+//! Despite the module name, nothing here renders a page any more: the move to
+//! the SPA replaced the server-rendered UI with the SPA in `web/`, and what survived
 //! the teardown are the JSON endpoints plus the handful of genuinely
 //! server-rendered surfaces the SPA cannot own — the OAuth callback pages in
 //! `rag_oauth` and `integrations`, which a provider redirects a browser to
@@ -23,6 +23,17 @@ use session_core::i18n::{Lang, t};
 use aiplane_core::rama_server::session::Session;
 use aiplane_core::server::db::users;
 use aiplane_runtime::rama_server::state::RamaState;
+
+/// The value of an `Ok`, or return the `Err`, which is already the response:
+/// the shape of every handler step that refuses with a ready response.
+macro_rules! or_return {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        }
+    };
+}
 
 /// Resolve the caller's session or bail out of the handler. Expands to the
 /// `require_session_or_redirect` match that early-`return`s the redirect
@@ -268,6 +279,53 @@ pub(crate) fn json_error(status: rama::http::StatusCode, code: &str, message: &s
 
 // ---------------------------------------------------------------------------
 // Shared shapes for the `/api/v0` handlers.
+
+/// The longest an SSE stream stays silent: past it, it sends
+/// [`sse_keepalive`], so a proxy with an idle timeout in front of it does not
+/// cut a quiet stream.
+pub(crate) const SSE_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The comment frame a quiet SSE stream sends every [`SSE_KEEPALIVE`].
+pub(crate) fn sse_keepalive() -> rama::bytes::Bytes {
+    rama::bytes::Bytes::from_static(b": keepalive\n\n")
+}
+
+/// The request's query string as a map; a malformed one reads as empty.
+pub(crate) fn query_map(req: &Request) -> std::collections::HashMap<String, String> {
+    serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default()
+}
+
+/// A list route's `limit`: `default` when absent, else a whole number from 1
+/// to `max`, or a 400 saying so.
+pub(crate) fn parse_limit(
+    query: &std::collections::HashMap<String, String>,
+    default: usize,
+    max: usize,
+) -> Result<usize, Response> {
+    match query.get("limit") {
+        None => Ok(default),
+        Some(l) => match l.parse::<usize>() {
+            Ok(n) if (1..=max).contains(&n) => Ok(n),
+            _ => Err(bad_request(format!(
+                "`limit` is `{l}`; it must be a whole number from 1 to {max}"
+            ))),
+        },
+    }
+}
+
+/// A list route's `cursor`: the `next_cursor` of the page before, or a 400.
+pub(crate) fn parse_cursor(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<Option<i64>, Response> {
+    match query.get("cursor").filter(|c| !c.is_empty()) {
+        None => Ok(None),
+        Some(c) => c.parse::<i64>().map(Some).map_err(|_| {
+            bad_request(format!(
+                "`cursor` is `{c}`; pass back the `next_cursor` of the previous page"
+            ))
+        }),
+    }
+}
 
 /// 400 with the error envelope.
 pub(crate) fn bad_request(message: impl Into<String>) -> Response {
@@ -570,6 +628,25 @@ mod tests {
             .uri(format!("http://gw.example.com{path}"))
             .body(rama::http::Body::empty())
             .expect("test request")
+    }
+
+    #[test]
+    fn a_list_routes_limit_and_cursor_are_parsed_or_refused() {
+        let q = query_map(&get("/x?limit=20&cursor=41"));
+        assert_eq!(parse_limit(&q, 100, 500).ok(), Some(20));
+        assert_eq!(parse_cursor(&q).ok(), Some(Some(41)));
+
+        let none = query_map(&get("/x?cursor="));
+        assert_eq!(parse_limit(&none, 100, 500).ok(), Some(100));
+        assert_eq!(parse_cursor(&none).ok(), Some(None));
+
+        for bad in ["/x?limit=0", "/x?limit=501", "/x?limit=many"] {
+            let refused = parse_limit(&query_map(&get(bad)), 100, 500).unwrap_err();
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let refused = parse_cursor(&query_map(&get("/x?cursor=next"))).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(query_map(&get("/x")).is_empty());
     }
 
     /// The whole reason this helper exists instead of the `Path` extractor.

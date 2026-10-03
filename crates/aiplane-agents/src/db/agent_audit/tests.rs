@@ -111,21 +111,22 @@ async fn a_management_event_extends_its_agents_own_chain_on_the_callers_transact
     let pool = memory().await;
     for n in 0..3 {
         let mut tx = WriteTx::begin(&pool).await.unwrap();
-        record(
+        append(
             &mut tx,
-            AuditKind::GrantAdded,
-            "p1",
-            "alice",
-            json!({"kind": "tool", "n": n}),
+            NewEvent::new(AuditKind::GrantAdded, "p1", json!({"kind": "tool", "n": n}))
+                .by(Some("alice")),
         )
         .await
         .unwrap();
         tx.commit().await.unwrap();
     }
     let mut tx = WriteTx::begin(&pool).await.unwrap();
-    record(&mut tx, AuditKind::GrantAdded, "p1", "alice", json!({}))
-        .await
-        .unwrap();
+    append(
+        &mut tx,
+        NewEvent::new(AuditKind::GrantAdded, "p1", json!({})).by(Some("alice")),
+    )
+    .await
+    .unwrap();
     drop(tx);
 
     let rows = chain_rows(&pool, "agent:p1").await;
@@ -158,7 +159,7 @@ async fn verify_names_the_first_link_that_was_changed_removed_or_never_chained()
     .execute(&pool)
     .await
     .unwrap();
-    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    let broken = verify_full(&pool, "p-main").await.unwrap().broken.unwrap();
     assert_eq!(
         (broken.chain_key.as_str(), broken.seq),
         ("conversation:s1", 3)
@@ -172,7 +173,7 @@ async fn verify_names_the_first_link_that_was_changed_removed_or_never_chained()
         .execute(&pool)
         .await
         .unwrap();
-    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    let broken = verify_full(&pool, "p-main").await.unwrap().broken.unwrap();
     assert_eq!(broken.seq, 2);
     assert!(broken.reason.contains("missing"), "{broken:?}");
 
@@ -183,7 +184,9 @@ async fn verify_names_the_first_link_that_was_changed_removed_or_never_chained()
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(verify(&pool, "p-main").await.unwrap().unchained, 1);
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.event_id.as_deref(), Some("old"));
+    assert!(broken.reason.contains("no chain"), "{broken:?}");
 }
 
 #[tokio::test]
@@ -642,6 +645,27 @@ fn canonical_json_sorts_keys_at_every_level_without_whitespace() {
     );
 }
 
+#[test]
+fn the_insert_has_a_placeholder_per_column() {
+    let columns = event_columns!().split(',').count();
+    assert_eq!(INSERT_SQL.matches('?').count(), columns);
+    assert_eq!(COLUMNS.split(',').count(), columns + 1, "rowid first");
+}
+
+#[test]
+fn the_markers_are_what_the_agent_chain_says_about_other_chains() {
+    let markers: Vec<AuditKind> = AuditKind::ALL
+        .iter()
+        .copied()
+        .filter(|k| k.is_marker())
+        .collect();
+    assert_eq!(
+        sql_kinds(markers),
+        "'activity_swept', 'chain_anchored', 'chain_checkpoint'"
+    );
+    assert_eq!(sql_kinds([]), "");
+}
+
 async fn live_conversation(pool: &Pool, id: &str) {
     sqlx::query(
         "INSERT INTO users (id, email, created_at, updated_at)
@@ -746,7 +770,7 @@ async fn a_removed_checkpoint_after_a_cut_breaks_the_agent_chain() {
         .execute(&pool)
         .await
         .unwrap();
-    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    let broken = verify_full(&pool, "p-main").await.unwrap().broken.unwrap();
     assert_eq!(broken.chain_key, "agent:p-main");
     assert!(broken.reason.contains("missing"), "{broken:?}");
 }
@@ -815,4 +839,130 @@ async fn an_image_sent_in_every_round_is_stored_once_and_read_back_whole() {
         .await
         .unwrap();
     assert_eq!(blobs, 0, "the chain's blobs go with it");
+}
+
+#[tokio::test]
+async fn a_check_hashes_only_what_was_written_since_the_last_and_a_full_walk_still_finds_a_change_below_it()
+ {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    for n in 0..4 {
+        run_event(
+            &pool,
+            &main_chain("s1"),
+            AuditKind::ToolCall,
+            json!({"n": n}),
+        )
+        .await;
+    }
+    anchor_conversation(&pool, "p-main", "s1").await.unwrap();
+    let first = verify(&pool, "p-main").await.unwrap();
+    assert!(first.ok(), "{first:?}");
+    assert_eq!((first.events, first.checked), (5, 5));
+
+    let again = verify(&pool, "p-main").await.unwrap();
+    assert_eq!((again.events, again.checked), (5, 0), "{again:?}");
+    assert_eq!(again.head, first.head);
+
+    run_event(
+        &pool,
+        &main_chain("s1"),
+        AuditKind::ToolCall,
+        json!({"n": 4}),
+    )
+    .await;
+    let next = verify(&pool, "p-main").await.unwrap();
+    assert_eq!(
+        (next.events, next.checked, next.unanchored),
+        (6, 1, 1),
+        "{next:?}"
+    );
+
+    sqlx::query(
+        "UPDATE agent_audit SET detail = '{\"n\":99}' WHERE chain_key = 'conversation:s1' AND seq = 2",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        verify(&pool, "p-main").await.unwrap().ok(),
+        "below the watermark only a full walk looks"
+    );
+    let broken = verify_full(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(
+        (broken.chain_key.as_str(), broken.seq),
+        ("conversation:s1", 2)
+    );
+    assert!(
+        broken.reason.contains("does not match its hash"),
+        "{broken:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_watermark_moved_in_the_database_is_not_trusted() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    for n in 0..3 {
+        run_event(
+            &pool,
+            &main_chain("s1"),
+            AuditKind::ToolCall,
+            json!({"n": n}),
+        )
+        .await;
+    }
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+    for n in 3..5 {
+        run_event(
+            &pool,
+            &main_chain("s1"),
+            AuditKind::ToolCall,
+            json!({"n": n}),
+        )
+        .await;
+    }
+    sqlx::query(
+        "UPDATE agent_audit SET detail = '{\"n\":99}' WHERE chain_key = 'conversation:s1' AND seq = 4",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let head = row_of(&pool, "conversation:s1", 5).await;
+    sqlx::query(
+        "UPDATE activity_verified SET seq = 5, hash = ? WHERE chain_key = 'conversation:s1'",
+    )
+    .bind(&head.hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.seq, 4);
+    assert!(
+        broken.reason.contains("does not match its hash"),
+        "{broken:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_sweep_lets_go_of_a_swept_chains_watermark() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    run_event(&pool, &main_chain("s-old"), AuditKind::ToolCall, json!({})).await;
+    anchor_conversation(&pool, "p-main", "s-old").await.unwrap();
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+    sweep_conversation_chains(
+        &pool,
+        "p-main",
+        Timestamp::now() + jiff::SignedDuration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    let marks: Vec<String> = sqlx::query_scalar("SELECT chain_key FROM activity_verified")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(marks, ["agent:p-main"]);
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
 }

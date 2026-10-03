@@ -22,15 +22,6 @@ use aiplane_core::server::auth::token;
 use aiplane_runtime::agents::spec;
 use aiplane_runtime::rama_server::state::RamaState;
 
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
-
 fn embed_key_json(k: &embed_keys::EmbedKey) -> Value {
     json!({
         "id": k.id,

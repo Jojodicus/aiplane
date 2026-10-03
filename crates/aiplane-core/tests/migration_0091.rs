@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Migration 0091 rebuilds `principal_grants` again, to admit the `a2a_agent`
-//! grant kind (an external agent an A2A route may reach, #101). A rebuild that drops a principal's grants would silently take rights
+//! grant kind (an external agent an A2A route may reach). A rebuild that drops a principal's grants would silently take rights
 //! away (or, worse, leave an agent half-configured), so this seeds a file
 //! database as the previous release left it and boots the current one on it.
 

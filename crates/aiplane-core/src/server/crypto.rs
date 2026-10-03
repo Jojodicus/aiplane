@@ -112,7 +112,9 @@ pub(crate) const ACTIVITY_LABEL: &[u8] = b"croit-aiplane/activity-log-chain/v1";
 #[derive(Clone)]
 pub struct ActivityKey {
     pub id: String,
-    key: [u8; 32],
+    /// Keyed once; every signature clones this state instead of re-running
+    /// the HMAC key schedule.
+    mac: Hmac<Sha256>,
 }
 
 impl std::fmt::Debug for ActivityKey {
@@ -126,14 +128,13 @@ impl ActivityKey {
         let key = derive(at_rest, ACTIVITY_LABEL);
         Self {
             id: sha256_hex(&key)[..16].to_string(),
-            key,
+            mac: <Hmac<Sha256>>::new_from_slice(&key).expect("HMAC accepts any key length"),
         }
     }
 
     /// Lowercase-hex HMAC-SHA256 of `message` under this key.
     pub fn sign(&self, message: &[u8]) -> String {
-        let mut mac =
-            <Hmac<Sha256>>::new_from_slice(&self.key).expect("HMAC accepts any key length");
+        let mut mac = self.mac.clone();
         mac.update(message);
         hex_encode(&mac.finalize().into_bytes())
     }

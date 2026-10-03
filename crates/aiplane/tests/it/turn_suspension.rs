@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Durable suspend and resume of a chat turn (#82), end to end.
+//! Durable suspend and resume of a chat turn (`docs/agents.md` "Suspend and resume"),
+//! end to end.
 //!
 //! A tool wrapped in `AskFirst` pauses its turn for the owner's approval. What
 //! this pins, through the real router, worker and SQLite file:

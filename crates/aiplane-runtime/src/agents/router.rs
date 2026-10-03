@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! `forward_request()`: the router (#87) and sub-agent dispatch (#88),
-//! `docs/agents.md` §3.
+//! `forward_request()`: the router and sub-agent dispatch
+//! (`docs/agents.md` §3, "What #87/#88 built").
 //!
 //! The tool takes no arguments. The gateway decides from state:
 //! 1. Every route's gate is evaluated. Only open routes are candidates; with

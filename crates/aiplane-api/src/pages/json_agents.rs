@@ -13,7 +13,7 @@
 //! share, so an agent whose last writer left can always be recovered.
 //!
 //! The agent's grants are its principal's, managed through
-//! `/api/v0/system-principals/{id}/grants` with the grant-time cap from #77;
+//! `/api/v0/system-principals/{id}/grants` with the grant-time cap (`docs/agents.md` §1);
 //! those routes check the share here too ([`guard_principal`]).
 
 use std::sync::Arc;
@@ -31,15 +31,6 @@ use aiplane_core::server::db::{gateway_groups, users};
 use aiplane_core::server::principal::GrantSet;
 use aiplane_runtime::agents::spec::{self, AgentSpec, SpecContext, SpecIssue, Stage};
 use aiplane_runtime::rama_server::state::RamaState;
-
-macro_rules! or_return {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(resp) => return resp,
-        }
-    };
-}
 
 fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
     state.rbac.role_ids_for(&user.roles)
@@ -498,8 +489,7 @@ pub async fn analytics(State(state): State<Arc<RamaState>>, req: Request) -> Res
     use jiff::ToSpan;
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    let query: std::collections::HashMap<String, String> =
-        serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default();
+    let query = super::query_map(&req);
     let to = match query.get("to") {
         Some(v) => or_return!(analytics_bound("to", v, true)),
         None => jiff::Timestamp::now(),
@@ -671,7 +661,7 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         _ => return bad_request("a share needs `access`: `read` or `write`"),
     };
     or_return!(require_manager_subject(&state, kind, subject).await);
-    match agents_db::set_share(
+    let changed = agents_db::set_share(
         &state.db,
         &agent.principal.id,
         kind,
@@ -679,8 +669,9 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         access,
         &user.id,
     )
-    .await
-    {
+    .await;
+    state.grant_caps.invalidate();
+    match changed {
         Ok(ShareChange::LastWriter) => last_writer(),
         Ok(change) => json_ok(
             if change == ShareChange::Changed {
@@ -700,7 +691,10 @@ pub async fn revoke_share(State(state): State<Arc<RamaState>>, req: Request) -> 
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
     let body: ShareBody = or_return!(super::read_json(req.into_body(), "the share body").await);
     let (kind, subject) = or_return!(parse_subject(&body));
-    match agents_db::remove_share(&state.db, &agent.principal.id, kind, subject, &user.id).await {
+    let removed =
+        agents_db::remove_share(&state.db, &agent.principal.id, kind, subject, &user.id).await;
+    state.grant_caps.invalidate();
+    match removed {
         Ok(ShareChange::LastWriter) => last_writer(),
         Ok(ShareChange::NotFound) => not_found(format!(
             "`{}` is not shared with {} `{subject}`",

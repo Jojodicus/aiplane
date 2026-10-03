@@ -29,9 +29,19 @@
 //! curates the MCP catalog — while still refusing link-local and the other
 //! never-reached ranges. What comes back is read through `capped_read`, so
 //! the peer does not decide how much is buffered.
+//!
+//! A host's addresses and the client pinned to them are reused for
+//! [`CACHE_TTL`], so a tool reading many pages of one site neither resolves
+//! it nor sets up a client per request. The addresses are checked against
+//! the caller's policy on every use, cached or not, so a cached answer is
+//! never let through where a fresh one would be refused; caching only
+//! defers noticing that the host's DNS changed.
 
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use reqwest::Url;
 
@@ -40,6 +50,58 @@ use crate::server::net_guard::{IpClass, classify, is_loopback_host};
 
 /// How many redirects [`get`] follows before giving up.
 pub const MAX_REDIRECTS: usize = 5;
+
+/// How long a host's resolved addresses, and a client pinned to them, are
+/// reused.
+pub const CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// The longest a host's lookup may take. The caller's timeout covers only
+/// the request, and a resolver that never answers would otherwise hold the
+/// tool call for as long as the system resolver retries.
+pub const DNS_BOUND: Duration = Duration::from_secs(5);
+
+/// Entries either cache holds before the stale ones are dropped.
+const CACHE_MAX: usize = 1024;
+
+/// Values that expire [`CACHE_TTL`] after they were stored.
+struct Expiring<K, V> {
+    entries: Mutex<HashMap<K, (Instant, V)>>,
+}
+
+impl<K: Eq + Hash, V: Clone> Expiring<K, V> {
+    fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get(&self, key: &K, now: Instant) -> Option<V> {
+        let entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        entries
+            .get(key)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < CACHE_TTL)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn put(&self, key: K, value: V, now: Instant) {
+        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        if entries.len() >= CACHE_MAX {
+            entries.retain(|_, (at, _)| now.saturating_duration_since(*at) < CACHE_TTL);
+            if entries.len() >= CACHE_MAX {
+                entries.clear();
+            }
+        }
+        entries.insert(key, (now, value));
+    }
+}
+
+/// What a host and port resolved to, unchecked: each use checks it.
+static RESOLVED: LazyLock<Expiring<(String, u16), Vec<SocketAddr>>> = LazyLock::new(Expiring::new);
+
+/// Clients pinned to a host's checked addresses, by host, addresses and
+/// timeout.
+type ClientKey = (String, Vec<SocketAddr>, Duration);
+static CLIENTS: LazyLock<Expiring<ClientKey, reqwest::Client>> = LazyLock::new(Expiring::new);
 
 /// Which schemes a destination may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,10 +216,7 @@ pub async fn resolve(
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let addrs: Vec<SocketAddr> = match host.parse::<IpAddr>() {
         Ok(ip) => vec![SocketAddr::new(ip, port)],
-        Err(_) => tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|e| format!("cannot resolve `{host}` ({e})"))?
-            .collect(),
+        Err(_) => lookup(host, port).await?,
     };
     if addrs.is_empty() {
         return Err(format!("`{host}` resolves to no address"));
@@ -166,6 +225,57 @@ pub async fn resolve(
         check_ip(addr.ip(), allow_private).map_err(|why| format!("`{host}` resolves to {why}"))?;
     }
     Ok(addrs)
+}
+
+/// `host`'s addresses, from [`RESOLVED`] or a lookup of at most
+/// [`DNS_BOUND`].
+async fn lookup(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    let key = (host.to_ascii_lowercase(), port);
+    if let Some(addrs) = RESOLVED.get(&key, Instant::now()) {
+        return Ok(addrs);
+    }
+    let addrs: Vec<SocketAddr> =
+        tokio::time::timeout(DNS_BOUND, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| {
+                format!(
+                    "resolving `{host}` took longer than {} s; try again later",
+                    DNS_BOUND.as_secs()
+                )
+            })?
+            .map_err(|e| format!("cannot resolve `{host}` ({e})"))?
+            .collect();
+    if !addrs.is_empty() {
+        RESOLVED.put(key, addrs.clone(), Instant::now());
+    }
+    Ok(addrs)
+}
+
+/// A client pinned to `addrs` for `host` that uses no proxy and follows no
+/// redirect, reused from [`CLIENTS`] when one was built for the same.
+fn pinned_client(
+    host: &str,
+    addrs: &[SocketAddr],
+    timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    let mut sorted = addrs.to_vec();
+    sorted.sort_unstable();
+    let key = (host.to_ascii_lowercase(), sorted, timeout);
+    if let Some(client) = CLIENTS.get(&key, Instant::now()) {
+        return Ok(client);
+    }
+    // The guarded client: pinned to the addresses checked by the caller. A
+    // proxy would resolve the host again on its own, so none is ever used.
+    #[allow(clippy::disallowed_methods)]
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .resolve_to_addrs(host, addrs)
+        .build()
+        .map_err(|e| format!("building the HTTP client failed: {e}"))?;
+    CLIENTS.put(key, client.clone(), Instant::now());
+    Ok(client)
 }
 
 /// Resolve `raw`, check every address, and build a client pinned to them
@@ -187,16 +297,7 @@ async fn pin_url(url: Url, policy: Policy, timeout: Duration) -> Result<Pinned, 
         .port_or_known_default()
         .ok_or_else(|| format!("`{url}` has no port"))?;
     let addrs = resolve(&host, port, policy.allow_private).await?;
-    // The guarded client: pinned to the addresses checked above. A proxy
-    // would resolve the host again on its own, so none is ever used.
-    #[allow(clippy::disallowed_methods)]
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .resolve_to_addrs(&host, &addrs)
-        .build()
-        .map_err(|e| format!("building the HTTP client failed: {e}"))?;
+    let client = pinned_client(&host, &addrs, timeout)?;
     Ok(Pinned { url, client })
 }
 
@@ -507,6 +608,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body, "direct");
+    }
+
+    #[test]
+    fn a_cached_value_expires_after_the_ttl() {
+        let cache: Expiring<&str, u8> = Expiring::new();
+        let t0 = Instant::now();
+        cache.put("host", 1, t0);
+        assert_eq!(cache.get(&"host", t0 + CACHE_TTL / 2), Some(1));
+        assert_eq!(cache.get(&"host", t0 + CACHE_TTL), None);
+    }
+
+    #[tokio::test]
+    async fn a_cached_address_is_checked_again_against_each_callers_policy() {
+        let allowed = resolve("localhost", 9, true).await.unwrap();
+        assert!(allowed.iter().all(|a| a.ip().is_loopback()), "{allowed:?}");
+        assert!(
+            RESOLVED
+                .get(&("localhost".to_string(), 9), Instant::now())
+                .is_some(),
+            "the lookup is cached"
+        );
+        let refused = resolve("localhost", 9, false).await.unwrap_err();
+        assert!(refused.contains(PRIVATE_NETWORKS_VAR), "{refused}");
+        let pinned = pin("https://localhost:9/", Policy::public_https(), T)
+            .await
+            .err()
+            .unwrap();
+        assert!(pinned.contains(PRIVATE_NETWORKS_VAR), "{pinned}");
+    }
+
+    #[tokio::test]
+    async fn a_client_is_reused_for_the_same_pin_only() {
+        let a = pin("http://127.0.0.1:9/a", Policy::web(true), T)
+            .await
+            .unwrap();
+        let b = pin("http://127.0.0.1:9/b", Policy::web(true), T)
+            .await
+            .unwrap();
+        let key = |port: u16| {
+            (
+                "127.0.0.1".to_string(),
+                vec![SocketAddr::new(ip("127.0.0.1"), port)],
+                T,
+            )
+        };
+        assert!(CLIENTS.get(&key(9), Instant::now()).is_some());
+        assert!(CLIENTS.get(&key(10), Instant::now()).is_none());
+        assert_eq!((a.url.path(), b.url.path()), ("/a", "/b"));
     }
 
     #[tokio::test]

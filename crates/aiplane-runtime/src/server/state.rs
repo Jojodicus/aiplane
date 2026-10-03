@@ -264,6 +264,9 @@ pub struct AppState {
     /// enabled = false`; the push endpoints then report "disabled" and the
     /// turn-complete hook is a no-op. Built at startup by [`Self::with_push`].
     pub push: Option<Arc<aiplane_features::server::push::PushSender>>,
+    /// System tokens' capped grants and last-use writes. Everything that can
+    /// change what a minter holds calls its `invalidate`.
+    pub grant_caps: Arc<crate::server::grant_holding::GrantCaps>,
 }
 
 impl AppState {
@@ -308,6 +311,7 @@ impl AppState {
             crypto,
             mcp,
             push: None,
+            grant_caps: Arc::default(),
         }
     }
 
@@ -741,6 +745,7 @@ impl AppState {
             self.tools.store(Arc::new(rebuilt));
         }
         self.config.store(next);
+        self.grant_caps.invalidate();
     }
 
     /// Rebuild the feature bundle from `config` and swap it in.
@@ -1068,6 +1073,7 @@ impl AppState {
             Ok(grants) => self.rbac.set_skill_grant_overlay(grants),
             Err(e) => tracing::warn!(error = %e, "reloading skill-grant overlay"),
         }
+        self.grant_caps.invalidate();
     }
 
     /// Union a once-per-request [`UserMcpLayer`]'s tool ids into an

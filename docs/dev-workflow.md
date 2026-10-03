@@ -629,3 +629,19 @@ comments rather than Rust doc comments.
 **Prevention.** No test for this one — describe a class rather than spelling
 it, and when the bundle size moves, check *which* selectors moved rather than
 just that it changed.
+
+### A new migration is invisible until the crate rebuilds
+
+**Symptom.** Tests fail with "no such column" or "no such table" for a schema
+the newest migration plainly creates, and keep failing however often they run.
+
+**Cause.** `sqlx::migrate!("./migrations")` embeds the migration files at
+compile time but never tells cargo it read them. Adding a file changes no
+source cargo watches, so `aiplane-core` and every test binary that embeds the
+set stay on the schema they were built with.
+
+**Prevention.** `crates/aiplane-core/build.rs` prints
+`cargo:rerun-if-changed=migrations`, so a file added to, changed in or removed
+from the directory rebuilds the crate. `migrations_are_frozen.rs` →
+`the_embedded_set_is_the_directory` compares the compiled-in versions with the
+directory at run time and fails if they differ.

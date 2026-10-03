@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The `/api/v0/admin/*` JSON surface for the SvelteKit SPA (issue #22,
-//! phase 4): groups, users, model defaults/prices, limits, settings, the
+//! The `/api/v0/admin/*` JSON surface for the SvelteKit SPA: groups, users, model defaults/prices, limits, settings, the
 //! admin token register, and the upstream topology. One module because the
 //! legacy form handlers' DB calls live one crate down in `aiplane-core` —
 //! these handlers are thin JSON translations of them, and the legacy
@@ -2399,8 +2398,8 @@ fn sorted(set: std::collections::HashSet<String>) -> Vec<String> {
 /// GET /api/v0/admin/upstreams/events — the live health stream as JSON
 /// events: one `status` event per backend whose state changed since it was
 /// last sent (plus the dirty counter inside each event), and a comment
-/// keepalive when nothing has changed for a while. See `TICK` and `KEEPALIVE`
-/// below for the cadence. The JSON twin of the legacy
+/// keepalive when nothing has changed for a while. See `TICK` below and
+/// `SSE_KEEPALIVE` for the cadence. The JSON twin of the legacy
 /// `/admin/upstreams/live` HTML-patch stream.
 pub async fn topology_events(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
@@ -2420,12 +2419,9 @@ pub async fn topology_events(State(state): State<Arc<RamaState>>, req: Request) 
         /// sends nothing, so this only bounds how stale a health flip can look
         /// — it is not what drives traffic.
         const TICK: Duration = Duration::from_secs(15);
-        /// Idle gap after which a comment frame goes out, so a proxy with an
-        /// idle timeout in front of the stream does not cut it. `since_send`
-        /// advances in whole ticks, so this is reached at the first tick at or
-        /// past it — keep it a multiple of `TICK`, or the effective gap is the
-        /// next multiple up (a 20 s threshold on a 15 s tick fires at 30 s).
-        const KEEPALIVE: Duration = Duration::from_secs(15);
+        // `since_send` advances in whole ticks, so `SSE_KEEPALIVE` is reached
+        // at the first tick at or past it — keep `TICK` a divisor of it, or
+        // the effective gap is the next multiple up.
         /// How often the rolling hour counts are re-aggregated. Slower than
         /// the tick, because an hour bucket does not move that fast.
         const USAGE_REFRESH: Duration = Duration::from_secs(60);
@@ -2520,12 +2516,8 @@ pub async fn topology_events(State(state): State<Arc<RamaState>>, req: Request) 
             } else {
                 since_send + TICK
             };
-            if since_send >= KEEPALIVE {
-                if tx
-                    .send(Ok(rama::bytes::Bytes::from(": keepalive\n\n")))
-                    .await
-                    .is_err()
-                {
+            if since_send >= super::SSE_KEEPALIVE {
+                if tx.send(Ok(super::sse_keepalive())).await.is_err() {
                     return;
                 }
                 since_send = Duration::ZERO;

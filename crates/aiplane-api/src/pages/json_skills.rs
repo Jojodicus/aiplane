@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Skills + connectors + feedback + ComfyUI JSON surfaces for the SPA
-//! (issue #22, P5). Thin JSON translations of the legacy handlers; the
+//! Skills + connectors + feedback + ComfyUI JSON surfaces for the SPA.
+//! Thin JSON translations of the legacy handlers; the
 //! legacy pages stay alive until phase 6.
 
 use std::collections::HashMap;
@@ -656,6 +656,7 @@ pub async fn admin_connectors_save(State(state): State<Arc<RamaState>>, req: Req
     } else {
         db::mcp_catalog::create(&state.db, input).await
     };
+    state.grant_caps.invalidate();
     match result {
         Ok(()) => json_ok(StatusCode::OK, serde_json::json!({ "key": parsed.key })),
         Err(err) => internal(err),
@@ -688,7 +689,9 @@ pub async fn admin_connectors_toggle(
     {
         return bad_request("this connector needs an OAuth client id before it can be enabled");
     }
-    match db::mcp_catalog::set_enabled(&state.db, &key, parsed.enabled).await {
+    let toggled = db::mcp_catalog::set_enabled(&state.db, &key, parsed.enabled).await;
+    state.grant_caps.invalidate();
+    match toggled {
         Ok(_) => json_ok(
             StatusCode::OK,
             serde_json::json!({ "key": key, "enabled": parsed.enabled }),
@@ -747,7 +750,9 @@ pub async fn admin_connectors_delete(
         return bad_request("the URL is missing its connector key");
     };
     let _ = db::user_mcp::delete_all_for_connector(&state.db, &key).await;
-    match db::mcp_catalog::delete(&state.db, &key).await {
+    let deleted = db::mcp_catalog::delete(&state.db, &key).await;
+    state.grant_caps.invalidate();
+    match deleted {
         Ok(_) => no_content(),
         Err(err) => internal(err),
     }
@@ -760,7 +765,9 @@ pub async fn admin_connectors_restore_defaults(
     req: Request,
 ) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
-    match db::mcp_catalog::seed_defaults(&state.db).await {
+    let seeded = db::mcp_catalog::seed_defaults(&state.db).await;
+    state.grant_caps.invalidate();
+    match seeded {
         Ok(count) => json_ok(StatusCode::OK, serde_json::json!({ "seeded": count })),
         Err(err) => internal(err),
     }

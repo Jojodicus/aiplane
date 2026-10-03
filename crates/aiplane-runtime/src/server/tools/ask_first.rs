@@ -4,7 +4,7 @@
 //! `AskFirst`: a tool that runs only after the user approves the call.
 //!
 //! The first consumer of [`crate::suspend`] and the shape `permission:
-//! always_ask` (#96) takes: wrap any tool, keep its id and schema, and on each
+//! always_ask` (`docs/agents.md` "What #96 built") takes: wrap any tool, keep its id and schema, and on each
 //! call pause the turn for an approval instead of running it. The driver
 //! answers a denial itself; an approval runs the call again with
 //! [`Suspend::Decided`], and only then does the wrapped tool run.

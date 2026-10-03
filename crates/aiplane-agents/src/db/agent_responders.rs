@@ -73,12 +73,14 @@ pub async fn add(
     .rows_affected()
         > 0;
     if added {
-        agent_audit::record(
+        agent_audit::append(
             &mut tx,
-            AuditKind::ResponderAdded,
-            agent_id,
-            actor_id,
-            json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+            agent_audit::NewEvent::new(
+                AuditKind::ResponderAdded,
+                agent_id,
+                json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+            )
+            .by(Some(actor_id)),
         )
         .await?;
     }
@@ -107,12 +109,14 @@ pub async fn remove(
     .rows_affected()
         > 0;
     if removed {
-        agent_audit::record(
+        agent_audit::append(
             &mut tx,
-            AuditKind::ResponderRemoved,
-            agent_id,
-            actor_id,
-            json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+            agent_audit::NewEvent::new(
+                AuditKind::ResponderRemoved,
+                agent_id,
+                json!({ "subject_kind": kind.as_str(), "subject_id": subject_id }),
+            )
+            .by(Some(actor_id)),
         )
         .await?;
     }

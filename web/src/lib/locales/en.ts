@@ -287,7 +287,6 @@ export const en: Catalog = {
  "agents-act-took": "{ms} ms",
  "agents-act-turn": "Turn {turn}",
  "agents-act-unanchored": "{count} newer events are not anchored yet: they were written after the last turn ended.",
- "agents-act-unchained": "{count} older events were recorded before the log was chained.",
  "agents-act-verified": "{events} events in {chains} chains are intact.",
  "agents-act-verify": "Verify chain",
  "agents-an-chart-empty": "No activity in this period.",

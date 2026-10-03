@@ -19,7 +19,6 @@ agents-act-to = Hasta
 agents-act-export = Exportar JSONL
 agents-act-verify = Verificar cadena
 agents-act-verified = { $events } eventos en { $chains } cadenas están intactos.
-agents-act-unchained = { $count } eventos anteriores se registraron antes de encadenar el registro.
 agents-act-unanchored = { $count } eventos más recientes aún no están anclados: se escribieron después de que terminara el último turno.
 agents-act-head = Guarde esta cabeza de la cadena propia del agente fuera de la pasarela: ancla cada conversación, así que un registro recortado a una cabeza anterior se nota al compararla.
 agents-act-broken = La cadena { $chain } se rompe en el evento { $seq }: { $reason }

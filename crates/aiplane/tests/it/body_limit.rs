@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The router-wide request body cap (`rama_server::body_limit`): 1 MiB by
-//! default, refused with `413 payload_too_large` before the handler runs;
-//! the large-body routes take more. The cap sits in front of authentication,
+//! The request body cap each route group is registered under
+//! (`rama_server::body_limit`): 1 MiB by default, refused with `413
+//! payload_too_large` before the handler runs; the large-body routes take
+//! more. The cap sits in front of authentication,
 //! so these requests carry no credentials: a capped body answers 413, a body
 //! within the route's cap reaches the handler and its 401.
 
@@ -30,8 +31,13 @@ fn over_the_default() -> Body {
 #[tokio::test]
 async fn a_default_capped_route_refuses_a_body_over_one_mib() {
     let state = common::state_no_skills().await;
-    for body in [over_the_default(), common::endless_body()] {
-        let resp = common::serve_promptly(&state, post("/api/v0/tokens", body)).await;
+    for (uri, body) in [
+        ("/api/v0/tokens", over_the_default()),
+        ("/api/v0/tokens", common::endless_body()),
+        ("/api/v0/admin/settings", over_the_default()),
+        ("/auth/logout", over_the_default()),
+    ] {
+        let resp = common::serve_promptly(&state, post(uri, body)).await;
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let body: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
         assert_eq!(body["error"]["code"], "payload_too_large", "{body}");
@@ -57,6 +63,18 @@ async fn an_upload_route_takes_a_body_over_the_default() {
             let resp = common::serve_promptly(&state, post(uri, body)).await;
             assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{uri}");
         }
+    }
+    for uri in [
+        "/v1/messages",
+        "/v1/audio/transcriptions",
+        "/api/v0/feedback",
+        "/api/v0/skills",
+        "/api/v0/admin/skills",
+        "/api/v0/chat/sessions/s1/messages",
+        "/api/v0/chat/sessions/s1/turns/t1/edit",
+    ] {
+        let resp = common::serve_promptly(&state, post(uri, over_the_default())).await;
+        assert_ne!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE, "{uri}");
     }
 }
 

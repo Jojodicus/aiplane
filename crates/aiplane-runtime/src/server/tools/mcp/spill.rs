@@ -56,10 +56,6 @@ use super::super::ToolContext;
 /// model the value it was about to read.
 const MIN_SPILL_CHARS: usize = 4096;
 
-/// Ceiling on one decoded payload. Matches the image ceiling the fetch tools
-/// use, so "too big to hand you" means the same size everywhere.
-const MAX_SPILL_BYTES: usize = 25 * 1024 * 1024;
-
 /// Most artifacts one tool call may produce. A mail with forty inline images
 /// would otherwise fill the reply with forty chips (and do forty uploads);
 /// past this the rest are dropped with a note rather than stored.
@@ -430,11 +426,11 @@ async fn handle(
     if bytes.is_empty() {
         return Spilled::Refused("the payload decoded to zero bytes".into());
     }
-    if bytes.len() > MAX_SPILL_BYTES {
+    if bytes.len() > chat_attachments::MAX_IMAGE_BYTES {
         return Spilled::Refused(format!(
             "it is {} — over the {} ceiling for one artifact",
             human_size(bytes.len() as u64),
-            human_size(MAX_SPILL_BYTES as u64)
+            human_size(chat_attachments::MAX_IMAGE_BYTES as u64)
         ));
     }
 
