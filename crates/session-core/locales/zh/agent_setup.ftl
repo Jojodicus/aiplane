@@ -41,6 +41,7 @@ agents-setup-assistant = 助手
 agents-setup-back = 上一步
 agents-setup-next = 下一步
 agents-setup-done = 完成
+agents-setup-exit = 保存并退出
 agents-setup-step-of = 第 { $current } 步，共 { $total } 步
 agents-setup-unknown-step = 没有这个步骤。
 agents-setup-step-start = 要做什么？

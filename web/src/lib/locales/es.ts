@@ -572,6 +572,7 @@ export const es: Catalog = {
  "agents-setup-done": "Terminar",
  "agents-setup-dropped": "Descartado:",
  "agents-setup-edit": "Editar",
+ "agents-setup-exit": "Guardar y salir",
  "agents-setup-fallback": "Si no, cuando el agente no pueda ayudar,",
  "agents-setup-fallback-human": "pasar a una persona",
  "agents-setup-fallback-none": "terminar la conversación con cortesía",

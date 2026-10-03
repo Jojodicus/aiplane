@@ -578,6 +578,7 @@ export const ru: Catalog = {
  "agents-setup-done": "Готово",
  "agents-setup-dropped": "Не вошло:",
  "agents-setup-edit": "Изменить",
+ "agents-setup-exit": "Сохранить и выйти",
  "agents-setup-fallback": "Иначе, если агент не может помочь,",
  "agents-setup-fallback-human": "передать человеку",
  "agents-setup-fallback-none": "вежливо завершить разговор",
