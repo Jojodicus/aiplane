@@ -45,17 +45,22 @@
 	let heading = $state<HTMLElement | null>(null);
 	let canvasEl = $state<HTMLElement | null>(null);
 
+	const nodeEl = (id: string) => canvasEl?.querySelector<HTMLElement>(`[data-node="${CSS.escape(id)}"]`);
+
+	/** The panel narrows the canvas, which can push the chosen node out of its scroll area. */
 	async function select(id: string) {
 		selectedId = id;
 		await tick();
 		heading?.focus();
+		const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+		nodeEl(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: still ? 'instant' : 'smooth' });
 	}
 
 	async function close() {
 		const id = selectedId;
 		selectedId = null;
 		await tick();
-		if (id) canvasEl?.querySelector<HTMLElement>(`[data-node="${CSS.escape(id)}"]`)?.focus();
+		if (id) nodeEl(id)?.focus();
 	}
 
 	function onkeydown(e: KeyboardEvent) {
