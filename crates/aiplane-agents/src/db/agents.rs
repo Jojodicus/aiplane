@@ -659,11 +659,13 @@ pub async fn delete(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::principal::GrantKind;
+    use aiplane_core::server::principal::GrantKind;
     use std::path::Path;
 
     async fn pool() -> Pool {
-        super::super::open(Path::new(":memory:")).await.unwrap()
+        aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap()
     }
 
     async fn agent(pool: &Pool, name: &str, creator: &str) -> AgentRow {

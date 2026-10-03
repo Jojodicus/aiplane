@@ -235,7 +235,7 @@ async fn a_responder_answers_a_handoff_from_the_inbox_and_the_visitor_receives_i
     let (_, after) = e.fx.get(&people.sam, "/api/v0/agents/inbox").await;
     assert_eq!(after["count"], 0);
 
-    let resumed = aiplane_core::server::db::agent_audit::for_principal(&e.fx.state.db, &e.agent)
+    let resumed = aiplane_agents::db::agent_audit::for_principal(&e.fx.state.db, &e.agent)
         .await
         .unwrap()
         .into_iter()

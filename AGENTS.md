@@ -11,7 +11,7 @@ A single Rust binary (`aiplane`, built from the `gateway` crate) plus the suppor
 - **`gateway`** — authenticated, OpenAI-compatible LLM proxy. Speaks `/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/models` so any OpenAI SDK talks to it, and `/v1/messages` in the Anthropic dialect so Claude Code can be pointed at it. OIDC browser login + gateway-minted bearer tokens. Routes across **multiple upstream LLM backends** with health checks + RAII in-flight accounting. Injects **company-specific tools** gated by **RBAC**. Serves a SvelteKit single-page app (dashboard / tokens / persisted multi-conversation chat) over a JSON `/api/v0` API.
 
 Shared crates:
-- **`session-core`** — chat substrate (DB schema + worker registry + the JSON-SSE event protocol in `chat_json` + `SessionDriver` trait). AIplane plugs in an `OpenAiDriver`; the trait keeps the substrate driver-agnostic so a future second consumer can drive the same chat surface without forking.
+- **`session-core`** — chat substrate (DB schema + worker registry + the JSON-SSE event protocol in `chat_json` + `SessionDriver` trait). AIplane plugs in an `OpenAiDriver`; the trait keeps the substrate driver-agnostic so a future second consumer can drive the same chat surface without forking. It is owner-agnostic too: it knows a person's conversation by `user_id` and treats any other owner as opaque — agent runs, visitors and principals are `aiplane-agents`' business.
 - **`shared`** — OpenAI wire types shared across the workspace.
 
 Built on **rama 0.3** (HTTP server + router + middleware) on the server, and **SvelteKit 2 + Svelte 5** with **daisyUI v5 + Tailwind v4** in `web/`. The browser talks to `/api/v0` over JSON and receives live turn updates as JSON frames on an SSE stream.
@@ -23,7 +23,7 @@ Built on **rama 0.3** (HTTP server + router + middleware) on the server, and **S
 ├── AGENTS.md                    # this file
 ├── README.md                    # human-facing — keep current with deploy story
 ├── mise.toml                    # toolchain pin + build/test/lint tasks
-├── Cargo.toml                   # workspace manifest (9 members)
+├── Cargo.toml                   # workspace manifest (10 members)
 ├── Dockerfile                   # gateway runtime image
 ├── docs/                        # detailed design docs (index in docs/README.md)
 ├── web/                         # SvelteKit SPA (Tailwind v4 + daisyUI v5) — see docs/ui.md
@@ -36,6 +36,7 @@ Built on **rama 0.3** (HTTP server + router + middleware) on the server, and **S
     │   └── ui/ts/                   composer + scroll TS
     ├── aiplane-core/            # base: db, config, crypto, rbac, upstreams
     ├── aiplane-features/        # optional subsystems: rag, skills, comfyui, push, …
+    ├── aiplane-agents/          # agent DB accessors, run sessions, visitor rates
     ├── aiplane-runtime/         # tool API + AppState/RamaState + chat driver
     ├── aiplane-tools/           # the tool implementations
     ├── aiplane-api/             # the server-rendered HTML pages
@@ -51,28 +52,34 @@ compilation unit, so editing any file re-ran the whole frontend + codegen. Each
 crate depends only on the ones beneath it.
 
 ```
-gateway            bin + router/proxy/api/oidc      6.5k  ← thinnest, most-edited
-   ├── aiplane-api     server-rendered HTML pages  25.5k  ← siblings: neither
-   └── aiplane-tools   the tool implementations    14.5k  ←   depends on the other
-          └── aiplane-runtime  tool API + AppState/RamaState + chat driver  14.7k
-                 ├── aiplane-features  RAG, skills, ComfyUI, push, geoip, …  13.9k
-                 └── aiplane-core      db, config, crypto, rbac, upstreams   22.1k
+gateway            bin + router/proxy/api/oidc     14.0k  ← thinnest, most-edited
+   ├── aiplane-api     the /api/v0 JSON handlers   17.5k  ← siblings: neither
+   └── aiplane-tools   the tool implementations    24.1k  ←   depends on the other
+          └── aiplane-runtime  tool API + AppState/RamaState + chat driver  58.1k
+                 ├── aiplane-features  RAG, skills, ComfyUI, push, geoip, …  25.5k  ← siblings
+                 └── aiplane-agents    agent tables, run sessions, rates      7.4k  ←
+                        └── aiplane-core      db, config, crypto, rbac, upstreams  45.6k
+                               └── session-core  chat substrate, owner-agnostic   10.5k
 ```
 
-Lines that must recompile after a one-line edit: `gateway` 6.5k, `aiplane-tools`
-21k, `aiplane-api` 32k, `aiplane-runtime` 61k, `aiplane-features` 75k,
-`aiplane-core` 97k — against **97k for any edit** before the split. The gains are
-front-loaded on purpose: the layers that churn most are the cheapest to rebuild.
+Lines that must recompile after a one-line edit (as of #109): `gateway` 14k,
+`aiplane-api` 32k, `aiplane-tools` 38k, `aiplane-runtime` 114k, `aiplane-agents`
+121k, `aiplane-features` 139k, `aiplane-core` 192k, `session-core` 203k. The
+gains are front-loaded on purpose: the layers that churn most are the cheapest
+to rebuild. Before #109 the agent DB code sat in `aiplane-core`, so editing it
+cost the full 191k.
 
 `aiplane-api` and `aiplane-tools` are siblings: neither depends on the other, so
-editing a page doesn't rebuild the tools and vice versa.
+editing a page doesn't rebuild the tools and vice versa. `aiplane-features` and
+`aiplane-agents` are siblings the same way.
 
 Two rules keep it that way, and both are easy to break by accident:
 1. **Put new code as high in the stack as it will go.** Something belongs in
    `aiplane-core` only if code below the feature layer genuinely needs it.
-2. **Never reference upward.** `aiplane-features` must not name `AppState` or the
-   tool registry; `aiplane-core` must not name a feature. One such reference
-   collapses a layer.
+2. **Never reference upward.** `aiplane-features` and `aiplane-agents` must not
+   name `AppState` or the tool registry; `aiplane-core` must not name a feature
+   or an agent table's accessors; `session-core` must not name an agent, a
+   visitor or a principal. One such reference collapses a layer.
 
 **When adding code, put it as high in the stack as it will go.** Something only
 belongs in `aiplane-core` if code below the page layer actually needs it. Adding a
@@ -95,11 +102,20 @@ server/
                               at the bottom while they live two layers up
     upstreams/                pool registry, health probes, RAII Acquired guard
     tool_naming.rs            well-known tool ids/prefixes + slug→title humaniser
-    usage/ limits/            metrics sink, rate-limit + quota enforcer
+    principal.rs run_chain.rs who acts (person / system principal) + the call chain
+    usage/ limits/            metrics sink, spend-limit + quota enforcer
 rama_server/
     session.rs                signed-cookie + sqlite session store; is_safe_return_to
-    cors.rs                   the CORS layer
+    cors.rs                   the /v1 CORS layer
 ```
+
+Inside `crates/aiplane-agents/src/` (beside `aiplane-features`): `db/` — the
+accessors of the agent tables (`agents`, `system_principals`, `agent_audit`,
+`embed_keys`, `visitor_sessions`, `a2a_contexts`, `agent_state`, `agent_tests`,
+…; their DDL stays in `aiplane-core`'s one migration set), `db/run_sessions.rs`
+(principal-owned conversations, the agent pause sweep, the inbox reads),
+`db/inbound.rs` + `rates.rs` (the visitor rate gate over every inbound channel),
+`notify_channels.rs` (the inbox's chat webhooks).
 
 Inside `crates/aiplane-features/src/server/`: the optional subsystems — `rag/`,
 `skills.rs`, `comfyui/`, `push/`, `github/`, `geoip/`, `typst.rs`, `image_gen.rs`,
@@ -155,6 +171,7 @@ rama_server/              # routing glue only:
     proxy.rs                  /v1/{models,chat/completions,audio/transcriptions,…}
     api.rs                    session-authed /api/v0/* JSON endpoints
     oidc_handlers.rs          /auth/{login,callback,logout}
+    embed_cors.rs             CORS for /api/v0/embed/*, scoped to embed-key origins
     rag_api.rs sandbox_api.rs comfyui_api.rs
     vad.rs                    silence trimming ahead of Whisper
 tests/it/                 # integration suite — builds the router, serves requests in-process

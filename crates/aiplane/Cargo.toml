@@ -20,6 +20,7 @@ publish.workspace = true
 [dependencies]
 aiplane-core = { path = "../aiplane-core" }
 aiplane-features = { path = "../aiplane-features" }
+aiplane-agents = { path = "../aiplane-agents" }
 aiplane-runtime = { path = "../aiplane-runtime" }
 aiplane-tools = { path = "../aiplane-tools" }
 aiplane-api = { path = "../aiplane-api" }

@@ -8,7 +8,11 @@
 //! rename to `session_*` rides in a follow-up migration):
 //!
 //! - `chat_sessions` — one row per conversation thread, scoped to a
-//!   user. Single-tenant callers can pass a constant user id.
+//!   user. Single-tenant callers can pass a constant user id. A row whose
+//!   `user_id` is NULL belongs to an owner this crate does not model (the
+//!   layers above keep their own columns for it); session-core treats it
+//!   as opaque — no person's read here returns it, and its sweeps of
+//!   expired pauses cover a person's conversations only.
 //! - `chat_turns` — one row per message in a thread. Role `user`
 //!   carries the prompt; role `assistant` carries the streamed reply
 //!   with `status` cycling through `in_progress → completed |
@@ -384,11 +388,13 @@ pub(crate) mod tests {
     ///
     /// session-core deliberately doesn't own migrations (the bins do
     /// — see the module-level doc comment), so for tests we recreate
-    /// just enough schema here: stub `users` and `system_principals`
-    /// tables (because a `chat_sessions` row is owned by one of them) plus
-    /// the tables this module actually manages. Kept in lock-step with
-    /// `crates/aiplane-core/migrations/` (`chat_sessions` as of 0081); if
-    /// those change shape, mirror the change here.
+    /// just enough schema here: a stub `users` table plus the tables this
+    /// module actually manages, with only the columns it reads. The real
+    /// `chat_sessions` has more (the columns of the owners it does not model,
+    /// whose `user_id` is NULL); they are left out because nothing here may
+    /// depend on them. Kept in lock-step with `crates/aiplane-core/migrations/`
+    /// for every column session-core reads; if those change shape, mirror the
+    /// change here.
     pub(crate) async fn pool() -> Pool {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -408,25 +414,14 @@ pub(crate) mod tests {
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             )"#,
-            r#"CREATE TABLE system_principals (
-                id          TEXT PRIMARY KEY NOT NULL,
-                name        TEXT NOT NULL UNIQUE
-            )"#,
             r#"CREATE TABLE chat_sessions (
                 id             TEXT PRIMARY KEY NOT NULL,
                 user_id        TEXT REFERENCES users(id) ON DELETE CASCADE,
-                principal_id   TEXT REFERENCES system_principals(id) ON DELETE CASCADE,
-                parent_turn_id TEXT,
-                agent_version  INTEGER,
-                visitor_id     TEXT,
-                lang           TEXT,
                 title          TEXT,
                 created_at     TEXT NOT NULL,
                 updated_at     TEXT NOT NULL,
                 shared         INTEGER NOT NULL DEFAULT 0,
-                pinned         INTEGER NOT NULL DEFAULT 0,
-                CHECK ((user_id IS NULL) != (principal_id IS NULL)),
-                CHECK (principal_id IS NULL OR shared = 0)
+                pinned         INTEGER NOT NULL DEFAULT 0
             )"#,
             r#"CREATE TABLE chat_turns (
                 id                    TEXT PRIMARY KEY NOT NULL,
@@ -546,11 +541,24 @@ pub(crate) mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO system_principals (id, name) VALUES ('p1', 'support-website')")
-            .execute(&pool)
-            .await
-            .unwrap();
         pool
+    }
+
+    /// A conversation no person owns (`user_id` NULL): what an owner this
+    /// crate does not model looks like from here.
+    pub(crate) async fn unowned_session(pool: &Pool) -> String {
+        let id = Uuid::new_v4().to_string();
+        let now = Timestamp::now().to_string();
+        sqlx::query(
+            "INSERT INTO chat_sessions (id, user_id, created_at, updated_at) VALUES (?, NULL, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
     }
 
     fn pending(turn_id: &str, session_id: &str) -> PendingTurn {

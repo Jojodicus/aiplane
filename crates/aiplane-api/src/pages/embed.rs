@@ -23,6 +23,7 @@
 
 use std::sync::Arc;
 
+use aiplane_agents::db::run_sessions;
 use jiff::Timestamp;
 use rama::http::service::web::extract::State;
 use rama::http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header};
@@ -34,10 +35,10 @@ use session_core::i18n::{self, Lang, t, t_args};
 
 use super::turn_wait::{TurnWait, Waited};
 use super::{bad_request, internal, json_error, json_ok};
+use aiplane_agents::db::agents::{self as agents_db, AgentRow};
+use aiplane_agents::db::embed_keys::{self, EmbedKey};
+use aiplane_agents::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
 use aiplane_core::server::auth::token;
-use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
-use aiplane_core::server::db::embed_keys::{self, EmbedKey};
-use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
 use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
@@ -352,10 +353,11 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
         .map_err(internal)?
         .filter(|k| k.revoked_at.is_none())
         .ok_or_else(embed_key_revoked)?;
-    let pinned = chat::get_principal_session(&state.db, &session.principal_id, &session.session_id)
-        .await
-        .map_err(internal)?
-        .and_then(|run| run.agent_version);
+    let pinned =
+        run_sessions::get_principal_session(&state.db, &session.principal_id, &session.session_id)
+            .await
+            .map_err(internal)?
+            .and_then(|run| run.agent_version);
     let live = live_agent(state, &session.principal_id, pinned).await?;
     check_origin(&key, &live.spec, req.headers())?;
     let session = visitor_sessions::slide(&state.db, &session, now)

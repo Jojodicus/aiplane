@@ -341,7 +341,7 @@ impl Tool for BoundTool {
 mod tests {
     use super::*;
     use crate::agents::state::tests::{at, schema};
-    use aiplane_core::server::db::agent_state::StoredSlot;
+    use aiplane_agents::db::agent_state::StoredSlot;
     use serde_json::json;
     use std::sync::Mutex;
 

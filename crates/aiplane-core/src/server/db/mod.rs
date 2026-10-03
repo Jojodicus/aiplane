@@ -12,17 +12,6 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 
-pub mod a2a_contexts;
-pub mod agent_a2a_tasks;
-pub mod agent_analytics;
-pub mod agent_audit;
-pub mod agent_channels;
-pub mod agent_responders;
-pub mod agent_retention;
-pub mod agent_state;
-pub mod agent_tests;
-pub mod agent_verifiers;
-pub mod agents;
 pub mod app_settings;
 pub mod audit;
 pub mod automatic_routes;
@@ -32,7 +21,6 @@ pub mod chat_session_settings;
 pub mod chat_session_skills;
 pub mod chat_session_tools;
 pub mod documents;
-pub mod embed_keys;
 pub mod gateway_groups;
 pub mod limits;
 pub mod mcp_audit;
@@ -45,7 +33,6 @@ pub mod rag_documents;
 pub mod rag_oauth;
 pub mod reseal;
 pub mod skill_grants;
-pub mod system_principals;
 pub mod token_models;
 pub mod token_tool_prefs;
 pub mod tokens;
@@ -55,7 +42,6 @@ pub mod user_mcp;
 pub mod user_memories;
 pub mod user_tool_prefs;
 pub mod users;
-pub mod visitor_sessions;
 
 pub type Pool = sqlx::SqlitePool;
 
@@ -116,7 +102,7 @@ pub fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestamp, DbEr
 /// (`…:05.1Z` sorts after `…:05.15Z`). Without the trailing `Z` it does, so a
 /// query that must be exact compares and orders on `rtrim(created_at, 'Z')`
 /// against this key.
-pub(crate) fn window_key(t: jiff::Timestamp) -> String {
+pub fn window_key(t: jiff::Timestamp) -> String {
     t.to_string().trim_end_matches('Z').to_string()
 }
 

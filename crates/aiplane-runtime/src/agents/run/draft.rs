@@ -15,11 +15,12 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::db::{DbError, agent_audit, agents as agents_db};
+use aiplane_agents::db::run_sessions;
+use aiplane_agents::db::{agent_audit, agents as agents_db};
+use aiplane_core::server::db::DbError;
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Value, json};
-use session_core::db as chat;
 
 use super::{AgentReply, AgentTurn, OpenedTurn, drive_opened};
 use crate::agents::gate::{GateInput, GateStatus, Unmet};
@@ -39,12 +40,11 @@ pub async fn run_draft_turn(
     options: RunOptions,
 ) -> Result<AgentReply, AgentRunError> {
     if let Some(session) = turn.session_id {
-        let continues = chat::get_principal_session(&state.db, turn.agent_id, session)
-            .await
-            .map_err(DbError::from)?
+        let continues = run_sessions::get_principal_session(&state.db, turn.agent_id, session)
+            .await?
             .is_some_and(|run| run.agent_version == Some(DRAFT_VERSION));
         if !continues {
-            let agent = aiplane_core::server::db::system_principals::get(&state.db, turn.agent_id)
+            let agent = aiplane_agents::db::system_principals::get(&state.db, turn.agent_id)
                 .await?
                 .map_or_else(|| turn.agent_id.to_string(), |p| p.name);
             return Err(AgentRunError::UnknownSession {

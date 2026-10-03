@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 use session_core::i18n::Lang;
 
 use super::{json_error, json_ok, raw_path_segment};
-use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
+use aiplane_agents::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::principal::{GrantKind, Principal};
 use aiplane_runtime::agents::a2a::{self as a2a_rt, CardFacts};
 use aiplane_runtime::agents::spec::AgentSpec;

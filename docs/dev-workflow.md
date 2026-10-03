@@ -215,7 +215,7 @@ a stub gateway with mock backends and a pre-seeded session instead.
 
 Env config is layered through mise, not a `.env` file:
 
-- **`mise.toml` `[env]`** holds the non-secret defaults committed to the repo (`RUST_BACKTRACE=1`, `RUST_LOG=info,gateway=debug,aiplane_core=debug,aiplane_features=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug`).
+- **`mise.toml` `[env]`** holds the non-secret defaults committed to the repo (`RUST_BACKTRACE=1`, `RUST_LOG=info,gateway=debug,aiplane_core=debug,aiplane_features=debug,aiplane_agents=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug`).
 - **`mise.local.toml` `[env]`** holds secrets and machine-local overrides — it is **gitignored**. This is where local dev keys go: `AIPLANE_SESSION_KEY`, `AIPLANE_OIDC_CLIENT_SECRET`, `AIPLANE_ENCRYPTION_KEY`, provider keys (`OPENAI_API_KEY`, `ZAI_API_KEY`, …), etc.
 
 Web-search settings are **not** environment variables any more. Provider, SearXNG URL, Brave API key, and Tavily API key live in the database and are set under **Web search** on `/admin/settings?tab=web-search` (keys sealed at rest like every other gateway secret). `SEARCH_PROVIDER`, `SEARXNG_URL`, and `BRAVE_SEARCH_API_KEY` are still read at boot to fill settings that are still empty; there is no Tavily environment-variable import. Once a setting is present in the database, its environment variable is ignored.

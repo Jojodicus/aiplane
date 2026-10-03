@@ -12,9 +12,10 @@ use super::suspend::{answer, staff, visitor_says, wait_settled};
 use super::*;
 use crate::agents::inbox::{self, Standing, Viewer};
 use crate::agents::resume::{AgentResume, claim, resume_expired, run_claimed};
-use aiplane_core::server::db::agent_channels::{self, ChannelKind, NewChannel};
-use aiplane_core::server::db::agent_responders;
-use aiplane_core::server::db::agents::SubjectKind;
+use aiplane_agents::db::agent_channels::{self, ChannelKind, NewChannel};
+use aiplane_agents::db::agent_responders;
+use aiplane_agents::db::agents::SubjectKind;
+use aiplane_agents::db::run_sessions;
 use session_core::db::{Decision, DecisionKind, DenyReason, SuspensionKind};
 
 const ECHO: &str = "company_echo";
@@ -305,11 +306,13 @@ async fn a_handoff_nobody_answers_tells_the_visitor_so_in_their_language() {
         .expires_at
         .duration_since(jiff::Timestamp::now());
     assert!(lasts.as_secs() <= 300, "the route's timeout: {lasts:?}");
-    let pending =
-        chat::pending_by_request(world.db(), &paused.suspension.as_ref().unwrap().request_id)
-            .await
-            .unwrap()
-            .unwrap();
+    let pending = run_sessions::pending_by_request(
+        world.db(),
+        &paused.suspension.as_ref().unwrap().request_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let transcript = &pending.suspension.run_context.unwrap()["handoff"]["transcript"];
     assert_eq!(transcript[0]["text"], "Ich wurde doppelt belastet.");
 
@@ -614,7 +617,7 @@ async fn a_handoff_after_a_resume_is_recorded_in_the_visitors_language() {
     let handed_off = staff_in(&world, &agent, &paused).await;
     let waiting = handed_off.suspension.expect("handed off to a person");
     assert_eq!(waiting.kind, SuspensionKind::HumanAnswer);
-    let pending = chat::pending_by_request(world.db(), &waiting.request_id)
+    let pending = run_sessions::pending_by_request(world.db(), &waiting.request_id)
         .await
         .unwrap()
         .unwrap();

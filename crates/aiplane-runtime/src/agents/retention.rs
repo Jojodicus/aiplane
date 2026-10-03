@@ -10,9 +10,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_audit::AuditKind;
-use aiplane_core::server::db::agent_retention::{self, Swept};
-use aiplane_core::server::db::{DbError, Pool, agents as agents_db};
+use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_retention::{self, Swept};
+use aiplane_agents::db::agents as agents_db;
+use aiplane_core::server::db::{DbError, Pool};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 

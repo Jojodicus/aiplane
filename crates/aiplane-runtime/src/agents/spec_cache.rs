@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::{DbError, Pool, agents as agents_db};
+use aiplane_agents::db::agents as agents_db;
+use aiplane_core::server::db::{DbError, Pool};
 use serde_json::Value;
 
 use super::gate::RouteGates;
@@ -220,7 +221,7 @@ impl SpecCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiplane_core::server::db::system_principals as sp;
+    use aiplane_agents::db::system_principals as sp;
     use serde_json::json;
 
     async fn db_with_agent() -> (Pool, String) {

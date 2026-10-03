@@ -21,14 +21,14 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::agents::{self, Fx, TIME};
 use crate::common;
 
-use aiplane_core::server::db::agent_audit;
+use aiplane_agents::db::agent_audit;
+use aiplane_agents::db::run_sessions;
 use aiplane_runtime::agents::embed::LiveAgentRunner;
 use aiplane_runtime::server::tools::ToolRegistry;
 use aiplane_runtime::server::tools::ask_first::AskFirst;
 use aiplane_runtime::server::tools::check_code::{CHECK_CODE, CheckCode};
 use aiplane_runtime::server::tools::echo::Echo;
 use aiplane_runtime::server::tools::time::CurrentTimestamp;
-use session_core::db as chat;
 
 const ANSWER: &str = "Your order ships today.";
 const CODE: &str = "481516";
@@ -557,7 +557,7 @@ async fn a_message_becomes_a_completed_task_with_the_agents_answer() {
     assert_eq!(history[1]["parts"][0]["text"], ANSWER);
     assert!(task["status"]["timestamp"].as_str().unwrap().ends_with('Z'));
 
-    let conversation = chat::get_principal_session(&a.fx.state.db, &a.agent, context)
+    let conversation = run_sessions::get_principal_session(&a.fx.state.db, &a.agent, context)
         .await
         .unwrap()
         .expect("the context is a conversation owned by the agent");

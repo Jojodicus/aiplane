@@ -42,36 +42,54 @@ only on the ones beneath it, so an edit recompiles that crate and what sits abov
 it — never what sits below.
 
 ```
-gateway            bin + router/proxy/api/oidc      6.5k  ← thinnest, most-edited glue
-   ├── aiplane-api     the /api/v0 JSON handlers   25.5k  ← siblings: neither
-   └── aiplane-tools   the tool implementations    14.5k  ←   depends on the other
-          └── aiplane-runtime  tool API + AppState/RamaState + chat driver   14.7k
-                 ├── aiplane-features  RAG, skills, ComfyUI, push, geoip, …  13.9k
-                 └── aiplane-core      db, config, crypto, rbac, upstreams   22.1k
-                        ├── session-core   chat-UI substrate
-                        └── shared         OpenAI wire types
+gateway            bin + router/proxy/api/oidc     14.0k  ← thinnest, most-edited glue
+   ├── aiplane-api     the /api/v0 JSON handlers   17.5k  ← siblings: neither
+   └── aiplane-tools   the tool implementations    24.1k  ←   depends on the other
+          └── aiplane-runtime  tool API + AppState/RamaState + chat/agent driver  58.1k
+                 ├── aiplane-features  RAG, skills, ComfyUI, push, geoip, …   25.5k  ← siblings: neither
+                 └── aiplane-agents    agent tables, run sessions, rates       7.4k  ←   depends on the other
+                        └── aiplane-core      db, config, crypto, rbac, upstreams  45.6k
+                               ├── session-core   chat-UI substrate (owner-agnostic) 10.5k
+                               └── shared         OpenAI wire types
 ```
 
-What that buys, in lines that must recompile after a one-line edit:
+(Lines of Rust under each crate's `src/`, measured for #109.)
 
-| edit site | recompiled |
-|---|---|
-| pre-split monolith | **97,310** (one unit) |
-| `gateway` | 6,510 |
-| `aiplane-tools` | 21,041 |
-| `aiplane-api` | 32,017 |
-| `aiplane-runtime` | 61,266 |
-| `aiplane-features` | 75,124 |
-| `aiplane-core` | 97,189 |
+What that buys, in lines that must recompile after a one-line edit (the crate
+edited plus every crate above it):
+
+| edit site | recompiled (split, first measurement) | recompiled (after #109) |
+|---|---|---|
+| pre-split monolith | **97,310** (one unit) | — |
+| `gateway` | 6,510 | 13,971 |
+| `aiplane-tools` | 21,041 | 38,077 |
+| `aiplane-api` | 32,017 | 31,518 |
+| `aiplane-runtime` | 61,266 | 113,723 |
+| `aiplane-agents` | — (in `aiplane-core`) | 121,086 |
+| `aiplane-features` | 75,124 | 139,241 |
+| `aiplane-core` | 97,189 | 192,178 |
 
 The gains are front-loaded deliberately: the layers that churn most (handlers, tools,
 glue — about 60% of file touches over six months) are the cheapest to rebuild, and
 `aiplane-core` — the one that still costs a full rebuild — is the least-edited.
 
-Those counts are the measurement that motivated the split, taken before the SPA
-migration deleted the server-rendered page stack; `aiplane-api` is roughly a third
-of the size quoted above now. The ordering — and therefore the rule below — is
-unchanged, and UI work no longer recompiles Rust at all.
+The first column is the measurement that motivated the split, taken before the
+SPA migration deleted the server-rendered page stack; the codebase has roughly
+doubled since, which is the second column. The ordering — and therefore the rule
+below — is unchanged, and UI work no longer recompiles Rust at all.
+
+**#109: agent persistence out of the base layer.** The agent builder put about
+6k lines of DB accessors into `aiplane-core`, so an agent DB edit cost a full
+192k-line rebuild (`aiplane-core` and the five crates above it). They now sit in
+`aiplane-agents`: an agent DB edit recompiles 121k lines (that crate, the
+runtime and the three above it) and no longer touches `aiplane-core` or
+`aiplane-features`. Measured with `mise run dev-build` after a one-line body
+edit to `db/agent_tests.rs`: before, `aiplane-core`, `-features`, `-runtime`,
+`-tools`, `-api` and `aiplane` recompiled; after, `aiplane-agents`, `-runtime`,
+`-tools`, `-api` and `aiplane`. Putting the same code in `aiplane-runtime` would
+cost the same for an agent DB edit but add its 7.4k lines to every runtime edit
+(121k instead of 114k), and the runtime is edited far more often — hence a crate
+of its own, beside `aiplane-features` so neither waits for the other.
 
 **Rule of thumb when adding code:** put it as high in the stack as it will go.
 Something only belongs in `aiplane-core` if code below the feature layer genuinely
@@ -86,13 +104,26 @@ Pure data types, no I/O:
 
 Depends only on `serde`, `serde_json`, `thiserror`.
 
+### `crates/session-core`
+The chat substrate: the `chat_*` tables' accessors, the worker registry, the
+`SessionDriver` trait and the JSON-SSE protocol (`chat_json`). It is
+owner-agnostic: it reads and writes a person's conversation by `user_id`, and a
+conversation whose `user_id` is NULL belongs to an owner it does not model. No
+person's read returns one, and its sweep of expired pauses covers a person's
+conversations only. The columns of the other owner (`principal_id`,
+`agent_version`, `visitor_id`, `parent_turn_id`, `lang`) and every query over
+them — opening and reading an agent run, the agent pause sweep, the inbox reads
+— live in `aiplane-agents` (`db::run_sessions`), which reuses session-core's
+suspension row mapper. The migrations' CHECK and foreign key to
+`system_principals` are SQL only; no session-core Rust depends on them.
+
 ### `crates/aiplane-core`
 The base layer — the things everything else stands on, and the least-edited code
 in the tree. No routing, no `AppState`, no tool registry:
 - `auth/oidc.rs` — hand-rolled OIDC client (discovery + JWKS-verified ID tokens, on reqwest).
 - `auth/token.rs` — gateway-token mint/hash helpers.
 - `config.rs` — typed `[upstream_pools]`, `[[models]]`, `[oidc]`, `[rbac]` schema.
-- `db/` — sqlx; users / tokens / sessions / prefs / usage / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`. Migrations run on one connection with foreign keys **off** and a `foreign_key_check` after, so a parent table can be rebuilt without `ON DELETE CASCADE` emptying its children (see `migrations/README.md`).
+- `db/` — sqlx; users / tokens / sessions / prefs / usage / limits / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`. Migrations run on one connection with foreign keys **off** and a `foreign_key_check` after, so a parent table can be rebuilt without `ON DELETE CASCADE` emptying its children (see `migrations/README.md`).
 - `principal.rs`, `run_chain.rs` — who acts: a person or a system principal, and on an agent run the call chain (agent → sub-agent → tool) that audit rows serialize. See [`agents.md`](agents.md#the-call-chain).
 - `crypto.rs` — AES-256-GCM at-rest sealing for DB-stored secrets.
 - `rbac/` — role lookup and grant resolution. It filters grants against the tool and skill registries through the [`GrantableSet`] trait (two methods, used via generics) rather than depending on them, which is what lets RBAC sit at the bottom while the registries live two layers up.
@@ -101,8 +132,9 @@ in the tree. No routing, no `AppState`, no tool registry:
 - `tool_naming.rs` — the well-known tool ids/prefixes (`comfyui_`, `typst_`, `enable_tools`, `read_skill`) and the slug→title humaniser. Down here because RBAC, the typst discovery pass, and the catalog all need it and they're on three different layers.
 - `net_guard.rs` — the one IP classifier (`classify` → `Public`, `Loopback`, `Private`, `Cgnat`, `LinkLocal`, `Multicast`, …, with IPv4-mapped IPv6 classified as the IPv4 it carries). Every outbound guard — A2A routes, Web Push endpoints, MCP OAuth, the WebDAV RAG source — and the GeoIP lookup ask it and apply their own policy: A2A refuses private ranges unless `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS` is on, push accepts public addresses only, MCP OAuth allows private ranges on purpose (admin-curated catalog) and refuses only link-local, unspecified and multicast. Down here because callers sit on three layers.
 - `capped_read.rs` — `read_capped`, the one bounded reader for outbound response bodies: a declared `Content-Length` over the cap is refused before anything is read, and otherwise reading stops the moment the running total passes it. The A2A client and the RAG sources wrap it with their own error wording.
-- `usage/`, `limits/` — the metrics sink and the rate-limit/quota enforcer.
-- `rama_server/session.rs` — signed-cookie + sqlite session store, plus the `is_safe_return_to` redirect guard the OIDC callback needs to bounce a signed-in user back to the SPA route they asked for; `rama_server/cors.rs` — the CORS layer. Neither needs `AppState`, so both stay here.
+- `usage/`, `limits/` — the metrics sink and the spend-limit/quota enforcer. Usage rows carry the run's `agent_id` and the enforcer checks an agent's budget against them, because spend is metered for every caller in one place; the agent's *visitor rates* are agent-only and live in `aiplane-agents` (`rates`).
+- What stays here although agents use it, and why: the one embedded migration set (the sqlx history is never split, so the agent tables' DDL is here while their accessors are not); `Principal`, `GrantSet`, `GrantKind` and `RunChain` (RBAC, the upstream registry and usage metering read them); the `gwe_`/`gwv_` token helpers in `auth/token.rs` (one module proves every bearer prefix disjoint); and `db/reseal.rs`'s list of sealed columns, which names `agent_notify_channels` so key rotation covers every secret in one pass.
+- `rama_server/session.rs` — signed-cookie + sqlite session store, plus the `is_safe_return_to` redirect guard the OIDC callback needs to bounce a signed-in user back to the SPA route they asked for; `rama_server/cors.rs` — the `/v1` CORS layer (the embed one reads agent data, so it lives with the router in `aiplane`). Neither needs `AppState`, so both stay here.
 
 ### `crates/aiplane-features`
 The optional subsystems — what a deployment switches on at `/admin/settings`
@@ -116,6 +148,28 @@ Each stands on `aiplane-core` and knows nothing about `AppState`, the tool
 registry, or routing. That ignorance is the whole point — it's what lets this
 layer sit below the runtime. A reference from here up into `aiplane-runtime`
 collapses the split.
+
+### `crates/aiplane-agents`
+The agent builder's persistence and the pieces only agents need, on
+`aiplane-core` beside `aiplane-features` (neither depends on the other):
+- `db/` — accessors for the agent tables: `agents` (versions, shares),
+  `system_principals` (grants, system tokens), `agent_audit`, `embed_keys`,
+  `visitor_sessions`, `a2a_contexts`, `agent_a2a_tasks`, `agent_state`,
+  `agent_tests`, `agent_analytics`, `agent_verifiers`, `agent_responders`,
+  `agent_channels`, `agent_retention`. They share `aiplane-core`'s pool, error
+  type and timestamp helpers; the DDL stays in `aiplane-core`'s migrations.
+- `db/run_sessions.rs` — conversations owned by a system principal: creating and
+  reading them, decoding a conversation's owner, the sweep of an agent
+  conversation's expired pause, and the inbox reads that tell a person's pause
+  from an agent's. session-core keeps no knowledge of them (see
+  `crates/session-core` above).
+- `db/inbound.rs` + `rates.rs` — the visitor rate gate: per-conversation and
+  per-IP sliding windows over every inbound channel (embed widget, A2A) in one
+  query shape, plus the window arithmetic the verifiers' send limits reuse.
+- `notify_channels.rs` — the Slack/Discord webhook payloads of the inbox.
+
+Like `aiplane-features`, it names neither `AppState` nor the tool registry, and
+nothing below it names an agent.
 
 ### `crates/aiplane-runtime`
 Where the world gets tied together:

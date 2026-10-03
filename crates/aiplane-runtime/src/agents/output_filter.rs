@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_core::server::run_chain::RunChain;
 use regex::Regex;
 use serde_json::{Value, json};

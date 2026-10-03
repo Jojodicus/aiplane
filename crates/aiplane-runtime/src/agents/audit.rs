@@ -4,8 +4,8 @@
 //! Run events in `agent_audit`. Every one is best-effort: the run goes on
 //! when its row cannot be written, and the failure is logged here, once.
 
+use aiplane_agents::db::agent_audit::{self, AuditKind};
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
 use aiplane_core::server::run_chain::RunChain;
 use serde_json::{Value, json};
 

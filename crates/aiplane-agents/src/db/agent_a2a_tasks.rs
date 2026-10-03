@@ -79,7 +79,7 @@ pub async fn take(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db;
+    use aiplane_core::server::db;
 
     async fn turn(pool: &Pool) -> String {
         let now = jiff::Timestamp::now();

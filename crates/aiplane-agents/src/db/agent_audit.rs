@@ -21,7 +21,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::{DbError, Pool};
-use crate::server::run_chain::RunChain;
+use aiplane_core::server::run_chain::RunChain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
@@ -280,8 +280,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::server::principal::{GrantSet, SystemPrincipal};
-    use crate::server::run_chain::{CallSite, Frame};
+    use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
+    use aiplane_core::server::run_chain::{CallSite, Frame};
 
     fn principal(id: &str, name: &str) -> SystemPrincipal {
         SystemPrincipal {
@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_event_is_attributed_to_the_running_sub_agent_with_the_whole_chain() {
-        let pool = crate::server::db::open(std::path::Path::new(":memory:"))
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
         let chain = RunChain::root(
@@ -331,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_management_event_has_no_chain() {
-        let pool = crate::server::db::open(std::path::Path::new(":memory:"))
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
         let mut conn = pool.acquire().await.unwrap();

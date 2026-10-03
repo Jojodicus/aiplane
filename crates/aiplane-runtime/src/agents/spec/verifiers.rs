@@ -20,7 +20,7 @@ use crate::agents::verifier::{
     self, CHECK_TOOL_DEFAULT, JwtAlgorithm, MAX_ATTEMPTS_CAP, MAX_CODE_TTL, MAX_LIFETIME_CAP,
     SEND_TOOL_DEFAULT,
 };
-use aiplane_core::server::db::agent_verifiers::MAX_WINDOW;
+use aiplane_agents::db::agent_verifiers::MAX_WINDOW;
 
 pub(super) const MCP_CODE: &str = "mcp_code";
 pub(super) const LOOKUP: &str = "lookup";

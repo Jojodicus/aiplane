@@ -81,7 +81,7 @@ pub async fn for_session(pool: &Pool, session_id: &str) -> Result<Vec<StoredSlot
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::open;
+    use aiplane_core::server::db::open;
     use serde_json::json;
     use std::path::Path;
 

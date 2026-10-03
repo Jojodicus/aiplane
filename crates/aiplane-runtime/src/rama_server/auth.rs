@@ -116,25 +116,28 @@ pub async fn require_bearer(
 /// request — what it may use is exactly what they list.
 async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCtx, AuthRefusal> {
     let hash = token::hash_system_bearer(bearer).ok_or_else(unauthorized)?;
-    let token_row = db::system_principals::find_active_token_by_hash(&state.db, &hash)
-        .await
-        .map_err(|err| {
-            tracing::warn!(error = %err, "system token lookup failed");
-            internal_error("system token lookup failed")
-        })?
-        .ok_or_else(unauthorized)?;
-    let principal = db::system_principals::load_active(&state.db, &token_row.principal_id)
-        .await
-        .map_err(|err| {
-            tracing::warn!(error = %err, "system principal lookup failed");
-            internal_error("system principal lookup failed")
-        })?
-        .ok_or_else(unauthorized)?;
+    let token_row =
+        aiplane_agents::db::system_principals::find_active_token_by_hash(&state.db, &hash)
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "system token lookup failed");
+                internal_error("system token lookup failed")
+            })?
+            .ok_or_else(unauthorized)?;
+    let principal =
+        aiplane_agents::db::system_principals::load_active(&state.db, &token_row.principal_id)
+            .await
+            .map_err(|err| {
+                tracing::warn!(error = %err, "system principal lookup failed");
+                internal_error("system principal lookup failed")
+            })?
+            .ok_or_else(unauthorized)?;
 
     let pool = state.db.clone();
     let token_id = token_row.id.clone();
     tokio::spawn(async move {
-        if let Err(err) = db::system_principals::touch_token(&pool, &token_id).await {
+        if let Err(err) = aiplane_agents::db::system_principals::touch_token(&pool, &token_id).await
+        {
             tracing::warn!(error = %err, token_id, "failed to bump system token last_used_at");
         }
     });

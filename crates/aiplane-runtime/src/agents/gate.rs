@@ -576,7 +576,7 @@ mod tests {
     use crate::agents::state::tests::{at, pool_with_session, schema, support_spec};
     use crate::agents::state::{TrustedWriter, write_trusted};
     use crate::server::tools::{ToolContext, ToolSource};
-    use aiplane_core::server::db::agent_state::StoredSlot;
+    use aiplane_agents::db::agent_state::StoredSlot;
     use serde_json::json;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

@@ -13,8 +13,8 @@
 //!
 //! Every function takes `now` so expiry is testable without waiting.
 
+use crate::db::run_sessions;
 use jiff::{SignedDuration, Timestamp};
-use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
@@ -91,9 +91,9 @@ pub async fn start(pool: &Pool, new: &NewVisitorSession<'_>) -> Result<VisitorSe
     let max_expires_at = add(new.now, new.max_age)?;
     let expires_at = add(new.now, new.idle_ttl)?.min(max_expires_at);
     let mut tx = pool.begin().await?;
-    let conversation = chat::create_principal_session(
+    let conversation = run_sessions::create_principal_session(
         &mut *tx,
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: new.principal_id,
             title: None,
             parent_turn_id: None,
@@ -178,71 +178,12 @@ pub async fn slide(
     })
 }
 
-pub(super) fn parse_times(rows: Vec<String>) -> Vec<Timestamp> {
-    rows.iter().filter_map(|t| t.parse().ok()).collect()
-}
-
-/// The newest `limit` messages visitor session `id` sent at or after
-/// `since`: all a per-visitor rate of at most `limit` events needs.
-pub async fn message_times(
-    pool: &Pool,
-    id: &str,
-    since: Timestamp,
-    limit: u32,
-) -> Result<Vec<Timestamp>, DbError> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT t.created_at FROM chat_turns t
-         JOIN visitor_sessions v ON v.session_id = t.session_id
-         WHERE v.id = ? AND t.role = 'user' AND rtrim(t.created_at, 'Z') >= ?
-         ORDER BY rtrim(t.created_at, 'Z') DESC LIMIT ?",
-    )
-    .bind(id)
-    .bind(super::window_key(since))
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(parse_times(rows))
-}
-
-/// The newest `limit` of the conversations `ip` started with agent
-/// `principal_id` and the messages sent in one, at or after `since`: the
-/// per-IP rate window. Starting conversations counts too, or a client could
-/// open a fresh one for each message and never meet the per-visitor limit.
-pub async fn ip_event_times(
-    pool: &Pool,
-    principal_id: &str,
-    ip: &str,
-    since: Timestamp,
-    limit: u32,
-) -> Result<Vec<Timestamp>, DbError> {
-    let from = super::window_key(since);
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT created_at FROM (
-             SELECT created_at FROM visitor_sessions
-             WHERE principal_id = ? AND client_ip = ? AND rtrim(created_at, 'Z') >= ?
-             UNION ALL
-             SELECT t.created_at FROM chat_turns t
-             JOIN visitor_sessions v ON v.session_id = t.session_id
-             WHERE v.principal_id = ? AND v.client_ip = ? AND t.role = 'user'
-               AND rtrim(t.created_at, 'Z') >= ?
-         ) ORDER BY rtrim(created_at, 'Z') DESC LIMIT ?",
-    )
-    .bind(principal_id)
-    .bind(ip)
-    .bind(&from)
-    .bind(principal_id)
-    .bind(ip)
-    .bind(&from)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(parse_times(rows))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::{agents, embed_keys, system_principals as sp};
+    use crate::db::inbound::{Inbound, ip_event_times, message_times};
+    use crate::db::{agents, embed_keys, system_principals as sp};
+    use session_core::db as chat;
 
     async fn message_at(pool: &Pool, session_id: &str, at: Timestamp) {
         let id = Uuid::new_v4().to_string();
@@ -271,7 +212,9 @@ mod tests {
 
         let since = add(t0(), 2 * MIN).unwrap();
         assert_eq!(
-            message_times(&fx.pool, &v.id, since, 10).await.unwrap(),
+            message_times(&fx.pool, Inbound::Visitor(&v.id), since, 10)
+                .await
+                .unwrap(),
             [add(t0(), 5 * MIN).unwrap()],
             "the other visitor's message, the answer and the older message do not count"
         );
@@ -292,16 +235,20 @@ mod tests {
         }
         let since = at("2026-10-01T12:00:05.12Z");
         assert_eq!(
-            message_times(&fx.pool, &v.id, since, 10).await.unwrap(),
+            message_times(&fx.pool, Inbound::Visitor(&v.id), since, 10)
+                .await
+                .unwrap(),
             [at("2026-10-01T12:00:06Z"), at("2026-10-01T12:00:05.15Z")],
             "newest first, and .1 is before the window"
         );
         assert_eq!(
-            message_times(&fx.pool, &v.id, since, 1).await.unwrap(),
+            message_times(&fx.pool, Inbound::Visitor(&v.id), since, 1)
+                .await
+                .unwrap(),
             [at("2026-10-01T12:00:06Z")]
         );
         assert!(
-            message_times(&fx.pool, &v.id, since, 0)
+            message_times(&fx.pool, Inbound::Visitor(&v.id), since, 0)
                 .await
                 .unwrap()
                 .is_empty()
@@ -397,7 +344,9 @@ mod tests {
     }
 
     async fn fixture() -> Fx {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let agent = agents::create(
             &pool,
             &sp::NewPrincipal {
@@ -462,7 +411,7 @@ mod tests {
         assert_eq!(v.max_expires_at, add(t0(), 24 * 60 * MIN).unwrap());
         assert_eq!(v.client_ip.as_deref(), Some("192.0.2.1"));
 
-        let run = chat::get_principal_session(&fx.pool, &fx.agent, &v.session_id)
+        let run = run_sessions::get_principal_session(&fx.pool, &fx.agent, &v.session_id)
             .await
             .unwrap()
             .expect("the conversation belongs to the agent's principal");

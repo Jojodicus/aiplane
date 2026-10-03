@@ -393,7 +393,7 @@ part above — `profile`, `main` (with `tool_resources`, their `bind`,
 
 - **Migration `0080_agents.sql`** creates the three tables above as written
   (`0078`/`0079` were left to concurrent branches). Rows live in
-  `aiplane-core::server::db::agents`; every mutation writes an `agent_audit` row
+  `aiplane-agents::db::agents`; every mutation writes an `agent_audit` row
   in the same transaction (`agent_created`, `agent_draft_updated`,
   `agent_published`, `agent_live_version_set`, `agent_share_set`,
   `agent_share_removed`, `agent_deleted`).
@@ -532,10 +532,12 @@ chat_sessions:
 together with its table (migration `0083`, [§5](#what-91-built)). A second CHECK, `principal_id IS NULL OR shared = 0`,
 keeps an agent conversation out of the "anyone with the link" read path.
 `parent_turn_id` has no foreign key: the child run stays an auditable record
-when the parent turn is gone. `session_core::db` gains `SessionOwner`,
-`create_principal_session` (`NewRunSession`), `get_principal_session` and
-`session_owner`; every person-facing query is unchanged and simply never
-matches a row whose `user_id` is `NULL`. The chat sweeper for expired
+when the parent turn is gone. `SessionOwner`, `create_principal_session`
+(`NewRunSession`), `get_principal_session` and `session_owner` landed in
+`session_core::db` and moved to `aiplane_agents::db::run_sessions` in #109,
+which left session-core owner-agnostic: every person-facing query is
+unchanged and simply never matches a row whose `user_id` is `NULL`, and
+session-core never names the other owner. The chat sweeper for expired
 suspensions skips principal-owned runs; the agent path resumes those
 ([agent-run suspend](#what-agent-run-suspend-built)). Because seven tables cascade from `chat_sessions`, migrations now run
 with foreign keys off — see `crates/aiplane-core/migrations/README.md`.
@@ -605,7 +607,7 @@ agent run every tool is `Concurrent`, so chat and `/v1` are unchanged.
   `CHECK` that `provenance` is `llm`, `host` or `verifier:<id>`. It references
   `chat_sessions(id)` only, so it holds for a user-owned and a principal-owned
   session alike and does not depend on #83's rebuild (`0081`). Storage is
-  `aiplane-core::server::db::agent_state` (`put`, `for_session`); it knows
+  `aiplane-agents::db::agent_state` (`put`, `for_session`); it knows
   neither types nor writers and has one caller.
 - **Typed slots** (`aiplane-runtime::agents::state`). `StateSchema::from_spec`
   reads `state` into `SlotDef`s. `SlotDef::check` validates in code and returns
@@ -1167,7 +1169,7 @@ agent runs pause and resume durably, sub-agent runs included.
   `run_claimed` runs it as the next turn. The synchronous entry points
   (`run_turn`, the test chat) refuse instead: `AgentRunError::DecisionPending`,
   `409 decision_pending`.
-- **Expiry.** `chat::expired_run_suspensions` lists the conversations' own
+- **Expiry.** `run_sessions::expired_run_suspensions` lists the conversations' own
   rows (principal-owned, no `parent_turn_id`) past their deadline;
   `agents::resume::resume_expired`, called by the existing 30-second sweeper,
   resumes each with its stored fallback, answered by `timeout`, skipping a
@@ -1249,7 +1251,7 @@ runs. Migration `0087_human_in_the_loop.sql`.
   like the rest of the agent; adding and removing one is audited
   (`responder_added`, `responder_removed`).
 - **The inbox** (`agents::inbox`). An item is a conversation's own pause
-  (`chat::pending_suspensions`; a sub-agent's pause shows through its
+  (`run_sessions::pending_suspensions`; a sub-agent's pause shows through its
   conversation's, with the innermost call's tool and arguments for an
   approval):
   - an agent conversation's `approval` or `human_answer`, outside the test
@@ -1273,7 +1275,7 @@ runs. Migration `0087_human_in_the_loop.sql`.
     or the run's owner. Title and body from the catalog in each
     subscription's language; the link is `/inbox?item=<request_id>`.
   - **Slack and Discord** incoming webhooks (`agent_notify_channels`,
-    `db::agent_channels`, `aiplane_features::server::notify_channels`). The
+    `db::agent_channels`, `aiplane_agents::notify_channels`). The
     URL is the credential: sealed at rest (and in the reseal pass), never
     returned by the API, never in a log line or an audit row; only its host
     is kept in clear. A URL must be `https` on `hooks.slack.com` or
@@ -1524,7 +1526,7 @@ untrusted audiences.
     visitor_sessions(id) ON DELETE SET NULL`. A new column with a `NULL`
     default may carry a foreign key, so no rebuild was needed and no row
     moves.
-- **Rows** live in `aiplane-core::server::db::{embed_keys, visitor_sessions}`.
+- **Rows** live in `aiplane-agents::db::{embed_keys, visitor_sessions}`.
   Creating and revoking a key writes `embed_key_created` /
   `embed_key_revoked` audit rows. `visitor_sessions::start` opens the
   principal-owned conversation (`agent_version` = the live version), the
@@ -1586,7 +1588,7 @@ untrusted audiences.
   working`) every 15 s. There is no status to report beyond "still running",
   and a comment needs no new `chat_json` event. A stream gives up after 10
   minutes with `idle`; the widget re-attaches.
-- **CORS.** `EmbedCorsLayer` (`aiplane-core::rama_server::cors`) handles
+- **CORS.** `EmbedCorsLayer` (`aiplane::rama_server::embed_cors`) handles
   `/api/v0/embed/*` only. A preflight carries neither key nor token, so the
   layer reflects an `Origin` only if some live key of an enabled agent lists
   it (and answers a preflight from any other origin `403`, without CORS
@@ -1687,7 +1689,9 @@ pool rule, and retention.
   Limits, budget and retention are read from the agent's **live** version, not
   the version a conversation is pinned to: lowering a budget or a retention
   period applies to every open conversation at once.
-- **Visitor rates** (`limits::Enforcer::check_visitor`, `limits::Rate`). An
+- **Visitor rates** (`aiplane_agents::rates::check_visitor`, `rates::Rate`;
+  the counted events are one query shape over every inbound channel,
+  `db::inbound`, since #109). An
   exact sliding window, not the hour-snapped `Window` of spend limits: a
   visitor told to wait 40 s may send after 40 s. What is counted is what a
   request leaves behind — the per-visitor bucket counts the visitor's user
@@ -1765,7 +1769,7 @@ pool rule, and retention.
 Three verifier kinds under `verifiers.<id>`, the only writers besides the
 host of a slot the model cannot write. Code in
 `aiplane-runtime::agents::verifier` (runtime) and `agents/spec/verifiers.rs`
-(validation); rows in `aiplane-core::server::db::agent_verifiers`
+(validation); rows in `aiplane-agents::db::agent_verifiers`
 (migration `0088`).
 
 ```yaml
@@ -1810,7 +1814,7 @@ verifiers:
   validator checks; `set_by: verifier:<host_jwt id>` is refused with "list
   `host`".
 - **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
-  checks the three send windows (`limits::sliding_window`, the #92 rate
+  checks the three send windows (`rates::sliding_window`, the #92 rate
   type, with new scopes `email` and `session`), records the send, calls
   `send_code`, stores the outstanding code's address hash, send time and
   expiry, and pauses the turn with `SuspendRequest::secure_input` (message
@@ -1981,7 +1985,7 @@ version and judged on more than the final answer.
   `agent_test_results`. `0087` and `0088` are claimed by the concurrent
   branches (#96, #95); renumber if either lands under another number, and the pinned line in
   `aiplane-core/tests/migration-checksums.txt` with it. Rows live
-  in `aiplane-core::server::db::agent_tests`; the logic in
+  in `aiplane-agents::db::agent_tests`; the logic in
   `aiplane-runtime::agents::eval` (and `eval_judge` for the rubric).
 - **Case.** `{name, script, expect, rubric?}`; the name is unique per agent. A
   case is validated when stored (`422 invalid_test_case` with `issues[{path,
@@ -2162,7 +2166,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
     do there;
   - **admission** is `agents::embed::admit` with `Admission { a2a_context, ip
     }`: the live spec's `publish.rate_limits.visitor` counts the messages of
-    one context (`a2a_contexts::message_times`), `…ip` counts the contexts a
+    one context (`inbound::message_times`), `…ip` counts the contexts a
     client IP opened plus their messages, added to the embed IP's events, and
     the owner budget and operator `system` limits apply. A refusal is a
     JSON-RPC error `-32000` with `RATE_LIMITED` or `AGENT_UNAVAILABLE`, a
@@ -2234,7 +2238,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   approval the caller cannot give; the streamed task, answer and status. Unit
   tests: `agents/a2a.rs` (opt-in, card, derived skills, state mapping),
   `agents/spec/a2a.rs` (validation), `pages/a2a/` (parts, configuration,
-  versions, error shape), `db/a2a_contexts.rs`, `run_chain.rs`,
+  versions, error shape), `aiplane-agents`' `db/a2a_contexts.rs`, `run_chain.rs`,
   `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
   `principal_grants` rebuild keeps every grant).
 
@@ -2245,7 +2249,7 @@ to another platform's agent that speaks A2A v1.0 (the JSON-RPC binding the
 gateway's own server speaks, [#102](#what-102-built)). Code in
 `aiplane-runtime::agents::a2a_client` (`guard`, `card`, the exchange) and
 `agents/spec/route_kinds.rs` (validation); the waiting task in
-`aiplane-core::server::db::agent_a2a_tasks` (migration `0091`).
+`aiplane-agents::db::agent_a2a_tasks` (migration `0091`).
 
 ```yaml
 routes:
@@ -2485,14 +2489,15 @@ upward.
 
 | Piece | Crate | Why there |
 |---|---|---|
-| Migrations; db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`; the `can_manage_agents` resolver check; `Principal`, `GrantSet` | `aiplane-core` | identity and rows sit below every consumer; no feature or `AppState` named |
-| `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol |
+| Migrations (one embedded set, agent tables included); the `can_manage_agents` resolver check; `Principal`, `GrantSet`, `RunChain`; the `agent_id` column of usage and the per-agent spend limits | `aiplane-core` | the migration history is never split; identity types are read by RBAC, the upstream registry and usage metering, all below the features |
+| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate (`rates`, over `db::inbound`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
+| `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol; it reads a conversation by `user_id` and treats any other owner as opaque |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
-| `/api/v0/embed/*` routes and CORS, `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only |
-| The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-core` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
+| `/api/v0/embed/*` routes and CORS (`rama_server::embed_cors`), `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only; the embed CORS layer reads embed keys, so it cannot sit in `aiplane-core` beside the `/v1` one |
+| The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-agents` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |

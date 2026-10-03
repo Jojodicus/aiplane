@@ -41,8 +41,8 @@ pub enum TurnUpdate {
     Finalized,
     /// The worker has left the registry: nothing more comes on this channel.
     /// Distinct from [`TurnUpdate::Finalized`], which says the turn's *row* is
-    /// final: a caller can keep its worker registered past that point (an
-    /// agent turn holds it until the output filter has ruled on the answer),
+    /// final: a caller can keep its worker registered past that point (until
+    /// its own check of the answer has ruled, say),
     /// and a subscriber that may only see the settled result waits for this.
     Released,
     SidebarChanged,

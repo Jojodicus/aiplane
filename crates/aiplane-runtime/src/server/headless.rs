@@ -28,6 +28,7 @@
 
 use std::sync::Arc;
 
+use aiplane_agents::db::run_sessions;
 use session_core::db as chat;
 use uuid::Uuid;
 
@@ -45,7 +46,7 @@ pub enum Owner<'a> {
     /// A person: the run lands as an ordinary chat they can open afterwards.
     User(&'a str),
     /// A system principal: an agent run, which is no person's chat. See
-    /// `session_core::db::NewRunSession` for the link fields.
+    /// `run_sessions::NewRunSession` for the link fields.
     Run {
         principal_id: &'a str,
         parent_turn_id: Option<&'a str>,
@@ -89,9 +90,9 @@ pub async fn open_session(db: &Pool, p: OpenParams<'_>) -> Result<(String, Strin
                 parent_turn_id,
                 agent_version,
             } => {
-                chat::create_principal_session(
+                run_sessions::create_principal_session(
                     db,
-                    &chat::NewRunSession {
+                    &run_sessions::NewRunSession {
                         principal_id,
                         title: Some(p.title),
                         parent_turn_id,
@@ -1028,7 +1029,7 @@ mod tests {
         name: &str,
         tools: &[&str],
     ) -> aiplane_core::server::principal::SystemPrincipal {
-        use aiplane_core::server::db::system_principals as sp;
+        use aiplane_agents::db::system_principals as sp;
         let row = sp::create(
             &state.db,
             &sp::NewPrincipal {
@@ -1169,12 +1170,14 @@ mod tests {
     async fn an_agent_run_is_owned_by_its_principal_and_is_no_persons_chat() {
         let r = agent_run(vec![text("Invoice 17 is paid.")]).await;
         assert_eq!(
-            chat::session_owner(&r.state.db, &r.session_id)
+            run_sessions::session_owner(&r.state.db, &r.session_id)
                 .await
                 .unwrap(),
-            Some(chat::SessionOwner::Principal(r.principal.id.clone()))
+            Some(run_sessions::SessionOwner::Principal(
+                r.principal.id.clone()
+            ))
         );
-        let run = chat::get_principal_session(&r.state.db, &r.principal.id, &r.session_id)
+        let run = run_sessions::get_principal_session(&r.state.db, &r.principal.id, &r.session_id)
             .await
             .unwrap()
             .unwrap();
@@ -1278,11 +1281,10 @@ mod tests {
             text("done"),
         ])
         .await;
-        let events =
-            aiplane_core::server::db::agent_audit::for_principal(&r.state.db, &r.principal.id)
-                .await
-                .unwrap();
-        let calls: Vec<&aiplane_core::server::db::agent_audit::AuditEvent> =
+        let events = aiplane_agents::db::agent_audit::for_principal(&r.state.db, &r.principal.id)
+            .await
+            .unwrap();
+        let calls: Vec<&aiplane_agents::db::agent_audit::AuditEvent> =
             events.iter().filter(|e| e.kind == "tool_call").collect();
         let decision = |tool: &str| {
             let e = calls

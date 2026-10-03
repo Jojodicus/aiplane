@@ -11,14 +11,13 @@
 //! rate limits: its messages per context, and per client IP the contexts
 //! opened and their messages.
 
+use crate::db::run_sessions;
 use jiff::Timestamp;
-use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::visitor_sessions::parse_times;
-use super::{DbError, Pool, window_key};
-use crate::server::run_chain::RemoteCaller;
+use super::{DbError, Pool};
+use aiplane_core::server::run_chain::RemoteCaller;
 
 /// The protocol name a context's caller is recorded under in a call chain.
 pub const PROTOCOL: &str = "a2a";
@@ -76,9 +75,9 @@ fn map_context(row: &SqliteRow) -> Result<A2aContext, DbError> {
 /// in one transaction.
 pub async fn open(pool: &Pool, new: &NewContext<'_>) -> Result<A2aContext, DbError> {
     let mut tx = pool.begin().await?;
-    let conversation = chat::create_principal_session(
+    let conversation = run_sessions::create_principal_session(
         &mut *tx,
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: new.agent_id,
             title: None,
             parent_turn_id: None,
@@ -129,62 +128,6 @@ pub async fn get_for_caller(
         .filter(|c| c.agent_id == agent_id && c.caller_id == caller_id))
 }
 
-/// The newest `limit` messages sent in context `session_id` at or after
-/// `since`: the per-context rate window.
-pub async fn message_times(
-    pool: &Pool,
-    session_id: &str,
-    since: Timestamp,
-    limit: u32,
-) -> Result<Vec<Timestamp>, DbError> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT t.created_at FROM chat_turns t
-         JOIN a2a_contexts c ON c.session_id = t.session_id
-         WHERE c.session_id = ? AND t.role = 'user' AND rtrim(t.created_at, 'Z') >= ?
-         ORDER BY rtrim(t.created_at, 'Z') DESC LIMIT ?",
-    )
-    .bind(session_id)
-    .bind(window_key(since))
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(parse_times(rows))
-}
-
-/// The newest `limit` of the contexts `ip` opened with agent `agent_id` and
-/// the messages sent in one, at or after `since`: the A2A half of the per-IP
-/// rate window.
-pub async fn ip_event_times(
-    pool: &Pool,
-    agent_id: &str,
-    ip: &str,
-    since: Timestamp,
-    limit: u32,
-) -> Result<Vec<Timestamp>, DbError> {
-    let from = window_key(since);
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT created_at FROM (
-             SELECT created_at FROM a2a_contexts
-             WHERE agent_id = ? AND client_ip = ? AND rtrim(created_at, 'Z') >= ?
-             UNION ALL
-             SELECT t.created_at FROM chat_turns t
-             JOIN a2a_contexts c ON c.session_id = t.session_id
-             WHERE c.agent_id = ? AND c.client_ip = ? AND t.role = 'user'
-               AND rtrim(t.created_at, 'Z') >= ?
-         ) ORDER BY rtrim(created_at, 'Z') DESC LIMIT ?",
-    )
-    .bind(agent_id)
-    .bind(ip)
-    .bind(&from)
-    .bind(agent_id)
-    .bind(ip)
-    .bind(&from)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(parse_times(rows))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -193,7 +136,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::server::db::{agents, system_principals as sp};
+    use crate::db::inbound::{Inbound, ip_event_times, message_times};
+    use crate::db::{agents, system_principals as sp};
+    use session_core::db as chat;
 
     const MIN: SignedDuration = SignedDuration::from_secs(60);
 
@@ -212,7 +157,9 @@ mod tests {
     }
 
     async fn fixture() -> Fx {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let agent = agents::create(
             &pool,
             &sp::NewPrincipal {
@@ -284,7 +231,7 @@ mod tests {
     async fn a_context_is_an_agent_conversation_that_remembers_its_caller() {
         let fx = fixture().await;
         let c = fx.open_from(Some("192.0.2.1"), t0()).await;
-        let run = chat::get_principal_session(&fx.pool, &fx.agent, &c.session_id)
+        let run = run_sessions::get_principal_session(&fx.pool, &fx.agent, &c.session_id)
             .await
             .unwrap()
             .expect("owned by the agent's principal");
@@ -333,7 +280,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            message_times(&fx.pool, &c.session_id, at(2), 10)
+            message_times(&fx.pool, Inbound::A2a(&c.session_id), at(2), 10)
                 .await
                 .unwrap(),
             [at(5)]

@@ -34,9 +34,9 @@ pub mod otp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::rates::Rate;
 use aiplane_core::server::crypto::sha256_hex;
-use aiplane_core::server::db::agent_audit::AuditKind;
-use aiplane_core::server::limits::Rate;
 use aiplane_core::server::principal::SystemPrincipal;
 use jiff::SignedDuration;
 use serde_json::{Map, Value, json};

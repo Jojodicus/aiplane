@@ -29,7 +29,7 @@ use super::agent_errors::resume_error;
 use super::json_agents::{agent_at, parse_spec};
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, raw_path_segment};
-use aiplane_core::server::db::agents::Access;
+use aiplane_agents::db::agents::Access;
 use aiplane_runtime::agents::profile::{AgentRunError, RunOptions};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use aiplane_runtime::agents::run::draft::{DRAFT_VERSION, collect_debug, run_draft_turn};

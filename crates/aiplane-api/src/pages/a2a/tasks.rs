@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use aiplane_agents::db::run_sessions;
 use jiff::Timestamp;
 use rama::http::Response;
 use serde_json::{Value, json};
@@ -16,8 +17,8 @@ use super::Call;
 use super::envelope::{RpcError, result_response};
 use super::params::{SendParams, history_length, parse_send, task_id_param};
 use super::stream::stream;
-use aiplane_core::server::db::a2a_contexts::{self, A2aContext, NewContext};
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_agents::db::a2a_contexts::{self, A2aContext, NewContext};
+use aiplane_agents::db::agent_audit::{self, AuditKind};
 use aiplane_runtime::agents::a2a::{self as a2a_rt, TaskState};
 use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{AgentResume, AgentResumeError, ResumedBy, claim};
@@ -85,7 +86,7 @@ async fn audit(call: &Call, action: &str, context: &A2aContext, task: &str) {
 async fn find_task(call: &Call, task_id: &str) -> Result<(A2aContext, chat::Turn), RpcError> {
     let db = &call.state.db;
     let agent = &call.served.agent.principal.id;
-    let Some(run) = chat::run_session_of_turn(db, task_id)
+    let Some(run) = run_sessions::run_session_of_turn(db, task_id)
         .await
         .map_err(RpcError::internal)?
         .filter(|s| &s.principal_id == agent && s.parent_turn_id.is_none())
@@ -363,7 +364,7 @@ async fn ensure_idle(call: &Call, session_id: &str) -> Result<(), RpcError> {
 async fn turn_model(call: &Call, session_id: &str) -> Result<(i64, String), RpcError> {
     let state = &call.state;
     let agent = &call.served.agent.principal.id;
-    let version = chat::get_principal_session(&state.db, agent, session_id)
+    let version = run_sessions::get_principal_session(&state.db, agent, session_id)
         .await
         .map_err(RpcError::internal)?
         .and_then(|run| run.agent_version)

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::agent_audit::{self, AuditKind};
 use super::{DbError, Pool};
-use crate::server::crypto::Crypto;
+use aiplane_core::server::crypto::Crypto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
@@ -224,13 +224,15 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::{agents, system_principals as sp};
+    use crate::db::{agents, system_principals as sp};
     use std::path::Path;
 
     const URL: &str = "https://hooks.slack.com/services/T000/B000/secret-part";
 
     async fn pool_with_agent() -> (Pool, String) {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let id = agents::create(
             &pool,
             &sp::NewPrincipal {

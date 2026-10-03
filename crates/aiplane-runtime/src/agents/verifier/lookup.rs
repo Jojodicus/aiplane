@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_verifiers::{
-    self as rows, Counted, EventKind, MAX_WINDOW, NewEvent,
-};
+use aiplane_agents::db::agent_verifiers::{self as rows, Counted, EventKind, MAX_WINDOW, NewEvent};
 use aiplane_core::server::principal::GrantKind;
 use serde_json::{Map, Value, json};
 use shared::api::ToolDef;

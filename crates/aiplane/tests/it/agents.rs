@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 use crate::common::{self, TEST_SECRET};
 
 use aiplane::rama_server::{RamaState, SessionStore};
-use aiplane_core::server::db::{self, agent_audit, gateway_groups, users};
+use aiplane_agents::db::agent_audit;
+use aiplane_core::server::db::{self, gateway_groups, users};
 use aiplane_core::server::rbac::Resolver;
 use aiplane_core::server::upstreams::{
     self,

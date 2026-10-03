@@ -23,17 +23,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_channels;
-use aiplane_core::server::db::agents::{self as agents_db, Access, SubjectKind};
-use aiplane_core::server::db::{DbError, agent_responders, push_subscriptions, users};
-use aiplane_features::server::notify_channels::{self, Notice};
+use aiplane_agents::db::agent_channels;
+use aiplane_agents::db::agent_responders;
+use aiplane_agents::db::agents::{self as agents_db, Access, SubjectKind};
+use aiplane_agents::db::run_sessions;
+use aiplane_agents::db::run_sessions::{PendingSuspension, SessionOwner};
+use aiplane_agents::notify_channels::{self, Notice};
+use aiplane_core::server::db::{DbError, push_subscriptions, users};
 use aiplane_features::server::push::{PushMessage, SendOutcome};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Value, json};
-use session_core::db::{
-    self as chat, Answerer, DecisionKind, PendingSuspension, SessionOwner, SuspensionKind,
-};
+use session_core::db::{self as chat, Answerer, DecisionKind, SuspensionKind};
 use session_core::i18n::{Lang, args, t, t_args};
 
 use super::human::handoff_of;
@@ -112,7 +113,7 @@ pub struct InboxItem {
 
 /// Every item `viewer` may answer, oldest first.
 pub async fn list(state: &RamaState, viewer: &Viewer) -> Result<Vec<InboxItem>, DbError> {
-    let pending = chat::pending_suspensions(&state.db).await?;
+    let pending = run_sessions::pending_suspensions(&state.db).await?;
     let mut standing_by_agent: BTreeMap<String, Option<Standing>> = BTreeMap::new();
     let mut items = Vec::new();
     for p in pending {
@@ -145,7 +146,7 @@ pub async fn find(
     viewer: &Viewer,
     request_id: &str,
 ) -> Result<Option<InboxItem>, DbError> {
-    let Some(p) = chat::pending_by_request(&state.db, request_id).await? else {
+    let Some(p) = run_sessions::pending_by_request(&state.db, request_id).await? else {
         return Ok(None);
     };
     let standing = match &p.owner {
@@ -315,7 +316,7 @@ impl Wording<'_> {
 /// Announce the pause `request_id` once: the first caller sends, every
 /// later one does nothing. Returns whether this call sent it.
 pub async fn announce(state: &RamaState, request_id: &str) -> bool {
-    let pending = match chat::pending_by_request(&state.db, request_id).await {
+    let pending = match run_sessions::pending_by_request(&state.db, request_id).await {
         Ok(Some(p)) => p,
         Ok(None) => return false,
         Err(err) => {
@@ -491,7 +492,7 @@ pub fn items_json(items: &[InboxItem]) -> Value {
 #[cfg(test)]
 mod tests {
 
-    use aiplane_core::server::db::agent_channels::ChannelKind;
+    use aiplane_agents::db::agent_channels::ChannelKind;
 
     #[test]
     fn a_channel_kind_names_itself_as_the_notify_list_does() {

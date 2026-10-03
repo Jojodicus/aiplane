@@ -8,6 +8,7 @@
 
 use jiff::SignedDuration;
 
+use aiplane_agents::db::run_sessions;
 use aiplane_core::server::db::{mcp_audit, mcp_catalog};
 use jsonwebtoken::{EncodingKey, Header, encode};
 use session_core::db::{Decision, DecisionKind, SuspensionKind};
@@ -250,7 +251,7 @@ async fn types(
 }
 
 async fn slot_rows(world: &World, session: &str) -> Vec<(String, Value, String)> {
-    aiplane_core::server::db::agent_state::for_session(world.db(), session)
+    aiplane_agents::db::agent_state::for_session(world.db(), session)
         .await
         .unwrap()
         .into_iter()
@@ -790,9 +791,9 @@ async fn conversation(world: &World) -> (String, String) {
     static N: AtomicUsize = AtomicUsize::new(0);
     let name = format!("site-{}", N.fetch_add(1, Ordering::SeqCst));
     let agent = world.agent(&name, &[]).await;
-    let session = chat::create_principal_session(
+    let session = run_sessions::create_principal_session(
         world.db(),
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: &agent,
             title: None,
             parent_turn_id: None,
