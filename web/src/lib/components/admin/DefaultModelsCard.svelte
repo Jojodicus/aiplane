@@ -11,6 +11,7 @@
 	const labels: Record<string, string> = {
 		chat: 'admin-defaults-chat-label',
 		transcription: 'admin-defaults-voice-label',
+		speech: 'admin-defaults-speech-label',
 		image: 'admin-defaults-image-label',
 		embedding: 'admin-defaults-embedding-label'
 	};

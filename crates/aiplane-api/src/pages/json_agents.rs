@@ -29,8 +29,12 @@ use super::{bad_request, internal, json_error, json_ok, no_content, not_found, r
 use aiplane_agents::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
 use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
 use aiplane_core::server::db::{gateway_groups, users};
-use aiplane_core::server::principal::GrantSet;
-use aiplane_runtime::agents::spec::{self, AgentSpec, SpecContext, SpecIssue, Stage};
+use aiplane_core::server::feature_defaults::Feature;
+use aiplane_core::server::principal::{GrantKind, GrantSet};
+use aiplane_runtime::agents::defaults;
+use aiplane_runtime::agents::spec::{
+    self, AgentSpec, SpecContext, SpecIssue, Stage, VoiceDefaults,
+};
 use aiplane_runtime::rama_server::state::RamaState;
 
 fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
@@ -202,6 +206,7 @@ async fn spec_check(
             grants: &world.grants,
             agents: &world.agents,
             live_specs: &world.live_specs,
+            voice_defaults: &world.voice_defaults,
         },
         stage,
     ))
@@ -213,12 +218,18 @@ pub(super) struct SpecWorld {
     pub grants: GrantSet,
     pub agents: HashMap<String, bool>,
     pub live_specs: HashMap<String, Value>,
+    pub voice_defaults: VoiceDefaults,
 }
 
 impl SpecWorld {
     pub(super) async fn load(state: &RamaState, agent_id: &str) -> Result<Self, Response> {
         let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
         let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
+        let pools = || grants.refs(GrantKind::Pool).map(str::to_string);
+        let voice_defaults = VoiceDefaults {
+            transcription: defaults::granted_default(state, Feature::Transcription, pools()).await,
+            speech: defaults::granted_default(state, Feature::Speech, pools()).await,
+        };
         let agents = agents_db::publication_status(&state.db)
             .await
             .map_err(internal)?;
@@ -232,6 +243,7 @@ impl SpecWorld {
             grants,
             agents,
             live_specs,
+            voice_defaults,
         })
     }
 }

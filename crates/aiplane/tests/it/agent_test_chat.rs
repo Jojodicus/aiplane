@@ -652,6 +652,23 @@ async fn resources_name_the_pool_behind_each_model_choice_an_admin_mapped() {
         body["tiers"],
         json!({ "fast": "guard-pool", "balanced": "main-pool", "thorough": null })
     );
+
+    settings::store(
+        &fx.state.db,
+        &fx.state.crypto,
+        &[("agents.pool_balanced".into(), String::new())],
+    )
+    .await
+    .unwrap();
+    fx.state.reload_settings().await;
+    let (_, body) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
+        .await;
+    assert!(body["tiers"]["balanced"].is_string(), "{body}");
+    assert_eq!(
+        body["tiers"]["balanced"], body["defaults"]["chat"]["pool"],
+        "an unset Balanced is the gateway's default chat model: {body}"
+    );
 }
 
 /// The setup assistant's starter templates (`web/src/lib/agent-templates.json`)

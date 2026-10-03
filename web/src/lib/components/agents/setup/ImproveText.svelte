@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
 	import { agentsApi, type AgentError, type ImproveField } from '$lib/agents';
+	import { setupErrorMessage } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 
@@ -25,7 +26,7 @@
 			const r = await agentsApi.improve(ws.id, field, before);
 			proposal = { before, after: r.suggestion, why: r.why };
 		} catch (err) {
-			error = t('agents-setup-suggest-failed', { reason: (err as AgentError).message });
+			error = setupErrorMessage(err as AgentError, t, 'assist');
 		} finally {
 			busy = false;
 		}

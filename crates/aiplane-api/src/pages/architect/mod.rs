@@ -138,7 +138,7 @@ pub async fn start(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     }
     .map(|agent| agent.principal.id);
     let access = state.pool_access_for(&user.roles);
-    let model = match aiplane_runtime::agents::assist::choose_pool(&state, &access, None, None) {
+    let model = match aiplane_runtime::agents::assist::choose_pool(&state, &access, None, None).await {
         Ok((_, model)) => model,
         Err(err) => {
             return json_error(

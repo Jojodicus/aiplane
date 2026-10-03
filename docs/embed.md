@@ -44,7 +44,9 @@ stylesheet still wins (see [Styling](#styling)).
 ## Voice
 
 When the agent's owner switches it on (`publish.voice`, the builder's
-*Website* step), the widget offers:
+*Website* step), the widget offers the following. Each runs on the pool the
+spec names, or else on the pool of the gateway's default transcription or
+speech model among the agent's grants:
 
 - **A microphone.** Hold it while speaking, or click once to start and
   again to stop (Enter or Space work too). What was said appears in the

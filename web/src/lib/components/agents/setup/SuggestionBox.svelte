@@ -2,6 +2,7 @@
 	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
 	import type { Snippet } from 'svelte';
 	import type { AgentError, AssistSuggestion } from '$lib/agents';
+	import { setupErrorMessage } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 
@@ -29,7 +30,7 @@
 			await onapply();
 			ws.settle(part);
 		} catch (err) {
-			error = t('agents-setup-grant-failed', { reason: (err as AgentError).message ?? String(err) });
+			error = t('agents-setup-grant-failed', { reason: setupErrorMessage(err as AgentError, t) });
 		} finally {
 			busy = false;
 		}

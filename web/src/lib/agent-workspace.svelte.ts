@@ -28,6 +28,8 @@ import {
 	type SpecIssue,
 	type TestDebug
 } from './agents.ts';
+import { setupErrorMessage } from './agent-setup.ts';
+import { t } from './i18n.svelte';
 import { emptyPlan, isEmpty, plannedGrants, stageGrant, stageRevoke, type GrantPlan } from './agent-grant-plan.ts';
 
 export class AgentWorkspace {
@@ -118,7 +120,7 @@ export class AgentWorkspace {
 			this.resources = r;
 			this.agents = a.filter((x) => x.id !== this.id);
 		} catch (err) {
-			this.loadError = (err as AgentError).message;
+			this.loadError = setupErrorMessage(err as AgentError, t);
 		} finally {
 			this.loading = false;
 		}
@@ -126,7 +128,7 @@ export class AgentWorkspace {
 
 	fail(err: unknown) {
 		const e = err as AgentError;
-		this.error = e.message;
+		this.error = setupErrorMessage(e, t);
 		this.issues = e.issues ?? [];
 	}
 

@@ -253,7 +253,12 @@ agents-setup-todo-site = Geben Sie die Website an, auf der der Agent erscheint, 
 agents-setup-proposal-ready = Ein Vorschlag liegt vor. Jeder Schritt zeigt jetzt seinen Teil – übernehmen Sie, was passt, und verwerfen Sie den Rest.
 agents-setup-dropped = Weggelassen:
 agents-setup-suggest-dismiss = Verwerfen
-agents-setup-suggest-failed = Der Assistent konnte keinen Vorschlag machen: { $reason }
+agents-error-network = Der Server ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.
+agents-error-rate = Gerade zu viele Anfragen. Warten Sie einen Moment und versuchen Sie es erneut.
+agents-error-rate-retry = Gerade zu viele Anfragen. Versuchen Sie es in { $seconds } Sekunden erneut.
+agents-error-assist-unavailable = Der Assistent ist auf diesem Server gerade nicht verfügbar. Versuchen Sie es später erneut oder wenden Sie sich an eine Administratorin oder einen Administrator.
+agents-error-assist-failed = Der Assistent konnte diesmal keine Antwort finden. Versuchen Sie es erneut.
+agents-error-generic = Auf dem Server ist etwas schiefgegangen. Versuchen Sie es erneut oder wenden Sie sich an eine Administratorin oder einen Administrator, wenn es wieder passiert.
 agents-setup-suggest-task = Vorgeschlagene Aufgabe
 agents-setup-suggest-tone = Vorgeschlagener Ton
 agents-setup-suggest-tests = Vorgeschlagene Testgespräche
@@ -276,7 +281,8 @@ agents-setup-voice-transcription-pool = Spracherkennung
 agents-setup-voice-speech-pool = Sprachausgabe
 agents-setup-voice-voice = Stimme (optional)
 agents-setup-voice-voice-hint = Leer lassen für die Standardstimme der Sprache des Besuchers.
-agents-setup-voice-no-pool = Sie haben keinen Pool dieser Art. Eine Administratorin oder ein Administrator kann einen einrichten.
+agents-setup-voice-unavailable-input = Spracheingabe ist nicht verfügbar, weil für Sie kein Spracherkennungsmodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
+agents-setup-voice-unavailable-output = Vorlesen ist nicht verfügbar, weil für Sie kein Sprachausgabemodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
 
 # The agent architect (#118): a centred chat window that plans an agent.
 architect-open = Mit dem Architekten planen

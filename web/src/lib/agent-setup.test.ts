@@ -53,7 +53,11 @@ import {
 	type Basics,
 	type Handoffs,
 	type Identity,
-	type SlotRow
+	type SlotRow,
+	defaultChatPool,
+	setupErrorMessage,
+	voiceOffered,
+	voicePoolOnSwitch
 } from './agent-setup.ts';
 
 const tr = (key: string) => `«${key}»`;
@@ -480,6 +484,43 @@ test('details keep the order they were given, and unordered slots follow by name
 	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.key), ['second', 'first', 'alpha', 'zeta']);
 	assert.equal(slotKind(spec.state.first), 'email', 'the order is not part of the friendly kind');
 });
+
+test('a voice direction switched on starts on the default pool the manager holds, staged for granting', () => {
+	const held: AgentResources = {
+		...resources,
+		voice_pools: { transcription: ['stt-a', 'stt-b'], speech: [] },
+		defaults: { chat: null, transcription: { pool: 'stt-b', model: 'whisper' }, speech: { pool: 'tts-private', model: 'tts-1' } }
+	};
+	assert.deepEqual(voicePoolOnSwitch('transcription', '', held), { pool: 'stt-b', grant: true });
+	assert.deepEqual(voicePoolOnSwitch('transcription', 'stt-a', held), { pool: 'stt-a', grant: false }, 'a named pool stays');
+	assert.equal(voicePoolOnSwitch('speech', '', held), null, 'a default the manager does not hold is never staged');
+	assert.equal(voiceOffered('speech', '', held), false);
+	assert.equal(voiceOffered('speech', 'tts-old', held), true, 'a pool already named can still be switched off');
+	assert.equal(voiceOffered('transcription', '', held), true);
+	const noDefault = { ...held, defaults: undefined };
+	assert.deepEqual(voicePoolOnSwitch('transcription', '', noDefault), { pool: 'stt-a', grant: true });
+});
+
+test('a new agent starts on the gateway default chat pool when the manager holds it', () => {
+	assert.equal(defaultChatPool({ ...resources, defaults: { chat: { pool: 'mid', model: 'm' }, transcription: null, speech: null } }), 'mid');
+	assert.equal(defaultChatPool({ ...resources, defaults: { chat: { pool: 'elsewhere', model: 'm' }, transcription: null, speech: null } }), null);
+	assert.equal(defaultChatPool(resources), null);
+});
+
+test('setup errors are plain words, never a raw HTTP status line', () => {
+	const words = (key: string, args?: Record<string, string | number>) => (args ? `${key}:${JSON.stringify(args)}` : key);
+	const raw = (status: number) => ({ status, message: `${status} Method Not Allowed`, issues: [] });
+	for (const status of [404, 405, 501, 503]) {
+		assert.equal(setupErrorMessage(raw(status), words, 'assist'), 'agents-error-assist-unavailable');
+	}
+	assert.equal(setupErrorMessage(raw(405), words), 'agents-error-generic');
+	assert.equal(setupErrorMessage({ status: 0, message: 'Failed to fetch', issues: [] }, words, 'assist'), 'agents-error-network');
+	assert.equal(setupErrorMessage({ ...raw(429), retryAfter: 42 }, words, 'assist'), 'agents-error-rate-retry:{"seconds":42}');
+	assert.equal(setupErrorMessage(raw(429), words), 'agents-error-rate');
+	assert.equal(setupErrorMessage(raw(502), words, 'assist'), 'agents-error-assist-failed');
+	const told = { status: 403, code: 'assist_pool_not_allowed', message: 'you may not use pool x — pick one you hold', issues: [] };
+	assert.equal(setupErrorMessage(told, words, 'assist'), told.message, "the server's own advice is kept");
+	assert.equal(setupErrorMessage({ status: 500, code: 'x', message: '500 Internal Server Error', issues: [] }, words), 'agents-error-generic');
 
 test('a draft the agent architect wrote reads as hand-off sentences and friendly details, not "advanced"', () => {
 	// Written by `apply_changes` on the server; `review/tests.rs` pins it.

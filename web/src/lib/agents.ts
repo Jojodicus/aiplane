@@ -131,8 +131,18 @@ export interface AgentResources {
 	connectors: { key: string; name: string; tools: string[] }[];
 	skills: string[];
 	rag_collections: { id: number; name: string }[];
-	/** The pool an admin mapped to each of the setup's model choices, held by the caller or not. */
+	/**
+	 * The pool an admin mapped to each of the setup's model choices, held by the caller or not.
+	 * All `null` unless an admin set one; then an unset Balanced is the chat default.
+	 */
 	tiers?: { fast: string | null; balanced: string | null; thorough: string | null };
+	/** The pool (and model) the gateway's admin "Default models" resolve to among the pools the caller holds. */
+	defaults?: Record<'chat' | 'transcription' | 'speech', PoolDefault | null>;
+}
+
+export interface PoolDefault {
+	pool: string;
+	model: string;
 }
 
 export interface Unmet {
@@ -242,6 +252,8 @@ export interface AgentError {
 	code?: string;
 	message: string;
 	issues: SpecIssue[];
+	/** Seconds to wait, from the refusal's `Retry-After`. */
+	retryAfter?: number;
 }
 
 /**
@@ -262,13 +274,14 @@ export function parseSpecError(err: unknown): AgentError {
 				status: err.status,
 				code: typeof envelope.code === 'string' ? envelope.code : err.code,
 				message: typeof envelope.message === 'string' ? envelope.message : err.message,
-				issues: Array.isArray(envelope.issues) ? envelope.issues : []
+				issues: Array.isArray(envelope.issues) ? envelope.issues : [],
+				retryAfter: err.retryAfter
 			};
 		}
 	} catch {
 		// not an envelope; fall through to the raw message
 	}
-	return { status: err.status, code: err.code, message: err.message, issues: [] };
+	return { status: err.status, code: err.code, message: err.message, issues: [], retryAfter: err.retryAfter };
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

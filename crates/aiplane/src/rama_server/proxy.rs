@@ -1794,7 +1794,15 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
         return (StatusCode::NO_CONTENT, "").into_response();
     }
 
-    let Some((model, default_voice)) = state.upstreams.speech_target(&language) else {
+    let preferred = aiplane_core::server::feature_defaults::get(
+        &state.db,
+        aiplane_core::server::feature_defaults::Feature::Speech,
+    )
+    .await;
+    let Some((model, default_voice)) = state
+        .upstreams
+        .speech_target(&language, preferred.as_deref())
+    else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "no_speech_backend",

@@ -352,16 +352,16 @@ impl Asker<'_> {
 
     /// The pool to ask, once the manager's rate and spend limits allow a
     /// call: `requested` if they may use it, else the draft's `main.pool`
-    /// if they may, else the admin's "Balanced" model choice
-    /// (`agents.pool_balanced`, #116) if they may, else the first chat pool
-    /// they may use that serves a model.
+    /// if they may, else the agents' chat default for them
+    /// ([`super::defaults::chat_pool`]: the admin's "Balanced" choice, else
+    /// the gateway's default chat model).
     async fn admit(
         &self,
         requested: Option<&str>,
         draft_pool: Option<&str>,
     ) -> Result<(String, PoolAccess), AssistError> {
         let access = self.state.pool_access_for(&self.user.roles);
-        let (pool, model) = choose_pool(self.state, &access, requested, draft_pool)?;
+        let (pool, model) = choose_pool(self.state, &access, requested, draft_pool).await?;
         let window = Window {
             scope: RateScope::Manager,
             rate: ASSIST_RATE,
@@ -445,7 +445,7 @@ fn usage_of(exchange: &JsonExchange) -> Value {
 }
 
 /// See [`Asker::admit`]; the pool and the model it would serve.
-pub fn choose_pool(
+pub async fn choose_pool(
     state: &RamaState,
     access: &PoolAccess,
     requested: Option<&str>,
@@ -466,20 +466,8 @@ pub fn choose_pool(
     if let Some(found) = draft_pool.and_then(with_model) {
         return Ok(found);
     }
-    let balanced = state.config().agents.pool_balanced.clone();
-    if let Some(found) = balanced.as_deref().and_then(with_model) {
-        return Ok(found);
-    }
-    let mut pools: Vec<String> = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .filter(|p| p.kind == PoolKind::Chat && access.allows(p))
-        .map(|p| p.name.clone())
-        .collect();
-    pools.sort();
-    pools
-        .iter()
-        .find_map(|p| with_model(p))
+    super::defaults::chat_pool(state, access)
+        .await
+        .map(|d| (d.pool, d.model))
         .ok_or(AssistError::NoModel)
 }

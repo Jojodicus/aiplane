@@ -92,6 +92,18 @@ pub struct SpecContext<'a> {
     /// Every published agent's live spec, by id: the sub-agent graph the
     /// cycle, depth and bind-reach checks walk.
     pub live_specs: &'a HashMap<String, Value>,
+    /// What a voice direction without a pool of its own would run on.
+    pub voice_defaults: &'a VoiceDefaults,
+}
+
+/// The pool each `publish.voice` direction falls back to when the spec names
+/// none: the pool of the gateway's default model for it among the agent's
+/// grants (`agents::defaults::granted_default`), `None` when no granted pool
+/// serves one.
+#[derive(Debug, Clone, Default)]
+pub struct VoiceDefaults {
+    pub transcription: Option<String>,
+    pub speech: Option<String>,
 }
 
 const TOP_KEYS: &[&str] = &[
@@ -1652,7 +1664,8 @@ impl<'a> Check<'a> {
     }
 
     /// `publish.voice`: each direction that is on runs on a pool the agent
-    /// was granted, named here — a published agent must say which.
+    /// was granted — the one named here, else the pool of the gateway's
+    /// default model for it. A published agent must have one of the two.
     fn voice(&mut self, v: &Value) {
         let Some(map) = self.object(v, "publish.voice", VOICE_KEYS) else {
             return;
@@ -1679,13 +1692,20 @@ impl<'a> Check<'a> {
                  the pool's default for the visitor's language",
             );
         }
-        for (key, wanted, what) in [
+        let defaults = self.ctx.voice_defaults;
+        for (key, wanted, fallback, (direction, kind)) in [
             (
                 "transcription_pool",
                 input,
-                "voice input transcribes the visitor's recording",
+                &defaults.transcription,
+                ("voice input", "speech-recognition"),
             ),
-            ("speech_pool", output, "voice output speaks the answers"),
+            (
+                "speech_pool",
+                output,
+                &defaults.speech,
+                ("voice output", "speech-output"),
+            ),
         ] {
             let path = join("publish.voice", key);
             match map.get(key) {
@@ -1694,11 +1714,13 @@ impl<'a> Check<'a> {
                         self.require_grant(&path, GrantKind::Pool, pool, "pool");
                     }
                 }
-                None if wanted && self.stage == Stage::Publish => self.issue(
+                None if wanted && fallback.is_none() && self.stage == Stage::Publish => self.issue(
                     &path,
                     format!(
-                        "{what} on a pool the agent was granted — name it here, or switch this \
-                         direction off"
+                        "{direction} is on, but the agent was granted no {kind} pool, so \
+                             neither a pool named here nor the gateway's default model can serve \
+                             it — in the setup's \"Website\" step choose one (that grants it), \
+                             or switch {direction} off"
                     ),
                 ),
                 None => {}
@@ -1744,6 +1766,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &HashMap::new(),
+                voice_defaults: &Default::default(),
             },
             stage,
         )
@@ -1835,6 +1858,7 @@ mod tests {
             grants: &grants,
             agents: &agents,
             live_specs: &live,
+            voice_defaults: &Default::default(),
         };
         let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
         assert_eq!(typed.main_pool(), Some("chat"));
@@ -2632,6 +2656,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &live_specs,
+                voice_defaults: &Default::default(),
             },
             stage,
         )
@@ -2939,6 +2964,37 @@ mod tests {
         let mut off = full();
         off["publish"]["voice"] = json!({ "input": false, "output": false });
         assert_eq!(check(off, Stage::Publish), []);
+    }
+
+    #[test]
+    fn a_voice_direction_without_a_pool_runs_on_the_granted_default_or_names_the_step() {
+        let mut spec = full();
+        spec["publish"]["voice"] = json!({ "input": true, "output": true });
+        let issues = check(spec.clone(), Stage::Publish);
+        assert!(
+            issues[0].message.contains("\"Website\" step"),
+            "{}",
+            issues[0].message
+        );
+
+        let grants = grants();
+        let agents = agents();
+        let defaults = VoiceDefaults {
+            transcription: Some("small".into()),
+            speech: None,
+        };
+        let issues = validate(
+            &spec,
+            &SpecContext {
+                agent_id: SELF,
+                grants: &grants,
+                agents: &agents,
+                live_specs: &HashMap::new(),
+                voice_defaults: &defaults,
+            },
+            Stage::Publish,
+        );
+        assert_eq!(paths(&issues), ["publish.voice.speech_pool"]);
     }
 
     #[test]

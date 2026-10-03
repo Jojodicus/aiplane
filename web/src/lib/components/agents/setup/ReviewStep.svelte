@@ -2,7 +2,7 @@
 	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
 	import { base } from '$app/paths';
 	import { agentsApi, type AgentError, type Spec } from '$lib/agents';
-	import { SECTIONS, checklist, summary, type StepKey } from '$lib/agent-setup';
+	import { SECTIONS, checklist, setupErrorMessage, summary, type StepKey } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SetupChecklist from './SetupChecklist.svelte';
@@ -24,7 +24,7 @@
 			await agentsApi.createTest(ws.id, { name: test.name, script: test.script, expect: test.expect, rubric: null });
 			saved = [...saved, test.name];
 		} catch (err) {
-			testError = (err as AgentError).message;
+			testError = setupErrorMessage(err as AgentError, t);
 		}
 	}
 	const sayings = (test: (typeof tests)[number]) =>

@@ -123,10 +123,13 @@ export class ApiError extends Error {
 	 * human-readable message, which is translated and free to change.
 	 */
 	readonly code?: string;
-	constructor(status: number, message: string, code?: string) {
+	/** Seconds from a `Retry-After` header, when a refusal (a `429`) sent one. */
+	readonly retryAfter?: number;
+	constructor(status: number, message: string, code?: string, retryAfter?: number) {
 		super(message);
 		this.status = status;
 		this.code = code;
+		this.retryAfter = retryAfter;
 	}
 }
 
@@ -154,10 +157,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		// The gateway answers auth failures with an OpenAI-style envelope;
 		// surface status so callers can distinguish 401 (sign in) from 5xx.
 		const detail = await res.text().catch(() => '');
+		const retry = Number(res.headers.get('retry-after'));
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
-			errorCode(detail)
+			errorCode(detail),
+			Number.isFinite(retry) && retry > 0 ? retry : undefined
 		);
 	}
 	if (res.status === 204) return undefined as T;

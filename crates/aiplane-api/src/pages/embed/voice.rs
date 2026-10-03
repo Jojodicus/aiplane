@@ -17,8 +17,11 @@
 use std::sync::Arc;
 
 use aiplane_agents::db::system_principals;
+use aiplane_core::server::feature_defaults::PoolDefault;
 use aiplane_features::server::vad;
+use aiplane_runtime::agents::defaults::{self, VoiceDirection};
 use aiplane_runtime::agents::spec::AgentSpec;
+use aiplane_runtime::agents::spec::model::VoiceSpec;
 use aiplane_runtime::agents::voice::{self, Conversation, Recording};
 use aiplane_runtime::rama_server::state::RamaState;
 use rama::bytes::Bytes;
@@ -66,12 +69,41 @@ fn voice_off(direction: &str) -> Response {
     )
 }
 
+const TRANSCRIPTION_UNAVAILABLE: &str = "speech recognition is unavailable right now — type the \
+     message instead, or try again in a moment";
+const SPEECH_UNAVAILABLE: &str =
+    "spoken answers are unavailable right now — the answer is on screen; try again in a moment";
+
 fn voice_unavailable(message: &str) -> Response {
     json_error(
         StatusCode::SERVICE_UNAVAILABLE,
         "voice_unavailable",
         message,
     )
+}
+
+/// The pool and model a direction that is on runs on for this agent: the
+/// one its spec names, else the gateway's default among its grants. When
+/// none resolves (an admin changed the defaults or the grants after
+/// publishing) the visitor is told voice is unavailable.
+async fn voice_target(
+    state: &RamaState,
+    principal: &aiplane_core::server::principal::SystemPrincipal,
+    voice: &VoiceSpec,
+    direction: VoiceDirection,
+    message: &str,
+) -> Result<PoolDefault, Response> {
+    defaults::voice_pool(state, principal, voice, direction)
+        .await
+        .ok_or_else(|| {
+            tracing::warn!(
+                agent = %principal.id,
+                ?direction,
+                "no pool granted to the agent serves this voice direction — name one in \
+                 publish.voice, or grant the pool of the gateway's default model"
+            );
+            voice_unavailable(message)
+        })
 }
 
 /// The agent's principal, with the grants its pools are checked against.
@@ -100,9 +132,9 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
     let lang = Lang::from_request(req.headers());
     let ip = state.client_ip(&req);
     let spec = v.live.spec.agent().unwrap_or(AgentSpec::empty());
-    let Some(pool) = spec.publish.voice.input_pool().map(str::to_string) else {
+    if !spec.publish.voice.input {
         return voice_off("input");
-    };
+    }
     let audio = match read_body_capped(req.into_body(), MAX_RECORDING_BYTES).await {
         Ok(bytes) => bytes,
         Err(CappedBodyError::TooLarge { max }) => return payload_too_large("the recording", max),
@@ -144,6 +176,16 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
         .await
     );
     let principal = or_return!(agent_principal(&state, &v).await);
+    let target = or_return!(
+        voice_target(
+            &state,
+            &principal,
+            &spec.publish.voice,
+            VoiceDirection::Input,
+            TRANSCRIPTION_UNAVAILABLE,
+        )
+        .await
+    );
     let wav: Bytes = vad::trim_silence(&audio).map_or(audio, |t| t.bytes);
     let at = Conversation {
         principal: &principal,
@@ -151,15 +193,12 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
         session_id: &v.session.session_id,
         visitor_id: &v.session.id,
     };
-    match voice::transcribe(&state, &pool, &at, Recording { wav, seconds }).await {
+    match voice::transcribe(&state, &target, &at, Recording { wav, seconds }).await {
         Ok(text) => {
             let text: String = text.chars().take(MAX_MESSAGE_CHARS).collect();
             json_ok(StatusCode::OK, json!({ "text": text }))
         }
-        Err(_) => voice_unavailable(
-            "speech recognition is unavailable right now — type the message instead, or try \
-             again in a moment",
-        ),
+        Err(_) => voice_unavailable(TRANSCRIPTION_UNAVAILABLE),
     }
 }
 
@@ -179,9 +218,9 @@ pub async fn speak(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     let ip = state.client_ip(&req);
     let spec = v.live.spec.agent().unwrap_or(AgentSpec::empty());
     let voice_spec = spec.publish.voice.clone();
-    let Some(pool) = voice_spec.output_pool() else {
+    if !voice_spec.output {
         return voice_off("output");
-    };
+    }
     let body: SpeakBody = or_return!(
         crate::pages::read_json_capped(req.into_body(), "the speak body", MAX_BODY_BYTES).await
     );
@@ -225,6 +264,16 @@ pub async fn speak(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         .await
     );
     let principal = or_return!(agent_principal(&state, &v).await);
+    let target = or_return!(
+        voice_target(
+            &state,
+            &principal,
+            &voice_spec,
+            VoiceDirection::Output,
+            SPEECH_UNAVAILABLE,
+        )
+        .await
+    );
     let at = Conversation {
         principal: &principal,
         version: v.live.version,
@@ -233,7 +282,7 @@ pub async fn speak(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     };
     match voice::speak(
         &state,
-        pool,
+        &target,
         voice_spec.voice.as_deref(),
         &at,
         &turn.id,
@@ -249,10 +298,7 @@ pub async fn speak(State(state): State<Arc<RamaState>>, req: Request) -> Respons
             .body(audio.into())
             .unwrap_or_else(internal),
         Ok(None) => (StatusCode::NO_CONTENT, "").into_response(),
-        Err(_) => voice_unavailable(
-            "spoken answers are unavailable right now — the answer is on screen; try again in \
-             a moment",
-        ),
+        Err(_) => voice_unavailable(SPEECH_UNAVAILABLE),
     }
 }
 
