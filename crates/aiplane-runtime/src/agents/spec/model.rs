@@ -687,6 +687,8 @@ pub struct Publish {
     #[serde(default)]
     pub require_passing_tests: bool,
     pub a2a: Option<A2aPublish>,
+    #[serde(default)]
+    pub voice: VoiceSpec,
 }
 
 impl Publish {
@@ -735,6 +737,34 @@ impl Publish {
     /// Whether the agent is served over A2A. Off unless the spec says so.
     pub fn a2a_enabled(&self) -> bool {
         self.a2a.as_ref().is_some_and(|a| a.enabled)
+    }
+}
+
+/// Spoken input and output for the embed widget (`publish.voice`). Each
+/// direction runs only while it is on *and* names its pool; the validator
+/// requires the pool of a direction that is on before publishing.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceSpec {
+    #[serde(default)]
+    pub input: bool,
+    #[serde(default)]
+    pub output: bool,
+    /// The TTS voice; the speech pool's default for the language when unset.
+    pub voice: Option<String>,
+    pub speech_pool: Option<String>,
+    pub transcription_pool: Option<String>,
+}
+
+impl VoiceSpec {
+    /// The pool a visitor's recording is transcribed on, when voice input is on.
+    pub fn input_pool(&self) -> Option<&str> {
+        self.transcription_pool.as_deref().filter(|_| self.input)
+    }
+
+    /// The pool answers are spoken on, when voice output is on.
+    pub fn output_pool(&self) -> Option<&str> {
+        self.speech_pool.as_deref().filter(|_| self.output)
     }
 }
 
@@ -824,6 +854,31 @@ mod tests {
         assert!(!spec.publish.a2a_enabled());
         assert!(!spec.publish.require_passing_tests);
         assert!(spec.main_pool().is_none() && spec.routes.is_empty());
+    }
+
+    #[test]
+    fn voice_is_off_until_a_direction_is_switched_on_with_its_pool() {
+        let spec = read(json!({}));
+        assert_eq!(spec.publish.voice.input_pool(), None);
+        assert_eq!(spec.publish.voice.output_pool(), None);
+
+        let spec = read(json!({ "publish": { "voice": {
+            "input": true, "output": false, "voice": "alloy",
+            "speech_pool": "tts", "transcription_pool": "stt"
+        } } }));
+        assert_eq!(spec.publish.voice.input_pool(), Some("stt"));
+        assert_eq!(spec.publish.voice.output_pool(), None, "output is off");
+        assert_eq!(spec.publish.voice.voice.as_deref(), Some("alloy"));
+
+        let unpooled = read(json!({ "publish": { "voice": { "output": true } } }));
+        assert_eq!(
+            unpooled.publish.voice.output_pool(),
+            None,
+            "no pool, no voice"
+        );
+        assert!(
+            AgentSpec::from_value(&json!({ "publish": { "voice": { "loud": true } } })).is_err()
+        );
     }
 
     #[test]

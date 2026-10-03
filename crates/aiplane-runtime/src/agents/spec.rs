@@ -176,6 +176,14 @@ const PUBLISH_KEYS: &[&str] = &[
     "output_filter",
     "require_passing_tests",
     "a2a",
+    "voice",
+];
+const VOICE_KEYS: &[&str] = &[
+    "input",
+    "output",
+    "voice",
+    "speech_pool",
+    "transcription_pool",
 ];
 const RATE_SCOPES: &[&str] = &["visitor", "ip"];
 const RATE_KEYS: &[&str] = &["max", "per"];
@@ -1613,6 +1621,9 @@ impl<'a> Check<'a> {
                 self.positive_int(x, "publish.budget.monthly_tokens", None);
             }
         }
+        if let Some(voice) = map.get("voice") {
+            self.voice(voice);
+        }
         if let Some(filter) = map.get("output_filter")
             && let Some(f) = self.object(filter, "publish.output_filter", OUTPUT_FILTER_KEYS)
             && let Some(patterns) = f.get("patterns")
@@ -1626,6 +1637,61 @@ impl<'a> Check<'a> {
                     "publish.output_filter.action",
                     super::output_filter::Action::NAMES,
                 );
+            }
+        }
+    }
+
+    /// `publish.voice`: each direction that is on runs on a pool the agent
+    /// was granted, named here — a published agent must say which.
+    fn voice(&mut self, v: &Value) {
+        let Some(map) = self.object(v, "publish.voice", VOICE_KEYS) else {
+            return;
+        };
+        let mut on = |key: &str| match map.get(key) {
+            Some(Value::Bool(b)) => *b,
+            Some(_) => {
+                self.issue(
+                    &join("publish.voice", key),
+                    "must be true or false: true offers the visitor this direction of voice",
+                );
+                false
+            }
+            None => false,
+        };
+        let (input, output) = (on("input"), on("output"));
+        if let Some(x) = map.get("voice")
+            && let Some(voice) = self.string(x, "publish.voice.voice")
+            && voice.trim().is_empty()
+        {
+            self.issue(
+                "publish.voice.voice",
+                "must not be blank — name one of the speech pool's voices, or remove it to use \
+                 the pool's default for the visitor's language",
+            );
+        }
+        for (key, wanted, what) in [
+            (
+                "transcription_pool",
+                input,
+                "voice input transcribes the visitor's recording",
+            ),
+            ("speech_pool", output, "voice output speaks the answers"),
+        ] {
+            let path = join("publish.voice", key);
+            match map.get(key) {
+                Some(x) => {
+                    if let Some(pool) = self.string(x, &path) {
+                        self.require_grant(&path, GrantKind::Pool, pool, "pool");
+                    }
+                }
+                None if wanted && self.stage == Stage::Publish => self.issue(
+                    &path,
+                    format!(
+                        "{what} on a pool the agent was granted — name it here, or switch this \
+                         direction off"
+                    ),
+                ),
+                None => {}
             }
         }
     }
@@ -2795,6 +2861,60 @@ mod tests {
             "{}",
             over[0].message
         );
+    }
+
+    #[test]
+    fn voice_settings_are_checked_and_their_pools_must_be_granted() {
+        let ok = check(
+            json!({ "publish": { "voice": {
+                "input": true, "output": true, "voice": "alloy",
+                "speech_pool": "chat", "transcription_pool": "small"
+            } } }),
+            Stage::Draft,
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+
+        let issues = check(
+            json!({ "publish": { "voice": {
+                "input": "yes", "output": true, "voice": " ",
+                "speech_pool": "cloud-tts", "transcription_pool": 3, "loud": true
+            } } }),
+            Stage::Draft,
+        );
+        assert_eq!(
+            paths(&issues),
+            [
+                "publish.voice.loud",
+                "publish.voice.input",
+                "publish.voice.voice",
+                "publish.voice.transcription_pool",
+                "publish.voice.speech_pool"
+            ]
+        );
+        assert!(
+            issues[4].message.contains("not granted"),
+            "{}",
+            issues[4].message
+        );
+    }
+
+    #[test]
+    fn a_published_voice_direction_names_the_pool_it_runs_on() {
+        let mut spec = full();
+        spec["publish"]["voice"] = json!({ "input": true, "output": true });
+        assert!(check(spec.clone(), Stage::Draft).is_empty());
+        let issues = check(spec, Stage::Publish);
+        assert_eq!(
+            paths(&issues),
+            [
+                "publish.voice.transcription_pool",
+                "publish.voice.speech_pool"
+            ]
+        );
+
+        let mut off = full();
+        off["publish"]["voice"] = json!({ "input": false, "output": false });
+        assert_eq!(check(off, Stage::Publish), []);
     }
 
     #[test]
