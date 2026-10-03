@@ -1641,6 +1641,12 @@ pool rule, and retention.
     `{limit: visitor_rate|ip_rate, visitor_id, max, per_secs,
     retry_after_secs}` or `{limit: budget, set_by: agent|operator, dimension,
     window, max, used, retry_after_secs}`. The client IP is not stored in it.
+    A flood is folded: one row per (agent, subject, limit) per minute, whose
+    `count` is set to the refusals it stands for when the minute closes. At
+    most 10 000 such windows are open at once; past that, a new subject's
+    refusals go to the agent's overflow row for the limit (`visitor_id`
+    null), so a storm from rotating IPs is still counted without growing
+    memory.
   - Managers see the state in `GET /api/v0/agents/{id}` under `agent.limits`:
     `{rate_limits: {visitor, ip}, retention_days, budget: [{set_by,
     dimension, window, max, used, exceeded, refreshes_at}], available,
