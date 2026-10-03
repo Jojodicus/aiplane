@@ -376,7 +376,7 @@
 	</aside>
 
 	<!-- Main column -->
-	<div class="relative isolate flex h-dvh min-w-0 flex-1 flex-col">
+	<div class="relative isolate flex h-dvh min-w-0 flex-1 flex-col overflow-clip">
 		<div class="pointer-events-none absolute -right-24 -top-28 h-96 w-96 rounded-full bg-primary/10 blur-3xl"></div>
 		<!-- Mobile top bar with the menu toggle -->
 		<div class="lg:hidden sticky top-0 z-20 h-14 flex items-center gap-2 px-3 bg-base-200/85 backdrop-blur-xl border-b border-base-300">
