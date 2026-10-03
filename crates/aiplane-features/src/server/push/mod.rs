@@ -30,6 +30,7 @@ use rand::TryRng;
 use aiplane_core::server::crypto::Crypto;
 use aiplane_core::server::db::push_subscriptions::PushSubscription;
 use aiplane_core::server::db::{self, Pool};
+use aiplane_core::server::net_guard::{IpClass, classify_host};
 
 /// `app_settings` key holding the sealed VAPID private scalar.
 const VAPID_PRIVATE_KEY_SETTING: &str = "push.vapid.private";
@@ -285,9 +286,10 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 /// owner's turn finishes, so an unchecked endpoint is a blind-SSRF vector.
 ///
 /// Requires:
-/// - `endpoint` is an `https` URL whose host is a public name/address — not
-///   loopback, private, link-local, or unspecified (blocks the cloud metadata
-///   IP, `localhost`, and RFC 1918 / ULA targets), and
+/// - `endpoint` is an `https` URL whose host is a name other than
+///   `localhost` or an address `net_guard` classifies as public (blocks the
+///   cloud metadata IP, loopback, RFC 1918 / ULA, CGNAT, multicast, and their
+///   IPv4-mapped IPv6 spellings), and
 /// - `p256dh` decodes to a 65-byte uncompressed P-256 point and `auth` to a
 ///   16-byte secret (so we never persist junk that can only ever fail to
 ///   encrypt).
@@ -300,16 +302,13 @@ pub fn validate_subscription(endpoint: &str, p256dh: &str, auth: &str) -> Result
     if url.scheme() != "https" {
         return Err("push endpoint must be https".to_string());
     }
-    match url.host() {
-        Some(url::Host::Domain(d)) if !d.eq_ignore_ascii_case("localhost") => {}
-        Some(url::Host::Ipv4(ip))
-            if !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()) => {}
-        Some(url::Host::Ipv6(ip)) if !is_disallowed_ipv6(&ip) => {}
-        _ => return Err("push endpoint host is not allowed".to_string()),
+    let public = match url.host() {
+        Some(url::Host::Domain(d)) => !d.eq_ignore_ascii_case("localhost"),
+        Some(host) => classify_host(&host).is_some_and(IpClass::is_public),
+        None => false,
+    };
+    if !public {
+        return Err("push endpoint host is not allowed".to_string());
     }
     match b64url_decode(p256dh) {
         Some(k) if k.len() == 65 && k[0] == 0x04 => {}
@@ -320,17 +319,6 @@ pub fn validate_subscription(endpoint: &str, p256dh: &str, auth: &str) -> Result
         _ => return Err("keys.auth must be a base64url 16-byte secret".to_string()),
     }
     Ok(())
-}
-
-/// Loopback / unspecified / unique-local (`fc00::/7`) / link-local (`fe80::/10`)
-/// IPv6 — the addresses a push endpoint must not target. Hand-rolled because
-/// `Ipv6Addr::is_unique_local` / `is_unicast_link_local` are still unstable.
-fn is_disallowed_ipv6(ip: &std::net::Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return true;
-    }
-    let first = ip.segments()[0];
-    (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
 }
 
 #[cfg(test)]
@@ -417,7 +405,8 @@ mod tests {
 
     #[test]
     fn validate_subscription_rejects_ssrf_and_non_https_targets() {
-        // Cloud metadata IP, loopback, private range, link-local, localhost, http.
+        // Cloud metadata IP, loopback, private range, link-local, CGNAT,
+        // IPv4-mapped spellings of those, multicast, localhost, http.
         for bad in [
             "https://169.254.169.254/latest/meta-data/",
             "https://127.0.0.1/x",
@@ -426,6 +415,11 @@ mod tests {
             "https://[::1]/x",
             "https://[fd00::1]/x",
             "https://[fe80::1]/x",
+            "https://100.64.0.1/x",
+            "https://[::ffff:127.0.0.1]/x",
+            "https://[::ffff:169.254.169.254]/x",
+            "https://[::ffff:10.0.0.5]/x",
+            "https://224.0.0.1/x",
             "https://localhost/x",
             "http://fcm.googleapis.com/x",
             "ftp://fcm.googleapis.com/x",

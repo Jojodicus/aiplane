@@ -22,7 +22,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
-use super::{DbError, Pool};
+use super::{DbError, Pool, parse_ts};
 
 /// The content type of a document. Drives both how the model edits it
 /// (see [`DocumentFormat::edit_kind`]) and how the canvas panel renders
@@ -207,13 +207,6 @@ pub struct DocumentVersion {
     pub created_at: Timestamp,
 }
 
-fn parse_ts(s: &str, column: &'static str) -> Result<Timestamp, DbError> {
-    s.parse().map_err(|e: jiff::Error| DbError::Decode {
-        column,
-        source: e.into(),
-    })
-}
-
 /// The column list every `Document`-returning query selects. Kept in one
 /// place so adding a field can't leave one query behind returning a row
 /// [`map_doc`] then fails to decode.
@@ -228,11 +221,10 @@ fn map_doc(row: &SqliteRow) -> Result<Document, DbError> {
         title: row.try_get("title")?,
         format: DocumentFormat::from_db(&format),
         current_ver: row.try_get("current_ver")?,
-        created_at: parse_ts(&row.try_get::<String, _>("created_at")?, "created_at")?,
-        updated_at: parse_ts(&row.try_get::<String, _>("updated_at")?, "updated_at")?,
+        created_at: parse_ts(row.try_get::<String, _>("created_at")?, "created_at")?,
+        updated_at: parse_ts(row.try_get::<String, _>("updated_at")?, "updated_at")?,
         deleted_at: row
             .try_get::<Option<String>, _>("deleted_at")?
-            .as_deref()
             .map(|s| parse_ts(s, "deleted_at"))
             .transpose()?,
     })
@@ -251,7 +243,7 @@ fn map_version(row: &SqliteRow) -> Result<DocumentVersion, DbError> {
         summary: row.try_get("summary")?,
         turn_id: row.try_get("turn_id")?,
         author: VersionAuthor::from_db(&author),
-        created_at: parse_ts(&row.try_get::<String, _>("created_at")?, "created_at")?,
+        created_at: parse_ts(row.try_get::<String, _>("created_at")?, "created_at")?,
     })
 }
 
@@ -478,7 +470,7 @@ pub async fn list_versions(
             Ok(VersionMeta {
                 version: row.try_get("version")?,
                 summary: row.try_get("summary")?,
-                created_at: parse_ts(&row.try_get::<String, _>("created_at")?, "created_at")?,
+                created_at: parse_ts(row.try_get::<String, _>("created_at")?, "created_at")?,
                 chars: row.try_get("chars")?,
                 author: VersionAuthor::from_db(&author),
             })

@@ -1641,6 +1641,12 @@ pool rule, and retention.
     `{limit: visitor_rate|ip_rate, visitor_id, max, per_secs,
     retry_after_secs}` or `{limit: budget, set_by: agent|operator, dimension,
     window, max, used, retry_after_secs}`. The client IP is not stored in it.
+    A flood is folded: one row per (agent, subject, limit) per minute, whose
+    `count` is set to the refusals it stands for when the minute closes. At
+    most 10 000 such windows are open at once; past that, a new subject's
+    refusals go to the agent's overflow row for the limit (`visitor_id`
+    null), so a storm from rotating IPs is still counted without growing
+    memory.
   - Managers see the state in `GET /api/v0/agents/{id}` under `agent.limits`:
     `{rate_limits: {visitor, ip}, retention_days, budget: [{set_by,
     dimension, window, max, used, exceeded, refreshes_at}], available,
@@ -1873,11 +1879,14 @@ that already exist. No second event store.
   `limit_refused` rows have no chain, because a refusal happens before any
   version runs, so they are left out while a version is selected (the SPA says
   so).
-- **Why Rust and not SQL aggregation.** The version sits inside a JSON string
-  and timestamps are RFC 3339 with fractional seconds of varying length, which
-  do not order as text. SQL narrows by whole days (index-friendly) and
-  `db::agent_analytics::compute` applies the exact range and the version. The
-  cost is one pass over the agent's rows for the period; a range is capped at
+- **Aggregated in SQL.** Conversations, turns, usage and the audit kinds that
+  are only counted are `GROUP BY substr(created_at, 1, 10)` (the UTC day)
+  queries. The version filter reads the chain with `json_extract`; the exact
+  range compares on `rtrim(created_at, 'Z')`, because RFC 3339 text with
+  fractional seconds of varying length orders correctly only without its `Z`
+  (`db::window_key`); whole-day bounds alongside keep the indexes in use. Only
+  the audit rows whose `detail` carries the numbers (route decisions, sub-agent
+  outcomes, output blocks, limit refusals) are fetched. A range is capped at
   366 days.
 - **SPA.** An *Analytics* tab on `/agents/{id}`
   ([`ui.md`](ui.md#agent-builder)).

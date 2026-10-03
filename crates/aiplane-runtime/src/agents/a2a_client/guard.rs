@@ -18,14 +18,17 @@
 //! unless `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS` is on: loopback, private
 //! (RFC 1918, IPv6 unique local), carrier-grade NAT and plain `http`.
 //!
-//! Not reused from `mcp_oauth::validate_outbound_url`: that guard allows
-//! private ranges on purpose (an admin curates the MCP catalog) and checks
-//! literal addresses only, while a route's target is chosen by an agent's
-//! owner and must not reach the gateway's own network.
+//! What an address is comes from `net_guard::classify`, shared with the
+//! other outbound guards; the policy is this module's own. It is stricter
+//! than `mcp_oauth::validate_outbound_url`, which allows private ranges on
+//! purpose (an admin curates the MCP catalog), while a route's target is
+//! chosen by an agent's owner and must not reach the gateway's own network.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use aiplane_core::server::capped_read::{self, CappedReadError};
+use aiplane_core::server::net_guard::{IpClass, classify, is_loopback_host};
 use reqwest::Url;
 
 /// A host that passed the guard, and the client pinned to its addresses.
@@ -34,81 +37,21 @@ pub struct Pinned {
     pub client: reqwest::Client,
 }
 
-/// Why an address may never be connected to, whatever the configuration.
-fn always_refused(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(v4) => {
-            if v4.is_unspecified() {
-                Some("an unspecified address")
-            } else if v4.is_link_local() {
-                Some("a link-local address (where cloud metadata lives)")
-            } else if v4.is_broadcast() {
-                Some("a broadcast address")
-            } else if v4.is_multicast() {
-                Some("a multicast address")
-            } else {
-                None
-            }
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return always_refused(IpAddr::V4(v4));
-            }
-            if v6.is_unspecified() {
-                Some("an unspecified address")
-            } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
-                Some("a link-local address")
-            } else if v6.is_multicast() {
-                Some("a multicast address")
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Why an address is inside a network the gateway itself sits in, if it is.
-fn private(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            if v4.is_loopback() {
-                Some("a loopback address")
-            } else if v4.is_private() {
-                Some("a private address")
-            } else if a == 100 && (64..128).contains(&b) {
-                Some("a carrier-grade NAT address")
-            } else {
-                None
-            }
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return private(IpAddr::V4(v4));
-            }
-            if v6.is_loopback() {
-                Some("a loopback address")
-            } else if (v6.segments()[0] & 0xfe00) == 0xfc00 {
-                Some("a unique local (private) address")
-            } else {
-                None
-            }
-        }
-    }
-}
-
 /// Whether `ip` may be connected to, and why not.
 pub fn check_ip(ip: IpAddr, allow_private: bool) -> Result<(), String> {
-    if let Some(why) = always_refused(ip) {
-        return Err(format!("{ip} is {why}, which is never reached"));
+    let class = classify(ip);
+    match class {
+        IpClass::Public => Ok(()),
+        IpClass::Unspecified | IpClass::LinkLocal | IpClass::Broadcast | IpClass::Multicast => Err(
+            format!("{ip} is {}, which is never reached", class.describe()),
+        ),
+        IpClass::Loopback | IpClass::Private | IpClass::Cgnat if allow_private => Ok(()),
+        IpClass::Loopback | IpClass::Private | IpClass::Cgnat => Err(format!(
+            "{ip} is {}; an agent reaches public hosts only unless the operator sets \
+             `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`",
+            class.describe()
+        )),
     }
-    if !allow_private && let Some(why) = private(ip) {
-        return Err(format!(
-            "{ip} is {why}; an agent reaches public hosts only unless the operator sets \
-             `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`"
-        ));
-    }
-    Ok(())
 }
 
 /// The scheme rule: `https`, or `http` where private networks are allowed.
@@ -159,33 +102,19 @@ pub async fn pin(raw: &str, allow_private: bool, timeout: Duration) -> Result<Pi
     Ok(Pinned { url, client })
 }
 
-/// The body of `resp`, refused once it is longer than `max` bytes: a
-/// declared `Content-Length` over the cap is refused before anything is read,
-/// and a body without one is read chunk by chunk and dropped the moment the
-/// running total passes the cap, so a hostile peer cannot make the gateway
-/// buffer more than `max`. `what` names the body in the error (`the agent
-/// card`).
+/// The body of `resp` through `capped_read::read_capped`, the errors worded
+/// for the agent's owner. `what` names the body (`the agent card`).
 pub async fn read_capped(
-    mut resp: reqwest::Response,
+    resp: reqwest::Response,
     max: usize,
     what: &str,
 ) -> Result<Vec<u8>, String> {
-    let too_large = || format!("{what} is larger than {} KiB", max / 1024);
-    if resp.content_length().is_some_and(|len| len > max as u64) {
-        return Err(too_large());
-    }
-    let mut body = Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
-    while let Some(chunk) = resp
-        .chunk()
+    capped_read::read_capped(resp, max as u64)
         .await
-        .map_err(|e| format!("reading {what} failed: {e}"))?
-    {
-        if body.len() + chunk.len() > max {
-            return Err(too_large());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        .map_err(|e| match e {
+            CappedReadError::TooLarge { .. } => format!("{what} is larger than {} KiB", max / 1024),
+            CappedReadError::Transport(e) => format!("reading {what} failed: {e}"),
+        })
 }
 
 /// The shape a card URL needs before anything is fetched: an absolute
@@ -193,15 +122,7 @@ pub async fn read_capped(
 /// host and no credentials in it.
 pub fn check_card_url(raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|e| format!("it is not a URL ({e})"))?;
-    let host = url.host_str().ok_or("it names no host")?;
-    let loopback = host == "localhost"
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| {
-                ip == IpAddr::V4(Ipv4Addr::LOCALHOST) || ip == IpAddr::V6(Ipv6Addr::LOCALHOST)
-            });
+    let loopback = is_loopback_host(&url.host().ok_or("it names no host")?);
     match url.scheme() {
         "https" => {}
         "http" if loopback => {}
@@ -295,47 +216,9 @@ mod tests {
         assert!(pin("ftp://example.com/x", true, t).await.is_err());
     }
 
-    /// A peer that answers with a chunked body and no `Content-Length`, one
-    /// 64 KiB chunk after another until the client hangs up. A raw socket
-    /// because wiremock always sends a length.
-    async fn endless_chunked_peer() -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf).await;
-            let head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
-                        transfer-encoding: chunked\r\n\r\n";
-            if sock.write_all(head.as_bytes()).await.is_err() {
-                return;
-            }
-            let chunk = format!("10000\r\n{}\r\n", " ".repeat(0x10000));
-            while sock.write_all(chunk.as_bytes()).await.is_ok() {}
-        });
-        format!("http://{addr}/")
-    }
-
     async fn get(url: &str) -> reqwest::Response {
         let pinned = pin(url, true, Duration::from_secs(30)).await.unwrap();
         pinned.client.get(pinned.url).send().await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn a_body_without_a_length_is_cut_off_at_the_cap() {
-        let url = endless_chunked_peer().await;
-        let read = tokio::time::timeout(
-            Duration::from_secs(10),
-            read_capped(get(&url).await, 256 * 1024, "the agent card"),
-        )
-        .await
-        .expect("reading stopped at the cap instead of draining the stream");
-        let why = read.unwrap_err();
-        assert!(
-            why.contains("the agent card is larger than 256 KiB"),
-            "{why}"
-        );
     }
 
     #[tokio::test]

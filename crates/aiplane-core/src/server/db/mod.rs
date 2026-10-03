@@ -99,18 +99,29 @@ pub enum DbError {
 
 /// Parse a stored timestamp string from column `column`, mapping a parse
 /// failure to [`DbError::Decode`]. The single home for timestamp decoding
-/// across the gateway's `db` submodules — mirrors the same helper in
-/// `session-core::db`, but returns the gateway's own [`DbError`] (the two
-/// crates have distinct error types, so the helper can't be shared directly).
-pub(crate) fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestamp, DbError> {
+/// across the gateway's `db` submodules and the runtime's own tables —
+/// mirrors the same helper in `session-core::db`, but returns the gateway's
+/// own [`DbError`] (the two crates have distinct error types, so the helper
+/// can't be shared directly).
+pub fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestamp, DbError> {
     s.parse().map_err(|e: jiff::Error| DbError::Decode {
         column,
         source: e.into(),
     })
 }
 
+/// `t` as it compares against a timestamp column inside SQL. The column
+/// holds `Timestamp`'s own RFC 3339 text, whose fractional seconds vary in
+/// length, so as stored it does not order as a string within one second
+/// (`…:05.1Z` sorts after `…:05.15Z`). Without the trailing `Z` it does, so a
+/// query that must be exact compares and orders on `rtrim(created_at, 'Z')`
+/// against this key.
+pub(crate) fn window_key(t: jiff::Timestamp) -> String {
+    t.to_string().trim_end_matches('Z').to_string()
+}
+
 /// [`parse_ts`] for a nullable column: `None` stays `None`, `Some` is parsed.
-pub(crate) fn parse_optional_ts(
+pub fn parse_optional_ts(
     s: Option<String>,
     column: &'static str,
 ) -> Result<Option<jiff::Timestamp>, DbError> {

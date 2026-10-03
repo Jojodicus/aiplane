@@ -27,6 +27,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use aiplane_core::server::net_guard::classify;
 use aiplane_core::server::trusted_proxies::TrustedProxies;
 use ip2location::{DB, Record};
 use rama::http::HeaderMap;
@@ -275,15 +276,9 @@ fn watch_dir(db_path: &Path) -> PathBuf {
 }
 
 /// Addresses that can never geolocate — skip the DB and avoid returning
-/// a bogus "0,0 / -" for them. Conservative: only the cases `std`
-/// classifies on stable Rust.
+/// a bogus "0,0 / -" for them.
 fn is_non_routable(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-        }
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
-    }
+    !classify(*ip).is_public()
 }
 
 /// Whether the browser is on a secure context — the precondition for
@@ -369,6 +364,9 @@ mod tests {
         assert!(is_non_routable(&"10.0.0.5".parse().unwrap()));
         assert!(is_non_routable(&"192.168.1.1".parse().unwrap()));
         assert!(is_non_routable(&"::1".parse().unwrap()));
+        assert!(is_non_routable(&"100.64.0.1".parse().unwrap()));
+        assert!(is_non_routable(&"fd00::1".parse().unwrap()));
+        assert!(is_non_routable(&"::ffff:10.0.0.5".parse().unwrap()));
         assert!(!is_non_routable(&"8.8.8.8".parse().unwrap()));
         assert!(!is_non_routable(
             &"2a00:1450:4001:80e::200e".parse().unwrap()

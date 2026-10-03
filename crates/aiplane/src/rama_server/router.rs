@@ -34,6 +34,7 @@ use rama::rt::Executor;
 use serde_json::json;
 
 use crate::rama_server::RamaState;
+use crate::rama_server::body_limit::BodyLimitLayer;
 #[cfg(debug_assertions)]
 use crate::rama_server::dev_seed;
 use crate::rama_server::first_run::FirstRunLayer;
@@ -763,6 +764,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
 /// on a 404 that explains nothing. It is a no-op once setup has completed. See
 /// [`first_run`](crate::rama_server::first_run) for why the gate lives here
 /// rather than in the handlers.
+///
+/// `BodyLimitLayer` caps every request body before a handler sees it — 1 MiB
+/// by default, more on the upload routes. See
+/// [`body_limit`](crate::rama_server::body_limit).
 pub fn service(
     state: Arc<RamaState>,
 ) -> impl rama::Service<
@@ -777,6 +782,7 @@ pub fn service(
         V1CorsLayer,
         embed_cors,
         first_run,
+        BodyLimitLayer,
         ArcLayer::new(),
         ErrorHandlerLayer::default(),
     )

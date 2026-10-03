@@ -22,7 +22,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
-use aiplane_core::server::db::{DbError, Pool};
+use aiplane_core::server::db::{DbError, Pool, parse_optional_ts, parse_ts};
 
 /// A persisted webhook.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,17 +90,6 @@ pub struct EditWebhook {
     pub reuse_rounds: i64,
 }
 
-fn parse_ts(s: String, column: &'static str) -> Result<Timestamp, DbError> {
-    s.parse().map_err(|e: jiff::Error| DbError::Decode {
-        column,
-        source: e.into(),
-    })
-}
-
-fn parse_opt_ts(s: Option<String>, column: &'static str) -> Result<Option<Timestamp>, DbError> {
-    s.map(|s| parse_ts(s, column)).transpose()
-}
-
 fn map_row(row: &SqliteRow) -> Result<Webhook, DbError> {
     Ok(Webhook {
         id: row.try_get("id")?,
@@ -112,7 +101,7 @@ fn map_row(row: &SqliteRow) -> Result<Webhook, DbError> {
         synchronous: row.try_get::<i64, _>("synchronous")? != 0,
         secret_hash: row.try_get("secret_hash")?,
         enabled: row.try_get::<i64, _>("enabled")? != 0,
-        last_fired_at: parse_opt_ts(row.try_get("last_fired_at")?, "last_fired_at")?,
+        last_fired_at: parse_optional_ts(row.try_get("last_fired_at")?, "last_fired_at")?,
         last_status: row.try_get("last_status")?,
         last_session_id: row.try_get("last_session_id")?,
         last_error: row.try_get("last_error")?,

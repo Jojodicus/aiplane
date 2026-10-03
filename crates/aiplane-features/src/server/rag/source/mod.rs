@@ -46,6 +46,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use aiplane_core::server::capped_read::{self, CappedReadError};
 use jiff::Timestamp;
 use thiserror::Error;
 
@@ -116,35 +117,22 @@ pub enum ProviderError {
     },
 }
 
-/// Read a response body, refusing to buffer more than `max_bytes`.
-///
-/// `resp.bytes()` buffers the whole thing and only then lets the caller
-/// compare — which is no bound at all against a server that understates (or
-/// omits) `content-length`. Google Drive exports declare no size, so that was
-/// the one path with nothing holding it back.
-///
-/// Stops the moment the budget is exceeded, so the peak is one chunk over the
-/// limit rather than the whole body.
+/// A source file's body through `capped_read::read_capped`, the size refusal
+/// worded for the indexer.
 pub async fn read_capped(
     provider: &'static str,
     path: &str,
     resp: reqwest::Response,
     max_bytes: u64,
 ) -> Result<Vec<u8>, ProviderError> {
-    use rama::futures::StreamExt as _;
-
-    let mut out: Vec<u8> = Vec::new();
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|source| ProviderError::Transport { provider, source })?;
-        if out.len() as u64 + chunk.len() as u64 > max_bytes {
-            return Err(ProviderError::Config(format!(
+    capped_read::read_capped(resp, max_bytes)
+        .await
+        .map_err(|e| match e {
+            CappedReadError::TooLarge { .. } => ProviderError::Config(format!(
                 "`{path}` is larger than the {max_bytes}-byte limit for indexed files"
-            )));
-        }
-        out.extend_from_slice(&chunk);
-    }
-    Ok(out)
+            )),
+            CappedReadError::Transport(source) => ProviderError::Transport { provider, source },
+        })
 }
 
 /// File or directory.

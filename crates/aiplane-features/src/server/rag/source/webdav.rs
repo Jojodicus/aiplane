@@ -31,6 +31,7 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use aiplane_core::server::net_guard::is_loopback_host;
 use jiff::Timestamp;
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -662,19 +663,14 @@ fn merge(into: &mut DavResponse, from: DavResponse) {
     }
 }
 
-/// `HTTP/1.1 200 OK` → true. Anything non-2xx (typically `404 Not Found`
-/// for properties the server doesn't implement) → false.
 fn is_loopback(url: &str) -> bool {
     url::Url::parse(url)
         .ok()
-        .and_then(|u| match u.host()? {
-            url::Host::Domain(d) => Some(d.eq_ignore_ascii_case("localhost")),
-            url::Host::Ipv4(ip) => Some(ip.is_loopback()),
-            url::Host::Ipv6(ip) => Some(ip.is_loopback()),
-        })
-        .unwrap_or(false)
+        .is_some_and(|u| u.host().is_some_and(|h| is_loopback_host(&h)))
 }
 
+/// `HTTP/1.1 200 OK` → true. Anything non-2xx (typically `404 Not Found`
+/// for properties the server doesn't implement) → false.
 fn is_success_status(status_line: &str) -> bool {
     status_line
         .split_whitespace()

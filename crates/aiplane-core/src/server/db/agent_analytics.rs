@@ -11,10 +11,11 @@
 //!
 //! Test conversations (the builder's draft chat, recorded as version
 //! [`DRAFT_VERSION`]) are left out everywhere, so a manager trying an agent
-//! never moves its numbers. Rows are aggregated in Rust rather than in SQL:
-//! the version lives inside the serialized call chain, and timestamps are
-//! RFC 3339 strings whose fractional seconds vary in length, so SQL only
-//! narrows by day and the exact range is applied here.
+//! never moves its numbers. SQL does the counting, per UTC day
+//! (`substr(created_at, 1, 10)`): the version filter reads the serialized
+//! call chain with `json_extract` ([`counts`]), and the exact range compares
+//! on `rtrim(created_at, 'Z')` ([`in_range`]). Only the audit rows whose
+//! `detail` carries the numbers are fetched, and nothing else is.
 
 use std::collections::BTreeMap;
 
@@ -23,20 +24,20 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::agents::DRAFT_VERSION;
-use super::{DbError, Pool};
+use super::{DbError, Pool, window_key};
 
 /// The audit kind #96 writes when a conversation is handed to a person. Named
 /// here so the count starts moving the day that kind exists; until then it is 0.
 pub const HUMAN_HANDOFF_KIND: &str = "human_handoff";
 
-const AUDIT_KINDS: [&str; 6] = [
+/// The audit kinds whose numbers are in `detail`; the rest are only counted.
+const DETAILED_KINDS: [&str; 4] = [
     "route_decision",
-    "sub_agent_dispatched",
     "sub_agent_finished",
     "output_blocked",
     "limit_refused",
-    HUMAN_HANDOFF_KIND,
 ];
+const COUNTED_KINDS: [&str; 2] = ["sub_agent_dispatched", HUMAN_HANDOFF_KIND];
 
 /// A half-open range `[from, to)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,10 +47,6 @@ pub struct Range {
 }
 
 impl Range {
-    fn contains(&self, at: Timestamp) -> bool {
-        self.from <= at && at < self.to
-    }
-
     fn day_prefixes(&self) -> (String, String) {
         let day = |t: Timestamp| t.to_string()[..10].to_string();
         (day(self.from), day(self.to + 24.hours()))
@@ -126,26 +123,55 @@ pub struct Analytics {
     pub daily: Vec<Day>,
 }
 
-/// Whether a row belongs in the numbers. `chain` is the serialized call chain
-/// on the row; `agent` is the main agent the numbers are for.
+/// Whether a row belongs in the numbers, as SQL over the row's serialized
+/// call chain in `chain`. `?1` is the main agent the numbers are for, `?2`
+/// [`DRAFT_VERSION`], `?3` the version asked for, if any.
 ///
 /// A chain whose main agent is someone else is that agent's run, and a chain
 /// at the draft version is a builder test. A row with no chain (a visitor
 /// refused before any run) has no version, so it counts only when the caller
 /// did not ask for one.
-fn counts(chain: Option<&Value>, agent: &str, version: Option<i64>) -> bool {
-    let Some(chain) = chain else {
-        return version.is_none();
-    };
-    let main = &chain["frames"][0];
-    if main["principal_id"].as_str() != Some(agent) {
-        return false;
-    }
-    let held = main["version"].as_i64();
-    if held == Some(DRAFT_VERSION) {
-        return false;
-    }
-    version.is_none_or(|v| held == Some(v))
+fn counts(chain: &str) -> String {
+    format!(
+        "CASE WHEN {chain} IS NULL OR NOT json_valid({chain}) THEN ?3 IS NULL
+         ELSE json_extract({chain}, '$.frames[0].principal_id') IS ?1
+          AND json_extract({chain}, '$.frames[0].version') IS NOT ?2
+          AND (?3 IS NULL OR json_extract({chain}, '$.frames[0].version') IS ?3) END"
+    )
+}
+
+/// Whether `created_at` lies in the range. `?4` and `?5` are the exact
+/// bounds as [`window_key`]s; `?6` and `?7` the whole days around them, which
+/// is what an index on the column can narrow by.
+fn in_range(created_at: &str) -> String {
+    format!(
+        "{created_at} >= ?6 AND {created_at} < ?7
+         AND rtrim({created_at}, 'Z') >= ?4 AND rtrim({created_at}, 'Z') < ?5"
+    )
+}
+
+/// One query's parameters, in the order [`counts`] and [`in_range`] number
+/// them.
+macro_rules! bind_all {
+    ($query:expr, $agent:expr, $version:expr, $range:expr) => {{
+        let (lo, hi) = $range.day_prefixes();
+        $query
+            .bind($agent)
+            .bind(DRAFT_VERSION)
+            .bind($version)
+            .bind(window_key($range.from))
+            .bind(window_key($range.to))
+            .bind(lo)
+            .bind(hi)
+    }};
+}
+
+fn kinds_list(kinds: &[&str]) -> String {
+    kinds
+        .iter()
+        .map(|k| format!("'{k}'"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -181,20 +207,11 @@ fn empty_days(range: Range) -> BTreeMap<String, Day> {
     days
 }
 
-fn bucket(days: &mut BTreeMap<String, Day>, at: Timestamp) -> &mut Day {
-    days.get_mut(&day_of(at))
-        .expect("a day inside the range has a bucket")
-}
-
-fn in_range(range: Range, created: &str) -> Option<Timestamp> {
-    created
-        .parse::<Timestamp>()
-        .ok()
-        .filter(|at| range.contains(*at))
-}
-
-fn parsed_chain(chain: Option<String>) -> Option<Value> {
-    chain.and_then(|c| serde_json::from_str(&c).ok())
+/// The bucket of a `YYYY-MM-DD` the database grouped by. Every day in the
+/// range has one; a row whose day is outside it cannot have passed the range
+/// filter, so `None` is only defensive.
+fn bucket<'a>(days: &'a mut BTreeMap<String, Day>, day: &str) -> Option<&'a mut Day> {
+    days.get_mut(day)
 }
 
 pub async fn compute(
@@ -203,7 +220,6 @@ pub async fn compute(
     range: Range,
     version: Option<i64>,
 ) -> Result<Analytics, DbError> {
-    let (lo, hi) = range.day_prefixes();
     let mut out = Analytics {
         from: range.from.to_string(),
         to: range.to.to_string(),
@@ -221,75 +237,84 @@ pub async fn compute(
     };
     let mut days = empty_days(range);
 
-    let sessions: Vec<(String,)> = sqlx::query_as(
-        "SELECT created_at FROM chat_sessions
-          WHERE principal_id = ? AND user_id IS NULL AND parent_turn_id IS NULL
-            AND agent_version IS NOT ? AND (? IS NULL OR agent_version = ?)
-            AND created_at >= ? AND created_at < ?",
-    )
-    .bind(agent_id)
-    .bind(DRAFT_VERSION)
-    .bind(version)
-    .bind(version)
-    .bind(&lo)
-    .bind(&hi)
-    .fetch_all(pool)
-    .await?;
-    for (created,) in sessions {
-        if let Some(at) = in_range(range, &created) {
-            out.conversations += 1;
-            bucket(&mut days, at).conversations += 1;
+    let sql = format!(
+        "SELECT substr(created_at, 1, 10), COUNT(*) FROM chat_sessions
+          WHERE principal_id = ?1 AND user_id IS NULL AND parent_turn_id IS NULL
+            AND agent_version IS NOT ?2 AND (?3 IS NULL OR agent_version = ?3)
+            AND {}
+          GROUP BY 1",
+        in_range("created_at")
+    );
+    let sessions: Vec<(String, i64)> = bind_all!(sqlx::query_as(&sql), agent_id, version, range)
+        .fetch_all(pool)
+        .await?;
+    for (day, n) in sessions {
+        out.conversations += n as u64;
+        if let Some(d) = bucket(&mut days, &day) {
+            d.conversations += n as u64;
         }
     }
 
-    let turns: Vec<(String,)> = sqlx::query_as(
-        "SELECT t.created_at FROM chat_turns t
+    let sql = format!(
+        "SELECT substr(t.created_at, 1, 10), COUNT(*) FROM chat_turns t
            JOIN chat_sessions s ON s.id = t.session_id
-          WHERE s.principal_id = ? AND s.user_id IS NULL AND s.parent_turn_id IS NULL
-            AND s.agent_version IS NOT ? AND (? IS NULL OR s.agent_version = ?)
-            AND t.role = 'user' AND t.created_at >= ? AND t.created_at < ?",
-    )
-    .bind(agent_id)
-    .bind(DRAFT_VERSION)
-    .bind(version)
-    .bind(version)
-    .bind(&lo)
-    .bind(&hi)
-    .fetch_all(pool)
-    .await?;
-    for (created,) in turns {
-        if let Some(at) = in_range(range, &created) {
-            out.turns += 1;
-            bucket(&mut days, at).turns += 1;
+          WHERE s.principal_id = ?1 AND s.user_id IS NULL AND s.parent_turn_id IS NULL
+            AND s.agent_version IS NOT ?2 AND (?3 IS NULL OR s.agent_version = ?3)
+            AND t.role = 'user' AND {}
+          GROUP BY 1",
+        in_range("t.created_at")
+    );
+    let turns: Vec<(String, i64)> = bind_all!(sqlx::query_as(&sql), agent_id, version, range)
+        .fetch_all(pool)
+        .await?;
+    for (day, n) in turns {
+        out.turns += n as u64;
+        if let Some(d) = bucket(&mut days, &day) {
+            d.turns += n as u64;
         }
     }
 
-    let kinds = AUDIT_KINDS.map(|k| format!("'{k}'")).join(",");
-    let audit: Vec<(String, Option<String>, String, String)> = sqlx::query_as(&format!(
-        "SELECT kind, chain, detail, created_at FROM agent_audit
-          WHERE principal_id = ? AND kind IN ({kinds})
-            AND created_at >= ? AND created_at < ?"
-    ))
-    .bind(agent_id)
-    .bind(&lo)
-    .bind(&hi)
-    .fetch_all(pool)
-    .await?;
-    let mut missing: BTreeMap<(String, String), u64> = BTreeMap::new();
-    for (kind, chain, detail, created) in audit {
-        let Some(at) = in_range(range, &created) else {
-            continue;
-        };
-        if !counts(parsed_chain(chain).as_ref(), agent_id, version) {
-            continue;
+    let sql = format!(
+        "SELECT kind, COUNT(*) FROM agent_audit
+          WHERE principal_id = ?1 AND kind IN ({}) AND {} AND {}
+          GROUP BY kind",
+        kinds_list(&COUNTED_KINDS),
+        counts("chain"),
+        in_range("created_at")
+    );
+    let counted: Vec<(String, i64)> = bind_all!(sqlx::query_as(&sql), agent_id, version, range)
+        .fetch_all(pool)
+        .await?;
+    for (kind, n) in counted {
+        match kind.as_str() {
+            "sub_agent_dispatched" => out.sub_agents.dispatched += n as u64,
+            HUMAN_HANDOFF_KIND => out.human_handoffs += n as u64,
+            _ => {}
         }
+    }
+
+    let sql = format!(
+        "SELECT kind, detail, substr(created_at, 1, 10) FROM agent_audit
+          WHERE principal_id = ?1 AND kind IN ({}) AND {} AND {}",
+        kinds_list(&DETAILED_KINDS),
+        counts("chain"),
+        in_range("created_at")
+    );
+    let detailed: Vec<(String, String, String)> =
+        bind_all!(sqlx::query_as(&sql), agent_id, version, range)
+            .fetch_all(pool)
+            .await?;
+    let mut missing: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for (kind, detail, day) in detailed {
         let detail: Value = serde_json::from_str(&detail).unwrap_or(Value::Null);
         match kind.as_str() {
             "route_decision" => match text(&detail, "picked") {
                 Some(route) => *out.routes_chosen.entry(route).or_default() += 1,
                 None if detail["reason"] == "no_open_route" => {
                     out.gate_refusals.total += 1;
-                    bucket(&mut days, at).refusals += 1;
+                    if let Some(d) = bucket(&mut days, &day) {
+                        d.refusals += 1;
+                    }
                     for gate in detail["routes"].as_array().into_iter().flatten() {
                         let Some(route) = text(gate, "route") else {
                             continue;
@@ -307,7 +332,6 @@ pub async fn compute(
                 }
                 None => {}
             },
-            "sub_agent_dispatched" => out.sub_agents.dispatched += 1,
             "sub_agent_finished" => match detail["outcome"]["status"].as_str() {
                 Some("finished") => out.sub_agents.finished += 1,
                 Some("incomplete") => {
@@ -329,11 +353,12 @@ pub async fn compute(
             "limit_refused" => {
                 let refused = detail["count"].as_u64().unwrap_or(1);
                 out.limit_refusals.total += refused;
-                bucket(&mut days, at).refusals += refused;
+                if let Some(d) = bucket(&mut days, &day) {
+                    d.refusals += refused;
+                }
                 let limit = text(&detail, "limit").unwrap_or_else(|| "unknown".into());
                 *out.limit_refusals.by_kind.entry(limit).or_default() += refused;
             }
-            HUMAN_HANDOFF_KIND => out.human_handoffs += 1,
             _ => {}
         }
     }
@@ -342,41 +367,32 @@ pub async fn compute(
         .map(|((route, slot), count)| MissingSlot { route, slot, count })
         .collect();
 
-    type UsageRow = (
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        f64,
-        Option<String>,
-    );
-    let usage: Vec<UsageRow> = sqlx::query_as(
-        "SELECT created_at, prompt_tokens, completion_tokens, total_tokens, cost, chain
+    type UsageDay = (String, i64, i64, i64, i64, f64);
+    let sql = format!(
+        "SELECT substr(created_at, 1, 10), COUNT(*),
+                SUM(COALESCE(prompt_tokens, 0)), SUM(COALESCE(completion_tokens, 0)),
+                SUM(COALESCE(total_tokens,
+                               COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))),
+                TOTAL(cost)
            FROM usage_events
-          WHERE agent_id = ? AND created_at >= ? AND created_at < ?",
-    )
-    .bind(agent_id)
-    .bind(&lo)
-    .bind(&hi)
-    .fetch_all(pool)
-    .await?;
-    for (created, prompt, completion, total, cost, chain) in usage {
-        let Some(at) = in_range(range, &created) else {
-            continue;
-        };
-        if !counts(parsed_chain(chain).as_ref(), agent_id, version) {
-            continue;
-        }
-        let (prompt, completion) = (prompt.unwrap_or(0) as u64, completion.unwrap_or(0) as u64);
-        let tokens = total.map_or(prompt + completion, |t| t as u64);
-        out.usage.requests += 1;
-        out.usage.prompt_tokens += prompt;
-        out.usage.completion_tokens += completion;
-        out.usage.tokens += tokens;
+          WHERE agent_id = ?1 AND {} AND {}
+          GROUP BY 1",
+        counts("chain"),
+        in_range("created_at")
+    );
+    let usage: Vec<UsageDay> = bind_all!(sqlx::query_as(&sql), agent_id, version, range)
+        .fetch_all(pool)
+        .await?;
+    for (day, requests, prompt, completion, tokens, cost) in usage {
+        out.usage.requests += requests as u64;
+        out.usage.prompt_tokens += prompt as u64;
+        out.usage.completion_tokens += completion as u64;
+        out.usage.tokens += tokens as u64;
         out.usage.cost += cost;
-        let day = bucket(&mut days, at);
-        day.tokens += tokens;
-        day.cost += cost;
+        if let Some(d) = bucket(&mut days, &day) {
+            d.tokens += tokens as u64;
+            d.cost += cost;
+        }
     }
     out.daily = days.into_values().collect();
     Ok(out)
@@ -388,26 +404,46 @@ mod tests {
 
     use super::*;
 
-    fn chain(main: &str, version: Option<i64>) -> Value {
-        json!({ "frames": [{ "principal_id": main, "version": version }] })
+    fn chain(main: &str, version: Option<i64>) -> Option<String> {
+        Some(json!({ "frames": [{ "principal_id": main, "version": version }] }).to_string())
     }
 
-    #[test]
-    fn a_draft_run_never_counts() {
-        assert!(!counts(Some(&chain("a", Some(0))), "a", None));
+    async fn counted(chain: Option<String>, agent: &str, version: Option<i64>) -> bool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query_scalar(&format!(
+            "SELECT {} FROM (SELECT ?4 AS chain)",
+            counts("chain")
+        ))
+        .bind(agent)
+        .bind(DRAFT_VERSION)
+        .bind(version)
+        .bind(chain)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
     }
 
-    #[test]
-    fn another_agents_run_never_counts() {
-        assert!(!counts(Some(&chain("b", Some(1))), "a", None));
+    #[tokio::test]
+    async fn a_draft_run_never_counts() {
+        assert!(!counted(chain("a", Some(0)), "a", None).await);
     }
 
-    #[test]
-    fn the_version_filter_keeps_only_that_version_and_drops_chainless_rows() {
-        assert!(counts(Some(&chain("a", Some(2))), "a", Some(2)));
-        assert!(!counts(Some(&chain("a", Some(1))), "a", Some(2)));
-        assert!(!counts(None, "a", Some(2)));
-        assert!(counts(None, "a", None));
+    #[tokio::test]
+    async fn another_agents_run_never_counts() {
+        assert!(!counted(chain("b", Some(1)), "a", None).await);
+    }
+
+    #[tokio::test]
+    async fn the_version_filter_keeps_only_that_version_and_drops_chainless_rows() {
+        assert!(counted(chain("a", Some(2)), "a", Some(2)).await);
+        assert!(!counted(chain("a", Some(1)), "a", Some(2)).await);
+        assert!(!counted(None, "a", Some(2)).await);
+        assert!(counted(None, "a", None).await);
+        assert!(counted(chain("a", None), "a", None).await);
+        assert!(
+            counted(Some("not json".into()), "a", None).await,
+            "an unreadable chain is a chainless row"
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ use rama::http::service::web::extract::{Path, Query, State};
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde_json::json;
+use session_core::chrome::read_body_to_bytes;
 use shared::api::{
     CreateTokenRequest, CreateTokenResponse, DeleteResponse, Me, RevokeResponse, TokenSummary,
     UpdateTokenToolsRequest,
@@ -1375,12 +1376,4 @@ fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
         body.to_string(),
     )
         .into_response()
-}
-
-async fn read_body_to_bytes(body: rama::http::Body) -> Result<rama::bytes::Bytes, String> {
-    use rama::http::body::util::BodyExt;
-    body.collect()
-        .await
-        .map(|c| c.to_bytes())
-        .map_err(|e| format!("reading request body: {e}"))
 }

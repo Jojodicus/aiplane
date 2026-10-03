@@ -99,6 +99,8 @@ in the tree. No routing, no `AppState`, no tool registry:
 - `upstreams/` — pool registry, backend health probes, RAII `Acquired` guard for in-flight accounting.
 - `reasoning.rs`, `model_defaults.rs`, `feature_defaults.rs` — per-model capability and effort tables.
 - `tool_naming.rs` — the well-known tool ids/prefixes (`comfyui_`, `typst_`, `enable_tools`, `read_skill`) and the slug→title humaniser. Down here because RBAC, the typst discovery pass, and the catalog all need it and they're on three different layers.
+- `net_guard.rs` — the one IP classifier (`classify` → `Public`, `Loopback`, `Private`, `Cgnat`, `LinkLocal`, `Multicast`, …, with IPv4-mapped IPv6 classified as the IPv4 it carries). Every outbound guard — A2A routes, Web Push endpoints, MCP OAuth, the WebDAV RAG source — and the GeoIP lookup ask it and apply their own policy: A2A refuses private ranges unless `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS` is on, push accepts public addresses only, MCP OAuth allows private ranges on purpose (admin-curated catalog) and refuses only link-local, unspecified and multicast. Down here because callers sit on three layers.
+- `capped_read.rs` — `read_capped`, the one bounded reader for outbound response bodies: a declared `Content-Length` over the cap is refused before anything is read, and otherwise reading stops the moment the running total passes it. The A2A client and the RAG sources wrap it with their own error wording.
 - `usage/`, `limits/` — the metrics sink and the rate-limit/quota enforcer.
 - `rama_server/session.rs` — signed-cookie + sqlite session store, plus the `is_safe_return_to` redirect guard the OIDC callback needs to bounce a signed-in user back to the SPA route they asked for; `rama_server/cors.rs` — the CORS layer. Neither needs `AppState`, so both stay here.
 
@@ -174,6 +176,7 @@ The binary and its routing glue — deliberately thin:
 - `rag_api.rs`, `sandbox_api.rs`, `comfyui_api.rs`, `setup_api.rs` — the remaining JSON surfaces. (`setup_api.rs` lives here rather than in `aiplane-api` so the first-run wizard's API survived the removal of the page stack.)
 - `spa.rs` — serves the built SvelteKit SPA from `AIPLANE_STATIC_DIR`: content-type map, cache policy, traversal guard, and the `index.html` history fallback. Its `GET /` + `GET /{*name}` catch-all is registered **last**, because rama matches in registration order.
 - `first_run.rs` — the layer that redirects everything to `/setup` until setup completes, with an allowlist for the SPA's static shell.
+- `body_limit.rs` — the request body cap every route sits behind. The layer reads the body itself (a declared length over the cap is refused before anything is read; otherwise reading stops as the running total passes it) and hands the handler buffered bytes, so no handler can drain an unbounded body: 1 MiB by default, 64 MiB on the large-body routes (`/v1/*`, `/api/v0/chat/*`, transcription, feedback, skill uploads), `413 payload_too_large` past it. `/hooks`, `/a2a` and `/api/v0/embed` read through their own tighter caps and are passed through; a new route under those prefixes must cap its own read.
 - `vad.rs` — neural voice-activity detection, trimming silence off uploaded voice notes before Whisper sees them.
 
 `main.rs` wires it all: config → db → upstreams → tools → rbac → SessionStore →

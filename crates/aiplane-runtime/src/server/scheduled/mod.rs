@@ -21,7 +21,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
-use aiplane_core::server::db::{DbError, Pool};
+use aiplane_core::server::db::{DbError, Pool, parse_optional_ts, parse_ts};
 
 /// A persisted scheduled action.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,17 +89,6 @@ pub struct EditAction {
     pub next_run_at: Option<Timestamp>,
 }
 
-fn parse_ts(s: String, column: &'static str) -> Result<Timestamp, DbError> {
-    s.parse().map_err(|e: jiff::Error| DbError::Decode {
-        column,
-        source: e.into(),
-    })
-}
-
-fn parse_opt_ts(s: Option<String>, column: &'static str) -> Result<Option<Timestamp>, DbError> {
-    s.map(|s| parse_ts(s, column)).transpose()
-}
-
 fn map_row(row: &SqliteRow) -> Result<ScheduledAction, DbError> {
     Ok(ScheduledAction {
         id: row.try_get("id")?,
@@ -113,8 +102,8 @@ fn map_row(row: &SqliteRow) -> Result<ScheduledAction, DbError> {
         reuse_conversation: row.try_get::<i64, _>("reuse_conversation")? != 0,
         reuse_rounds: row.try_get("reuse_rounds")?,
         enabled: row.try_get::<i64, _>("enabled")? != 0,
-        next_run_at: parse_opt_ts(row.try_get("next_run_at")?, "next_run_at")?,
-        last_run_at: parse_opt_ts(row.try_get("last_run_at")?, "last_run_at")?,
+        next_run_at: parse_optional_ts(row.try_get("next_run_at")?, "next_run_at")?,
+        last_run_at: parse_optional_ts(row.try_get("last_run_at")?, "last_run_at")?,
         last_status: row.try_get("last_status")?,
         last_session_id: row.try_get("last_session_id")?,
         last_error: row.try_get("last_error")?,
