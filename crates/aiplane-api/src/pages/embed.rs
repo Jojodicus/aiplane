@@ -38,7 +38,7 @@ use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal};
+use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
 };
@@ -529,16 +529,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         caller: None,
         lang: Some(lang),
     };
-    let state_for_run = state.clone();
-    let turn_id = assistant_turn_id.clone();
-    tokio::spawn(async move {
-        let _claim = claim;
-        let run = tokio::spawn(async move { runner.run(state_for_run, turn).await });
-        if let Err(err) = run.await {
-            tracing::error!(error = %err, turn = %turn_id, "agent turn runner panicked");
-        }
-        settle_unfinished(&state, &session_id, &turn_id).await;
-    });
+    embed_rt::spawn_guarded(state, runner, claim, TurnWork::Run(turn));
 
     json_ok(
         StatusCode::ACCEPTED,
@@ -697,18 +688,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(claimed) => claimed,
         Err(err) => return visitor_resume_refused(err, lang),
     };
-    let resumed = turn_id.clone();
-    tokio::spawn(async move {
-        let _hold = hold;
-        let run = tokio::spawn({
-            let state = state.clone();
-            async move { runner.resume(state, claimed).await }
-        });
-        if let Err(err) = run.await {
-            tracing::error!(error = %err, turn = %resumed, "agent resume panicked");
-        }
-        settle_unfinished(&state, &session_id, &resumed).await;
-    });
+    embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
     json_ok(StatusCode::ACCEPTED, json!({ "turn_id": turn_id }))
 }
 
@@ -759,29 +739,6 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
             };
             refuse(status, err.code(), &err.to_string())
         }
-    }
-}
-
-/// The runner contract says the turn is terminal when `run` returns; a
-/// runner that broke it (or panicked) must not leave the visitor waiting
-/// forever with every later message refused as `turn_in_progress`.
-pub(crate) async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
-    match chat::get_turn(&state.db, session_id, turn_id).await {
-        Ok(Some(t)) if t.status == TurnStatus::InProgress => {
-            tracing::warn!(turn = %turn_id, "agent turn runner returned with the turn unfinished");
-            if let Err(err) = chat::finalize_turn(
-                &state.db,
-                turn_id,
-                TurnStatus::Errored,
-                Some("the agent run ended without finishing its turn"),
-            )
-            .await
-            {
-                tracing::warn!(error = %err, turn = %turn_id, "erroring an unfinished agent turn");
-            }
-        }
-        Ok(_) => {}
-        Err(err) => tracing::warn!(error = %err, turn = %turn_id, "reading an agent turn"),
     }
 }
 

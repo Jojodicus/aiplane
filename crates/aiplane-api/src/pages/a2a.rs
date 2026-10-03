@@ -40,7 +40,7 @@ use aiplane_core::server::db::agent_audit::{self, AuditKind};
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::principal::{GrantKind, Principal};
 use aiplane_runtime::agents::a2a::{self as a2a_rt, CardFacts, TaskState};
-use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal};
+use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{AgentResume, AgentResumeError, ResumedBy, claim};
 use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
@@ -1008,22 +1008,7 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         caller: Some(context.caller()),
         lang: Some(call.lang),
     };
-    let run = {
-        let state = state.clone();
-        let session_id = session_id.clone();
-        let task_id = task_id.clone();
-        tokio::spawn(async move {
-            let _hold = hold;
-            let inner = tokio::spawn({
-                let state = state.clone();
-                async move { runner.run(state, turn).await }
-            });
-            if let Err(err) = inner.await {
-                tracing::error!(error = %err, task = %task_id, "A2A task runner panicked");
-            }
-            super::embed::settle_unfinished(&state, &session_id, &task_id).await;
-        })
-    };
+    let run = embed_rt::spawn_guarded(state.clone(), runner, hold, TurnWork::Run(turn));
     respond(call, &session_id, &task_id, run, p, streaming).await
 }
 
@@ -1084,22 +1069,7 @@ async fn continue_task(
     .await
     .map_err(|err| resume_refused(err, call.lang, task_id))?;
     audit(call, "input", &context, task_id).await;
-    let run = {
-        let state = state.clone();
-        let task = task_id.to_string();
-        let session_id = session_id.clone();
-        tokio::spawn(async move {
-            let _hold = hold;
-            let inner = tokio::spawn({
-                let state = state.clone();
-                async move { runner.resume(state, claimed).await }
-            });
-            if let Err(err) = inner.await {
-                tracing::error!(error = %err, task = %task, "A2A task resume panicked");
-            }
-            super::embed::settle_unfinished(&state, &session_id, &task).await;
-        })
-    };
+    let run = embed_rt::spawn_guarded(state.clone(), runner, hold, TurnWork::Resume(claimed));
     respond(call, &session_id, task_id, run, p, streaming).await
 }
 

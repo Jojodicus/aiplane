@@ -423,6 +423,77 @@ impl AgentTurnRunner for LiveAgentRunner {
     }
 }
 
+/// A turn to produce in the background: a fresh one, or a suspended one
+/// whose decision won the claim.
+pub enum TurnWork {
+    Run(OpenedTurn),
+    Resume(ClaimedResume),
+}
+
+impl TurnWork {
+    fn ids(&self) -> (String, String) {
+        match self {
+            Self::Run(turn) => (turn.session_id.clone(), turn.turn_id.clone()),
+            Self::Resume(claimed) => (
+                claimed.session_id().to_string(),
+                claimed.turn_id().to_string(),
+            ),
+        }
+    }
+}
+
+/// Produce `work` on its own task under `claim`, so the turn finishes even
+/// if the request that started it goes away. The claim is released only once
+/// the turn is settled: a runner that panicked or broke its contract leaves
+/// the turn errored, never `in_progress` behind a released claim.
+pub fn spawn_guarded(
+    state: Arc<RamaState>,
+    runner: Arc<dyn AgentTurnRunner>,
+    claim: TurnClaim,
+    work: TurnWork,
+) -> tokio::task::JoinHandle<()> {
+    let (session_id, turn_id) = work.ids();
+    tokio::spawn(async move {
+        let _claim = claim;
+        let run = tokio::spawn({
+            let state = state.clone();
+            async move {
+                match work {
+                    TurnWork::Run(turn) => runner.run(state, turn).await,
+                    TurnWork::Resume(claimed) => runner.resume(state, claimed).await,
+                }
+            }
+        });
+        if let Err(err) = run.await {
+            tracing::error!(error = %err, turn = %turn_id, "agent turn run panicked");
+        }
+        settle_unfinished(&state, &session_id, &turn_id).await;
+    })
+}
+
+/// The runner contract says the turn is terminal when `run` returns; a
+/// runner that broke it (or panicked) must not leave the conversation waiting
+/// forever with every later message refused as `turn_in_progress`.
+async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
+    match chat::get_turn(&state.db, session_id, turn_id).await {
+        Ok(Some(t)) if t.status == chat::TurnStatus::InProgress => {
+            tracing::warn!(turn = %turn_id, "agent turn runner returned with the turn unfinished");
+            if let Err(err) = chat::finalize_turn(
+                &state.db,
+                turn_id,
+                chat::TurnStatus::Errored,
+                Some("the agent run ended without finishing its turn"),
+            )
+            .await
+            {
+                tracing::warn!(error = %err, turn = %turn_id, "erroring an unfinished agent turn");
+            }
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!(error = %err, turn = %turn_id, "reading an agent turn"),
+    }
+}
+
 /// The runner, if this build has one, and the conversations with a turn
 /// running right now, each with the turn that holds it and the flag that
 /// stops it.
