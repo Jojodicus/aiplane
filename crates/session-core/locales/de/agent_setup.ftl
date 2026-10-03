@@ -315,3 +315,4 @@ agents-setup-proposing = Aus Ihrer Beschreibung wird ein Setup entworfen. Das da
 agents-setup-abilities-search = Fähigkeiten suchen
 agents-setup-abilities-none-found = Keine Fähigkeit passt zu Ihrer Suche.
 agents-setup-abilities-show-all = Alle Fähigkeiten anzeigen ({ $count })
+agents-setup-abilities-none-chosen = Die meisten Agenten brauchen keine weiteren Fähigkeiten. Suchen Sie oben gezielt danach oder lassen Sie sich alle anzeigen.

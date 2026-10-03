@@ -557,6 +557,7 @@ export const en: Catalog = {
  "agents-setup-abilities": "Abilities",
  "agents-setup-abilities-lead": "What may the agent use? The access it needs is granted automatically, as far as you hold it yourself.",
  "agents-setup-abilities-more": "Not listed? An admin can connect more knowledge bases and connectors.",
+ "agents-setup-abilities-none-chosen": "Most agents need no further abilities. Search for one above, or show them all.",
  "agents-setup-abilities-none-found": "No ability matches your search.",
  "agents-setup-abilities-search": "Search abilities",
  "agents-setup-abilities-show-all": "Show all abilities ({count})",

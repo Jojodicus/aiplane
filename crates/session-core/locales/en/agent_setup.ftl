@@ -314,3 +314,4 @@ agents-setup-proposing = Drafting a setup from your description. This usually ta
 agents-setup-abilities-search = Search abilities
 agents-setup-abilities-none-found = No ability matches your search.
 agents-setup-abilities-show-all = Show all abilities ({ $count })
+agents-setup-abilities-none-chosen = Most agents need no further abilities. Search for one above, or show them all.

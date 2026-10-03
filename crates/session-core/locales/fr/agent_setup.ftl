@@ -315,3 +315,4 @@ agents-setup-proposing = Un paramétrage est en cours de rédaction à partir de
 agents-setup-abilities-search = Rechercher des capacités
 agents-setup-abilities-none-found = Aucune capacité ne correspond à votre recherche.
 agents-setup-abilities-show-all = Afficher toutes les capacités ({ $count })
+agents-setup-abilities-none-chosen = La plupart des agents n’ont besoin d’aucune autre capacité. Recherchez-en une ci-dessus ou affichez-les toutes.

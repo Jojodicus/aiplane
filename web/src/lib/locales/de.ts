@@ -557,6 +557,7 @@ export const de: Catalog = {
  "agents-setup-abilities": "Fähigkeiten",
  "agents-setup-abilities-lead": "Was darf der Agent nutzen? Die nötigen Zugriffe werden automatisch vergeben, soweit Sie sie selbst haben.",
  "agents-setup-abilities-more": "Nicht dabei? Ein Admin kann weitere Wissensdatenbanken und Connectoren anbinden.",
+ "agents-setup-abilities-none-chosen": "Die meisten Agenten brauchen keine weiteren Fähigkeiten. Suchen Sie oben gezielt danach oder lassen Sie sich alle anzeigen.",
  "agents-setup-abilities-none-found": "Keine Fähigkeit passt zu Ihrer Suche.",
  "agents-setup-abilities-search": "Fähigkeiten suchen",
  "agents-setup-abilities-show-all": "Alle Fähigkeiten anzeigen ({count})",

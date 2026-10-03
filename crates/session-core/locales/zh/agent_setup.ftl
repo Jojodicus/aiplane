@@ -308,3 +308,4 @@ agents-setup-proposing = 正在根据您的描述起草设置，通常需要 20 
 agents-setup-abilities-search = 搜索能力
 agents-setup-abilities-none-found = 没有符合搜索条件的能力。
 agents-setup-abilities-show-all = 显示全部能力（{ $count }）
+agents-setup-abilities-none-chosen = 大多数智能体不需要更多能力。可在上方搜索，或显示全部。

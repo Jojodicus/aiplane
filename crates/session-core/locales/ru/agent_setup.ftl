@@ -329,3 +329,4 @@ agents-setup-proposing = Настройка составляется по ваш
 agents-setup-abilities-search = Поиск возможностей
 agents-setup-abilities-none-found = Нет возможностей, подходящих под ваш запрос.
 agents-setup-abilities-show-all = Показать все возможности ({ $count })
+agents-setup-abilities-none-chosen = Большинству агентов дополнительные возможности не нужны. Найдите нужную через поиск выше или покажите все.

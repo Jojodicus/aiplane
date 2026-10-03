@@ -1,7 +1,5 @@
 import { humanize, type Ability } from './agent-setup.ts';
 
-export const DEFAULT_EXTRA = 6;
-
 export const abilityTitle = (c: Ability) => (c.kind === 'tool' && c.name === c.ref ? humanize(c.name) : c.name);
 
 export const plainText = (text: string) => text.replaceAll('`', '');
@@ -18,10 +16,10 @@ export function filterAbilities(list: Ability[], query: string): Ability[] {
 	return list.filter((c) => `${abilityTitle(c)} ${c.description ?? ''}`.toLowerCase().includes(q));
 }
 
-/** An ordered list cut to the cards that matter plus a few more, unless everything is asked for. */
+/**
+ * An ordered list cut to the cards switched on or proposed, unless everything is asked for:
+ * the first few of an alphabet are no recommendation, and a visitor-facing agent needs few abilities.
+ */
 export function visibleAbilities(ordered: Ability[], suggested: string[], showAll: boolean): Ability[] {
-	if (showAll) return ordered;
-	const core = ordered.filter((c) => c.on || suggested.includes(c.ref));
-	const rest = ordered.filter((c) => !c.on && !suggested.includes(c.ref));
-	return [...core, ...rest.slice(0, DEFAULT_EXTRA)];
+	return showAll ? ordered : ordered.filter((c) => c.on || suggested.includes(c.ref));
 }

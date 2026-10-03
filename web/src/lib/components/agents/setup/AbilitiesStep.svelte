@@ -144,6 +144,9 @@
 			{#if query.trim() && !matching.length}
 				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-none-found')}</p>
 			{/if}
+			{#if !shown.length && !query.trim()}
+				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-none-chosen')}</p>
+			{/if}
 			{#if hidden > 0}
 				<button class="btn btn-sm self-start" type="button" onclick={() => (showAll = true)}>{t('agents-setup-abilities-show-all', { count: matching.length })}</button>
 			{/if}

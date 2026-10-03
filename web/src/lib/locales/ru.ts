@@ -557,6 +557,7 @@ export const ru: Catalog = {
  "agents-setup-abilities": "Возможности",
  "agents-setup-abilities-lead": "Чем может пользоваться агент? Нужные доступы выдаются автоматически, насколько они есть у вас самих.",
  "agents-setup-abilities-more": "Нет в списке? Администратор может подключить другие базы знаний и коннекторы.",
+ "agents-setup-abilities-none-chosen": "Большинству агентов дополнительные возможности не нужны. Найдите нужную через поиск выше или покажите все.",
  "agents-setup-abilities-none-found": "Нет возможностей, подходящих под ваш запрос.",
  "agents-setup-abilities-search": "Поиск возможностей",
  "agents-setup-abilities-show-all": "Показать все возможности ({count})",

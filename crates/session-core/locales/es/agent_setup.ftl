@@ -315,3 +315,4 @@ agents-setup-proposing = Se está redactando una configuración a partir de su d
 agents-setup-abilities-search = Buscar capacidades
 agents-setup-abilities-none-found = Ninguna capacidad coincide con su búsqueda.
 agents-setup-abilities-show-all = Mostrar todas las capacidades ({ $count })
+agents-setup-abilities-none-chosen = La mayoría de los agentes no necesitan más capacidades. Busque una arriba o muéstrelas todas.

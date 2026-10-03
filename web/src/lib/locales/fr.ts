@@ -557,6 +557,7 @@ export const fr: Catalog = {
  "agents-setup-abilities": "Capacités",
  "agents-setup-abilities-lead": "Que peut utiliser l’agent ? Les accès nécessaires sont accordés automatiquement, dans la limite de vos propres droits.",
  "agents-setup-abilities-more": "Absent de la liste ? Un admin peut connecter d’autres bases de connaissances et connecteurs.",
+ "agents-setup-abilities-none-chosen": "La plupart des agents n’ont besoin d’aucune autre capacité. Recherchez-en une ci-dessus ou affichez-les toutes.",
  "agents-setup-abilities-none-found": "Aucune capacité ne correspond à votre recherche.",
  "agents-setup-abilities-search": "Rechercher des capacités",
  "agents-setup-abilities-show-all": "Afficher toutes les capacités ({count})",

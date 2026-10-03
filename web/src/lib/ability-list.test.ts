@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Ability } from './agent-setup.ts';
-import { DEFAULT_EXTRA, abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from './ability-list.ts';
+import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from './ability-list.ts';
 
 const card = (ref: string, over: Partial<Ability> = {}): Ability => ({
 	kind: 'tool',
@@ -39,13 +39,13 @@ test('filter matches title and description, case-insensitively', () => {
 	assert.deepEqual(refs(filterAbilities(list, '  ')), ['a', 'b']);
 });
 
-test('collapsed list shows on, suggested and a few others', () => {
+test('collapsed list shows only what is on or suggested', () => {
 	const many = Array.from({ length: 20 }, (_, i) => card(`t${String(i).padStart(2, '0')}`));
 	many[10] = card('t10', { on: true });
 	const ordered = orderAbilities(many, ['t15']);
 	const shown = visibleAbilities(ordered, ['t15'], false);
 	assert.deepEqual(refs(shown).slice(0, 2), ['t10', 't15']);
-	assert.equal(shown.length, 2 + DEFAULT_EXTRA);
+	assert.equal(shown.length, 2);
 	assert.equal(visibleAbilities(ordered, ['t15'], true).length, 20);
 });
 

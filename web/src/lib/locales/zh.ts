@@ -557,6 +557,7 @@ export const zh: Catalog = {
  "agents-setup-abilities": "能力",
  "agents-setup-abilities-lead": "智能体可以使用什么？所需的访问权限会在你本人权限范围内自动授予。",
  "agents-setup-abilities-more": "没有列出？管理员可以接入更多知识库和连接器。",
+ "agents-setup-abilities-none-chosen": "大多数智能体不需要更多能力。可在上方搜索，或显示全部。",
  "agents-setup-abilities-none-found": "没有符合搜索条件的能力。",
  "agents-setup-abilities-search": "搜索能力",
  "agents-setup-abilities-show-all": "显示全部能力（{count}）",
