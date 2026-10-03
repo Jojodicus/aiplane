@@ -1,0 +1,393 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! What sets a person's turn apart from an agent's run, in one place.
+//!
+//! The round loop in [`super::run_one_turn`] is the same for both: it asks the
+//! [`TurnPolicy`] for the leading system message, the round's tool offer, the
+//! pools, budget and injection scan, and how the turn ends, and never asks
+//! whether it is running an agent. See docs/architecture.md
+//! (`openai_driver/turn_policy.rs`) and docs/agents.md → "`RunProfile`".
+//!
+//! An enum rather than a trait object: the set is closed (a turn acts for a
+//! person or is an agent's run, exactly as [`crate::agent_run::Actor`] says),
+//! the agent variant only borrows the [`AgentRun`] the driver already holds,
+//! and the methods are async — a `dyn` policy would need boxing and
+//! `async_trait` lifetimes for no extension anyone can make. A third kind of
+//! turn is a new variant here, not an edit to the loop.
+
+use std::collections::{BTreeMap, HashSet};
+
+use serde_json::Value;
+
+use super::{OpenAiDriver, TurnEnd, VOICE_DIRECTIVE, build_request_context, run_outcome};
+use crate::agent_run::AgentRun;
+use crate::agents::profile::{AgentSurface, RunToolSource};
+use crate::budget::Budget;
+use crate::finish::{FINISH_NUDGE, FinishTool};
+use crate::server::tools::injection::InjectionScan;
+use crate::server::tools::mcp::manager::UserMcpLayer;
+use crate::server::tools::runner::{self, ToolCallAcc};
+use crate::server::tools::{ToolPhase, ToolSource};
+use aiplane_core::server::db::chat_session_tools;
+use aiplane_core::server::reasoning::Effort;
+use aiplane_core::server::upstreams::PoolAccess;
+use session_core::driver::TurnError;
+
+/// Who the turn is for, and so what it is offered and how it ends.
+#[derive(Clone, Copy)]
+pub(super) enum TurnPolicy<'a> {
+    /// A person's turn: the chat rules, their own context, and the tools the
+    /// conversation has turned on.
+    Chat,
+    /// An agent's run: the spec's system message, its principal's grants
+    /// (narrowed to the spec's tools) with the run's synthetic tools over
+    /// them, and, under a contract, an end only through `finish`.
+    Agent(&'a AgentRun),
+}
+
+/// What the round that must end the turn does with the calls the model made
+/// on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FinalRound {
+    /// None of them runs: the reply written alongside is the answer.
+    Answers,
+    /// The terminal calls run, and nothing else; whether one is accepted
+    /// decides how the run ends.
+    RunsTerminal,
+    /// No terminal call came, so the run ends incomplete.
+    Incomplete,
+}
+
+impl<'a> TurnPolicy<'a> {
+    pub(super) fn of(d: &'a OpenAiDriver) -> Self {
+        d.agent().map_or(Self::Chat, Self::Agent)
+    }
+
+    fn surface(self) -> Option<&'a AgentSurface> {
+        match self {
+            Self::Chat => None,
+            Self::Agent(run) => run.surface(),
+        }
+    }
+
+    fn finish(self) -> Option<&'a FinishTool> {
+        match self {
+            Self::Chat => None,
+            Self::Agent(run) => run.finish(),
+        }
+    }
+
+    fn agent(self) -> Option<&'a AgentRun> {
+        match self {
+            Self::Chat => None,
+            Self::Agent(run) => Some(run),
+        }
+    }
+
+    /// `granted` with the run's synthetic and terminal tools layered over it.
+    /// A person's turn gets `granted` unchanged.
+    pub(super) fn tool_source<'s>(self, granted: &'s dyn ToolSource) -> RunToolSource<'s>
+    where
+        'a: 's,
+    {
+        RunToolSource::new(granted, self.agent())
+    }
+
+    /// The pools this turn's rounds may route to.
+    pub(super) fn pools(self, d: &OpenAiDriver) -> PoolAccess {
+        match self.surface() {
+            Some(surface) => surface.pools().clone(),
+            None => d.state.pool_access_for_principal(&d.tool_ctx.principal),
+        }
+    }
+
+    /// The pools compacting this conversation may use.
+    pub(super) fn compaction_pools(self) -> PoolAccess {
+        self.surface()
+            .map_or_else(PoolAccess::all, |surface| surface.pools().clone())
+    }
+
+    pub(super) fn budget(self, effort: Effort) -> Budget {
+        self.agent()
+            .and_then(AgentRun::budget)
+            .unwrap_or_else(|| Budget::from_effort(effort))
+    }
+
+    pub(super) fn injection(self) -> InjectionScan {
+        self.agent()
+            .map(AgentRun::injection)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The name a usage row carries: the person's email, the agent's name.
+    pub(super) async fn usage_name(self, d: &OpenAiDriver) -> String {
+        match self {
+            Self::Agent(run) => run.system_principal().name.clone(),
+            Self::Chat => aiplane_core::server::db::users::find_by_id(
+                &d.state.db,
+                d.tool_ctx.principal.subject_id(),
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|u| u.email)
+            .unwrap_or_default(),
+        }
+    }
+
+    /// Count `tokens` against the allowance the run spends inside, if any.
+    pub(super) fn record_spend(self, tokens: u64) {
+        if let Some(surface) = self.surface() {
+            surface.record_spend(tokens);
+        }
+    }
+
+    /// The single leading system message. Built here and nowhere else, so the
+    /// turn's first round and every refresh agree on its shape.
+    ///
+    /// For a person it combines the turn-discipline rule, the voice directive,
+    /// the request context and the compaction summary; for an agent run it is
+    /// the spec's message (or just the turn-discipline rule, for a run with no
+    /// spec), with the finish contract's instructions under a contract. Kept
+    /// to one message: some backends reject more than one leading `system`
+    /// turn.
+    pub(super) async fn system_message(
+        self,
+        d: &OpenAiDriver,
+        session_id: &str,
+        user_mcp: &UserMcpLayer,
+        summary: Option<&str>,
+    ) -> Value {
+        let base = match self {
+            Self::Chat => {
+                let request_context = build_request_context(d, user_mcp).await;
+                let voice_directive = d.voice_mode.then_some(VOICE_DIRECTIVE);
+                super::leading_system_message(voice_directive, request_context, summary)
+            }
+            Self::Agent(run) => match run.surface() {
+                Some(surface) => {
+                    surface
+                        .system_message(&d.state.db, session_id, summary)
+                        .await
+                }
+                None => super::leading_system_message(None, None, summary),
+            },
+        };
+        let mut leading = vec![base];
+        if let Some(finish) = self.finish() {
+            runner::merge_into_leading_system_message(
+                &mut leading,
+                finish.contract().instructions(),
+            );
+        }
+        leading.swap_remove(0)
+    }
+
+    /// Bring `messages[0]` up to date at the top of a round that is not the
+    /// turn's first: a slot the model set last round must show, or it would
+    /// ask for it again. Only an agent's conversation state changes within a
+    /// turn.
+    pub(super) async fn refresh_system_message(
+        self,
+        d: &OpenAiDriver,
+        session_id: &str,
+        user_mcp: &UserMcpLayer,
+        summary: Option<&str>,
+        messages: &mut [Value],
+    ) {
+        if self
+            .surface()
+            .is_some_and(AgentSurface::has_conversation_state)
+        {
+            messages[0] = self.system_message(d, session_id, user_mcp, summary).await;
+        }
+    }
+
+    /// Whether the turn has any tools, as the automatic router weighs it.
+    pub(super) async fn routing_has_tools(
+        self,
+        d: &OpenAiDriver,
+        session_id: &str,
+        granted: &[String],
+    ) -> bool {
+        match self {
+            Self::Chat => {
+                count_chat_only_read();
+                !d.state
+                    .allowed_tools_for_session(&d.tool_ctx.principal, session_id)
+                    .await
+                    .is_empty()
+                    || !chat_session_tools::enabled_keys_for_session(&d.state.db, session_id)
+                        .await
+                        .unwrap_or_default()
+                        .is_empty()
+            }
+            Self::Agent(run) => !agent_offer(run, granted).is_empty(),
+        }
+    }
+
+    /// The tool ids this round offers the model.
+    ///
+    /// A person's turn re-resolves the conversation's overlay every round, so
+    /// a mid-turn `enable_tools` call surfaces the newly-enabled schemas on
+    /// the next one. An agent run is offered its grants (the spec's tools
+    /// among them, when it has a spec), the run's synthetic tools and, under
+    /// a contract, `finish` — the same every round.
+    pub(super) async fn offer(
+        self,
+        d: &OpenAiDriver,
+        session_id: &str,
+        user_mcp: &UserMcpLayer,
+        granted: &[String],
+    ) -> Vec<String> {
+        let Self::Agent(run) = self else {
+            return chat_offer(d, session_id, user_mcp).await;
+        };
+        agent_offer(run, granted)
+    }
+
+    /// Tool families the person switched off for this conversation. Their
+    /// schemas are never offered, but a model can still call one from its
+    /// training; those calls are refused. An agent run has no such switches.
+    pub(super) async fn disabled_keys(self, d: &OpenAiDriver) -> HashSet<String> {
+        let (Self::Chat, Some(sid)) = (self, d.tool_ctx.session_id.as_deref()) else {
+            return HashSet::new();
+        };
+        count_chat_only_read();
+        // A DB hiccup degrades open.
+        chat_session_tools::disabled_keys_for_session(&d.state.db, sid)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Narrow the final round's offer: a contracted run's last round offers
+    /// only what can end it.
+    pub(super) fn narrow_final_offer(self, offer: &mut Vec<String>, source: &dyn ToolSource) {
+        if self.finish().is_some() {
+            offer.retain(|id| source.phase(id) == ToolPhase::Terminal);
+        }
+    }
+
+    /// Shape the request for the last round the budget allows.
+    pub(super) fn prepare_final_round(
+        self,
+        body: &mut Value,
+        honors_tool_choice: bool,
+        max_rounds: u32,
+    ) {
+        match self.finish() {
+            Some(finish) => {
+                finish.contract().prepare_final_round(body);
+                tracing::info!(
+                    max_rounds,
+                    "tool-round budget reached; offering only finish for the final round"
+                );
+            }
+            None => {
+                // Whether the definitions may stay depends on whether this
+                // backend can be trusted with `tool_choice` at all.
+                runner::prepare_final_round(body, honors_tool_choice);
+                tracing::info!(
+                    max_rounds,
+                    tools_withheld = !honors_tool_choice,
+                    "tool-round budget reached; requesting final answer with tool choice none"
+                );
+            }
+        }
+    }
+
+    /// What happens to the calls of the round that must end the turn. On a
+    /// contracted run only a terminal call can still run; anything else the
+    /// model called there never does.
+    pub(super) fn final_round_calls(
+        self,
+        calls: &mut BTreeMap<usize, ToolCallAcc>,
+        source: &dyn ToolSource,
+    ) -> FinalRound {
+        if self.finish().is_none() {
+            return FinalRound::Answers;
+        }
+        calls.retain(|_, acc| source.phase(&acc.name) == ToolPhase::Terminal);
+        if calls.is_empty() {
+            FinalRound::Incomplete
+        } else {
+            FinalRound::RunsTerminal
+        }
+    }
+
+    /// A round that came back without tool calls. Under a contract the run is
+    /// not over because the model stopped calling tools: its text goes back
+    /// with a nudge toward `finish` and this returns `true` (the round is
+    /// spent). Otherwise the reply ends the turn and nothing changes.
+    pub(super) fn nudge_toward_finish(
+        self,
+        round_content: &str,
+        messages: &mut Vec<Value>,
+    ) -> bool {
+        if self.finish().is_none() {
+            return false;
+        }
+        messages.push(serde_json::json!({"role": "assistant", "content": round_content}));
+        messages.push(serde_json::json!({"role": "user", "content": FINISH_NUDGE}));
+        true
+    }
+
+    /// Record a contracted run's [`RunOutcome`](crate::finish::RunOutcome)
+    /// from how its turn ended. Every exit of the round loop passes through
+    /// here once, so none of them settles the run itself.
+    pub(super) fn settle(self, end: &Result<TurnEnd, TurnError>, cancelled: bool) {
+        if let Self::Agent(run) = self
+            && let Some(finish) = run.finish()
+        {
+            run.settle(run_outcome(finish.result(), end, cancelled));
+        }
+    }
+}
+
+/// An agent run's offer: its granted spec tools and synthetic tools (every
+/// grant, for a run with no spec), then the run's terminal tool.
+fn agent_offer(run: &AgentRun, granted: &[String]) -> Vec<String> {
+    let mut offer = match run.surface() {
+        Some(surface) => surface.offered(granted),
+        None => granted.to_vec(),
+    };
+    offer.extend(run.terminal_tool().iter().map(|t| t.id().to_string()));
+    offer
+}
+
+/// A person's offer: the per-conversation overlay of their grant, plus the
+/// connected MCP tools whose connector the conversation turned on (via
+/// `enable_tools` or the composer's "+" menu). The MCP ids come from the SAME
+/// layer the executor uses, so an advertised tool is always dispatchable.
+async fn chat_offer(d: &OpenAiDriver, session_id: &str, user_mcp: &UserMcpLayer) -> Vec<String> {
+    count_chat_only_read();
+    let mut allowed = d
+        .state
+        .allowed_tools_for_session(&d.tool_ctx.principal, session_id)
+        .await;
+    let enabled_keys = chat_session_tools::enabled_keys_for_session(&d.state.db, session_id)
+        .await
+        .unwrap_or_default();
+    d.state.union_enabled_mcp_tool_ids(
+        &mut allowed,
+        user_mcp,
+        &enabled_keys,
+        &d.state.mcp_grant_for_principal(&d.tool_ctx.principal),
+    );
+    allowed
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many chat-only reads this thread's turns made. A test seam, not a
+    /// fake: on an agent run their results would be thrown away, so no state
+    /// could show whether they ran — only a count can.
+    pub(crate) static CHAT_ONLY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn count_chat_only_read() {
+    #[cfg(test)]
+    CHAT_ONLY_READS.with(|reads| reads.set(reads.get() + 1));
+}
