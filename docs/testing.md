@@ -13,6 +13,50 @@
 | **SPA unit** | `web/src/lib/*.test.ts` | `mise run test-web` — Node's own `node --test` with type stripping, no jsdom. Covers the framework-free halves of the SPA (the chat event fold in `chat-protocol.ts`, markdown rendering), which is what pins client-side wire behaviour. |
 | **E2E (browser ↔ gateway)** | `e2e/*.test.mjs` | Playwright + Node's `node:test` against a running `mise run dev`. The SPA suites are `e2e/spa*.test.mjs` (shell boot, signed-out OIDC redirect, signed-in identity, tokens, admin, a full chat turn streaming in); the rest cover the anonymous sign-in funnel and plain-`fetch` checks of the public HTTP surface. See `e2e/README.md`. |
 
+## Architecture tests
+
+Feature tests check what a feature does; they cannot see that a new file
+skipped a shared mechanism. The cross-cutting invariants are therefore checked
+by tests that read the workspace's own source, in
+`crates/aiplane/tests/it/architecture.rs`:
+
+| Test | Invariant | Shared mechanism |
+|---|---|---|
+| `outbound_http_clients_are_built_only_at_the_vetted_sites` | a reqwest client (`Client::new`/`builder`, `ClientBuilder::new`, `reqwest::get`, under any `use` alias) is built only in the listed files | the net_guard-checked, pinned client in `agents/a2a_client/guard.rs` for destinations a user, model or agent owner chooses; `AppState::http` for operator-configured backends |
+| `request_bodies_are_read_only_through_the_capped_readers` | nothing outside `session_core::chrome` names `BodyExt`; `read_body_to_bytes`/`read_json` appear only behind `BodyLimitLayer` (`aiplane/src/rama_server/`, `aiplane-api/src/`) and never in the modules serving a prefix the layer passes through (`HANDLER_CAPPED_PREFIXES`) | `read_body_capped`, `read_body_prefix`, `read_json_capped`, `BodyLimitLayer` |
+| `agent_spec_json_is_read_only_by_the_validator` | no JSON accessor (`.get`, `.get_mut`, `.remove`, `.pointer`, `[..]`) names a spec key (`publish`, `routes`, `main`, …) outside the validator | the typed `AgentSpec` from `CompiledSpec::agent()` |
+| `model_tool_calls_dispatch_only_through_the_grant` | only the chat/agent driver, its resume path and the `/v1` loops hand calls to the runner, and each still builds its gate (`GrantedToolSource`, `DiscoverableToolSource`); `Tool::run` is called directly only by the runner and the listed wrappers/verifiers | `GrantedToolSource` (+ `RunToolSource` over it), `DiscoverableToolSource` |
+
+How they work: each production `.rs` file under `crates/` (not `tests/`,
+`tests.rs`, `examples/`, or a `#[cfg(test)]` item) is masked — comments
+blanked, string literal contents blanked except for the spec-key rule, which
+matches the literal on purpose — and searched for the call shape that breaks
+the rule. A hit outside the rule's allow-list fails with the file and line. An
+allow-list entry that no longer matches anything fails too, so an exception
+cannot outlive its reason. A scan is a tripwire, not a proof: it catches the
+silent omission in a new file, which is how every one of these invariants was
+actually broken.
+
+The allow-lists are deliberately short, and every entry carries its reason.
+Entries marked **KNOWN GAP** are real violations that predate the test
+(`fetch_url` and `load_image_url` fetch model-chosen URLs without `net_guard`;
+`sandbox-runner` reads its request body uncapped). They are listed so the test
+can land green and stop the next one; fixing them removes the entry.
+
+Not covered yet: outbound *response* bodies read with reqwest's
+`.bytes()`/`.text()`/`.json()` instead of `capped_read::read_capped` — about 40
+files do, most against operator-configured upstreams, which is too many to
+allow-list file by file.
+
+**Adding one.** Write it in `architecture.rs` next to the others: the needles,
+the view (`code` with literals blanked, or `text` with them kept), an
+`Allowed { path, why }` list, and `assert_within` with a message that names the
+shared mechanism to use instead. Then prove it: add the violation to a
+production file (an undeclared `.rs` file under some `src/` is enough — the
+scan reads files, not the module tree), watch the test fail naming it, remove
+it. Prefer a `clippy.toml` entry as well where clippy can resolve the path (see
+below), so the editor points at the line.
+
 ## Style: test-first, Chicago / Classicist
 
 Write the test before the code — red, green, refactor (**TDD**). Tests are **state-based**: assert on observable results, exercising real collaborators (in-memory SQLite, `wiremock` upstreams, the actual `ToolRegistry` / `UpstreamRegistry`) rather than interaction mocks. Behaviour-verification (London-school) mocks are the exception, reserved for collaborators you genuinely can't stand up in-process — and the test says why in a comment. The mocking philosophy below is the practical edge of this: we fake only the things that reach outside the process.

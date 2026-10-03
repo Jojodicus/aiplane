@@ -14,6 +14,7 @@ mod agent_evaluation;
 mod agent_test_chat;
 mod agents;
 mod anthropic_messages;
+mod architecture;
 mod ask_feedback;
 mod automatic_routing;
 mod body_limit;

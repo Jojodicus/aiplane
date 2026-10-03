@@ -47,7 +47,7 @@ const UPLOAD_PREFIXES: &[&str] = &[
     "/api/v0/admin/skills",
 ];
 
-const HANDLER_CAPPED_PREFIXES: &[&str] = &["/hooks/", "/a2a/", "/api/v0/embed/"];
+pub const HANDLER_CAPPED_PREFIXES: &[&str] = &["/hooks/", "/a2a/", "/api/v0/embed/"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
