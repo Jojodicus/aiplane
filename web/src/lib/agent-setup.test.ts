@@ -21,7 +21,9 @@ import {
 	readHandoffs,
 	readIdentity,
 	readScope,
+	readColor,
 	readSite,
+	readVoice,
 	readSlots,
 	sectionStatus,
 	setAbility,
@@ -30,6 +32,7 @@ import {
 	slotKind,
 	slotsForIdentity,
 	stepForPath,
+	voiceMissing,
 	summary,
 	suggestedMethod,
 	suggestedRules,
@@ -42,7 +45,9 @@ import {
 	writeHandoffs,
 	writeIdentity,
 	writeScope,
+	writeColor,
 	writeSite,
+	writeVoice,
 	writeSlots,
 	type Basics,
 	type Handoffs,
@@ -320,6 +325,7 @@ test('a grant the published version relies on is kept', () => {
 	assert.ok(liveUses(live, 'skill', 'brand-voice'));
 	assert.ok(!liveUses(live, 'tool', 'search_web'));
 	assert.ok(!liveUses(null, 'tool', 'search_web'));
+	assert.ok(liveUses({ publish: { voice: { speech_pool: 'tts' } } }, 'pool', 'tts'), 'a live voice pool stays granted');
 });
 
 test('the website step keeps only web origins', () => {
@@ -332,6 +338,27 @@ test('the website step keeps only web origins', () => {
 	assert.deepEqual(readSite(throughEditor(spec)), ['https://www.croit.io']);
 	writeSite(spec, []);
 	assert.equal(spec.publish, undefined);
+});
+
+test('the website step binds the widget colour and voice and writes back what it reads', () => {
+	const spec: Spec = { profile: { display: 'Ada' } };
+	writeColor(spec, '#0B6BCB');
+	assert.equal(readColor(throughEditor(spec)), '#0b6bcb');
+	writeColor(spec, 'blue');
+	assert.deepEqual(spec.profile, { display: 'Ada' }, 'a non-colour clears it');
+
+	const voice = { input: true, output: true, voice: 'nova', transcriptionPool: 'stt', speechPool: 'tts' };
+	writeVoice(spec, voice);
+	assert.deepEqual(spec.publish.voice, { input: true, output: true, voice: 'nova', transcription_pool: 'stt', speech_pool: 'tts' });
+	assert.deepEqual(readVoice(throughEditor(spec)), voice);
+	assert.deepEqual(voiceMissing({ ...voice, speechPool: '' }), ['speech']);
+	assert.deepEqual(voiceMissing({ ...voice, input: false, transcriptionPool: '' }), []);
+
+	writeVoice(spec, { input: false, output: false, voice: '', transcriptionPool: '', speechPool: '' });
+	assert.equal(spec.publish, undefined, 'nothing chosen leaves no publish block');
+	assert.equal(stepForPath('publish.voice.speech_pool'), 'site');
+	assert.equal(stepForPath('profile.color'), 'site');
+	assert.equal(stepForPath('profile.display'), 'basics');
 });
 
 test('every template is a starter spec the steps read without leftovers', () => {
@@ -350,6 +377,8 @@ test('every template is a starter spec the steps read without leftovers', () => 
 		writeIdentity(again, readIdentity(spec), labels);
 		writeHandoffs(again, h);
 		writeSite(again, readSite(spec));
+		writeColor(again, readColor(spec));
+		writeVoice(again, readVoice(spec));
 		assert.deepEqual(throughEditor(again), throughEditor(spec), `${key}: the steps write back what they read`);
 	}
 	assert.equal(templateSpec('support', tr).main.instructions.orchestration, '«agents-tpl-support-task»');

@@ -8,6 +8,7 @@ import appCss from './embed.css?inline';
 import { EmbedApi, TokenStore } from './api.ts';
 import { pickLanguage, translator } from './i18n.ts';
 import { applyStyles, forShadowRoot } from './styles.ts';
+import { agentThemeCss } from './theme.ts';
 import { Widget } from './widget.ts';
 
 const HOST_TAG = 'croit-aiplane-embed';
@@ -32,7 +33,8 @@ function mount(script: HTMLScriptElement): void {
 	const theme = script.dataset.theme;
 	if (theme === 'light' || theme === 'dark') host.setAttribute('data-theme', theme);
 	const root = host.attachShadow({ mode: 'open' });
-	applyStyles(root, forShadowRoot(appCss));
+	const css = forShadowRoot(appCss);
+	applyStyles(root, css);
 
 	const api = new EmbedApi({
 		base: new URL(script.src, location.href).origin,
@@ -49,12 +51,20 @@ function mount(script: HTMLScriptElement): void {
 		t: translator(lang),
 		title: script.dataset.title?.trim() || null,
 		position: script.dataset.position === 'left' ? 'left' : 'right',
-		reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches
+		reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+		onAgent: (agent) => applyStyles(root, css, agentThemeCss(agent.color))
 	});
 	root.append(widget.element);
 	document.body.append(host);
 	const identity = script.dataset.identityToken;
 	void (identity ? api.setIdentity(identity) : Promise.resolve()).then(() => widget.resume());
+	// Before any conversation, so the microphone and the agent's colour are there from the start.
+	api.describe().then(
+		(agent) => widget.applyAgent(agent),
+		() => {
+			// The widget works without it; sending reports real trouble.
+		}
+	);
 }
 
 const script = ownScript();

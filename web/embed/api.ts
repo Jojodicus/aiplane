@@ -96,8 +96,17 @@ export interface TurnWithTools {
 	suspension?: Waiting | null;
 }
 
+/** The agent as the widget draws it (`agent_json` on the server). */
+export interface AgentView {
+	display: string;
+	/** `#rrggbb`, or `null` for the widget's own colour. */
+	color?: string | null;
+	/** Which directions of voice the agent offers. */
+	voice?: { input: boolean; output: boolean };
+}
+
 export interface SessionView {
-	agent: { display: string };
+	agent: AgentView;
 	live_turn_id: string | null;
 	turns: TurnWithTools[];
 }
@@ -129,13 +138,23 @@ export class EmbedApi {
 		this.options.tokens.clear();
 	}
 
-	async start(): Promise<{ agent: { display: string } }> {
+	/** The agent behind the embed key, before any conversation: what the widget needs to draw itself. */
+	async describe(): Promise<AgentView> {
+		const response = await this.call('/api/v0/embed/agent', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ key: this.options.key })
+		});
+		return ((await response.json()) as { agent: AgentView }).agent;
+	}
+
+	async start(): Promise<{ agent: AgentView }> {
 		const response = await this.call('/api/v0/embed/sessions', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ key: this.options.key })
 		});
-		const body = (await response.json()) as { token: string; agent: { display: string } };
+		const body = (await response.json()) as { token: string; agent: AgentView };
 		this.options.tokens.save(body.token);
 		this.identitySent = false;
 		await this.identify();
@@ -163,9 +182,9 @@ export class EmbedApi {
 	 * tells the caller the earlier conversation is gone. `agent` is the agent of
 	 * a session this call started, `null` when it reused the stored one.
 	 */
-	async send(text: string): Promise<{ restarted: boolean; agent: { display: string } | null }> {
+	async send(text: string): Promise<{ restarted: boolean; agent: AgentView | null }> {
 		let restarted = false;
-		let agent: { display: string } | null = null;
+		let agent: AgentView | null = null;
 		if (!this.hasToken()) ({ agent } = await this.start());
 		for (let attempt = 0; ; attempt++) {
 			try {
@@ -182,6 +201,45 @@ export class EmbedApi {
 				restarted = true;
 			}
 		}
+	}
+
+	/**
+	 * A recording (16 kHz mono WAV) as text for the visitor to read and send.
+	 * Starts a conversation when there is none, since the visitor is about to
+	 * send a message anyway.
+	 */
+	async transcribe(wav: ArrayBuffer): Promise<{ text: string; agent: AgentView | null }> {
+		let agent: AgentView | null = null;
+		if (!this.hasToken()) ({ agent } = await this.start());
+		for (let attempt = 0; ; attempt++) {
+			try {
+				const response = await this.call('/api/v0/embed/transcribe', {
+					method: 'POST',
+					headers: { ...this.auth(), 'content-type': 'audio/wav' },
+					body: wav
+				});
+				return { text: ((await response.json()) as { text: string }).text, agent };
+			} catch (error) {
+				if (attempt > 0 || !(error instanceof EmbedError) || !error.sessionLost) throw error;
+				this.forget();
+				({ agent } = await this.start());
+			}
+		}
+	}
+
+	/** The spoken audio of a finished answer; `null` when nothing of it is speakable. */
+	async speak(turnId: string): Promise<ArrayBuffer | null> {
+		const response = await this.call('/api/v0/embed/speak', {
+			method: 'POST',
+			headers: { ...this.auth(), 'content-type': 'application/json' },
+			body: JSON.stringify({ turn_id: turnId })
+		});
+		return response.status === 204 ? null : response.arrayBuffer();
+	}
+
+	/** Where the recorder's audio worklet is served, with the embed CORS a cross-origin worklet needs. */
+	get recorderUrl(): string {
+		return `${this.options.base}/api/v0/embed/recorder.js`;
 	}
 
 	/**

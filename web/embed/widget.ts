@@ -5,12 +5,14 @@
  * `textContent` or an attribute value, never as markup. Classes are daisyUI
  * components plus Tailwind utilities, compiled into `embed.css`.
  */
-import { EmbedApi, EmbedError } from './api.ts';
+import { EmbedApi, EmbedError, type AgentView } from './api.ts';
+import { MicRecording, Speaker, canRecord } from './audio.ts';
 import { applyFrame, emptyConversation, fromTurns, type Conversation, type Message } from './conversation.ts';
 import { isSafeHref } from '../shared/url.ts';
 import { parseBlocks, type Block, type Inline } from './markdown.ts';
 import { secureInputForm, secureRequest } from './secure-input.ts';
 import { trackWaiting, waitingFromTurns, waitingLabel, WAIT_POLL_MS, type Waiting } from './waiting.ts';
+import { MAX_RECORDING_MS, answerToSpeak, idleMic, micErrorKey, micStep, type MicEvent } from './voice.ts';
 
 export interface WidgetOptions {
 	api: EmbedApi;
@@ -18,6 +20,8 @@ export interface WidgetOptions {
 	title: string | null;
 	position: 'left' | 'right';
 	reducedMotion: boolean;
+	/** The agent's description arrived or changed: its colour is the page's to apply. */
+	onAgent?: (agent: AgentView) => void;
 }
 
 const MAX_MESSAGE_CHARS = 8000;
@@ -57,6 +61,9 @@ function svg(path: string): SVGSVGElement {
 
 const ICON_CHAT = 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z';
 const ICON_CLOSE = 'M6 6l12 12M18 6 6 18';
+const ICON_MIC = 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm7 9a7 7 0 0 1-14 0M12 19v3';
+const ICON_SPEAKER = 'M11 5 6 9H3v6h3l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13';
+const ICON_STOP = 'M7 7h10v10H7z';
 
 function inline(nodes: Inline[]): Node[] {
 	return nodes.map((node): Node => {
@@ -106,6 +113,12 @@ export class Widget {
 	private stream: AbortController | null = null;
 	private waiting: Waiting | null = null;
 	private rendered = new Map<string, { el: HTMLElement; signature: string }>();
+	private voice = { input: false, output: false };
+	private micState = idleMic();
+	private recording: MicRecording | null = null;
+	private recordingLimit: ReturnType<typeof setTimeout> | null = null;
+	private speakAloud = false;
+	private readonly speaker = new Speaker();
 
 	private readonly launcher: HTMLButtonElement;
 	private readonly panel: HTMLElement;
@@ -115,6 +128,12 @@ export class Widget {
 	private readonly send: HTMLButtonElement;
 	private readonly closeButton: HTMLButtonElement;
 	private readonly newConversation: HTMLButtonElement;
+	private readonly mic: HTMLButtonElement;
+	private readonly micStatus: HTMLElement;
+	private readonly micStatusText: HTMLElement;
+	private readonly micCancel: HTMLButtonElement;
+	private readonly speakToggle: HTMLButtonElement;
+	private readonly stopSpeaking: HTMLButtonElement;
 	readonly element: HTMLElement;
 
 	constructor(options: WidgetOptions) {
@@ -130,20 +149,28 @@ export class Widget {
 		this.log = h('div', 'flex-1 overflow-y-auto p-4 space-y-3', { role: 'log', 'aria-live': 'polite', 'aria-relevant': 'additions', tabindex: '0', 'aria-labelledby': 'croit-aiplane-title' });
 		this.input = h('textarea', 'textarea flex-1 resize-none text-base min-h-10 py-2', { id: 'croit-aiplane-input', rows: '1', maxlength: String(MAX_MESSAGE_CHARS), placeholder: t('embed-input-placeholder'), autocomplete: 'off' });
 		this.send = h('button', 'btn btn-primary', { type: 'submit' }, t('embed-send'));
+		this.mic = h('button', 'btn btn-ghost btn-square', { type: 'button', hidden: '', 'aria-pressed': 'false', 'aria-label': t('embed-voice-record'), title: t('embed-voice-record') }, svg(ICON_MIC));
+		this.micStatusText = h('span', 'flex-1', {});
+		this.micCancel = h('button', 'btn btn-ghost btn-xs', { type: 'button' }, t('embed-voice-cancel'));
+		this.micStatus = h('div', 'flex items-center gap-2 px-3 pt-2 text-sm', { role: 'status', hidden: '' }, this.micStatusText, this.micCancel);
 		const form = h(
 			'form',
 			'flex items-end gap-2 p-3 border-t border-base-300',
 			{},
 			h('label', 'sr-only', { for: 'croit-aiplane-input' }, t('embed-input-label')),
+			this.mic,
 			this.input,
 			this.send
 		);
+		this.speakToggle = h('button', 'btn btn-ghost btn-sm btn-square text-primary-content', { type: 'button', hidden: '', 'aria-pressed': 'false', 'aria-label': t('embed-voice-read-aloud'), title: t('embed-voice-read-aloud') }, svg(ICON_SPEAKER));
+		this.stopSpeaking = h('button', 'btn btn-ghost btn-sm btn-square text-primary-content', { type: 'button', hidden: '', 'aria-label': t('embed-voice-stop-speaking'), title: t('embed-voice-stop-speaking') }, svg(ICON_STOP));
 		this.panel = h(
 			'section',
 			'card bg-base-100 text-base-content shadow-xl border border-base-300 flex flex-col w-[22rem] h-[32rem] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-6.5rem)] max-sm:fixed max-sm:inset-0 max-sm:z-10 max-sm:w-auto max-sm:h-auto max-sm:max-w-none max-sm:max-h-none max-sm:rounded-none',
 			{ id: panelId, role: 'dialog', 'aria-labelledby': 'croit-aiplane-title', hidden: '' },
-			h('header', 'flex items-center justify-between gap-2 bg-primary text-primary-content px-4 py-2 rounded-t-box max-sm:rounded-none', {}, this.heading, h('div', 'flex items-center gap-1', {}, this.newConversation, this.closeButton)),
+			h('header', 'flex items-center justify-between gap-2 bg-primary text-primary-content px-4 py-2 rounded-t-box max-sm:rounded-none', {}, this.heading, h('div', 'flex items-center gap-1', {}, this.stopSpeaking, this.speakToggle, this.newConversation, this.closeButton)),
 			this.log,
+			this.micStatus,
 			form
 		);
 		this.launcher = h('button', 'btn btn-primary btn-circle btn-lg shadow-lg', { type: 'button', 'aria-label': t('embed-launcher-open'), 'aria-expanded': 'false', 'aria-controls': panelId }, svg(ICON_CHAT));
@@ -153,8 +180,36 @@ export class Widget {
 		this.closeButton.addEventListener('click', () => this.toggle(false));
 		this.newConversation.addEventListener('click', () => this.reset());
 		this.panel.addEventListener('keydown', (e) => {
-			if (e.key === 'Escape') this.toggle(false);
+			if (e.key !== 'Escape') return;
+			if (this.micState.phase === 'starting' || this.micState.phase === 'recording') this.micEvent({ type: 'cancel' });
+			else this.toggle(false);
 		});
+		this.mic.addEventListener('pointerdown', (e) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			try {
+				this.mic.setPointerCapture(e.pointerId);
+			} catch {
+				// Capture only keeps the release on the button; recording works without it.
+			}
+			this.micEvent({ type: 'down', at: performance.now() });
+		});
+		for (const type of ['pointerup', 'pointercancel'] as const) {
+			this.mic.addEventListener(type, () => this.micEvent({ type: 'up', at: performance.now() }));
+		}
+		// Enter and Space click a focused button without any pointer: that toggles.
+		this.mic.addEventListener('click', (e) => {
+			if (e.detail === 0) this.micEvent({ type: 'toggle' });
+		});
+		this.micCancel.addEventListener('click', () => this.micEvent({ type: 'cancel' }));
+		this.speakToggle.addEventListener('click', () => {
+			this.speakAloud = !this.speakAloud;
+			if (this.speakAloud) this.speaker.unlock();
+			else this.speaker.stop();
+			this.renderSpeaker();
+		});
+		this.stopSpeaking.addEventListener('click', () => this.speaker.stop());
+		this.speaker.onchange = () => this.renderSpeaker();
 		form.addEventListener('submit', (e) => {
 			e.preventDefault();
 			void this.submit();
@@ -176,12 +231,25 @@ export class Widget {
 			if (!session) return;
 			this.state = fromTurns(session.turns, session.live_turn_id);
 			this.waiting = waitingFromTurns(session.turns);
-			this.setTitle(session.agent.display);
+			this.applyAgent(session.agent);
 			this.renderLog();
 			if (this.state.pending || this.waiting) void this.follow();
 		} catch {
 			// The panel works without the old transcript; sending reports real trouble.
 		}
+	}
+
+	/** What the gateway says about the agent: its name, colour and which voice directions it offers. */
+	applyAgent(agent: AgentView): void {
+		this.setTitle(agent.display);
+		this.voice = { input: !!agent.voice?.input, output: !!agent.voice?.output };
+		if (!this.voice.output && this.speakAloud) {
+			this.speakAloud = false;
+			this.speaker.stop();
+		}
+		this.renderMic();
+		this.renderSpeaker();
+		this.o.onAgent?.(agent);
 	}
 
 	private setTitle(display: string): void {
@@ -205,6 +273,8 @@ export class Widget {
 
 	private reset(): void {
 		this.stream?.abort();
+		this.micEvent({ type: 'cancel' });
+		this.speaker.stop();
 		this.o.api.forget();
 		this.state = emptyConversation();
 		this.waiting = null;
@@ -234,7 +304,7 @@ export class Widget {
 		this.renderLog();
 		try {
 			const { restarted, agent } = await this.o.api.send(text);
-			if (agent) this.setTitle(agent.display);
+			if (agent) this.applyAgent(agent);
 			if (restarted) {
 				this.state.messages = this.state.messages.slice(-1);
 				this.notice = this.o.t('embed-session-restarted');
@@ -266,6 +336,104 @@ export class Widget {
 		void this.follow();
 	}
 
+	private micEvent(event: MicEvent): void {
+		const [next, effect] = micStep(this.micState, event);
+		this.micState = next;
+		this.renderMic();
+		if (effect === 'start') void this.startRecording();
+		else if (effect === 'send') void this.finishRecording();
+		else if (effect === 'abort') void this.dropRecording();
+	}
+
+	private async startRecording(): Promise<void> {
+		this.error = null;
+		this.renderLog();
+		if (!canRecord()) {
+			this.micEvent({ type: 'failed' });
+			return this.showError('embed-voice-unsupported');
+		}
+		try {
+			const recording = await MicRecording.open(this.o.api.recorderUrl);
+			if (this.micState.phase !== 'starting') return void (await recording.abort());
+			this.recording = recording;
+			this.recordingLimit = setTimeout(() => this.micEvent({ type: 'limit' }), MAX_RECORDING_MS);
+			this.micEvent({ type: 'started' });
+		} catch (error) {
+			this.micEvent({ type: 'failed' });
+			this.showError(micErrorKey(error));
+		}
+	}
+
+	/** The transcript goes into the input for the visitor to read and send; nothing is sent for them. */
+	private async finishRecording(): Promise<void> {
+		const recording = this.takeRecording();
+		try {
+			if (!recording) return;
+			const { text, agent } = await this.o.api.transcribe(await recording.stop());
+			if (agent) this.applyAgent(agent);
+			if (!text.trim()) return this.showError('embed-voice-empty');
+			const before = this.input.value.trimEnd();
+			this.input.value = (before ? `${before} ${text.trim()}` : text.trim()).slice(0, MAX_MESSAGE_CHARS);
+			this.syncInput();
+			this.input.focus();
+		} catch (error) {
+			this.showError(voiceErrorKey(error));
+		} finally {
+			this.micEvent({ type: 'done' });
+		}
+	}
+
+	private async dropRecording(): Promise<void> {
+		await this.takeRecording()?.abort();
+	}
+
+	private takeRecording(): MicRecording | null {
+		if (this.recordingLimit) clearTimeout(this.recordingLimit);
+		this.recordingLimit = null;
+		const recording = this.recording;
+		this.recording = null;
+		return recording;
+	}
+
+	private async speakTurn(turnId: string): Promise<void> {
+		try {
+			const audio = await this.o.api.speak(turnId);
+			if (audio && this.speakAloud) await this.speaker.play(audio);
+		} catch {
+			this.showError('embed-voice-speak-failed');
+		}
+	}
+
+	private renderMic(): void {
+		const t = this.o.t;
+		const { phase } = this.micState;
+		const active = phase === 'starting' || phase === 'recording';
+		this.mic.hidden = !this.voice.input;
+		this.mic.disabled = phase === 'sending';
+		this.mic.className = active ? `btn btn-error btn-square${this.o.reducedMotion ? '' : ' animate-pulse'}` : 'btn btn-ghost btn-square';
+		this.mic.setAttribute('aria-pressed', String(active));
+		const label = t(active ? 'embed-voice-stop-recording' : 'embed-voice-record');
+		this.mic.setAttribute('aria-label', label);
+		this.mic.title = label;
+		this.mic.replaceChildren(phase === 'sending' && !this.o.reducedMotion ? h('span', 'loading loading-spinner loading-sm', { 'aria-hidden': 'true' }) : svg(ICON_MIC));
+		this.micStatus.hidden = phase === 'idle';
+		this.micStatusText.textContent = phase === 'sending' ? t('embed-voice-transcribing') : phase === 'idle' ? '' : t('embed-voice-recording');
+		this.micCancel.hidden = !active;
+	}
+
+	private renderSpeaker(): void {
+		this.speakToggle.hidden = !this.voice.output;
+		this.speakToggle.setAttribute('aria-pressed', String(this.speakAloud));
+		this.speakToggle.classList.toggle('btn-active', this.speakAloud);
+		this.stopSpeaking.hidden = !this.speaker.playing;
+	}
+
+	/** An error that leaves the conversation as it is. */
+	private showError(key: string): void {
+		this.error = this.o.t(key);
+		this.renderLog();
+	}
+
 	private fail(key: string): void {
 		this.error = this.o.t(key);
 		this.state.pending = false;
@@ -281,6 +449,8 @@ export class Widget {
 			try {
 				for await (const frame of this.o.api.events(controller.signal)) {
 					applyFrame(this.state, frame);
+					const spoken = answerToSpeak(frame);
+					if (spoken && this.speakAloud) void this.speakTurn(spoken);
 					this.waiting = trackWaiting(this.waiting, frame);
 					this.syncInput();
 					this.renderLog();
@@ -402,6 +572,12 @@ export class Widget {
 	private scrollToEnd(): void {
 		this.log.scrollTop = this.log.scrollHeight;
 	}
+}
+
+function voiceErrorKey(error: unknown): string {
+	if (error instanceof EmbedError && error.code === 'audio_too_short') return 'embed-voice-too-short';
+	if (error instanceof EmbedError && error.code === 'voice_unavailable') return 'embed-voice-failed';
+	return errorKey(error);
 }
 
 function errorKey(error: unknown): string {

@@ -336,7 +336,13 @@ export function liveUses(live: Spec | null, kind: string, ref: string): boolean 
 	const used = tools(live);
 	switch (kind) {
 		case 'pool':
-			return live.main?.pool === ref || live.scope?.classifier_pool === ref || live.router?.pool === ref;
+			return (
+				live.main?.pool === ref ||
+				live.scope?.classifier_pool === ref ||
+				live.router?.pool === ref ||
+				live.publish?.voice?.speech_pool === ref ||
+				live.publish?.voice?.transcription_pool === ref
+			);
 		case 'tool':
 			return used.includes(ref);
 		case 'connector':
@@ -788,6 +794,72 @@ export function writeSite(spec: Spec, origins: string[]): void {
 	}
 }
 
+/** The widget's colour (`profile.color`): `#rrggbb`, or `''` for the widget's own. */
+export function readColor(spec: Spec): string {
+	const color = String(spec.profile?.color ?? '').trim().toLowerCase();
+	return /^#[0-9a-f]{6}$/.test(color) ? color : '';
+}
+
+export function writeColor(spec: Spec, color: string): void {
+	const value = color.trim().toLowerCase();
+	if (/^#[0-9a-f]{6}$/.test(value)) {
+		spec.profile ??= {};
+		spec.profile.color = value;
+		return;
+	}
+	if (spec.profile) {
+		delete spec.profile.color;
+		if (!Object.keys(spec.profile).length) delete spec.profile;
+	}
+}
+
+/** `publish.voice`: what visitors may say and hear, and the pool each runs on. */
+export interface Voice {
+	input: boolean;
+	output: boolean;
+	/** `''` for the speech pool's default voice for the visitor's language. */
+	voice: string;
+	transcriptionPool: string;
+	speechPool: string;
+}
+
+export function readVoice(spec: Spec): Voice {
+	const v = spec.publish?.voice ?? {};
+	return {
+		input: v.input === true,
+		output: v.output === true,
+		voice: typeof v.voice === 'string' ? v.voice : '',
+		transcriptionPool: typeof v.transcription_pool === 'string' ? v.transcription_pool : '',
+		speechPool: typeof v.speech_pool === 'string' ? v.speech_pool : ''
+	};
+}
+
+export function writeVoice(spec: Spec, v: Voice): void {
+	const out: Record<string, unknown> = {};
+	if (v.input) out.input = true;
+	if (v.output) out.output = true;
+	if (v.voice.trim()) out.voice = v.voice.trim();
+	if (v.transcriptionPool) out.transcription_pool = v.transcriptionPool;
+	if (v.speechPool) out.speech_pool = v.speechPool;
+	if (Object.keys(out).length) {
+		spec.publish ??= {};
+		spec.publish.voice = out;
+		return;
+	}
+	if (spec.publish) {
+		delete spec.publish.voice;
+		if (!Object.keys(spec.publish).length) delete spec.publish;
+	}
+}
+
+/** The pools a voice direction that is on still needs before the agent can be published. */
+export function voiceMissing(v: Voice): Array<'transcription' | 'speech'> {
+	const missing: Array<'transcription' | 'speech'> = [];
+	if (v.input && !v.transcriptionPool) missing.push('transcription');
+	if (v.output && !v.speechPool) missing.push('speech');
+	return missing;
+}
+
 /* ---- templates ------------------------------------------------------ */
 
 export const TEMPLATES = ['faq', 'support', 'leads', 'internal', 'blank'] as const;
@@ -846,6 +918,7 @@ export interface Todo {
 /** The step whose part of the spec a validator path points into. */
 export function stepForPath(path: string): StepKey | null {
 	const head = (prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}.`) || path.startsWith(`${p}[`));
+	if (head(['profile.color', 'publish.voice'])) return 'site';
 	if (head(['main.pool', 'main.instructions', 'profile'])) return 'basics';
 	if (head(['scope'])) return 'scope';
 	if (head(['main.tools', 'main.skills', 'main.tool_resources'])) return 'abilities';
