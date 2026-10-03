@@ -500,10 +500,12 @@ async fn improve_returns_a_suggestion_and_why() {
 }
 
 /// Without a pool in the request or the draft, the assistant runs on the
-/// admin's "Balanced" model choice (#116) before falling back to the first
-/// chat pool by name.
+/// agents' chat default: the admin's "Balanced" choice (#116) when set, else
+/// the pool of the gateway's default chat model (Models & routing → Default
+/// models), which itself falls back to the first model served.
 #[tokio::test]
-async fn without_a_pool_the_assistant_prefers_the_balanced_model_choice() {
+async fn without_a_pool_the_assistant_follows_the_gateway_default_chat_model() {
+    use aiplane_core::server::feature_defaults::{self, Feature};
     use aiplane_core::server::settings;
 
     let fx = fixture(answer(
@@ -513,12 +515,29 @@ async fn without_a_pool_the_assistant_prefers_the_balanced_model_choice() {
     let (_, body) = fx
         .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
         .await;
-    assert_eq!(body["pool"], "assist-pool", "the first chat pool by name");
+    assert_eq!(
+        body["pool"], "assist-pool",
+        "no default: the first model served"
+    );
+    assert_eq!(body["model"], "assist-model");
+
+    feature_defaults::set(&fx.state.db, Feature::Chat, Some("balanced-model"))
+        .await
+        .unwrap();
+    let (status, body) = fx
+        .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["pool"], "zz-balanced",
+        "the gateway's default chat model"
+    );
+    assert_eq!(body["model"], "balanced-model");
 
     settings::store(
         &fx.state.db,
         &fx.state.crypto,
-        &[("agents.pool_balanced".into(), "zz-balanced".into())],
+        &[("agents.pool_balanced".into(), "assist-pool".into())],
     )
     .await
     .unwrap();
@@ -527,8 +546,10 @@ async fn without_a_pool_the_assistant_prefers_the_balanced_model_choice() {
         .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["pool"], "zz-balanced");
-    assert_eq!(body["model"], "balanced-model");
+    assert_eq!(
+        body["pool"], "assist-pool",
+        "an admin's Balanced choice wins"
+    );
 }
 
 #[tokio::test]

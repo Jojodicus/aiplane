@@ -5,8 +5,10 @@
 //! "Voice"): a recording transcribed on the agent's transcription pool, and
 //! a finished answer spoken on its speech pool.
 //!
-//! Both calls run as the agent's principal on the one pool its spec names
-//! for that direction (`PoolAccess::for_system_pools`), exactly like a
+//! Both calls run as the agent's principal on one pool granted to it —
+//! the one its spec names for that direction, else the pool of the
+//! gateway's default model for it ([`super::defaults::voice_pool`]) —
+//! narrowed with `PoolAccess::for_system_pools`, exactly like a
 //! model round: the usage row is the agent run's (so it spends the owner's
 //! budget) and the exchange is an `llm_exchange` in the conversation's
 //! activity chain (`purpose: transcription` or `speech`). The log keeps the
@@ -23,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use aiplane_core::server::capped_read::{self, CappedReadError};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
+use aiplane_core::server::feature_defaults::PoolDefault;
 use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
@@ -69,11 +72,6 @@ impl Conversation<'_> {
 /// unavailable; this is for the activity log and the server log.
 #[derive(Debug, thiserror::Error)]
 pub enum VoiceError {
-    #[error(
-        "pool `{pool}` serves no {what} model this agent may use — check that the pool is a \
-         {what} pool, that it is granted to the agent, and that a backend of it is up"
-    )]
-    NoModel { pool: String, what: &'static str },
     #[error("routing to the {what} pool failed: {message}")]
     Route { what: &'static str, message: String },
     #[error("the {what} backend could not be reached: {message}")]
@@ -91,11 +89,11 @@ pub struct Recording {
     pub seconds: f64,
 }
 
-/// Transcribe `recording` on `pool`. The transcript is returned to the
+/// Transcribe `recording` on `target`. The transcript is returned to the
 /// visitor to read and send; nothing is posted to the conversation.
 pub async fn transcribe(
     state: &RamaState,
-    pool: &str,
+    target: &PoolDefault,
     conversation: &Conversation<'_>,
     recording: Recording,
 ) -> Result<String, VoiceError> {
@@ -103,16 +101,10 @@ pub async fn transcribe(
     let mut exchange = SideExchange::new("transcription");
     let mut usage = Usage::new(UsageKind::Transcription, Some(recording.seconds));
     let result = async {
-        let access = PoolAccess::for_system_pools(conversation.principal, [pool]);
-        let model = pool_model(state, pool, PoolKind::Transcription, &access).ok_or_else(|| {
-            VoiceError::NoModel {
-                pool: pool.to_string(),
-                what: WHAT,
-            }
-        })?;
+        let access = PoolAccess::for_system_pools(conversation.principal, [target.pool.as_str()]);
         let acquired = state
             .upstreams
-            .route_access(&model, PoolKind::Transcription, &access)
+            .route_access(&target.model, PoolKind::Transcription, &access)
             .map_err(|e| VoiceError::Route {
                 what: WHAT,
                 message: e.to_string(),
@@ -179,13 +171,13 @@ pub async fn transcribe(
     result
 }
 
-/// Speak `answer`, the final text of assistant turn `turn_id`, on `pool` in
-/// `voice` (the pool's voice for `lang` when `None`). `Ok(None)` when
+/// Speak `answer`, the final text of assistant turn `turn_id`, on `target`
+/// in `voice` (the pool's voice for `lang` when `None`). `Ok(None)` when
 /// nothing of the answer is speakable (a bare code block). A turn already
 /// spoken in the same voice is served from memory.
 pub async fn speak(
     state: &RamaState,
-    pool: &str,
+    target: &PoolDefault,
     voice: Option<&str>,
     conversation: &Conversation<'_>,
     turn_id: &str,
@@ -207,6 +199,7 @@ pub async fn speak(
     if spoken.is_empty() {
         return Ok(None);
     }
+    let pool = target.pool.as_str();
     let access = PoolAccess::for_system_pools(conversation.principal, [pool]);
     let found = state
         .upstreams
@@ -221,7 +214,11 @@ pub async fn speak(
                 .cloned()
         })
     });
-    let cache_key = format!("{turn_id}|{pool}|{}", voice.as_deref().unwrap_or(""));
+    let cache_key = format!(
+        "{turn_id}|{pool}|{}|{}",
+        target.model,
+        voice.as_deref().unwrap_or("")
+    );
     if let Some(audio) = SPOKEN.lock().ok().and_then(|c| c.get(&cache_key)) {
         return Ok(Some(audio));
     }
@@ -229,17 +226,9 @@ pub async fn speak(
     let mut exchange = SideExchange::new("speech");
     let mut usage = Usage::new(UsageKind::Speech, Some(spoken.chars().count() as f64));
     let result = async {
-        let model =
-            found
-                .as_ref()
-                .and_then(|p| first_model(p))
-                .ok_or_else(|| VoiceError::NoModel {
-                    pool: pool.to_string(),
-                    what: WHAT,
-                })?;
         let acquired = state
             .upstreams
-            .route_access(&model, PoolKind::Speech, &access)
+            .route_access(&target.model, PoolKind::Speech, &access)
             .map_err(|e| VoiceError::Route {
                 what: WHAT,
                 message: e.to_string(),
@@ -410,33 +399,6 @@ fn read_error(what: &'static str, err: CappedReadError) -> VoiceError {
             message: other.to_string(),
         },
     }
-}
-
-/// A model of pool `pool` of `kind` that `access` may use: the operator's
-/// declared model first (a cloud provider lists its whole catalogue on
-/// `/models`), else the smallest a healthy backend reports.
-fn pool_model(
-    state: &RamaState,
-    pool: &str,
-    kind: PoolKind,
-    access: &PoolAccess,
-) -> Option<String> {
-    let found = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .find(|p| p.name == pool && p.kind == kind && access.allows(p))?;
-    first_model(&found)
-}
-
-fn first_model(pool: &aiplane_core::server::upstreams::Pool) -> Option<String> {
-    pool.configured_models.first().cloned().or_else(|| {
-        pool.backends
-            .iter()
-            .filter(|b| b.is_available())
-            .flat_map(|b| b.models_snapshot())
-            .min()
-    })
 }
 
 /// `text` cut to at most `max` characters, at the end of the last sentence

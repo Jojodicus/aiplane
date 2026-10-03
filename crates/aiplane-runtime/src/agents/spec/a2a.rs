@@ -151,6 +151,7 @@ mod tests {
                 grants: &grants,
                 agents: &HashMap::new(),
                 live_specs: &HashMap::new(),
+                voice_defaults: &Default::default(),
             },
             Stage::Draft,
         )

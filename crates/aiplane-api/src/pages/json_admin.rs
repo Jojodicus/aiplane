@@ -488,12 +488,7 @@ pub async fn models_list(State(state): State<Arc<RamaState>>, req: Request) -> R
         }));
     }
     let mut feature_defaults = Vec::new();
-    for feature in [
-        Feature::Chat,
-        Feature::Transcription,
-        Feature::Image,
-        Feature::Embedding,
-    ] {
+    for feature in Feature::ALL {
         let model = feature_defaults::get(&state.db, feature).await;
         let mut available = state.upstreams.models_for_kind(feature.pool_kind());
         available.sort();

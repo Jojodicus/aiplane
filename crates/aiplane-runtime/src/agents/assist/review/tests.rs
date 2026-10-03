@@ -174,6 +174,7 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
         grants: &granted,
         agents: &w.agents,
         live_specs: &w.live,
+        voice_defaults: &Default::default(),
     };
     spec::check(&draft, &ctx, Stage::Draft).unwrap();
     spec::check(&draft, &ctx, Stage::Publish).unwrap();

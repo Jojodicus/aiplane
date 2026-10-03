@@ -6,6 +6,7 @@
 		ANSWER_LANGUAGES,
 		TIERS,
 		TONES,
+		defaultChatPool,
 		hasTiers,
 		humanize,
 		readBasics,
@@ -57,6 +58,12 @@
 		if (previous) ws.stageRevoke('pool', previous);
 	}
 	const tierLabel = (tier: Tier) => t(`agents-setup-model-${tier}`);
+
+	/** A new agent starts on the gateway's default chat model, staged for granting like any choice. */
+	$effect(() => {
+		const start = defaultChatPool(ws.resources);
+		if (start && !model.pool && ws.writable) choosePool(start, start);
+	});
 
 	/** A proposed or improved tone is a response text; read it back into chips, language and the rest. */
 	function adoptResponse(response: string) {

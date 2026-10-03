@@ -13,7 +13,13 @@
 //! `tiers` names the pool behind each of the setup assistant's model choices
 //! (`[agents] pool_fast/_balanced/_thorough`, set by an admin), whether or not
 //! the caller holds it: the assistant says why a choice it cannot grant is
-//! unavailable instead of hiding it.
+//! unavailable instead of hiding it. The choice exists only when an admin set
+//! one of them; "Balanced" left unset is the chat default below.
+//!
+//! `defaults` names the pool (and model) the gateway's admin "Default
+//! models" resolve to among the pools the caller holds — what the setup
+//! preselects for a new agent's chat pool and for a voice direction switched
+//! on. Being held, each is one the grant route accepts.
 
 use std::sync::Arc;
 
@@ -24,8 +30,10 @@ use serde_json::json;
 use super::json_principals::require_agent_manager;
 use super::{internal, json_ok};
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
+use aiplane_core::server::feature_defaults::{self, Feature, PoolDefault};
 use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::assist::Ability;
+use aiplane_runtime::agents::defaults;
 use aiplane_runtime::rama_server::state::RamaState;
 
 const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
@@ -131,13 +139,42 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         .map(|c| json!({ "id": c.id, "name": c.name }))
         .collect();
 
+    let chat_default = defaults::chat_pool(&state, &access).await;
+    let transcription_default = feature_defaults::default_pool(
+        &state.db,
+        &state.upstreams,
+        Feature::Transcription,
+        &access,
+    )
+    .await;
+    let speech_default =
+        feature_defaults::default_pool(&state.db, &state.upstreams, Feature::Speech, &access).await;
+    let pool_default =
+        |d: Option<PoolDefault>| d.map(|d| json!({ "pool": d.pool, "model": d.model }));
+    let defaults = json!({
+        "chat": pool_default(chat_default.clone()),
+        "transcription": pool_default(transcription_default),
+        "speech": pool_default(speech_default),
+    });
+
     let config = state.config();
     let agents = &config.agents;
-    let tiers = json!({
-        "fast": agents.pool_fast,
-        "balanced": agents.pool_balanced,
-        "thorough": agents.pool_thorough,
-    });
+    let tiers = if [
+        &agents.pool_fast,
+        &agents.pool_balanced,
+        &agents.pool_thorough,
+    ]
+    .iter()
+    .any(|p| p.is_some())
+    {
+        json!({
+            "fast": agents.pool_fast,
+            "balanced": agents.pool_balanced.clone().or(chat_default.map(|d| d.pool)),
+            "thorough": agents.pool_thorough,
+        })
+    } else {
+        json!({ "fast": null, "balanced": null, "thorough": null })
+    };
 
     json_ok(
         StatusCode::OK,
@@ -145,6 +182,7 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
             "pools": pools,
             "voice_pools": voice_pools,
             "tiers": tiers,
+            "defaults": defaults,
             "tools": tools,
             "connectors": connectors,
             "skills": skills,

@@ -16,7 +16,7 @@
  * structured system prompt it ends up in (`docs/agents.md` "What #115
  * built"). Text a person reads comes from the catalogs.
  */
-import type { AgentResources, Grant, Spec, SpecIssue } from './agents.ts';
+import type { AgentError, AgentResources, Grant, Spec, SpecIssue } from './agents.ts';
 import templates from './agent-templates.json' with { type: 'json' };
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the spec is open-ended JSON */
@@ -866,6 +866,64 @@ export function voiceMissing(v: Voice): Array<'transcription' | 'speech'> {
 	if (v.input && !v.transcriptionPool) missing.push('transcription');
 	if (v.output && !v.speechPool) missing.push('speech');
 	return missing;
+}
+
+export type VoiceKind = 'transcription' | 'speech';
+
+/** Whether the manager can offer this direction at all: they hold a pool of its kind, or one is named already. */
+export function voiceOffered(kind: VoiceKind, named: string, resources: AgentResources | null | undefined): boolean {
+	return !!named || (resources?.voice_pools?.[kind]?.length ?? 0) > 0;
+}
+
+/**
+ * The pool a voice direction starts on when it is switched on: the one
+ * already named, else the pool of the gateway's default model for it, else
+ * the first the manager holds. `grant` says the pool still has to be staged
+ * for granting. `null` when the manager holds none — the step explains
+ * instead of offering a switch that publishing would refuse.
+ */
+export function voicePoolOnSwitch(
+	kind: VoiceKind,
+	named: string,
+	resources: AgentResources | null | undefined
+): { pool: string; grant: boolean } | null {
+	if (named) return { pool: named, grant: false };
+	const held = resources?.voice_pools?.[kind] ?? [];
+	const preferred = resources?.defaults?.[kind]?.pool;
+	const pool = preferred && held.includes(preferred) ? preferred : held[0];
+	return pool ? { pool, grant: true } : null;
+}
+
+/** The chat pool a new agent starts on: the gateway's default chat model's pool, when the manager holds it. */
+export function defaultChatPool(resources: AgentResources | null | undefined): string | null {
+	const pool = resources?.defaults?.chat?.pool;
+	return pool && (resources?.pools ?? []).includes(pool) ? pool : null;
+}
+
+/* ---- errors --------------------------------------------------------- */
+
+/**
+ * A failed call in words a manager can act on, never a raw HTTP status line.
+ * The server's own message stays when it sent one in its error envelope
+ * (those say what to fix); a missing endpoint, an outage, a network failure
+ * and a rate refusal get a catalog message instead. `assist` marks the
+ * prompt assistant, whose absence on a server is worth saying as such.
+ */
+export function setupErrorMessage(
+	err: AgentError,
+	tr: (key: string, args?: Record<string, string | number>) => string,
+	kind: 'assist' | 'other' = 'other'
+): string {
+	if (err.status === 0) return tr('agents-error-network');
+	if (err.status === 429) {
+		return err.retryAfter ? tr('agents-error-rate-retry', { seconds: Math.ceil(err.retryAfter) }) : tr('agents-error-rate');
+	}
+	if (kind === 'assist') {
+		if ([404, 405, 501, 503].includes(err.status)) return tr('agents-error-assist-unavailable');
+		if (err.status === 502) return tr('agents-error-assist-failed');
+	}
+	if (err.code && err.message && !/^\d{3} /.test(err.message)) return err.message;
+	return tr('agents-error-generic');
 }
 
 /* ---- templates ------------------------------------------------------ */
