@@ -710,7 +710,7 @@ async fn every_routing_step_is_audited_with_the_call_chain() {
         .iter()
         .filter(|e| e.chain.is_some())
         .map(|e| e.kind.as_str())
-        .filter(|k| *k != "tool_call")
+        .filter(|k| !matches!(*k, "tool_call" | "state_written"))
         .collect();
     assert_eq!(
         kinds,
@@ -890,6 +890,22 @@ async fn the_model_can_never_select_a_closed_route() {
     let helper = requests(&helper).await;
     assert_eq!(helper.len(), 1, "only the open route was dispatched");
     assert_eq!(helper[0]["messages"][1]["content"], "Technical: billing");
+
+    let decisions: Vec<Value> = world
+        .audit(&support)
+        .await
+        .iter()
+        .filter(|e| e.kind == "route_decision")
+        .map(|e| e.detail.clone())
+        .collect();
+    assert_eq!(
+        decisions
+            .iter()
+            .map(|d| d["method"].clone())
+            .collect::<Vec<_>>(),
+        [json!("classifier"), json!("classifier")],
+        "the refused pick and the dispatch both say the classifier decided: {decisions:?}"
+    );
 }
 
 #[tokio::test]

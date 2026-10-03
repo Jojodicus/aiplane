@@ -139,7 +139,7 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   up only in `system_tokens` (joined to a principal that is not disabled),
   `gwk_` only in `tokens`. A forged prefix swap never authenticates.
 - **What it resolves to.** `UserCtx.principal = Principal::System` with the
-  grants loaded once per request. `tools_enabled` is always on — the grants are
+  grants loaded once per request and capped at the token's minter (below). `tools_enabled` is always on — the grants are
   the policy — and there is no model allowlist; pools are its `pool` grants.
 - **Default deny.** A new principal has no rights at all, not even a pool:
   until one is granted, `/v1/chat/completions` answers 404 for every model. See
@@ -194,8 +194,22 @@ its principal to whoever holds it. So a non-admin may issue one only while
 they hold every grant the principal has, checked the same way as a new grant
 (a grant whose resource is gone counts as not held). Otherwise `403
 token_exceeds_manager` names the first missing grant. Admins are not capped.
-Grants still survive the granting manager losing rights. Existing tokens keep
-working; only new tokens are refused.
+
+**A token is capped at its minter, at every request.** The token records who
+minted it (`system_tokens.created_by`). When a `gws_` bearer authenticates,
+`require_bearer` keeps only the principal's grants that the minter holds *at
+that moment*, by the same check as a new grant
+(`aiplane_runtime::server::grant_holding::capped_to_minter`): a grant added
+to the principal later that the minter does not hold is not usable through
+that token, a grant the minter has since lost stops working through it, and a
+minter who is gone leaves the token with no grants at all. A token an admin
+minted is uncapped while the minter is an admin. *Chosen* over checking only
+at issue time: the principal can be granted more after a token exists — by
+an admin, or by another manager with a share — and a manager's token must
+never become a way to use what that manager could not hand out. The
+principal's grants themselves still survive the granting manager losing
+rights; use an admin-minted token for a principal meant to outlive its
+manager.
 
 There is no SPA screen for this yet; it is API-only.
 

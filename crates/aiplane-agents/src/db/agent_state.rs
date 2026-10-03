@@ -9,6 +9,7 @@
 //! [`put`] directly would skip both the validator and the `set_by` check, so
 //! nothing else may.
 
+use aiplane_core::server::run_chain::RunChain;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -30,7 +31,9 @@ pub struct StoredSlot {
 /// in the activity log on the same transaction: the slot, its old and new
 /// value, the provenance, and when. The write and its event commit together
 /// or not at all. A slot of a person's conversation is written without an
-/// event; only an agent's conversation has a log.
+/// event; only an agent's conversation has a log. `run` is the run that
+/// wrote it: its root conversation's chain takes the event, so a sub-agent's
+/// write in its child session lands where the rest of the run is.
 pub async fn put(
     conn: &mut sqlx::SqliteConnection,
     session_id: &str,
@@ -38,6 +41,7 @@ pub async fn put(
     value: &Value,
     provenance: &str,
     set_at: Timestamp,
+    run: Option<&RunChain>,
 ) -> Result<(), DbError> {
     // A write first, so the old value is read under the lock it is replaced
     // under.
@@ -98,6 +102,7 @@ pub async fn put(
                 "set_at": set_at,
             }),
         )
+        .in_run(run)
         .at(Correlation {
             session_id: Some(session_id.to_string()),
             conversation_id: Some(session_id.to_string()),
@@ -179,6 +184,7 @@ mod tests {
             &json!({"customer_id": "K-12345"}),
             "verifier:otp",
             at("2026-10-02T10:00:00Z"),
+            None,
         )
         .await
         .unwrap();
@@ -189,6 +195,7 @@ mod tests {
             &json!("a@b.example"),
             "llm",
             at("2026-10-02T10:01:00Z"),
+            None,
         )
         .await
         .unwrap();
@@ -223,6 +230,7 @@ mod tests {
             &json!("sales"),
             "llm",
             at("2026-10-02T10:00:00Z"),
+            None,
         )
         .await
         .unwrap();
@@ -233,6 +241,7 @@ mod tests {
             &json!("billing"),
             "host",
             at("2026-10-02T11:00:00Z"),
+            None,
         )
         .await
         .unwrap();
@@ -255,6 +264,7 @@ mod tests {
             &json!("Ada"),
             "llm",
             Timestamp::now(),
+            None,
         )
         .await
         .unwrap();
@@ -279,7 +289,8 @@ mod tests {
                     "x",
                     &json!(1),
                     bad,
-                    Timestamp::now()
+                    Timestamp::now(),
+                    None
                 )
                 .await
                 .is_err(),
@@ -298,7 +309,8 @@ mod tests {
                 "x",
                 &json!(1),
                 "llm",
-                Timestamp::now()
+                Timestamp::now(),
+                None
             )
             .await
             .is_err()

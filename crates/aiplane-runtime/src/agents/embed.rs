@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use session_core::SessionWorkers;
 use session_core::workers::{ActiveWorker, RegisterOutcome, TurnUpdate};
 
-use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_agents::db::inbound::Inbound;
 use aiplane_agents::rates::{self, Rate, RateExceeded, VisitorKey};
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
@@ -201,12 +201,15 @@ const REFUSAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 const MAX_OPEN_REFUSALS: usize = 10_000;
 
 /// Keeps a flood of refused requests from becoming a flood of database
-/// work: one `limit_refused` event per (agent, subject, limit) when a window
-/// opens, with `count: 1`, and — when more were refused in it — one more as
-/// the window closes, whose `count` is the rest and whose `folds` names the
-/// first. The log is append-only, so the count is never written back into
-/// the first event. One sweeper task, started with the first refusal, closes
-/// the windows that have run their course.
+/// work: one event per (agent, subject, class) when a window opens, with
+/// `count: 1`, and — when more were refused in it — one more as the window
+/// closes, whose `count` is the rest and whose `folds` names the first. The
+/// log is append-only, so the count is never written back into the first
+/// event. One sweeper task, started with the first refusal, closes the
+/// windows that have run their course. A visitor refused by a limit
+/// (`limit_refused`, class = the limit) and a host identity token refused
+/// for a conversation (`host_identity`, class = the reason) both go through
+/// it.
 #[derive(Clone)]
 pub struct RefusalAudit {
     window: std::time::Duration,
@@ -215,14 +218,31 @@ pub struct RefusalAudit {
     sweeping: Arc<AtomicBool>,
 }
 
-/// `(agent, subject, limit kind)`: one open refusal window per triple. The
+/// `(agent, subject, class)`: one open refusal window per triple. The
 /// overflow window of an agent has the empty subject.
 type RefusalKey = (String, String, String);
+
+/// One refused request, as [`RefusalAudit`] counts it.
+pub struct Refused<'a> {
+    pub agent_id: &'a str,
+    /// Who was refused: a visitor, an A2A context, a client IP, or a
+    /// conversation.
+    pub subject: &'a str,
+    /// What refused it: one window per agent, subject and class.
+    pub class: String,
+    pub kind: AuditKind,
+    /// The conversation whose chain takes the events; `None` for the
+    /// agent's own chain.
+    pub conversation_id: Option<&'a str>,
+    pub detail: Value,
+}
 
 struct OpenRefusal {
     /// The first refusal's detail; its `window_id` is what the closing
     /// event's `folds` names.
     detail: Value,
+    kind: AuditKind,
+    conversation_id: Option<String>,
     count: u64,
     opened: std::time::Instant,
 }
@@ -243,15 +263,41 @@ impl RefusalAudit {
         }
     }
 
+    /// A visitor request refused by a limit, as `limit_refused` on the
+    /// agent's own chain.
     async fn record(
         &self,
         db: &aiplane_core::server::db::Pool,
         agent_id: &str,
         subject: &str,
-        mut detail: Value,
+        detail: Value,
     ) {
-        let kind = detail["limit"].as_str().unwrap_or("unknown").to_string();
-        let mut key = (agent_id.to_string(), subject.to_string(), kind);
+        let class = detail["limit"].as_str().unwrap_or("unknown").to_string();
+        self.fold(
+            db,
+            Refused {
+                agent_id,
+                subject,
+                class,
+                kind: AuditKind::LimitRefused,
+                conversation_id: None,
+                detail,
+            },
+        )
+        .await;
+    }
+
+    pub async fn fold(&self, db: &aiplane_core::server::db::Pool, refused: Refused<'_>) {
+        let Refused {
+            agent_id,
+            subject,
+            class,
+            kind,
+            mut detail,
+            ..
+        } = refused;
+        let mut conversation_id = refused.conversation_id.map(str::to_string);
+        let mut key = (agent_id.to_string(), subject.to_string(), class);
         {
             let mut open = self.open.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(entry) = open.get_mut(&key) {
@@ -261,6 +307,7 @@ impl RefusalAudit {
             if open.len() >= self.max_open {
                 key.1 = String::new();
                 detail["visitor_id"] = Value::Null;
+                conversation_id = None;
                 if let Some(entry) = open.get_mut(&key) {
                     entry.count += 1;
                     return;
@@ -273,12 +320,14 @@ impl RefusalAudit {
                 key,
                 OpenRefusal {
                     detail: detail.clone(),
+                    kind,
+                    conversation_id: conversation_id.clone(),
                     count: 1,
                     opened: std::time::Instant::now(),
                 },
             );
         }
-        refusal_event(db, agent_id, detail).await;
+        refusal_event(db, agent_id, kind, conversation_id.as_deref(), detail).await;
         self.start_sweeper(db);
     }
 
@@ -306,15 +355,33 @@ impl RefusalAudit {
                     let mut detail = entry.detail;
                     detail["folds"] = detail["window_id"].take();
                     detail["count"] = json!(entry.count - 1);
-                    refusal_event(&db, &key.0, detail).await;
+                    refusal_event(
+                        &db,
+                        &key.0,
+                        entry.kind,
+                        entry.conversation_id.as_deref(),
+                        detail,
+                    )
+                    .await;
                 }
             }
         });
     }
 }
 
-async fn refusal_event(db: &aiplane_core::server::db::Pool, agent_id: &str, detail: Value) {
-    super::audit::record(db, AuditKind::LimitRefused, agent_id, None, None, detail).await;
+async fn refusal_event(
+    db: &aiplane_core::server::db::Pool,
+    agent_id: &str,
+    kind: AuditKind,
+    conversation_id: Option<&str>,
+    detail: Value,
+) {
+    let event = NewEvent::new(kind, agent_id, detail).at(Correlation {
+        session_id: conversation_id.map(str::to_string),
+        conversation_id: conversation_id.map(str::to_string),
+        ..Correlation::default()
+    });
+    let _ = super::audit::record_event(db, event).await;
 }
 
 /// What an agent's managers see of its limits under the live spec `live`

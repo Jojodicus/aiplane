@@ -151,9 +151,11 @@ async fn pin_url(url: Url, policy: Policy, timeout: Duration) -> Result<Pinned, 
         .port_or_known_default()
         .ok_or_else(|| format!("`{url}` has no port"))?;
     let addrs = resolve(&host, port, policy.allow_private).await?;
-    // The guarded client: pinned to the addresses checked above.
+    // The guarded client: pinned to the addresses checked above. A proxy
+    // would resolve the host again on its own, so none is ever used.
     #[allow(clippy::disallowed_methods)]
     let client = reqwest::Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
         .resolve_to_addrs(&host, &addrs)
@@ -368,6 +370,45 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.url().path(), "/new");
+    }
+
+    /// A proxy resolves the host itself, after the guard checked it, so a
+    /// guarded request never goes through one, whatever the environment says.
+    #[tokio::test]
+    async fn an_environment_proxy_is_never_used() {
+        let proxy = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("via proxy"))
+            .mount(&proxy)
+            .await;
+        let target = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/page"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("direct"))
+            .mount(&target)
+            .await;
+        const VARS: [&str; 4] = ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+        // nextest runs every test in a process of its own; the variables are
+        // read when the client is built and removed right after.
+        unsafe {
+            for var in VARS {
+                std::env::set_var(var, proxy.uri());
+            }
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+        }
+        let pinned = pin(&format!("{}/page", target.uri()), Policy::web(true), T).await;
+        unsafe {
+            for var in VARS {
+                std::env::remove_var(var);
+            }
+        }
+        let pinned = pinned.unwrap();
+        let resp = pinned.client.get(pinned.url).send().await.unwrap();
+        let body = crate::server::capped_read::read_capped_text(resp, 1024)
+            .await
+            .unwrap();
+        assert_eq!(body, "direct");
     }
 
     #[tokio::test]

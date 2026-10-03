@@ -70,7 +70,9 @@ company-wide rights. That contradicts the decided default-deny.
   principals.
 - A manager can only grant **what they hold themselves at grant time**. After
   that a grant persists until the principal is reconfigured, independent of the
-  manager's later rights.
+  manager's later rights. A token a non-admin manager minted, though, carries
+  only what that manager holds at each request
+  ([`auth.md`](auth.md#system-principals-and-gws_-tokens)).
 - **Sub-agents are agents.** Each one is its own principal with its own grants.
 - A **visitor is not a principal**. A visitor is a session under the agent.
 
@@ -1818,7 +1820,10 @@ verifiers:
   `host`".
 - **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
   checks the three send windows (`rates::sliding_window`, the #92 rate
-  type, with new scopes `email` and `session`), records the send, calls
+  type, with new scopes `email` and `session`) and records the send in one
+  write transaction (`agent_verifiers::record_event_within`, `BEGIN
+  IMMEDIATE`, so parallel requests cannot all pass the check before one is
+  counted; a lookup's attempts go through the same call), calls
   `send_code`, stores the outstanding code's address hash, send time and
   expiry, and pauses the turn with `SuspendRequest::secure_input` (message
   `agent-verifier-code-sent`, timeout `code_ttl`). The widget's secure field
@@ -1882,8 +1887,12 @@ verifiers:
   assurance, session_id, turn_id, …}`; outcomes `code_sent`, `verified`,
   `wrong_code`, `locked`, `expired`, `email_changed`, `rate_limited`,
   `not_confirmed`, `too_many_attempts`, `write_failed`) and `host_identity`
-  (`{session_id, outcome, reason | slots}`). Never a code, an address or a
-  claim value.
+  (`{session_id, outcome, reason | slots}`, in the chain of the conversation
+  the token was presented for, with its `conversation_id`). A refused token
+  is counted like a refused visitor (`embed::RefusalAudit`): one event per
+  conversation and reason when a window opens, one with the rest of the
+  `count` when it closes, so a flood of bad tokens is two rows, not one a
+  request. Never a code, an address or a claim value.
 - **The system message after a resume.** The driver now rebuilds an agent's
   system message on the first round after a resume too, so a slot the
   resumed call just wrote (the verifier's) shows on the next request and
@@ -2489,7 +2498,8 @@ routes:
 
 A complete, tamper-evident activity log: everything an agent does, enough to
 reconstruct any conversation, decision and model exchange afterwards, with
-no secret in it. Migration `0096_agent_activity_log.sql`; the log is
+no secret in it. Migrations `0096_agent_activity_log.sql` and
+`0097_activity_blobs.sql`; the log is
 `aiplane-agents::db::agent_audit`, the runtime's door to it
 `aiplane-runtime::agents::audit`.
 
@@ -2614,17 +2624,18 @@ logged and the request goes on as it would have.
 
 | Event | Written by | Detail |
 |---|---|---|
-| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` (the body exactly as sent: system message, messages, tool offer, parameters), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
+| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` or, after a turn's first round, `request_delta` (see "Storage") (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
 | `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
-| `state_written` | `agent_state::put`, on the write's transaction | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
+| `state_written` | `agent_state::put`, on the write's transaction, in the chain of the writing run's root conversation (a sub-agent's slot in its child session included) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
 | `turn_started` / `turn_finished` | `headless::drive`, for every agent turn (main and sub-agent, resumed too) | the message the turn answers (a visitor's, or a sub-agent's task), or `resumed: true`; `status`, `answer`, `error`, `outcome` (a contracted run's `RunOutcome`: budget, rounds, repeated call …) |
 | `route_decision`, `sub_agent_dispatched`/`_finished`, `loop_iteration`/`_finished` | the router (#87/#88/#103) | as before (every route's gate, the route picked), plus the `method` that picked it (`rules`, `only_open`, `classifier`); an A2A dispatch also records the `message` it sent (`{secure_input_sent: true}` for an answer to the peer's `input-required`) |
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
 | `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
 | management kinds | the agent DB modules, on the change's transaction | as before |
 | `activity_swept` | the retention sweep, on the deletion's transaction | `chain_key`, `events`, `before` |
+| `chain_checkpoint` | the retention sweep, when it cuts the agent's own chain | `base_seq`, `base_hash`, `removed`, `seqs`, `from`, `to`, `before`, `anchors` |
 | `chain_anchored` | the end of every turn (`drive_opened_from`) | `chain_key`, `seq`, `hash` of the conversation chain's head |
 | `llm_exchange` | compaction, the rubric judge, the vision fallback | see below |
 
@@ -2638,7 +2649,14 @@ view and the evaluation read — leaves out the content kinds
 `tool_result` it records whatever the tool did with it, the run's resume
 records `secure_input_received` instead of it, the verifier's MCP check is
 redacted as before (#95), and the model never saw it, so no
-`llm_exchange` carries it. The A2A credential is sealed in the spec and
+`llm_exchange` carries it. Both writers redact through one
+`agents::audit::Redaction`, so a call looks the same in its `tool_result`
+and in every `llm_exchange` that carries it: the arguments of a tool that
+declares `sensitive_args` are `{redacted: true}` — in the answer's
+`tool_calls` and in the assistant `tool_calls` of every later request — and
+a turn resumed with a secure input has that value withheld
+(`[secure input withheld]`) from each of its exchanges too. A stored
+request therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
 sent only as a header, which no event records. Tokens, embed keys and
 client secrets are hashed or sealed where they are stored and never part
 of an event. `activity::a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret`
@@ -2672,8 +2690,22 @@ event is older than that, never part of a chain, and appends an
 `activity_swept` marker per chain to the agent's own chain, in the same
 transaction. The validator refuses a
 value below `publish.retention_days` (default 30), so a conversation's log
-always outlives the conversation. The agent's own chain is never swept;
-events from before #111 go by their age.
+always outlives the conversation. Events from before #111 go by their age.
+
+The agent's own chain honours the same retention, so it does not grow for
+ever with anchors, sweep markers and management events: before the
+conversation chains, the sweep cuts the chain's *prefix* written before the
+cutoff (`agent_audit::cut_agent_chain`), in one transaction with a signed
+`chain_checkpoint` appended at its head — `base_seq` and `base_hash` (the
+last removed event), `removed`, `seqs` (the removed range), `from`/`to`
+(when they were written), `before`, and `anchors`: the latest anchor of
+every conversation among them that was not swept, so a live conversation
+stays guarded. Anchors of swept conversations go with the prefix.
+`verify` starts the agent chain at the newest checkpoint (after
+`base_seq`, expecting `base_hash`) and seeds its anchors from it; a
+checkpoint met further along adds its carried anchors without replacing a
+newer one. Removing more of the prefix shows as a missing event, and
+removing the checkpoint as a gap in the chain.
 
 **Access and API** (`aiplane-api::pages::json_agent_activity`): the
 agent-management permission plus a `read` share (admins hold one on every
@@ -2697,12 +2729,26 @@ with `agent`, `principal`, `version`, `conversation`, `session`, `turn`,
 `visitor`, `caller` and `depth`, and every tool call in a `tool_call` span
 with `tool` and `call_id`, so a log line joins the events it belongs to.
 
-**Storage.** The log keeps payloads whole, and a model round's request
-carries the whole conversation so far: a conversation of *r* rounds over a
-prompt growing to *p* bytes stores roughly *r × p / 2* bytes of requests,
-plus every tool result once. A 20-round conversation with a 40 KB prompt is
-about 0.5 MB; image parts sent to a vision model count at their base64
-size. SQLite stores rows that large on overflow pages, which the hourly
+**Storage.** A model round's request carries the whole conversation so
+far, so the log does not store it whole every round
+(`agent_audit::exchange`): the first round of a turn keeps its `request`;
+every later round keeps a `request_delta` against the round before it —
+`prev` (that exchange's event id), `keep` (how many of its messages this
+request starts with), the `messages` after them, the `system` message only
+when it changed, `tools` only when the offer changed (`null` when it was
+dropped), and `rest` (model, stream and sampling parameters). A request that
+shares nothing with the previous one beyond the system message is stored
+whole. A `data:` URL of at least 4 KiB (a base64 image) is stored once per
+chain in `activity_blobs` by its SHA-256, and the detail holds
+`activity-blob:sha256:<hash>` instead; the reference is inside the event's
+signed hash, a blob whose content no longer matches its hash is not served,
+and the sweep deletes a chain's blobs with it. The activity API's page and
+export serve every exchange as the whole request it stood for
+(`agent_audit::Reconstructor`, which follows `prev` back to a whole request
+and puts the blobs back); `activity::a_whole_run_is_one_hash_chain…` checks
+that what it gives back is what was sent. So a turn of *r* rounds stores its
+prompt about once plus what each round added, plus every tool result once.
+SQLite stores large rows on overflow pages, which the hourly
 sweep frees whole chain by chain; the file does not shrink without a
 `VACUUM`, but freed pages are reused. The columns #111 added sit after
 `detail` in the row, and reading a column behind an overflowing `detail`

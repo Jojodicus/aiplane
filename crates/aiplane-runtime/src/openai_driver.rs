@@ -1238,6 +1238,19 @@ async fn run_one_turn(
     // Everything from here on is this turn's own rounds — what a suspension
     // stores as its tail, and what a resume appends after the rebuilt history.
     let prefix_len = messages.len();
+    let exchange_log = exchange::ExchangeLog::new(
+        &tool_source,
+        crate::agents::audit::Redaction {
+            decided: d.resume.as_ref().and_then(|from| match &from.decision {
+                chat::Decision::Value { value }
+                    if from.suspension.kind == chat::SuspensionKind::SecureInput =>
+                {
+                    Some(value)
+                }
+                _ => None,
+            }),
+        },
+    );
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {
         match resume::resume_into(
@@ -1396,16 +1409,17 @@ async fn run_one_turn(
             Err(err) => {
                 let err = upstream_err(err);
                 let answer = exchange::Answer::from_error(&err);
-                exchange::record(
-                    d,
-                    &tool_ctx,
-                    round,
-                    &request_body,
-                    unsent(None),
-                    answer,
-                    sent_at,
-                )
-                .await;
+                exchange_log
+                    .record(
+                        d,
+                        &tool_ctx,
+                        round,
+                        &request_body,
+                        unsent(None),
+                        answer,
+                        sent_at,
+                    )
+                    .await;
                 return Err(err);
             }
         };
@@ -1438,16 +1452,17 @@ async fn run_one_turn(
             Err(err) => {
                 let err = transport_err(err);
                 let answer = exchange::Answer::from_error(&err);
-                exchange::record(
-                    d,
-                    &tool_ctx,
-                    round,
-                    &request_body,
-                    served(),
-                    answer,
-                    started,
-                )
-                .await;
+                exchange_log
+                    .record(
+                        d,
+                        &tool_ctx,
+                        round,
+                        &request_body,
+                        served(),
+                        answer,
+                        started,
+                    )
+                    .await;
                 return Err(err);
             }
         };
@@ -1468,16 +1483,17 @@ async fn run_one_turn(
             );
             let body = String::from_utf8_lossy(&bytes);
             let answer = exchange::Answer::failed(Some(status.as_u16()), body.to_string());
-            exchange::record(
-                d,
-                &tool_ctx,
-                round,
-                &request_body,
-                served(),
-                answer,
-                started,
-            )
-            .await;
+            exchange_log
+                .record(
+                    d,
+                    &tool_ctx,
+                    round,
+                    &request_body,
+                    served(),
+                    answer,
+                    started,
+                )
+                .await;
             // A context overflow is the one upstream 400 a *user* can act on,
             // and the raw backend JSON ("This model's maximum context length
             // is 262144 tokens…") tells them nothing they can act on. Say what
@@ -1738,16 +1754,17 @@ async fn run_one_turn(
                 error: streamed.as_ref().err().map(ToString::to_string),
                 cancelled: matches!(streamed, Ok(Some(_))),
             };
-            exchange::record(
-                d,
-                &tool_ctx,
-                round,
-                &request_body,
-                served(),
-                answer,
-                started,
-            )
-            .await;
+            exchange_log
+                .record(
+                    d,
+                    &tool_ctx,
+                    round,
+                    &request_body,
+                    served(),
+                    answer,
+                    started,
+                )
+                .await;
         }
         if let Some(end) = streamed? {
             return Ok(end);

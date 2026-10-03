@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_agents::db::agent_verifiers;
 use aiplane_core::server::capped_read;
 use aiplane_core::server::crypto::sha256_hex;
@@ -34,6 +34,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::{Map, Value, json};
 
 use super::JwtAlgorithm;
+use crate::agents::embed::Refused;
 use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
@@ -447,7 +448,8 @@ fn slot_values(
 
 /// Accept `token` for conversation `session_id` of agent `agent_id`, whose
 /// version runs `spec`: verify it and write its mapped slots as `host`.
-/// Returns the slots written.
+/// Returns the slots written. The outcome is a `host_identity` event of the
+/// conversation's chain.
 pub async fn accept(
     state: &RamaState,
     agent_id: &str,
@@ -468,16 +470,32 @@ pub async fn accept(
         }),
         Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
     };
-    if !matches!(outcome, Err(IdentityError::NotConfigured)) {
-        crate::agents::audit::record(
-            &state.db,
-            AuditKind::HostIdentity,
-            agent_id,
-            None,
-            None,
-            detail,
-        )
-        .await;
+    match &outcome {
+        Err(IdentityError::NotConfigured) => {}
+        Ok(_) => {
+            let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
+                session_id: Some(session_id.to_string()),
+                conversation_id: Some(session_id.to_string()),
+                ..Correlation::default()
+            });
+            let _ = crate::agents::audit::record_event(&state.db, event).await;
+        }
+        // A website (or someone posing as it) can post bad tokens as fast
+        // as it likes; each reason is counted in a window, not a row each.
+        Err(e) => {
+            let refused = Refused {
+                agent_id,
+                subject: session_id,
+                class: format!(
+                    "host_identity:{}",
+                    detail["reason"].as_str().unwrap_or(e.code())
+                ),
+                kind: AuditKind::HostIdentity,
+                conversation_id: Some(session_id),
+                detail,
+            };
+            state.refusals.fold(&state.db, refused).await;
+        }
     }
     outcome
 }
@@ -521,6 +539,7 @@ async fn accept_inner(
         &values,
         TrustedWriter::Host,
         now,
+        None,
     )
     .await
     .map_err(|e| storage(&e))?;

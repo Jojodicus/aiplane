@@ -14,6 +14,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::{DbError, Pool};
+use crate::rates::{Rate, RateExceeded, RateScope, sliding_window};
 
 /// The longest rate window a spec may configure. Events older than this are
 /// never counted again, so recording one prunes them.
@@ -148,6 +149,43 @@ pub struct NewEvent<'a> {
 /// count any more.
 pub async fn record_event(pool: &Pool, e: &NewEvent<'_>) -> Result<(), DbError> {
     let mut tx = pool.begin().await?;
+    insert_event(&mut tx, e).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// One window a counted event must fit into.
+#[derive(Debug, Clone, Copy)]
+pub struct Window<'a> {
+    pub scope: RateScope,
+    pub rate: Rate,
+    pub who: Counted<'a>,
+}
+
+/// Record `e` only if it fits every one of `windows`: the first window it
+/// does not fit is the answer, and nothing is recorded. The windows are
+/// read and the event written in one write transaction (`BEGIN IMMEDIATE`),
+/// so parallel requests queue on the write lock instead of all passing the
+/// check before any of them is counted.
+pub async fn record_event_within(
+    pool: &Pool,
+    e: &NewEvent<'_>,
+    windows: &[Window<'_>],
+) -> Result<Result<(), RateExceeded>, DbError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    for w in windows {
+        let since = e.at.checked_sub(w.rate.per).unwrap_or(e.at);
+        let times = event_times(&mut *tx, e.principal_id, e.verifier, e.kind, w.who, since).await?;
+        if let Err(exceeded) = sliding_window(w.scope, w.rate, &times, e.at) {
+            return Ok(Err(exceeded));
+        }
+    }
+    insert_event(&mut tx, e).await?;
+    tx.commit().await?;
+    Ok(Ok(()))
+}
+
+async fn insert_event(conn: &mut sqlx::SqliteConnection, e: &NewEvent<'_>) -> Result<(), DbError> {
     sqlx::query(
         "INSERT INTO agent_verifier_events
            (id, principal_id, verifier, kind, session_id, email_hash, ip_hash, created_at)
@@ -161,15 +199,14 @@ pub async fn record_event(pool: &Pool, e: &NewEvent<'_>) -> Result<(), DbError> 
     .bind(e.email_hash)
     .bind(e.ip_hash)
     .bind(e.at.to_string())
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
     let horizon = e.at.checked_sub(MAX_WINDOW).unwrap_or(e.at);
     sqlx::query("DELETE FROM agent_verifier_events WHERE principal_id = ? AND created_at < ?")
         .bind(e.principal_id)
         .bind(horizon.to_string())
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -186,8 +223,8 @@ pub enum Counted<'a> {
 
 /// When each `kind` event of `verifier` counted by `who` happened, since
 /// `since`.
-pub async fn event_times(
-    pool: &Pool,
+pub async fn event_times<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
     principal_id: &str,
     verifier: &str,
     kind: EventKind,
@@ -209,7 +246,7 @@ pub async fn event_times(
     .bind(kind.as_str())
     .bind(value)
     .bind(since.to_string())
-    .fetch_all(pool)
+    .fetch_all(db)
     .await?;
     rows.into_iter()
         .map(|r| super::parse_ts(r.try_get("created_at")?, "created_at"))
@@ -359,6 +396,54 @@ mod tests {
             1,
             "events older than any window are pruned"
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_sends_to_one_address_admit_exactly_the_limit() {
+        let pool = fresh().await;
+        let now = at("2026-10-02T10:00:00Z");
+        let windows = [Window {
+            scope: RateScope::Email,
+            rate: Rate {
+                max: 3,
+                per: SignedDuration::from_mins(15),
+            },
+            who: Counted::Email("e1"),
+        }];
+        let sends: Vec<_> = (0..20)
+            .map(|_| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    let event = NewEvent {
+                        principal_id: "a1",
+                        verifier: "otp",
+                        kind: EventKind::Send,
+                        session_id: "s1",
+                        email_hash: Some("e1"),
+                        ip_hash: None,
+                        at: now,
+                    };
+                    record_event_within(&pool, &event, &windows).await.unwrap()
+                })
+            })
+            .collect();
+        let mut admitted = 0;
+        for send in sends {
+            admitted += usize::from(send.await.unwrap().is_ok());
+        }
+        assert_eq!(admitted, 3);
+        let since = at("2026-10-02T09:00:00Z");
+        let recorded = event_times(
+            &pool,
+            "a1",
+            "otp",
+            EventKind::Send,
+            Counted::Email("e1"),
+            since,
+        )
+        .await
+        .unwrap();
+        assert_eq!(recorded.len(), 3);
     }
 
     #[tokio::test]

@@ -33,6 +33,7 @@ fn billing_spec() -> Value {
             "instructions": { "orchestration": "Explain the customer's invoice." },
             "budget": { "rounds": 3 }
         },
+        "state": { "finding": { "type": "string", "set_by": ["llm"] } },
         "finish": { "schema": finish_schema() }
     })
 }
@@ -102,10 +103,10 @@ async fn the_story() -> Run {
         text(FINAL),
     ])
     .await;
-    let sub = llm(vec![finish(
-        "b1",
-        json!({ "answer": "RE-1 was billed twice." }),
-    )])
+    let sub = llm(vec![
+        call("n1", "set_finding", json!({ "value": "double charge" })),
+        finish("b1", json!({ "answer": "RE-1 was billed twice." })),
+    ])
     .await;
     let peer = Peer::bearer(vec![completed(json!({ "answer": "Covered until 2027." }))]).await;
     let (erp, _) = erp().await;
@@ -216,6 +217,24 @@ async fn conversation(run: &Run) -> Vec<StoredEvent> {
     .events
 }
 
+/// `request` with the arguments of every assistant call to one of `tools`
+/// replaced by the log's marker, as the log keeps it.
+fn with_sensitive_arguments_redacted(mut request: Value, tools: &[&str]) -> Value {
+    for message in request["messages"].as_array_mut().unwrap() {
+        for call in message
+            .get_mut("tool_calls")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if tools.contains(&call["function"]["name"].as_str().unwrap_or_default()) {
+                call["function"]["arguments"] = json!({ "redacted": true });
+            }
+        }
+    }
+    request
+}
+
 fn detail(e: &StoredEvent) -> Value {
     serde_json::from_str(&e.detail).unwrap()
 }
@@ -267,12 +286,42 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
             .all(|e| e.chain_key.as_deref() == Some(&format!("conversation:{}", run.session)))
     );
 
-    // Every model request, exactly as sent, and what came back.
+    // Every model request, exactly as sent, and what came back. A round
+    // after the first of its turn is stored as a delta against the one
+    // before; the log reads it back whole.
+    let stored: Vec<Value> = events
+        .iter()
+        .filter(|e| e.kind == "llm_exchange" && e.principal_id == run.support)
+        .map(detail)
+        .collect();
+    assert!(
+        stored[0].get("request").is_some(),
+        "a turn's first round is whole"
+    );
+    let deltas = stored
+        .iter()
+        .filter(|d| d.get("request_delta").is_some())
+        .count();
+    assert!(
+        deltas >= stored.len() - 3,
+        "every round but each turn's first is a delta: {deltas} of {}",
+        stored.len()
+    );
+    let mut reconstructor = agent_audit::Reconstructor::default();
+    let mut read_back = Vec::new();
+    for event in &events {
+        read_back.push(
+            reconstructor
+                .event_json(run.world.db(), event)
+                .await
+                .unwrap(),
+        );
+    }
     let exchanges = |principal: &str| -> Vec<Value> {
-        events
+        read_back
             .iter()
-            .filter(|e| e.kind == "llm_exchange" && e.principal_id == principal)
-            .map(detail)
+            .filter(|e| e["kind"] == "llm_exchange" && e["principal_id"] == principal)
+            .map(|e| e["detail"].clone())
             .collect()
     };
     let main_exchanges = exchanges(&run.support);
@@ -281,8 +330,13 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
             .iter()
             .map(|e| e["request"].clone())
             .collect::<Vec<_>>(),
-        run.main,
-        "the main agent's requests, byte for byte"
+        run.main
+            .iter()
+            .cloned()
+            .map(|r| with_sensitive_arguments_redacted(r, &["verify_otp_request_code"]))
+            .collect::<Vec<_>>(),
+        "the main agent's requests, byte for byte but for the OTP tool's arguments, which \
+         it declares sensitive"
     );
     assert_eq!(
         exchanges(&run.billing)
@@ -304,7 +358,9 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
         .filter(|e| e.kind == "tool_result")
         .map(|e| (e.call_id.clone().unwrap(), detail(e)))
         .collect();
-    for id in ["k1", "k2", "fwd1", "v1", "fwd2", "k3", "fwd3", "h1", "b1"] {
+    for id in [
+        "k1", "k2", "fwd1", "v1", "fwd2", "k3", "fwd3", "h1", "n1", "b1",
+    ] {
         assert!(results.contains_key(id), "no tool_result for {id}");
     }
     assert_eq!(results["k1"]["arguments"], json!({ "value": ALICE }));
@@ -386,6 +442,16 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
     assert_eq!(issue_writes[1]["old"]["value"], "billing");
     assert_eq!(issue_writes[1]["new"], "warranty");
     assert_eq!(issue_writes[1]["provenance"], "llm");
+
+    let finding = &events[position(&events, |e, d| {
+        e.kind == "state_written" && d["slot"] == "finding"
+    })];
+    assert_eq!(
+        finding.principal_id, run.billing,
+        "the sub-agent's slot write is in the root conversation's chain"
+    );
+    assert_eq!(finding.agent_id.as_deref(), Some(run.support.as_str()));
+    assert_ne!(finding.session_id.as_deref(), Some(run.session.as_str()));
 
     let sub_event = events
         .iter()
@@ -630,6 +696,77 @@ async fn the_rubric_judges_exchange_is_logged_in_the_case_conversation() {
     );
     assert_eq!(judged[0].version, Some(0), "the evaluation's draft run");
     assert!(detail(&judged[0])["request"].to_string().contains("greets"));
+}
+
+/// A tool whose arguments carry what a visitor must not find in a log.
+struct Secretive;
+
+const SECRET_ARG: &str = "pin-4711-never-logged";
+
+impl crate::server::tools::Tool for Secretive {
+    fn id(&self) -> &str {
+        "secretive"
+    }
+
+    fn schema(&self) -> shared::api::ToolDef {
+        shared::api::ToolDef::function(
+            "secretive",
+            "Check a pin.",
+            json!({ "type": "object", "properties": { "pin": { "type": "string" } } }),
+        )
+    }
+
+    fn sensitive_args(&self) -> bool {
+        true
+    }
+
+    fn run<'a>(
+        &'a self,
+        _ctx: crate::server::tools::ToolContext,
+        _args: Value,
+    ) -> crate::server::tools::ToolFuture<'a> {
+        Box::pin(async move { Ok(json!({ "ok": true })) })
+    }
+}
+
+#[tokio::test]
+async fn a_sensitive_tools_arguments_stay_out_of_every_model_exchange() {
+    let main = llm(vec![
+        call("s1", "secretive", json!({ "pin": SECRET_ARG })),
+        text("Checked."),
+    ])
+    .await;
+    let world = World::build(
+        &[("support-pool", "support-model", &main)],
+        None,
+        false,
+        base_tools().with(Secretive),
+        None,
+    )
+    .await;
+    let agent = plain_agent(&world, &[(GrantKind::Tool, "secretive")], &["secretive"]).await;
+
+    let reply = visitor_says(&world, &agent, "Check my pin.").await;
+    assert_eq!(reply.answer.as_deref(), Some("Checked."));
+    assert!(
+        requests(&main).await[1].to_string().contains(SECRET_ARG),
+        "the model itself was sent its own call back"
+    );
+    let rounds = exchanges_of(&world, &agent, "round").await;
+    assert_eq!(rounds.len(), 2);
+    assert_eq!(
+        detail(&rounds[0])["response"]["tool_calls"][0]["function"]["arguments"],
+        json!({ "redacted": true }),
+        "the marker the tool_result keeps"
+    );
+    let stored: Vec<String> = sqlx::query_scalar("SELECT detail FROM agent_audit")
+        .fetch_all(world.db())
+        .await
+        .unwrap();
+    assert!(
+        stored.iter().all(|d| !d.contains(SECRET_ARG)),
+        "no event of the log holds the sensitive arguments"
+    );
 }
 
 /// A tool that returns an image for the model to see.

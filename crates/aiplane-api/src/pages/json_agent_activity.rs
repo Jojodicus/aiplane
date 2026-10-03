@@ -11,6 +11,9 @@
 //! conversations takes: the agent-management permission and a share on the
 //! agent (admins hold one on every agent). Responders, who answer handoffs
 //! without a share, cannot read it.
+//!
+//! An exchange stored as a delta, or with blobs, is served as the whole
+//! request it stood for (`agent_audit::Reconstructor`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +28,7 @@ use serde_json::json;
 use super::json_agents::{agent_at, analytics_bound};
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_ok};
-use aiplane_agents::db::agent_audit::{self, ActivityQuery, AuditKind, Order};
+use aiplane_agents::db::agent_audit::{self, ActivityQuery, AuditKind, Order, Reconstructor};
 use aiplane_agents::db::agents::Access;
 use aiplane_runtime::rama_server::state::RamaState;
 
@@ -130,17 +133,26 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
         },
     };
     query.max_bytes = PAGE_BYTES;
-    match agent_audit::page(&state.db, &query).await {
-        Ok(page) => json_ok(
-            StatusCode::OK,
-            json!({
-                "events": page.events.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
-                "next_cursor": page.next_cursor,
-                "order": if query.order == Order::Asc { "asc" } else { "desc" },
-            }),
-        ),
-        Err(err) => internal(err),
+    let page = match agent_audit::page(&state.db, &query).await {
+        Ok(page) => page,
+        Err(err) => return internal(err),
+    };
+    let mut reconstructor = Reconstructor::default();
+    let mut events = Vec::with_capacity(page.events.len());
+    for event in &page.events {
+        match reconstructor.event_json(&state.db, event).await {
+            Ok(json) => events.push(json),
+            Err(err) => return internal(err),
+        }
     }
+    json_ok(
+        StatusCode::OK,
+        json!({
+            "events": events,
+            "next_cursor": page.next_cursor,
+            "order": if query.order == Order::Asc { "asc" } else { "desc" },
+        }),
+    )
 }
 
 /// GET /api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=
@@ -156,6 +168,7 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     query.max_bytes = EXPORT_BATCH_BYTES;
     let (mut tx, rx) = rama::futures::channel::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
     tokio::spawn(async move {
+        let mut reconstructor = Reconstructor::default();
         loop {
             let page = match agent_audit::page(&state.db, &query).await {
                 Ok(page) => page,
@@ -171,7 +184,19 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
             };
             let mut lines = String::new();
             for event in &page.events {
-                lines.push_str(&event.to_json().to_string());
+                let json = match reconstructor.event_json(&state.db, event).await {
+                    Ok(json) => json,
+                    Err(err) => {
+                        tracing::error!(error = %err, agent = %query.agent_id, "exporting the activity log");
+                        let _ = tx
+                            .send(Err(std::io::Error::other(format!(
+                                "reading the activity log failed: {err}"
+                            ))))
+                            .await;
+                        return;
+                    }
+                };
+                lines.push_str(&json.to_string());
                 lines.push('\n');
             }
             if !lines.is_empty() && tx.send(Ok(Bytes::from(lines))).await.is_err() {

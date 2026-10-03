@@ -89,6 +89,16 @@ pub struct RouterSpec {
     pub snapshot: Arc<StateSnapshot>,
 }
 
+/// How [`ForwardRequest`] picked among the open routes, as the
+/// `route_decision` records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RouteMethod {
+    Rules,
+    OnlyOpen,
+    Classifier,
+}
+
 /// What [`ForwardRequest::task_and_binds`] makes of an open route.
 enum TaskOutcome {
     Ready {
@@ -119,32 +129,38 @@ impl ForwardRequest {
     }
 
     /// The route to dispatch among `open` (name order, never empty), or why
-    /// none was chosen.
-    /// How [`Self::choose`] decides among `open`, as the decision records it.
-    fn method(&self, open: &[String]) -> &'static str {
-        match self.router() {
-            Some(r) if r.kind == RouterKind::Rules => "rules",
-            _ if open.len() == 1 => "only_open",
-            _ => "classifier",
-        }
-    }
-
+    /// none was chosen, with the method that decided either way.
     async fn choose(
         &self,
         ctx: &ToolContext,
         open: &[String],
         state: &AgentState,
-    ) -> Result<String, String> {
+    ) -> (RouteMethod, Result<String, String>) {
         if let Some(router) = self.router().filter(|r| r.kind == RouterKind::Rules) {
             let ranked = router
                 .order
                 .iter()
                 .find(|name| open.iter().any(|o| o == *name));
-            return Ok(ranked.unwrap_or(&open[0]).to_string());
+            return (
+                RouteMethod::Rules,
+                Ok(ranked.unwrap_or(&open[0]).to_string()),
+            );
         }
         if let [only] = open {
-            return Ok(only.clone());
+            return (RouteMethod::OnlyOpen, Ok(only.clone()));
         }
+        (
+            RouteMethod::Classifier,
+            self.classify(ctx, open, state).await,
+        )
+    }
+
+    async fn classify(
+        &self,
+        ctx: &ToolContext,
+        open: &[String],
+        state: &AgentState,
+    ) -> Result<String, String> {
         let choices: Vec<RouteChoice> = open
             .iter()
             .map(|name| RouteChoice {
@@ -242,7 +258,8 @@ impl ForwardRequest {
                 }).collect::<Vec<_>>(),
             }));
         }
-        let picked = match self.choose(ctx, &open, &state).await {
+        let (method, choice) = self.choose(ctx, &open, &state).await;
+        let picked = match choice {
             Ok(picked) => picked,
             Err(message) => {
                 ctx.audit(
@@ -251,7 +268,7 @@ impl ForwardRequest {
                         "routes": gate_json,
                         "picked": null,
                         "reason": message,
-                        "method": self.method(&open),
+                        "method": method,
                     }),
                 )
                 .await;
@@ -269,7 +286,7 @@ impl ForwardRequest {
         })?;
         ctx.audit(
             AuditKind::RouteDecision,
-            json!({ "routes": gate_json, "picked": picked, "method": self.method(&open) }),
+            json!({ "routes": gate_json, "picked": picked, "method": method }),
         )
         .await;
         self.dispatch(ctx, route, &state).await

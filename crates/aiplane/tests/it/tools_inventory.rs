@@ -46,7 +46,8 @@ const UNDOCUMENTED: &[&str] = &[];
 /// `bound_fixture` one inside the bound-argument tests; `check_code` the
 /// secure-input fixture of the suspend tests, which `main` never registers;
 /// `lookup_invoice` the invoice lookup of the output-filter tests;
-/// `snapshot` the image-returning tool of the activity-log tests.
+/// `snapshot` the image-returning tool of the activity-log tests;
+/// `secretive` their tool with sensitive arguments.
 const NOT_REAL_TOOLS: &[&str] = &[
     "mcp__demo__echo",
     "big_result",
@@ -54,6 +55,7 @@ const NOT_REAL_TOOLS: &[&str] = &[
     "check_code",
     "lookup_invoice",
     "phase_step",
+    "secretive",
     "snapshot",
 ];
 

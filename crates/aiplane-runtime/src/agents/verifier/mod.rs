@@ -337,16 +337,18 @@ fn write_failed(id: &str, slot: &str, why: &str) -> ToolError {
 }
 
 /// Resolve every write first and store them only if all fit, so a gate never
-/// sees half a verification.
+/// sees half a verification. The slots are `ctx`'s conversation's, written
+/// in its run.
 pub(crate) async fn apply_writes(
     run: &VerifierRun,
-    session_id: &str,
+    ctx: &ToolContext,
     id: &str,
     writes: &Writes,
     answer: &Map<String, Value>,
     inputs: &Map<String, Value>,
     writer: TrustedWriter,
 ) -> Result<Vec<String>, ToolError> {
+    let session_id = session_of(ctx, id)?;
     let mut resolved = Vec::new();
     for (slot, source) in writes {
         let value = match source {
@@ -376,9 +378,17 @@ pub(crate) async fn apply_writes(
         .begin()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
-    write_trusted_all(&mut tx, &run.schema, session_id, &resolved, writer, now)
-        .await
-        .map_err(refused)?;
+    write_trusted_all(
+        &mut tx,
+        &run.schema,
+        session_id,
+        &resolved,
+        writer,
+        now,
+        ctx.chain(),
+    )
+    .await
+    .map_err(refused)?;
     tx.commit()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;

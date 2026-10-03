@@ -405,7 +405,8 @@ async fn the_sweep_takes_whole_chains_of_gone_conversations_only() {
         swept,
         SweptChains {
             chains: 1,
-            events: 3
+            events: 3,
+            agent_events: agent_events as u64,
         }
     );
     assert!(chain_rows(&pool, "conversation:s-gone").await.is_empty());
@@ -416,9 +417,9 @@ async fn the_sweep_takes_whole_chains_of_gone_conversations_only() {
     );
     let own = chain_rows(&pool, &agent_chain(&agent.id)).await;
     assert_eq!(
-        own.len(),
-        agent_events + 1,
-        "the agent's own chain is never swept, and gains the sweep's marker"
+        own.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+        ["chain_checkpoint", "activity_swept"],
+        "the agent's own chain is cut back behind a checkpoint, then gains the sweep's marker"
     );
     let marker: Value = serde_json::from_str(&own.last().unwrap().detail).unwrap();
     assert_eq!(own.last().unwrap().kind, "activity_swept");
@@ -630,7 +631,7 @@ async fn a_chain_the_sweep_removed_is_let_go_by_its_anchor() {
         .into_iter()
         .map(|e| e.kind)
         .collect();
-    assert_eq!(kinds, ["activity_swept", "chain_anchored"]);
+    assert_eq!(kinds, ["activity_swept", "chain_checkpoint"]);
 }
 
 #[test]
@@ -640,4 +641,179 @@ fn canonical_json_sorts_keys_at_every_level_without_whitespace() {
         canonical_json(&v),
         "{\"a\":\"é\",\"b\":{\"a\":[{\"x\":null,\"y\":true}],\"z\":1}}"
     );
+}
+
+async fn live_conversation(pool: &Pool, id: &str) {
+    sqlx::query(
+        "INSERT INTO users (id, email, created_at, updated_at)
+         VALUES ('u1', 'u1@example.com', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chat_sessions (id, user_id, created_at, updated_at)
+         VALUES (?, 'u1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn management_events(pool: &Pool, n: usize) {
+    for n in 0..n {
+        append_now(
+            pool,
+            NewEvent::new(AuditKind::GrantAdded, "p-main", json!({ "n": n })),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn the_sweep_cuts_the_agent_chains_old_prefix_behind_a_checkpoint_verify_starts_from() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    live_conversation(&pool, "s-live").await;
+    management_events(&pool, 20).await;
+    for _ in 0..2 {
+        run_event(&pool, &main_chain("s-live"), AuditKind::ToolCall, json!({})).await;
+    }
+    anchor_conversation(&pool, "p-main", "s-live")
+        .await
+        .unwrap();
+    run_event(&pool, &main_chain("s-gone"), AuditKind::ToolCall, json!({})).await;
+    anchor_conversation(&pool, "p-main", "s-gone")
+        .await
+        .unwrap();
+    let cut = chain_rows(&pool, "agent:p-main").await.len();
+
+    let later = Timestamp::now() + jiff::SignedDuration::from_secs(60);
+    sweep_conversation_chains(&pool, "p-main", later)
+        .await
+        .unwrap();
+    let own = chain_rows(&pool, "agent:p-main").await;
+    let kinds: Vec<&str> = own.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["chain_checkpoint", "activity_swept"],
+        "the old prefix is gone; the checkpoint and the sweep's marker remain"
+    );
+    let checkpoint: Value = serde_json::from_str(&own[0].detail).unwrap();
+    assert_eq!(checkpoint["removed"], cut);
+    assert_eq!(checkpoint["base_seq"], cut);
+    assert_eq!(
+        own[0].prev_hash,
+        checkpoint["base_hash"].as_str().map(str::to_string)
+    );
+    let v = verify(&pool, "p-main").await.unwrap();
+    assert!(v.ok(), "{v:?}");
+    assert_eq!(
+        v.unanchored, 0,
+        "the live conversation's anchor was carried over"
+    );
+
+    sqlx::query("DELETE FROM agent_audit WHERE chain_key = 'conversation:s-live' AND seq = 2")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.chain_key, "conversation:s-live");
+    assert!(
+        broken.reason.contains("newest events were removed"),
+        "the carried anchor still guards the tail: {broken:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_removed_checkpoint_after_a_cut_breaks_the_agent_chain() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    management_events(&pool, 5).await;
+    let later = Timestamp::now() + jiff::SignedDuration::from_secs(60);
+    sweep_conversation_chains(&pool, "p-main", later)
+        .await
+        .unwrap();
+    management_events(&pool, 2).await;
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+    let own = chain_rows(&pool, "agent:p-main").await;
+    assert_eq!(own.len(), 3);
+
+    sqlx::query("DELETE FROM agent_audit WHERE id = ?")
+        .bind(&own[0].id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.chain_key, "agent:p-main");
+    assert!(broken.reason.contains("missing"), "{broken:?}");
+}
+
+#[tokio::test]
+async fn an_image_sent_in_every_round_is_stored_once_and_read_back_whole() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    let image = format!(
+        "data:image/png;base64,{}",
+        "Q".repeat(exchange::BLOB_MIN_BYTES)
+    );
+    let chain = main_chain("s1");
+    let first = json!({ "model": "m", "messages": [
+        { "role": "system", "content": "s" },
+        { "role": "user", "content": [{ "type": "image_url", "image_url": { "url": image } }] }
+    ] });
+    let mut second = first.clone();
+    second["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "role": "assistant", "content": "a cat" }));
+    let round = |request: Value| json!({ "purpose": "round", "request": request });
+    let a = run_event(&pool, &chain, AuditKind::LlmExchange, round(first.clone())).await;
+    let mut delta = exchange::request_delta(&first, &second).unwrap();
+    delta["prev"] = json!(a.id);
+    run_event(
+        &pool,
+        &chain,
+        AuditKind::LlmExchange,
+        json!({ "purpose": "round", "request_delta": delta }),
+    )
+    .await;
+    run_event(&pool, &chain, AuditKind::LlmExchange, round(first.clone())).await;
+
+    let blobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM activity_blobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blobs, 1, "the image is stored once");
+    let stored: Vec<String> = sqlx::query_scalar("SELECT detail FROM agent_audit")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(stored.iter().all(|d| !d.contains(&image)));
+
+    let mut reconstructor = Reconstructor::default();
+    let mut requests = Vec::new();
+    for event in chain_rows(&pool, "conversation:s1").await {
+        let json = reconstructor.event_json(&pool, &event).await.unwrap();
+        assert!(json["detail"].get("request_delta").is_none());
+        requests.push(json["detail"]["request"].clone());
+    }
+    assert_eq!(requests, [first.clone(), second, first]);
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+
+    sweep_conversation_chains(
+        &pool,
+        "p-main",
+        Timestamp::now() + jiff::SignedDuration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    let blobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM activity_blobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blobs, 0, "the chain's blobs go with it");
 }

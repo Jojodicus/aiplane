@@ -39,6 +39,7 @@
 use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
+use crate::agents::audit::Redaction;
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use aiplane_agents::db::agent_audit::AuditKind;
 
@@ -1075,18 +1076,16 @@ async fn record_call(
     if ctx.agent.is_none() {
         return;
     }
-    let arguments = if sensitive {
-        json!({ "redacted": true })
-    } else {
-        serde_json::from_str(&call.arguments_raw)
-            .unwrap_or_else(|_| Value::String(call.arguments_raw.clone()))
+    let redaction = Redaction {
+        decided: match &ctx.suspend {
+            crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
+                Some(value)
+            }
+            _ => None,
+        },
     };
-    let body = match &ctx.suspend {
-        crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
-            crate::suspend::withhold_secret(result.body.clone(), value)
-        }
-        _ => result.body.clone(),
-    };
+    let arguments = Redaction::arguments(&call.arguments_raw, sensitive);
+    let body = redaction.body(result.body.clone());
     let signals: Vec<&str> = result.signals.iter().map(|s| s.as_str()).collect();
     ctx.audit_event(
         AuditKind::ToolResult,
@@ -1198,7 +1197,8 @@ pub async fn execute_tool_calls_guarded(
                     signals: &[],
                     elapsed: Duration::ZERO,
                 };
-                record_call(&ctx, call, false, scan, result).await;
+                let sensitive = tools.get(&call.name).is_some_and(|t| t.sensitive_args());
+                record_call(&ctx, call, sensitive, scan, result).await;
                 refused
             }
         };
@@ -2022,6 +2022,59 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A tool whose arguments are a secret the visitor typed.
+    struct Secretive;
+
+    impl Tool for Secretive {
+        fn id(&self) -> &str {
+            "secretive"
+        }
+        fn schema(&self) -> shared::api::ToolDef {
+            shared::api::ToolDef::function("secretive", "secret", json!({"type": "object"}))
+        }
+        fn sensitive_args(&self) -> bool {
+            true
+        }
+        fn run<'a>(&'a self, _ctx: ToolContext, _args: Value) -> ToolFuture<'a> {
+            Box::pin(async move { Ok(json!({ "ok": true })) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_repeat_of_a_sensitive_tool_keeps_its_arguments_out_of_the_log() {
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let ctx = agent_ctx(pool.clone());
+        let tools = ToolRegistry::new().with(Secretive);
+        let call = vec![ToolCallRef {
+            id: "c1".into(),
+            name: "secretive".into(),
+            arguments_raw: json!({ "pin": "4711-SECRET" }).to_string(),
+        }];
+        let mut guard = RepeatedCallGuard::new();
+        for _ in 0..=crate::repeated_calls::MAX_IDENTICAL_CALLS {
+            execute_tool_calls_guarded(&tools, &ctx, &call, &mut guard, &InjectionScan::default())
+                .await
+                .unwrap();
+        }
+        let details: Vec<String> =
+            sqlx::query_scalar("SELECT detail FROM agent_audit WHERE kind = 'tool_result'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let mut statuses = Vec::new();
+        for detail in &details {
+            let detail: Value = serde_json::from_str(detail).unwrap();
+            statuses.push(detail["status"].as_str().unwrap().to_string());
+            assert_eq!(detail["arguments"], json!({ "redacted": true }), "{detail}");
+        }
+        assert_eq!(
+            statuses.last().map(String::as_str),
+            Some("refused_repeated")
         );
     }
 

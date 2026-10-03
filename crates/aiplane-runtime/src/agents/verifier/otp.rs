@@ -30,10 +30,10 @@
 use std::sync::Arc;
 
 use aiplane_agents::db::agent_verifiers::{
-    self as rows, Counted, EventKind, NewEvent, PendingCode,
+    self as rows, Counted, EventKind, NewEvent, PendingCode, Window,
 };
 use aiplane_agents::db::visitor_sessions;
-use aiplane_agents::rates::{RateExceeded, RateScope, sliding_window};
+use aiplane_agents::rates::{RateExceeded, RateScope};
 use aiplane_core::server::crypto::sha256_hex;
 use jiff::Timestamp;
 use serde_json::{Map, Value, json};
@@ -238,7 +238,9 @@ impl Flow<'_> {
         })
     }
 
-    async fn rate_limited(
+    /// Count this send against every window and record it, in one step: the
+    /// first window it does not fit, if any.
+    async fn record_send(
         &self,
         session: &str,
         email: &str,
@@ -247,33 +249,37 @@ impl Flow<'_> {
     ) -> Result<Option<RateExceeded>, ToolError> {
         let limits = self.cfg.limits;
         let mut windows = vec![
-            (RateScope::Email, limits.email, Counted::Email(email)),
-            (
-                RateScope::Session,
-                limits.session,
-                Counted::Session(session),
-            ),
+            Window {
+                scope: RateScope::Email,
+                rate: limits.email,
+                who: Counted::Email(email),
+            },
+            Window {
+                scope: RateScope::Session,
+                rate: limits.session,
+                who: Counted::Session(session),
+            },
         ];
         if let Some(ip) = ip {
-            windows.push((RateScope::Ip, limits.ip, Counted::Ip(ip)));
+            windows.push(Window {
+                scope: RateScope::Ip,
+                rate: limits.ip,
+                who: Counted::Ip(ip),
+            });
         }
-        for (scope, rate, who) in windows {
-            let since = now.checked_sub(rate.per).unwrap_or(now);
-            let times = rows::event_times(
-                &self.run.state.db,
-                &self.run.principal.id,
-                &self.cfg.id,
-                EventKind::Send,
-                who,
-                since,
-            )
+        let event = NewEvent {
+            principal_id: &self.run.principal.id,
+            verifier: &self.cfg.id,
+            kind: EventKind::Send,
+            session_id: session,
+            email_hash: Some(email),
+            ip_hash: ip,
+            at: now,
+        };
+        rows::record_event_within(&self.run.state.db, &event, &windows)
             .await
-            .map_err(db_failed)?;
-            if let Err(exceeded) = sliding_window(scope, rate, &times, now) {
-                return Ok(Some(exceeded));
-            }
-        }
-        Ok(None)
+            .map(Result::err)
+            .map_err(db_failed)
     }
 
     async fn send(&self) -> Result<Value, ToolError> {
@@ -290,7 +296,7 @@ impl Flow<'_> {
         let hashed = email_hash(&email);
         let ip = self.ip_hash().await;
         if let Some(exceeded) = self
-            .rate_limited(session, &hashed, ip.as_deref(), now)
+            .record_send(session, &hashed, ip.as_deref(), now)
             .await?
         {
             let mut detail = self.outcome("send", "rate_limited");
@@ -305,20 +311,6 @@ impl Flow<'_> {
                          not call this again in this turn."
             }));
         }
-        rows::record_event(
-            &self.run.state.db,
-            &NewEvent {
-                principal_id: &self.run.principal.id,
-                verifier: &self.cfg.id,
-                kind: EventKind::Send,
-                session_id: session,
-                email_hash: Some(&hashed),
-                ip_hash: ip.as_deref(),
-                at: now,
-            },
-        )
-        .await
-        .map_err(db_failed)?;
         // Registered or not, the visitor and the model are told the same:
         // the connector's answer only reaches the owner's audit trail.
         let delivery = match call_connector(
@@ -499,7 +491,7 @@ impl Flow<'_> {
         let inputs = Map::from_iter([("email".to_string(), Value::String(email))]);
         let written = apply_writes(
             self.run,
-            session,
+            self.ctx,
             &self.cfg.id,
             &self.cfg.writes,
             answer.as_ref().expect("a confirming answer is an object"),

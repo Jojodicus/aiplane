@@ -865,6 +865,20 @@ async fn a_valid_host_token_writes_its_claims_as_host() {
     let events = world.audit(&agent).await;
     let accepted = events.iter().find(|e| e.kind == "host_identity").unwrap();
     assert_eq!(accepted.detail["outcome"], "accepted");
+    let (chain_key, conversation): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT chain_key, conversation_id FROM agent_audit WHERE kind = 'host_identity'",
+    )
+    .fetch_one(world.db())
+    .await
+    .unwrap();
+    assert_eq!(
+        (chain_key, conversation),
+        (
+            Some(format!("conversation:{session}")),
+            Some(session.clone())
+        ),
+        "the identity is part of the conversation's chain"
+    );
     assert!(
         !accepted.detail.to_string().contains("K-1"),
         "no claim value"
@@ -943,6 +957,34 @@ async fn a_token_signed_with_another_algorithm_is_refused_before_its_signature()
             found: "HS256".into()
         }
     );
+}
+
+#[tokio::test]
+async fn a_flood_of_refused_identity_tokens_writes_one_event_per_window() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(&world, hs256());
+    let (agent, session) = conversation(&world).await;
+    let forged = signed(&claims(300), "another-secret-of-at-least-32-bytes!!");
+    for token in
+        std::iter::repeat_n("not.a.jwt", 100).chain(std::iter::repeat_n(forged.as_str(), 100))
+    {
+        let refused = accept(
+            &world.state,
+            &agent,
+            &session,
+            &spec,
+            token,
+            jiff::Timestamp::now(),
+        )
+        .await;
+        assert!(matches!(refused, Err(IdentityError::Invalid(_))));
+    }
+    let rows: Vec<String> =
+        sqlx::query_scalar("SELECT detail FROM agent_audit WHERE kind = 'host_identity'")
+            .fetch_all(world.db())
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 2, "one per reason, not per request");
 }
 
 #[tokio::test]

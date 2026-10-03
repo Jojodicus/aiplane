@@ -834,6 +834,7 @@ sudo systemctl enable --now gateway.service
 Operational notes:
 - **TLS:** the unit binds `127.0.0.1:8080` — terminate HTTPS with a reverse proxy (Caddy / Traefik / nginx) in front. Set AIplane's public URL to the external HTTPS URL at `/setup` so the OIDC callback is correct, and register `<public_url>/auth/callback` as a redirect URI on your OIDC client.
 - **State:** the SQLite DB + session store live in a Podman-managed named volume and survive image swaps. Point `$AIPLANE_DB_PATH` (and, if you use RAG, its `data_dir` at `/admin/settings`) at that volume.
+- **Egress proxies:** `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` (and a system proxy) do not apply to the destinations someone other than the operator chooses — the URLs a model fetches or probes, an A2A route's card, endpoint and token URL, a `host_jwt` verifier's JWKS URL. Those connections are pinned to the addresses AIplane checked (`AIPLANE_ALLOW_PRIVATE_NETWORKS`), and a proxy would resolve the host again behind that check, so they always go direct: the host needs direct egress for them. Egress through a proxy for them is not supported yet.
 - **Updates:** Quadlet treats `Image=` as the source of truth and won't re-pull `:latest` on restart — pin a digest or a `:<git-sha>` tag in production.
 
 ### Docker Compose
