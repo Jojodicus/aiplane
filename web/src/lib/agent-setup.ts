@@ -703,14 +703,19 @@ function targetOf(route: Spec): Target | null {
 const isDetailLeaf = (leaf: Spec) =>
 	!!leaf && typeof leaf.slot === 'string' && !MANAGED_SLOTS.has(leaf.slot) && leaf.set === true && Object.keys(leaf).length === 2;
 
-/** The rule a route is, when it has exactly the shape [`writeHandoffs`] gives one. */
-export function ruleOf(name: string, route: Spec): Rule | null {
+/**
+ * The rule a route is, when it has exactly the shape [`writeHandoffs`] gives
+ * one: its `set` leaves, if any, name exactly the agent's `details`, in any
+ * order. A route on only some of them is the advanced editor's, kept as is.
+ */
+export function ruleOf(name: string, route: Spec, details: string[]): Rule | null {
 	const target = targetOf(route ?? {});
 	const all = route?.when?.all;
 	if (!target || !Array.isArray(all) || Object.keys(route.when).length !== 1) return null;
 	const [topic, request, ...rest] = all;
 	const verified = rest.length && !isDetailLeaf(rest[rest.length - 1]) ? rest.pop() : undefined;
 	if (!rest.every(isDetailLeaf) || !same(request, REQUEST_SET)) return null;
+	if (rest.length && !sameKeys(rest.map((leaf: Spec) => leaf.slot), details)) return null;
 	if (!topic || topic.slot !== TOPIC_SLOT || typeof topic.eq !== 'string' || Object.keys(topic).length !== 2) return null;
 	if (verified && !(verified.slot === VERIFIED_SLOT && typeof verified.provenance === 'string' && Object.keys(verified).length === 2)) return null;
 	if (target.kind === 'agent' && route.task !== HANDOFF_TASK) return null;
@@ -728,9 +733,10 @@ function routeOrder(spec: Spec): string[] {
 
 export function readHandoffs(spec: Spec): Handoffs {
 	const out: Handoffs = { rules: [], fallback: false, custom: [] };
+	const details = detailKeys(spec);
 	for (const name of routeOrder(spec)) {
 		const route = spec.routes[name];
-		const rule = ruleOf(name, route);
+		const rule = ruleOf(name, route, details);
 		if (rule) out.rules.push(rule);
 		else if (isFallback(name, route)) out.fallback = true;
 		else out.custom.push(name);

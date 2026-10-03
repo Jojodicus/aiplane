@@ -297,6 +297,37 @@ test('a hand-off can wait until every detail is collected, and follows the detai
 	assert.deepEqual(spec.routes.qualifizierte_vertriebsanfrage.when.all.at(-1), { slot: 'verified', provenance: 'verifier:identity' });
 });
 
+test('a hand-written route on one detail stays custom and is kept verbatim when the details change', () => {
+	const text = (order: number) => ({ type: 'string', max_length: 200, set_by: ['llm'], order });
+	const refund = {
+		description: 'Refund',
+		when: { all: [{ slot: 'topic', eq: 'Refund' }, { slot: 'request', set: true }, { slot: 'order_id', set: true }] },
+		human: {}
+	};
+	const spec: Spec = {
+		state: { order_id: text(0), email: text(1), phone: text(2), topic: { type: 'enum', values: ['Refund', 'Lead'], set_by: ['llm'] } },
+		routes: {
+			refund: structuredClone(refund),
+			lead: {
+				description: 'Lead',
+				when: { all: [{ slot: 'topic', eq: 'Lead' }, { slot: 'request', set: true }, { slot: 'phone', set: true }, { slot: 'order_id', set: true }, { slot: 'email', set: true }] },
+				human: {}
+			}
+		},
+		router: { kind: 'rules', order: ['refund', 'lead'] }
+	};
+	const h = readHandoffs(spec);
+	assert.deepEqual(h.custom, ['refund']);
+	assert.deepEqual(h.rules.map((r) => [r.topic, r.details]), [['Lead', true]], 'every detail, in any order, is the details rule');
+
+	writeSlots(spec, [...readSlots(spec), { key: 'fax', label: 'Fax', kind: 'text', values: [], fresh: true }]);
+	assert.deepEqual(spec.routes.refund, refund);
+	assert.deepEqual(
+		spec.routes.lead.when.all.slice(2).map((leaf: Spec) => leaf.slot),
+		['order_id', 'email', 'phone', 'fax']
+	);
+});
+
 test('the identity step regates a hand-off waiting for every detail when it adds the slots it reads', () => {
 	const spec: Spec = {};
 	writeSlots(spec, [{ key: 'company', label: 'Company', kind: 'text', values: [] }]);

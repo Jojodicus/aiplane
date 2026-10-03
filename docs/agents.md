@@ -3169,7 +3169,9 @@ setup assistant as what it is, not as "set up in the advanced editor":
 - hand-offs are the hand-off step's rules: `assist::handoffs` is a port of
   `readHandoffs` / `writeHandoffs` / `deriveBind` from
   `web/src/lib/agent-setup.ts` (routes `when: {all: [topic eq, request set,
-  (one `set` leaf per detail slot), (verified provenance)]}`, `task`
+  (one `set` leaf per detail slot — read as a rule only when the leaves
+  name exactly the detail slots, in any order; a route on some of them is
+  custom and kept verbatim), (verified provenance)]}`, `task`
   `Request about {topic}: {request}`, the
   `topic` enum and `request` slots, `router.order`, the `fallback` route). A
   rule whose topic exists replaces it; other routes stay as they are. The

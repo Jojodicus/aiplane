@@ -110,8 +110,10 @@ fn target_of(route: &Value) -> Option<Target> {
         .map(|_| Target::Human)
 }
 
-/// The rule `route` is, when it has exactly the shape [`write`] gives one.
-fn rule_of(name: &str, route: &Value) -> Option<Rule> {
+/// The rule `route` is, when it has exactly the shape [`write`] gives one:
+/// its `set` leaves, if any, name exactly the agent's `details`, in any
+/// order. A route on only some of them is the advanced editor's, kept as is.
+fn rule_of(name: &str, route: &Value, details: &[String]) -> Option<Rule> {
     let target = target_of(route)?;
     let when = route.get("when")?.as_object()?;
     if when.len() != 1 {
@@ -121,12 +123,19 @@ fn rule_of(name: &str, route: &Value) -> Option<Rule> {
     let [topic, request, rest @ ..] = all.as_slice() else {
         return None;
     };
-    let (verified, details) = match rest {
-        [details @ .., last] if !detail_leaf(last) => (Some(last), details),
-        details => (None, details),
+    let (verified, leaves) = match rest {
+        [leaves @ .., last] if !detail_leaf(last) => (Some(last), leaves),
+        leaves => (None, leaves),
     };
-    if !details.iter().all(detail_leaf) {
+    if !leaves.iter().all(detail_leaf) {
         return None;
+    }
+    if !leaves.is_empty() {
+        let named: BTreeSet<&str> = leaves.iter().filter_map(|l| l["slot"].as_str()).collect();
+        let wanted: BTreeSet<&str> = details.iter().map(String::as_str).collect();
+        if named.len() != leaves.len() || named != wanted {
+            return None;
+        }
     }
     if *request != request_set() {
         return None;
@@ -151,7 +160,7 @@ fn rule_of(name: &str, route: &Value) -> Option<Rule> {
     Some(Rule {
         route: Some(name.to_string()),
         topic: topic_eq.to_string(),
-        details: !details.is_empty(),
+        details: !leaves.is_empty(),
         identity: verified.is_some(),
         target,
         bind: route
@@ -192,9 +201,10 @@ fn route_order(spec: &Value) -> Vec<String> {
 
 pub fn read(spec: &Value) -> Handoffs {
     let mut out = Handoffs::default();
+    let details = detail_slots(spec);
     for name in route_order(spec) {
         let route = &spec["routes"][&name];
-        if let Some(rule) = rule_of(&name, route) {
+        if let Some(rule) = rule_of(&name, route, &details) {
             out.rules.push(rule);
         } else if is_fallback(&name, route) {
             out.fallback = true;
@@ -545,6 +555,56 @@ mod tests {
         );
         let back = read(&both);
         assert!(back.rules[0].details && back.rules[0].identity);
+    }
+
+    #[test]
+    fn a_route_on_only_some_details_stays_custom_and_every_detail_in_any_order_is_a_rule() {
+        let text = |order: u64| json!({ "type": "string", "set_by": ["llm"], "order": order });
+        let refund = json!({
+            "description": "Refund",
+            "when": { "all": [
+                { "slot": "topic", "eq": "Refund" },
+                { "slot": "request", "set": true },
+                { "slot": "order_id", "set": true },
+            ] },
+            "human": {},
+        });
+        let mut spec = json!({
+            "state": { "order_id": text(0), "email": text(1), "phone": text(2) },
+            "routes": {
+                "refund": refund.clone(),
+                "lead": {
+                    "description": "Lead",
+                    "when": { "all": [
+                        { "slot": "topic", "eq": "Lead" },
+                        { "slot": "request", "set": true },
+                        { "slot": "phone", "set": true },
+                        { "slot": "order_id", "set": true },
+                        { "slot": "email", "set": true },
+                    ] },
+                    "human": {},
+                },
+                "twice": {
+                    "description": "Twice",
+                    "when": { "all": [
+                        { "slot": "topic", "eq": "Twice" },
+                        { "slot": "request", "set": true },
+                        { "slot": "phone", "set": true },
+                        { "slot": "phone", "set": true },
+                        { "slot": "email", "set": true },
+                    ] },
+                    "human": {},
+                },
+            },
+            "router": { "kind": "rules", "order": ["refund", "lead", "twice"] },
+        });
+        let h = read(&spec);
+        assert_eq!(h.custom, ["refund", "twice"]);
+        assert_eq!(h.rules.len(), 1);
+        assert!(h.rules[0].details && h.rules[0].topic == "Lead");
+
+        write(&mut spec, &h);
+        assert_eq!(spec["routes"]["refund"], refund, "kept verbatim");
     }
 
     #[test]
