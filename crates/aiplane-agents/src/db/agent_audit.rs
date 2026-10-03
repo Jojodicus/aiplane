@@ -72,7 +72,7 @@ pub enum AuditKind {
     SubAgentDispatched,
     /// A sub-agent run ended, with its outcome.
     SubAgentFinished,
-    /// The output filter (#89) redacted or withheld a main agent's answer.
+    /// The output filter redacted or withheld a main agent's answer.
     OutputBlocked,
     /// A run paused for a decision (an approval, a secure input). Never the
     /// value a resume brings.
@@ -93,7 +93,7 @@ pub enum AuditKind {
     /// The retention sweeper deleted conversations; counts only.
     ConversationsSwept,
     /// The main agent handed the conversation to a human (`request_human`
-    /// or a `human` route), with the run chain. #100's analytics count it.
+    /// or a `human` route), with the run chain. The analytics count it.
     HumanHandoff,
     /// A responder was added to or removed from an agent's inbox.
     ResponderAdded,
@@ -102,25 +102,25 @@ pub enum AuditKind {
     /// URL is never in the detail.
     ChannelCreated,
     ChannelDeleted,
-    /// A verifier step (#95): a code sent, a code checked, a lookup made, and
+    /// A verifier step: a code sent, a code checked, a lookup made, and
     /// the outcome. Never the code, the address or a looked-up value.
     VerifierOutcome,
-    /// A host identity token was accepted or refused (#95). Never a claim value.
+    /// A host identity token was accepted or refused. Never a claim value.
     HostIdentity,
-    /// An A2A caller started, answered or cancelled a task (#102): which
+    /// An A2A caller started, answered or cancelled a task: which
     /// caller, token, context and task. Never the message text.
     A2aTask,
-    /// One iteration of a `loop` route (#103): the worker's and the critic's
+    /// One iteration of a `loop` route: the worker's and the critic's
     /// child runs, and whether the critic accepted.
     LoopIteration,
     /// A `loop` route ended: how many iterations, and why it stopped.
     LoopFinished,
-    /// One request to a model and its whole answer (#111): the body sent,
+    /// One request to a model and its whole answer: the body sent,
     /// the assembled text, reasoning, tool calls, finish reason, usage,
     /// latency, or the error.
     LlmExchange,
     /// One tool call's full arguments and full result, before the prompt's
-    /// byte budget trims it (#111).
+    /// byte budget trims it.
     ToolResult,
     /// A turn of an agent run began: the message it answers.
     TurnStarted,

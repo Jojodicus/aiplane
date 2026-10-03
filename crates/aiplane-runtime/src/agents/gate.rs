@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Route gates: the JSON condition tree and its evaluator (`docs/agents.md`
-//! §4, issue #86).
+//! §4, "What #86 built").
 //!
 //! ```text
 //! Cond := { all: [Cond] } | { any: [Cond] } | { not: Cond }
@@ -1011,7 +1011,7 @@ mod tests {
         assert_eq!(err.path, "routes.r.when");
     }
 
-    /// The acceptance test for #86: a route cannot be opened while its gate is
+    /// The gate's acceptance test: a route cannot be opened while its gate is
     /// closed, whatever the model sends through the tools it has.
     #[tokio::test]
     async fn a_route_cannot_be_opened_while_closed_whatever_the_model_sends() {

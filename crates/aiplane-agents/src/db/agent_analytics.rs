@@ -27,8 +27,6 @@ use super::agent_audit::{AuditKind, sql_kinds};
 use super::agents::DRAFT_VERSION;
 use super::{DbError, Pool, window_key};
 
-/// The audit kind #96 writes when a conversation is handed to a person. Named
-/// here so the count starts moving the day that kind exists; until then it is 0.
 /// The audit kinds whose numbers are in `detail`; the rest are only counted.
 const DETAILED_KINDS: [AuditKind; 4] = [
     AuditKind::RouteDecision,

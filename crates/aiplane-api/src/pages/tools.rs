@@ -30,7 +30,7 @@ use aiplane_runtime::server::tools::catalog;
 // ---------------------------------------------------------------------------
 // POST /tools/toggle
 
-/// GET /api/v0/tools — the caller's tool toggles as data (issue #22 P3):
+/// GET /api/v0/tools — the caller's tool toggles as data:
 /// every tool their roles grant, with its per-user enabled state and the
 /// same grouping the page renders.
 pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) -> Response {

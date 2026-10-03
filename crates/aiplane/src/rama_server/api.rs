@@ -375,7 +375,7 @@ pub struct UsageQuery {
     token: Option<String>,
 }
 
-/// GET /api/v0/usage — the usage dashboard as data (issue #22 P3): the same
+/// GET /api/v0/usage — the usage dashboard as data: the same
 /// aggregates, pickers, in-force limits, and unpriced-model hints the
 /// server-rendered page computes, for the SPA's usage view.
 pub async fn usage(

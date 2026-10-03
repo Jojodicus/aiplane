@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The user-facing `/api/v0` workspace surfaces for the SPA (issue #22,
-//! P5): memories, scheduled actions, and webhooks. Thin JSON translations
+//! The user-facing `/api/v0` workspace surfaces for the SPA:
+//! memories, scheduled actions, and webhooks. Thin JSON translations
 //! of the legacy form handlers one layer down — the legacy pages stay
 //! alive beside them until phase 6.
 

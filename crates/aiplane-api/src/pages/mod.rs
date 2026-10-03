@@ -3,8 +3,8 @@
 
 //! The `/api/v0` JSON handlers the SvelteKit SPA calls.
 //!
-//! Despite the module name, nothing here renders a page any more: issue #22
-//! replaced the server-rendered UI with the SPA in `web/`, and what survived
+//! Despite the module name, nothing here renders a page any more: the move to
+//! the SPA replaced the server-rendered UI with the SPA in `web/`, and what survived
 //! the teardown are the JSON endpoints plus the handful of genuinely
 //! server-rendered surfaces the SPA cannot own — the OAuth callback pages in
 //! `rag_oauth` and `integrations`, which a provider redirects a browser to

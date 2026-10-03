@@ -928,7 +928,7 @@ async fn readable_session(
 }
 
 // ---------------------------------------------------------------------------
-// Turn actions (retry/edit/share/fork/effort/export) — issue #22 P5/P6.
+// Turn actions (retry/edit/share/fork/effort/export).
 
 /// Named (not positional) path extraction: rama's tuple `Path` reads
 /// captures in a non-deterministic order, so any route with two or more

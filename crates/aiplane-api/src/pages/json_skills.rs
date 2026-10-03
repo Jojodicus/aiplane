@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Skills + connectors + feedback + ComfyUI JSON surfaces for the SPA
-//! (issue #22, P5). Thin JSON translations of the legacy handlers; the
+//! Skills + connectors + feedback + ComfyUI JSON surfaces for the SPA.
+//! Thin JSON translations of the legacy handlers; the
 //! legacy pages stay alive until phase 6.
 
 use std::collections::HashMap;

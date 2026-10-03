@@ -540,7 +540,7 @@ fn queued_message(turns: &[TurnWithTools]) -> Option<String> {
 }
 
 /// A message sent while the conversation waits for a decision is stored and
-/// runs after the decision, as the #96 decision on suspend/resume says — it
+/// runs after the decision, as "What #96 built" decided for suspend/resume — it
 /// neither cancels the pending request nor answers it. One message waits at
 /// a time.
 async fn queue_behind_decision(

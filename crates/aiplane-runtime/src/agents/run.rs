@@ -2,8 +2,8 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Run one turn of an agent conversation as the agent's principal, on its
-//! live version. The Rust entry point the internal test chat (#90) and the
-//! public endpoint (#91) put HTTP in front of.
+//! live version. The Rust entry point the internal test chat and the public
+//! endpoint put HTTP in front of (`docs/agents.md` "What #90 built", "What #91 built").
 
 use std::sync::Arc;
 

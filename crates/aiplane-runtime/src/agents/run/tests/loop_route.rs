@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! A `loop` route (#103), end to end: a main agent, a worker and a critic on
+//! A `loop` route (`docs/agents.md` "What #103 built"), end to end: a main agent, a worker and a critic on
 //! wiremock models, real SQLite and the real headless loop. It stops on the
 //! critic's acceptance, on `max_iterations` and on the route's budget.
 

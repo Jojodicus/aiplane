@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents/{id}/test-turn` — the internal test chat (`docs/agents.md`
-//! §3, #90): a manager sends a message to the agent's **draft** and gets the
+//! §3, "What #90 built"): a manager sends a message to the agent's **draft** and gets the
 //! answer plus what a visitor never sees — slot values and provenance, each
 //! route's gate, the routing decision, sub-agent calls and tool-call
 //! decisions.

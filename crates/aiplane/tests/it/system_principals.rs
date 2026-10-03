@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! System principals and `gws_` tokens, end to end (issue #77,
-//! `docs/agents.md` §1).
+//! System principals and `gws_` tokens, end to end
+//! (`docs/agents.md` §1, "Principals").
 //!
 //! The fixture is deliberately generous to *people*: a default group grants
 //! tools, skills and both MCP connectors to everyone, a global connector is

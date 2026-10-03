@@ -6,7 +6,7 @@
 //!
 //! `always_ask` wraps the tool in [`AskFirst`]: every call pauses the turn
 //! until a member of staff approves it in the inbox, and an approval nobody
-//! gives in time is a denial (#96's decision; [`SuspensionKind::timeout_fallback`]
+//! gives in time is a denial (the decision of "What #96 built"; [`SuspensionKind::timeout_fallback`]
 //! enforces it whatever the tool asked). `always_allow` runs it as granted.
 //! Without a `permission` a tool asks first exactly when it is known to
 //! change something ([`Tool::changes_state`]): an MCP tool its server marks

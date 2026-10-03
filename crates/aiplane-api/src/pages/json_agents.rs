@@ -13,7 +13,7 @@
 //! share, so an agent whose last writer left can always be recovered.
 //!
 //! The agent's grants are its principal's, managed through
-//! `/api/v0/system-principals/{id}/grants` with the grant-time cap from #77;
+//! `/api/v0/system-principals/{id}/grants` with the grant-time cap (`docs/agents.md` §1);
 //! those routes check the share here too ([`guard_principal`]).
 
 use std::sync::Arc;

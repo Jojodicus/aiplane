@@ -381,7 +381,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_get("/a2a/agents/{id}/agent-card.json", pages::a2a::card)
         .with_post("/a2a/agents/{id}", pages::a2a::rpc)
         .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
-        // Admin JSON API for the SPA (issue #22 P4).
+        // Admin JSON API for the SPA.
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)
         .with_delete(
@@ -480,8 +480,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             pages::json_admin::topology_reload,
         )
         .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
-        // Workspace JSON API for the SPA (issue #22 P5).
-        // Skills + connectors + integrations JSON (issue #22 P5).
+        // Workspace JSON API for the SPA: skills, connectors, integrations.
         .with_get("/api/v0/skills", pages::json_skills::skills_list)
         .with_post("/api/v0/skills", pages::json_skills::skills_upload)
         .with_get("/api/v0/skills/{name}/body", pages::json_skills::skill_body)
@@ -624,7 +623,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_get("/api/v0/tools", pages::tools::tools_list_json)
         .with_post("/api/v0/tools/toggle", pages::tools::tools_toggle_json)
         .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
-        // Chat JSON API for the SvelteKit SPA (issue #22 phase 2). The
+        // Chat JSON API for the SvelteKit SPA. The
         // legacy form/SSE-HTML chat routes under `/chat/*` stay alive
         // beside these until phase 6.
         .with_get(

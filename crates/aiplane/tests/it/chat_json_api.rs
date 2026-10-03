@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! `/api/v0/chat/*` — the JSON chat API for the SvelteKit SPA (issue #22
-//! phase 2): session CRUD, the JSON submit, and the JSON-SSE event stream.
+//! `/api/v0/chat/*` — the JSON chat API for the SvelteKit SPA (`docs/ui.md`
+//! → "The JSON API and its contract"): session CRUD, the JSON submit, and the JSON-SSE event stream.
 //!
 //! The crown case is `a_submitted_turn_streams_over_the_events_endpoint`:
 //! a real wiremock upstream streams chunks through the real worker into

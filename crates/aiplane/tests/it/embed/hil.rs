@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Human in the loop over HTTP (#96, `docs/agents.md` "What #96 built"): a
+//! Human in the loop over HTTP (`docs/agents.md` "What #96 built"): a
 //! handoff a responder answers from the inbox and the visitor receives, what
 //! a responder can and cannot reach, someone who may not answer, the
 //! responder and channel management routes, and a scheduled run that paused

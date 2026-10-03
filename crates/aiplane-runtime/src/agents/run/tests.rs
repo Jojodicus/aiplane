@@ -566,7 +566,7 @@ async fn support_example_scripted(
         "the closed gate kept the request from the sub-agent"
     );
 
-    // The OTP verifier (#95) confirmed the visitor: it writes the subject
+    // The OTP verifier confirmed the visitor: it writes the subject
     // through the trusted door, which no tool call can reach.
     let schema = StateSchema::from_spec(&spec_of(&billing)).unwrap();
     write_trusted(
@@ -1382,7 +1382,7 @@ async fn without_patterns_the_answer_is_unchanged() {
 /// Every model call a visitor conversation causes is a usage row charged to
 /// the main agent (`agent_id`), the main rounds, the classifier's pick and
 /// the sub-agent's rounds alike, while `user_id` still names the principal
-/// that made the call. That is what the owner's budget sums (#92).
+/// that made the call. That is what the owner's budget sums (`docs/agents.md` "What #92 built").
 #[tokio::test]
 async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
     let main = llm(vec![

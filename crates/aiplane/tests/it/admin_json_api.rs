@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! `/api/v0/admin/*` — the admin JSON API for the SPA (issue #22 P4).
+//! `/api/v0/admin/*` — the admin JSON API for the SPA (`docs/ui.md` → "The JSON API
+//! and its contract").
 //! The gating contract (401 anonymous, 403 non-admin, full data for admin)
 //! plus one write round-trip per surface family: groups (RBAC reload),
 //! limits, settings (hot reload), model defaults (shared validation), and
@@ -1328,7 +1329,7 @@ async fn topology_save_apply_and_stream() {
     drop(resp);
 }
 
-/// The workspace API (issue #22 P5): memories + scheduled + webhooks CRUD
+/// The workspace API: memories + scheduled + webhooks CRUD
 /// under /api/v0, session-gated.
 #[tokio::test]
 async fn workspace_surfaces_round_trip() {
@@ -2066,7 +2067,7 @@ async fn private_skills_authoring_round_trip() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
 
-/// The setup wizard API (issue #22 P5/P6): state/draft lifecycle on a fresh
+/// The setup wizard API: state/draft lifecycle on a fresh
 /// gateway. The full OIDC round trip needs a real provider — wiremock OIDC
 /// lives in oidc_integration — so this pins the gate + draft mechanics.
 #[tokio::test]

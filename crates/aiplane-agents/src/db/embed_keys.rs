@@ -7,7 +7,7 @@
 //! The key itself is public — it ships in the embedding page — so the origin
 //! allowlist, not the key, is what keeps other sites from embedding the agent.
 //! Neither is protection against abuse: a non-browser client forges `Origin`
-//! at will. That is the job of the rate limits, the budget (#92), the agent's
+//! at will. That is the job of the rate limits, the budget (`docs/agents.md` "What #92 built"), the agent's
 //! default-deny grants and its gates.
 //!
 //! Only the SHA-256 of a key is stored. Creating and revoking one records an

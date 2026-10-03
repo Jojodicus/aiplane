@@ -3,7 +3,7 @@
 
 //! Cookie, body and response helpers shared by the gateway's HTTP surfaces.
 //!
-//! What is left after issue #22: the server renders almost nothing now, so
+//! What is left after the move to the SPA: the server renders almost nothing now, so
 //! this is the small set of primitives the JSON API and the two OAuth
 //! callback pages still need — reading a cookie, draining a request body,
 //! a 303, and the SSE response wrapper the chat event stream builds on.

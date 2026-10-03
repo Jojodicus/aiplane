@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The `/api/v0/admin/*` JSON surface for the SvelteKit SPA (issue #22,
-//! phase 4): groups, users, model defaults/prices, limits, settings, the
+//! The `/api/v0/admin/*` JSON surface for the SvelteKit SPA: groups, users, model defaults/prices, limits, settings, the
 //! admin token register, and the upstream topology. One module because the
 //! legacy form handlers' DB calls live one crate down in `aiplane-core` —
 //! these handlers are thin JSON translations of them, and the legacy

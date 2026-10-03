@@ -3323,7 +3323,7 @@ mod tests {
         assert_eq!(params["required"], json!(["base"]));
     }
 
-    // --- deck-as-canvas (#13) ---------------------------------------------
+    // --- deck-as-canvas --------------------------------------------------
 
     #[test]
     fn render_schema_advertises_canvas_document_source() {

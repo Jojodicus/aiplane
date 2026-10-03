@@ -1528,7 +1528,7 @@ fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// Refs + sync tokens (issue #22 P5 — the SPA's collection browser)
+// Refs + sync tokens (the SPA's collection browser)
 
 #[derive(Serialize)]
 struct RefView {

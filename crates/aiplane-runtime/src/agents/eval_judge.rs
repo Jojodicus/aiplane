@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The model that judges a case's rubric (#99): one non-streaming call on the
+//! The model that judges a case's rubric (`docs/agents.md` "What #99 built"):
+//! one non-streaming call on the
 //! agent's main pool, as the agent's principal, so the pool grant applies.
 //!
 //! It reads the visitor's messages and the agent's answers and nothing else:
