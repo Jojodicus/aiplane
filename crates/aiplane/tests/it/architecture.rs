@@ -431,53 +431,147 @@ fn outbound_http_clients_are_built_only_at_the_vetted_sites() {
 // ---------------------------------------------------------------------------
 // Unbounded request body reads.
 
-/// Where a body may be read frame by frame or collected whole: the readers
-/// everything else calls.
-const BODY_READERS: &[Allowed] = &[
-    Allowed {
-        path: "session-core/src/chrome.rs",
-        why: "the readers: read_body_capped, read_body_prefix, and read_body_to_bytes (for \
-              routes behind BodyLimitLayer)",
-    },
-    Allowed {
-        path: "sandbox-runner/src/server.rs",
-        why: "the runner's own capped /run reader (413 past MAX_RUN_REQUEST_BYTES): it stands \
-              outside the crate stack and cannot use session_core::chrome",
-    },
-];
+/// How a file may read an inbound request body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyRead {
+    /// Defines the readers everything else calls: frame by frame, capped.
+    Reader,
+    /// A capped reader of its own, outside the crate stack.
+    OwnCap,
+    /// Drains a body whole (`read_body_to_bytes`, `read_json`), bounded by
+    /// the `BodyLimitLayer` its route group is registered under.
+    BehindLimit,
+    /// Reads the fields of a multipart upload whole, behind `BodyLimitLayer`.
+    Multipart,
+}
 
-/// Where `read_body_to_bytes` (and `read_json`, its JSON wrapper) may drain
-/// a body whole: the handlers behind the router, whose `BodyLimitLayer` has
-/// already buffered the body up to the route's cap.
-const BEHIND_BODY_LIMIT: &[Allowed] = &[
-    Allowed {
-        path: "aiplane/src/rama_server/",
-        why: "routed through BodyLimitLayer",
-    },
-    Allowed {
-        path: "aiplane-api/src/",
-        why: "routed through BodyLimitLayer",
-    },
-    Allowed {
-        path: "session-core/src/chrome.rs",
-        why: "the definition",
-    },
-];
-
-/// The handler modules behind each prefix `BodyLimitLayer` passes through
-/// uncapped (`body_limit::HANDLER_CAPPED_PREFIXES`). They must read through
-/// a capped reader of their own.
-const HANDLER_CAPPED_MODULES: &[(&str, &[&str])] = &[
+/// Every file that reads a request body, once, with how. Each rule below
+/// takes the kinds it allows from this one list.
+const REQUEST_BODY_READS: &[(BodyRead, Allowed)] = &[
     (
-        "/hooks/",
-        &[
-            "aiplane-api/src/pages/webhooks.rs",
-            "aiplane-api/src/pages/rag.rs",
-        ],
+        BodyRead::Reader,
+        Allowed {
+            path: "session-core/src/chrome.rs",
+            why: "the readers: read_body_capped, read_body_prefix, and read_body_to_bytes (for \
+                  routes behind BodyLimitLayer)",
+        },
     ),
-    ("/a2a/", &["aiplane-api/src/pages/a2a/"]),
-    ("/api/v0/embed/", &["aiplane-api/src/pages/embed.rs"]),
+    (
+        BodyRead::OwnCap,
+        Allowed {
+            path: "sandbox-runner/src/server.rs",
+            why: "the runner's own capped /run reader (413 past MAX_RUN_REQUEST_BYTES): it \
+                  stands outside the crate stack and cannot use session_core::chrome",
+        },
+    ),
+    (
+        BodyRead::BehindLimit,
+        Allowed {
+            path: "aiplane/src/rama_server/",
+            why: "routed through BodyLimitLayer",
+        },
+    ),
+    (
+        BodyRead::BehindLimit,
+        Allowed {
+            path: "aiplane-api/src/",
+            why: "routed through BodyLimitLayer",
+        },
+    ),
+    (
+        BodyRead::Multipart,
+        Allowed {
+            path: "aiplane-api/src/pages/chat/mod.rs",
+            why: "the fields of an inbound chat upload, behind BodyLimitLayer — not a response",
+        },
+    ),
+    (
+        BodyRead::Multipart,
+        Allowed {
+            path: "aiplane-api/src/pages/json_skills.rs",
+            why: "the field of an inbound skill-archive upload, behind BodyLimitLayer — not a \
+                  response",
+        },
+    ),
+    (
+        BodyRead::Multipart,
+        Allowed {
+            path: "aiplane/src/rama_server/multipart.rs",
+            why: "the fields of an inbound /v1 multipart upload, behind BodyLimitLayer — not a \
+                  response",
+        },
+    ),
 ];
+
+fn body_reads(kinds: &[BodyRead]) -> Vec<Allowed> {
+    REQUEST_BODY_READS
+        .iter()
+        .filter(|(kind, _)| kinds.contains(kind))
+        .map(|(_, a)| Allowed {
+            path: a.path,
+            why: a.why,
+        })
+        .collect()
+}
+
+const ROUTER: &str = "aiplane/src/rama_server/router.rs";
+
+/// The handlers `router.rs` registers under
+/// `endpoint(BodyLimitLayer::HANDLER_CAPPED)`, as the files that define them
+/// — a directory for a `mod.rs`, whose submodules serve it. Read from the
+/// router itself, so a route added to that group is checked without a list
+/// to keep in step.
+fn handler_capped_modules() -> BTreeSet<String> {
+    let sources = production_sources();
+    let router = sources
+        .iter()
+        .find(|s| s.rel == ROUTER)
+        .expect("the router is a production source");
+    let mut handlers = Vec::new();
+    for group in router.text.split(".with_endpoint_layer(").skip(1) {
+        if !group.starts_with("endpoint(BodyLimitLayer::HANDLER_CAPPED)") {
+            continue;
+        }
+        for route in group.split(".with_").skip(1) {
+            let Some((_, handler)) = route.split_once(',') else {
+                continue;
+            };
+            let handler: String = handler
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                .collect();
+            handlers.push(handler);
+        }
+    }
+    assert!(
+        !handlers.is_empty(),
+        "found no route under endpoint(BodyLimitLayer::HANDLER_CAPPED) in crates/{ROUTER}; \
+         the scan below would check nothing"
+    );
+    let mut modules = BTreeSet::new();
+    for handler in handlers {
+        let (path, name) = handler.rsplit_once("::").unwrap_or(("", &handler));
+        let under = format!("aiplane-api/src/{}", path.replace("::", "/"));
+        let defines = format!("fn {name}(");
+        let found: Vec<&Source> = sources
+            .iter()
+            .filter(|s| s.rel.starts_with(&under) && s.code.contains(&defines))
+            .collect();
+        assert!(
+            !found.is_empty(),
+            "cannot find where `{handler}`, a handler-capped route's handler in \
+             crates/{ROUTER}, is defined (looked for `{defines}` under crates/{under})"
+        );
+        for s in found {
+            modules.insert(match s.rel.strip_suffix("mod.rs") {
+                Some(dir) => dir.to_string(),
+                None => s.rel.clone(),
+            });
+        }
+    }
+    modules
+}
 
 #[test]
 fn request_bodies_are_read_only_through_the_capped_readers() {
@@ -495,50 +589,37 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
         "A body is read outside session_core::chrome. Reading frames or collecting a body \
          by hand bypasses the cap; call read_body_capped (or read_body_prefix), or \
          read_body_to_bytes in a handler behind BodyLimitLayer.",
-        BODY_READERS,
+        &body_reads(&[BodyRead::Reader, BodyRead::OwnCap]),
         &hits,
     );
 
     let drains = scan(&["read_body_to_bytes(", "read_json("], |s| s.code.as_str());
     assert_within(
         "read_body_to_bytes / read_json drains a body without a cap of its own, which is \
-         only bounded behind the router's BodyLimitLayer.",
-        BEHIND_BODY_LIMIT,
+         only bounded behind a route group's BodyLimitLayer.",
+        &body_reads(&[BodyRead::Reader, BodyRead::BehindLimit]),
         &drains,
     );
 
-    let prefixes: BTreeSet<&str> = HANDLER_CAPPED_MODULES.iter().map(|(p, _)| *p).collect();
-    let passed_through: BTreeSet<&str> = aiplane::rama_server::body_limit::HANDLER_CAPPED_PREFIXES
-        .iter()
-        .copied()
-        .collect();
-    assert_eq!(
-        prefixes, passed_through,
-        "BodyLimitLayer passes a different set of prefixes through uncapped than this test \
-         knows handler modules for; list the modules serving the new prefix in \
-         HANDLER_CAPPED_MODULES so their reads are checked"
-    );
+    let modules = handler_capped_modules();
     let uncapped: Vec<String> = drains
         .iter()
         .filter(|(rel, _, _)| {
-            HANDLER_CAPPED_MODULES
-                .iter()
-                .flat_map(|(_, modules)| modules.iter())
-                .any(|m| {
-                    if m.ends_with('/') {
-                        rel.starts_with(m)
-                    } else {
-                        rel == m
-                    }
-                })
+            modules.iter().any(|m| {
+                if m.ends_with('/') {
+                    rel.starts_with(m.as_str())
+                } else {
+                    rel == m
+                }
+            })
         })
         .map(|(rel, line, what)| format!("crates/{rel}:{line}: {what}"))
         .collect();
     assert!(
         uncapped.is_empty(),
-        "these handlers sit behind a prefix BodyLimitLayer passes through uncapped, so \
-         their whole-body read has no bound at all; read through read_body_capped / \
-         read_json_capped / read_body_prefix:\n  {}",
+        "these handlers are registered under BodyLimitLayer::HANDLER_CAPPED, which passes \
+         their body through uncapped, so their whole-body read has no bound at all; read \
+         through read_body_capped / read_json_capped / read_body_prefix:\n  {}",
         uncapped.join("\n  ")
     );
 }
@@ -546,24 +627,12 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
 // ---------------------------------------------------------------------------
 // Unbounded response body reads.
 
-/// Where a body may be read whole with `.bytes()` / `.text()` / `.json()`.
+/// Where a body may be read whole with `.bytes()` / `.text()` / `.json()`:
+/// only an inbound multipart upload's fields (`REQUEST_BODY_READS`).
 /// Outbound responses never are: they go through `capped_read`.
-const WHOLE_BODY_READS: &[Allowed] = &[
-    Allowed {
-        path: "aiplane-api/src/pages/chat/mod.rs",
-        why: "the fields of an inbound multipart upload, behind BodyLimitLayer — not a response",
-    },
-    Allowed {
-        path: "aiplane-api/src/pages/json_skills.rs",
-        why: "the field of an inbound skill-archive upload, behind BodyLimitLayer — not a \
-              response",
-    },
-    Allowed {
-        path: "aiplane/src/rama_server/multipart.rs",
-        why: "the fields of an inbound /v1 multipart upload, behind BodyLimitLayer — not a \
-              response",
-    },
-];
+fn whole_body_reads() -> Vec<Allowed> {
+    body_reads(&[BodyRead::Multipart])
+}
 
 /// Offsets of `.bytes()`, `.text()`, `.json()` and `.json::<…>()` calls that
 /// are awaited: reqwest's whole-body reads (and multipart's). `str::bytes()`
@@ -614,7 +683,7 @@ fn response_bodies_are_read_only_through_the_capped_reader() {
         "A response body is read whole. `.bytes()` / `.text()` / `.json()` buffer whatever \
          the peer sends; read through aiplane_core::server::capped_read (read_capped, \
          read_capped_for, read_capped_json, read_capped_text, read_error_text) with a cap that fits the use.",
-        WHOLE_BODY_READS,
+        &whole_body_reads(),
         &hits,
     );
 }

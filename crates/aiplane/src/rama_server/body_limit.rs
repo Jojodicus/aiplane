@@ -12,23 +12,26 @@
 //! payload_too_large` naming the limit. Handlers stay unchanged — what they
 //! drain is already bounded.
 //!
-//! The limit is [`DEFAULT_MAX_BODY_BYTES`] unless the path is listed in
-//! [`policy`]: the routes that legitimately take large bodies (the model API
-//! with its long contexts, base64 images and audio uploads; chat attachments;
-//! transcription; feedback screenshots; skill archives) get
-//! [`UPLOAD_MAX_BODY_BYTES`], and the public routes that already read through
-//! their own tighter cap (`/hooks`, `/a2a`, `/api/v0/embed`) are passed
-//! through untouched so their refusals keep their own shape. A new route
-//! under one of those pass-through prefixes must cap its own read.
+//! The router gives each group of routes its cap as the endpoint layer it
+//! registers them under ([`endpoint`]), so a route's cap is where the route
+//! is: [`BodyLimitLayer::DEFAULT`] for most, [`BodyLimitLayer::UPLOAD`] for
+//! the routes that legitimately take large bodies (the model API with its
+//! long contexts, base64 images and audio uploads; chat attachments;
+//! transcription; feedback screenshots; skill archives), and
+//! [`BodyLimitLayer::HANDLER_CAPPED`] for the public routes that read through
+//! their own tighter cap (`/hooks`, `/a2a`, `/api/v0/embed`), passed through
+//! untouched so their refusals keep their own shape. A route registered
+//! under the handler-capped group must cap its own read; the architecture
+//! test reads that group out of `router.rs` and checks the handlers.
 //!
 //! A refusal speaks the route's dialect: on the Anthropic Messages routes
-//! (`/v1/messages`, `/v1/messages/count_tokens`) it is the Anthropic error
-//! envelope (`request_too_large`) every other error there uses, so a client
-//! such as Claude Code reads it like any other rejection; everywhere else it
-//! is the gateway's OpenAI-shaped error.
+//! (`/v1/messages`, `/v1/messages/count_tokens`, under
+//! [`BodyLimitLayer::ANTHROPIC_UPLOAD`]) it is the Anthropic error envelope
+//! (`request_too_large`) every other error there uses, so a client such as
+//! Claude Code reads it like any other rejection; everywhere else it is the
+//! gateway's OpenAI-shaped error.
 
-use std::convert::Infallible;
-
+use rama::http::service::web::router::DefaultEndpointLayer;
 use rama::http::{Body, Request, Response, StatusCode};
 use rama::{Layer, Service};
 use session_core::chrome::{CappedBodyError, read_body_capped};
@@ -38,83 +41,89 @@ use crate::rama_server::{messages, proxy};
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const UPLOAD_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
-const UPLOAD_PREFIXES: &[&str] = &[
-    "/v1/",
-    "/api/v0/chat/",
-    "/api/v0/transcriptions",
-    "/api/v0/feedback",
-    "/api/v0/skills",
-    "/api/v0/admin/skills",
-];
-
-pub const HANDLER_CAPPED_PREFIXES: &[&str] = &["/hooks/", "/a2a/", "/api/v0/embed/"];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Policy {
-    Cap(usize),
-    /// The handler reads through its own, tighter cap.
-    HandlerCapped,
+enum Dialect {
+    OpenAi,
+    Anthropic,
 }
 
-/// Whether `path` is an Anthropic Messages route, whose errors use the
-/// Anthropic envelope.
-fn is_anthropic(path: &str) -> bool {
-    path.strip_prefix("/v1/messages")
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+/// The body cap of one group of routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyLimitLayer {
+    /// `None`: the handler reads through its own, tighter cap.
+    max: Option<usize>,
+    dialect: Dialect,
 }
 
-/// A refusal of the body, in the dialect of the route at `path`.
-fn refusal(path: &str, status: StatusCode, code: &str, message: &str) -> Response {
-    if is_anthropic(path) {
-        messages::error_response(status, message)
-    } else {
-        proxy::error_response(status, code, message)
+impl BodyLimitLayer {
+    pub const DEFAULT: Self = Self {
+        max: Some(DEFAULT_MAX_BODY_BYTES),
+        dialect: Dialect::OpenAi,
+    };
+    pub const UPLOAD: Self = Self {
+        max: Some(UPLOAD_MAX_BODY_BYTES),
+        dialect: Dialect::OpenAi,
+    };
+    pub const ANTHROPIC_UPLOAD: Self = Self {
+        max: Some(UPLOAD_MAX_BODY_BYTES),
+        dialect: Dialect::Anthropic,
+    };
+    pub const HANDLER_CAPPED: Self = Self {
+        max: None,
+        dialect: Dialect::OpenAi,
+    };
+}
+
+/// The endpoint layer a group of routes is registered under: its body cap in
+/// front of rama's default endpoint layer.
+pub type Endpoint = (BodyLimitLayer, DefaultEndpointLayer);
+
+pub fn endpoint(limit: BodyLimitLayer) -> Endpoint {
+    (limit, DefaultEndpointLayer::default())
+}
+
+/// A refusal of the body, in the route's dialect.
+fn refusal(dialect: Dialect, status: StatusCode, code: &str, message: &str) -> Response {
+    match dialect {
+        Dialect::Anthropic => messages::error_response(status, message),
+        Dialect::OpenAi => proxy::error_response(status, code, message),
     }
 }
-
-pub fn policy(path: &str) -> Policy {
-    if HANDLER_CAPPED_PREFIXES.iter().any(|p| path.starts_with(p)) {
-        Policy::HandlerCapped
-    } else if UPLOAD_PREFIXES.iter().any(|p| path.starts_with(p)) {
-        Policy::Cap(UPLOAD_MAX_BODY_BYTES)
-    } else {
-        Policy::Cap(DEFAULT_MAX_BODY_BYTES)
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct BodyLimitLayer;
 
 impl<S> Layer<S> for BodyLimitLayer {
     type Service = BodyLimit<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        BodyLimit { inner }
+        BodyLimit {
+            inner,
+            limit: *self,
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct BodyLimit<S> {
     inner: S,
+    limit: BodyLimitLayer,
 }
 
 impl<S> Service<Request> for BodyLimit<S>
 where
-    S: Service<Request, Output = Response, Error = Infallible>,
+    S: Service<Request, Output = Response>,
 {
     type Output = Response;
-    type Error = Infallible;
+    type Error = S::Error;
 
     async fn serve(&self, req: Request) -> Result<Self::Output, Self::Error> {
         use rama::http::StreamingBody;
-        let Policy::Cap(max) = policy(req.uri().path()) else {
+        let Some(max) = self.limit.max else {
             return self.inner.serve(req).await;
         };
         if req.body().size_hint().exact() == Some(0) {
             return self.inner.serve(req).await;
         }
         let (parts, body) = req.into_parts();
-        let path = parts.uri.path();
+        let dialect = self.limit.dialect;
         match read_body_capped(body, max).await {
             Ok(bytes) => {
                 self.inner
@@ -122,7 +131,7 @@ where
                     .await
             }
             Err(CappedBodyError::TooLarge { max }) => Ok(refusal(
-                path,
+                dialect,
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
                 &format!(
@@ -132,69 +141,11 @@ where
                 ),
             )),
             Err(CappedBodyError::Read(e)) => Ok(refusal(
-                path,
+                dialect,
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 &e,
             )),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn large_body_routes_get_the_upload_cap_and_the_rest_the_default() {
-        for path in [
-            "/v1/chat/completions",
-            "/v1/messages",
-            "/v1/audio/transcriptions",
-            "/v1/images/edits",
-            "/api/v0/chat/sessions/s1/messages",
-            "/api/v0/transcriptions",
-            "/api/v0/feedback",
-            "/api/v0/feedback/extract",
-            "/api/v0/skills",
-            "/api/v0/admin/skills",
-        ] {
-            assert_eq!(policy(path), Policy::Cap(UPLOAD_MAX_BODY_BYTES), "{path}");
-        }
-        for path in [
-            "/api/v0/tokens",
-            "/api/v0/admin/settings",
-            "/api/v0/rag/collections",
-            "/api/v0/agents/a1/draft",
-            "/auth/logout",
-        ] {
-            assert_eq!(policy(path), Policy::Cap(DEFAULT_MAX_BODY_BYTES), "{path}");
-        }
-    }
-
-    #[test]
-    fn only_the_messages_routes_speak_the_anthropic_dialect() {
-        for path in ["/v1/messages", "/v1/messages/count_tokens"] {
-            assert!(is_anthropic(path), "{path}");
-        }
-        for path in [
-            "/v1/chat/completions",
-            "/v1/messagesx",
-            "/api/v0/chat/messages",
-        ] {
-            assert!(!is_anthropic(path), "{path}");
-        }
-    }
-
-    #[test]
-    fn routes_with_their_own_cap_are_passed_through() {
-        for path in [
-            "/hooks/secret",
-            "/hooks/rag/token",
-            "/a2a/agents/a1",
-            "/api/v0/embed/messages",
-        ] {
-            assert_eq!(policy(path), Policy::HandlerCapped, "{path}");
         }
     }
 }

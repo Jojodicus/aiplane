@@ -34,7 +34,7 @@ use rama::rt::Executor;
 use serde_json::json;
 
 use crate::rama_server::RamaState;
-use crate::rama_server::body_limit::BodyLimitLayer;
+use crate::rama_server::body_limit::{BodyLimitLayer, Endpoint, endpoint};
 #[cfg(debug_assertions)]
 use crate::rama_server::dev_seed;
 use crate::rama_server::embed_cors::EmbedCorsLayer;
@@ -46,9 +46,11 @@ use crate::rama_server::{
 use aiplane_core::rama_server::cors::V1CorsLayer;
 
 /// Builds the rama router. State is shared via `Arc` since handlers
-/// borrow it immutably.
-pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
+/// borrow it immutably. Every route is registered under the
+/// `with_endpoint_layer` before it, which carries its body cap.
+pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
     let router = Router::new_with_state(state)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         .with_get("/healthz", async || Json(json!({"status": "ok"})))
         .with_get("/openapi.json", openapi::document)
         .with_get("/api/v0/build", aiplane_api::build_info::metadata)
@@ -66,6 +68,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
                 )
             }
         })
+        .with_endpoint_layer(endpoint(BodyLimitLayer::HANDLER_CAPPED))
         // --- Non-UI routes that outlived the server-rendered pages --------
         //
         // The SPA replaced every page, but these four are not a UI: two are
@@ -81,6 +84,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         // POSTers both work; the secret in the URL is the credential.
         .with_get("/hooks/{secret}", pages::webhook_trigger)
         .with_post("/hooks/{secret}", pages::webhook_trigger)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         // RAG source OAuth: `connect` sends the operator to the provider,
         // `callback` is the redirect URI they registered there.
         .with_get("/rag/{id}/connect", pages::rag_connect)
@@ -89,12 +93,14 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_post("/integrations/{key}/connect", pages::integrations_connect)
         .with_post("/integrations/{key}/retry", pages::integrations_retry)
         .with_get("/integrations/callback", pages::integrations_callback)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         .with_get("/v1/models", proxy::list_models)
         // Catch-all param: model ids contain `/` (e.g.
         // `mistralai/Voxtral-Mini-4B-Realtime-2602`).
         .with_get("/v1/models/{*id}", proxy::retrieve_model)
         .with_post("/v1/chat/completions", proxy::chat_completions)
         .with_post("/v1/systemone", proxy::system_one)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::ANTHROPIC_UPLOAD))
         // Anthropic Messages format — what Claude Code speaks. Same pipeline
         // as `/v1/chat/completions` (routing, limits, tool loop, usage); only
         // the wire format differs. See `rama_server::messages`.
@@ -102,6 +108,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         // disambiguates everywhere else.
         .with_post("/v1/messages/count_tokens", messages::count_tokens)
         .with_post("/v1/messages", messages::messages)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         .with_post("/v1/audio/transcriptions", proxy::transcribe)
         .with_post("/v1/audio/speech", proxy::speech)
         .with_post("/v1/embeddings", proxy::embeddings)
@@ -110,6 +117,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         // Bearer-authed download of a file a sandbox run produced for an
         // API caller (scoped to the caller's user; see `sandbox_api`).
         .with_get("/v1/sandbox/files/{run}/{filename}", sandbox_api::download)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         // Connection-warming probe an Anthropic-format client sends at
         // startup. Unauthenticated: it carries no request and reveals only
         // that something is listening.
@@ -124,7 +132,9 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_post("/api/v0/tokens/{id}/rotate", api::rotate_token)
         .with_put("/api/v0/tokens/{id}/tools", api::update_token_tools)
         .with_delete("/api/v0/tokens/{id}", api::delete_token)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         .with_post("/api/v0/transcriptions", proxy::transcribe_session)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         .with_get("/api/v0/transcription_models", api::transcription_models)
         .with_post("/api/v0/speech", proxy::speech_session)
         .with_get("/api/v0/push/config", api::push_config)
@@ -162,11 +172,13 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/chat/attachment/{turn_id}/{filename}",
             pages::chat_attachment,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         // Feedback widget: report a problem, and the config that tells the SPA
         // whether it is wired up at all.
         .with_get("/api/v0/feedback/config", pages::feedback_config)
         .with_post("/api/v0/feedback/extract", pages::feedback_extract)
         .with_post("/api/v0/feedback", pages::feedback_submit)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         .with_get("/api/v0/rag/providers", rag_api::list_providers)
         .with_post("/api/v0/rag/test-source", rag_api::test_source)
         .with_get("/api/v0/rag/profiles", rag_api::list_profiles)
@@ -353,6 +365,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/embed-keys/{key_id}/revoke",
             pages::json_embed_keys::revoke,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::HANDLER_CAPPED))
         // The public agent endpoint (docs/agents.md §5): anonymous visitors
         // with an embed key, then a `gwv_` visitor token. No session cookie
         // is read here, and the visitor token is read nowhere else.
@@ -367,6 +380,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         // for `gws_` callers granted `a2a_caller` on it.
         .with_get("/a2a/agents/{id}/agent-card.json", pages::a2a::card)
         .with_post("/a2a/agents/{id}", pages::a2a::rpc)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         // Admin JSON API for the SPA (issue #22 P4).
         .with_get("/api/v0/admin/groups", pages::json_admin::groups_list)
         .with_put("/api/v0/admin/groups", pages::json_admin::groups_save)
@@ -465,6 +479,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/admin/upstreams/reload",
             pages::json_admin::topology_reload,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         // Workspace JSON API for the SPA (issue #22 P5).
         // Skills + connectors + integrations JSON (issue #22 P5).
         .with_get("/api/v0/skills", pages::json_skills::skills_list)
@@ -495,6 +510,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/admin/skills/grants",
             pages::json_skills::admin_skills_grants,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         .with_get(
             "/api/v0/admin/connectors",
             pages::json_skills::admin_connectors_list,
@@ -607,6 +623,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         )
         .with_get("/api/v0/tools", pages::tools::tools_list_json)
         .with_post("/api/v0/tools/toggle", pages::tools::tools_toggle_json)
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         // Chat JSON API for the SvelteKit SPA (issue #22 phase 2). The
         // legacy form/SSE-HTML chat routes under `/chat/*` stay alive
         // beside these until phase 6.
@@ -674,6 +691,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/chat/sessions/{id}/capabilities",
             pages::chat::json_api::capabilities_set,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT))
         .with_put(
             "/api/v0/tokens/{id}/models",
             pages::chat::json_api::owner_token_models,
@@ -691,6 +709,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/tokens/{id}/quota/{rule_id}",
             pages::chat::json_api::owner_token_quota_delete,
         )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::UPLOAD))
         .with_get(
             "/api/v0/chat/sessions/{id}/export.md",
             pages::chat::json_api::session_export_markdown,
@@ -733,7 +752,8 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         .with_post(
             "/api/v0/chat/sessions/{id}/turns/{turn_id}/edit",
             pages::chat::json_api::turn_edit,
-        );
+        )
+        .with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT));
     // Debug-only dev/e2e seeding. Registered before the SPA catch-all (which
     // must remain the last routes) and absent from release binaries entirely —
     // see `rama_server::dev_seed` for why there are two endpoints.
@@ -778,8 +798,9 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
 /// [`first_run`](crate::rama_server::first_run) for why the gate lives here
 /// rather than in the handlers.
 ///
-/// `BodyLimitLayer` caps every request body before a handler sees it — 1 MiB
-/// by default, more on the upload routes. See
+/// The body caps are not in this stack: [`router`] registers each group of
+/// routes under its own `BodyLimitLayer` (1 MiB by default, more on the
+/// upload routes, none where the handler caps its own read). See
 /// [`body_limit`](crate::rama_server::body_limit).
 pub fn service(
     state: Arc<RamaState>,
@@ -795,7 +816,6 @@ pub fn service(
         V1CorsLayer,
         embed_cors,
         first_run,
-        BodyLimitLayer,
         ArcLayer::new(),
         ErrorHandlerLayer::default(),
     )
