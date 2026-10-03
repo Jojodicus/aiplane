@@ -97,6 +97,8 @@ pub fn is_knowledge_tool(id: &str) -> bool {
 pub struct Knowledge {
     pub id: String,
     pub name: String,
+    /// What the base holds, as the admin described it; the model matches on it.
+    pub description: Option<String>,
 }
 
 /// An agent this manager may hand conversations to.

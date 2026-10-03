@@ -36,10 +36,12 @@ fn candidates() -> Candidates {
             Knowledge {
                 id: "7".into(),
                 name: "Ceph docs".into(),
+                description: None,
             },
             Knowledge {
                 id: "9".into(),
                 name: "Price list".into(),
+                description: None,
             },
         ],
         agents: vec![Target {

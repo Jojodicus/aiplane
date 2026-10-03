@@ -99,6 +99,7 @@ pub(super) async fn candidates(
             .map(|c| Knowledge {
                 id: c.id.to_string(),
                 name: c.name,
+                description: c.description,
             })
             .collect(),
         agents,

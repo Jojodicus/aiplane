@@ -492,7 +492,7 @@ async fn knowledge_bases_are_offered_by_name_and_need_knowledge_search() {
         &fx.state.db,
         &aiplane_core::server::db::rag::NewCollection {
             name: "Ceph docs".into(),
-            description: None,
+            description: Some("Ceph administration manual".into()),
             git_url: String::new(),
             git_ref: "main".into(),
             pat: None,
@@ -534,7 +534,10 @@ async fn knowledge_bases_are_offered_by_name_and_need_knowledge_search() {
     let sent = &fx.model_requests().await[0];
     let input: Value =
         serde_json::from_str(sent["messages"][1]["content"].as_str().unwrap()).unwrap();
-    assert_eq!(input["knowledge"], json!([{ "name": "Ceph docs" }]));
+    assert_eq!(
+        input["knowledge"],
+        json!([{ "name": "Ceph docs", "description": "Ceph administration manual" }])
+    );
     let schema = &sent["response_format"]["json_schema"]["schema"];
     assert_eq!(
         schema["properties"]["knowledge"]["items"]["properties"]["name"]["enum"],

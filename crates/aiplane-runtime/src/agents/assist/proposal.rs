@@ -123,7 +123,9 @@ know about how to answer that the chips and the language do not already say (may
 - `abilities`: only ids from the given `abilities` list that the scenario needs, each with `why`. \
 Propose none that is not in the list.
 - `knowledge`: the knowledge bases from the given `knowledge` list (by `name`) whose content the \
-agent needs to answer, each with `why`. Only propose one whose name fits the subject.
+agent needs to answer, each with `why`. Only propose one whose name or `description` shows it \
+covers the scenario's subject; a base about another product or topic does not fit, however close. \
+When in doubt, propose none and name the subject under `missing_knowledge`.
 - `missing_knowledge`: the subjects the agent must know about that none of the given knowledge \
 bases covers, as short noun phrases; empty when they are covered.
 - `slots`: the information to collect from the visitor. `name` is a short lowercase identifier, \
@@ -191,7 +193,10 @@ pub fn suggest_input(
             .map(|a| json!({ "id": a.id, "name": a.name, "description": a.description }))
             .collect::<Vec<_>>(),
         "knowledge": candidates.knowledge.iter()
-            .map(|k| json!({ "name": k.name }))
+            .map(|k| match &k.description {
+                Some(d) => json!({ "name": k.name, "description": d }),
+                None => json!({ "name": k.name }),
+            })
             .collect::<Vec<_>>(),
         "agents": candidates.agents.iter()
             .map(|a| json!({ "id": a.id, "name": a.name }))

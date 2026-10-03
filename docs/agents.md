@@ -3020,7 +3020,9 @@ system message says to ignore instructions in it.
   collection finds nothing, so it is offered as knowledge (dropped with a
   reason if the model names it anyway);
 - `knowledge: [{id, name, why}]` — knowledge bases (RAG collections) the
-  manager may read and so grant, chosen by name; applying one does what its
+  manager may read and so grant, chosen by name and the admin's description
+  (the model is told a base about another product does not fit, and to name
+  the subject under `missing_knowledge` when in doubt); applying one does what its
   knowledge card does: the collection and `rag_search` granted, the search
   bound to it as a constant when it is the only one, `rag_list_collections`
   added when there are several (`review::set_knowledge`, a port of
