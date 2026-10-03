@@ -800,6 +800,7 @@ fn check_write(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write(
     pool: &Pool,
     schema: &StateSchema,

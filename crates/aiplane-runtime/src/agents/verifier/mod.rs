@@ -38,7 +38,6 @@ use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_agents::rates::Rate;
 use aiplane_core::server::crypto::sha256_hex;
 use aiplane_core::server::principal::SystemPrincipal;
-use aiplane_core::server::run_chain::RunChain;
 use jiff::SignedDuration;
 use serde_json::{Map, Value, json};
 
@@ -338,17 +337,18 @@ fn write_failed(id: &str, slot: &str, why: &str) -> ToolError {
 }
 
 /// Resolve every write first and store them only if all fit, so a gate never
-/// sees half a verification.
+/// sees half a verification. The slots are `ctx`'s conversation's, written
+/// in its run.
 pub(crate) async fn apply_writes(
     run: &VerifierRun,
-    session_id: &str,
-    chain: Option<&RunChain>,
+    ctx: &ToolContext,
     id: &str,
     writes: &Writes,
     answer: &Map<String, Value>,
     inputs: &Map<String, Value>,
     writer: TrustedWriter,
 ) -> Result<Vec<String>, ToolError> {
+    let session_id = session_of(ctx, id)?;
     let mut resolved = Vec::new();
     for (slot, source) in writes {
         let value = match source {
@@ -385,7 +385,7 @@ pub(crate) async fn apply_writes(
         &resolved,
         writer,
         now,
-        chain,
+        ctx.chain(),
     )
     .await
     .map_err(refused)?;

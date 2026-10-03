@@ -491,8 +491,7 @@ impl Flow<'_> {
         let inputs = Map::from_iter([("email".to_string(), Value::String(email))]);
         let written = apply_writes(
             self.run,
-            session,
-            self.ctx.chain(),
+            self.ctx,
             &self.cfg.id,
             &self.cfg.writes,
             answer.as_ref().expect("a confirming answer is an object"),
