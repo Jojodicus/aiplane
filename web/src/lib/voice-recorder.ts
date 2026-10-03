@@ -4,65 +4,14 @@
  * resampled to 16 kHz mono, encoded as a canonical 44-byte WAV. PCM rather
  * than MediaRecorder/Opus because the `/api/v0/transcriptions` handler runs
  * the upload through a neural VAD (earshot) that needs raw PCM16 — see
- * `crates/aiplane/src/rama_server/vad.rs`.
+ * `crates/aiplane-features/src/server/vad.rs`; the encoding is `web/shared/wav.ts`.
  *
  * Differences from the legacy module: the worklet URL is an explicit
  * parameter (the SPA serves it at `${base}/pcm-recorder.js`) and the
  * DOM-level meter tap is dropped (the SPA modal animates off CSS state).
  */
 import { t } from './i18n.svelte';
-
-export const TARGET_RATE = 16000;
-
-const resampleTo16k = (samples: Float32Array, fromRate: number): Float32Array => {
-	if (fromRate === TARGET_RATE) return samples;
-	const ratio = fromRate / TARGET_RATE;
-	const outLen = Math.floor(samples.length / ratio);
-	const out = new Float32Array(outLen);
-	for (let i = 0; i < outLen; i++) {
-		const src = i * ratio;
-		const lo = Math.floor(src);
-		const hi = Math.min(lo + 1, samples.length - 1);
-		const t = src - lo;
-		out[i] = samples[lo]! * (1 - t) + samples[hi]! * t;
-	}
-	return out;
-};
-
-/**
- * Pack a Float32 sample buffer (range -1..1) into a 16 kHz mono 16-bit PCM
- * WAV (44-byte canonical header). Matches what
- * `rama_server::vad::parse_pcm16_mono_16k` expects.
- */
-export const encodeWav = (samples: Float32Array): Blob => {
-	const numSamples = samples.length;
-	const dataSize = numSamples * 2;
-	const buf = new ArrayBuffer(44 + dataSize);
-	const view = new DataView(buf);
-	const writeStr = (offset: number, s: string): void => {
-		for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
-	};
-	writeStr(0, 'RIFF');
-	view.setUint32(4, 36 + dataSize, true);
-	writeStr(8, 'WAVE');
-	writeStr(12, 'fmt ');
-	view.setUint32(16, 16, true);
-	view.setUint16(20, 1, true);
-	view.setUint16(22, 1, true);
-	view.setUint32(24, TARGET_RATE, true);
-	view.setUint32(28, TARGET_RATE * 2, true);
-	view.setUint16(32, 2, true);
-	view.setUint16(34, 16, true);
-	writeStr(36, 'data');
-	view.setUint32(40, dataSize, true);
-	let offset = 44;
-	for (let i = 0; i < numSamples; i++) {
-		const s = Math.max(-1, Math.min(1, samples[i]!));
-		view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-		offset += 2;
-	}
-	return new Blob([buf], { type: 'audio/wav' });
-};
+import { TARGET_RATE, chunksToWav } from '../../shared/wav.ts';
 
 /** One recording session: AudioContext, mic stream, worklet, chunk buffer. */
 class VoiceRecorder {
@@ -103,16 +52,8 @@ class VoiceRecorder {
 				/* best-effort */
 			}
 		}
-		let total = 0;
-		for (const c of this.chunks) total += c.length;
-		if (total === 0) return new Blob([], { type: 'audio/wav' });
-		const flat = new Float32Array(total);
-		let off = 0;
-		for (const c of this.chunks) {
-			flat.set(c, off);
-			off += c.length;
-		}
-		return encodeWav(resampleTo16k(flat, this.captureRate));
+		if (this.chunks.length === 0) return new Blob([], { type: 'audio/wav' });
+		return new Blob([chunksToWav(this.chunks, this.captureRate)], { type: 'audio/wav' });
 	}
 }
 

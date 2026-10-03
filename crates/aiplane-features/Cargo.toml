@@ -61,6 +61,13 @@ rama = { workspace = true }
 # OneDrive/Dropbox later) and tests swap in an in-memory fake, exactly as
 # `sandbox-runner` does for `dyn ContainerBackend`.
 async-trait = { workspace = true }
+# Pure-Rust neural VAD. ~110 KiB binary footprint, no ONNX runtime.
+# Used in server::vad to strip leading/trailing silence from uploaded voice
+# notes before they hit Whisper (silence is the single biggest source of
+# Whisper hallucinations) — by the `/v1` proxy and the embed widget alike.
+earshot = "1"
+# Audio format probing for transcription billing (server::vad).
+symphonia = { workspace = true }
 # PROPFIND multistatus parsing for the WebDAV source provider.
 quick-xml = { workspace = true }
 

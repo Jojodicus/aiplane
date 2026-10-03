@@ -365,7 +365,8 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 `verifiers` (tagged by `kind`), `router`, `routes` (each with exactly one
 `RouteTarget`: `agent`, `human`, `a2a` or `loop`), `finish`,
 `on_tool_unavailable` and `publish` (origins, `idle_ttl`, `retention_days`,
-`rate_limits`, `budget`, `output_filter`, `require_passing_tests`, `a2a`).
+`rate_limits`, `budget`, `output_filter`, `require_passing_tests`, `a2a`,
+`voice`).
 
 - **Validation and typing are two steps over one JSON.** `spec::check` runs
   the path-reporting walk; only when it found nothing does it deserialize the
@@ -3076,6 +3077,87 @@ scenario; improve; the rate refusing with `Retry-After` and per manager; bad
 input and missing shares refused before the model is asked; a failed model
 call recorded and answered `502`).
 
+### What #119 built
+
+Voice in the embed widget: a visitor may speak a message and hear answers.
+
+**Shared mechanisms.**
+- *Used:* the typed `AgentSpec`, the embed `visitor()` chain and `admit`
+  (rates and owner budget), `read_body_capped` / `read_json_capped` under
+  `BodyLimitLayer::HANDLER_CAPPED`, `PoolAccess::for_system_pools`, the VAD
+  (`aiplane_features::server::vad`, moved down from the gateway crate so the
+  API layer can trim a recording too), `speech::to_spoken`, `UsageRecord::in_run`,
+  `agents::audit::{RunLog, SideExchange, anchor}`.
+- *Introduced:* `aiplane-runtime::agents::voice` — the two calls, made as the
+  agent on the one pool the spec names; `RunLog::visitor` for an event of a
+  visitor's conversation between turns; `web/shared/wav.ts` (the WAV encoder
+  the SPA composer and the widget now share) and `web/shared/color.ts`.
+
+**Spec.** `publish.voice: { input, output, voice?, transcription_pool?,
+speech_pool? }` (`spec::model::VoiceSpec`). Both directions are off by
+default. A pool named here must be granted to the agent; publishing with a
+direction on requires its pool (`input` → `transcription_pool`, `output` →
+`speech_pool`), the same rule as `main.pool`: an agent reaches only pools its
+spec names. `voice` is the TTS voice; unset, the speech pool's voice for the
+visitor's language (its `voices` map) applies. `VoiceSpec::{input_pool,
+output_pool}` return a pool only for a direction that is on. `profile.color`
+is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
+itself in it.
+
+**Endpoints** (`aiplane-api::pages::embed::voice`, visitor token, origin
+chain as for messages):
+
+| Method | Path | |
+|---|---|---|
+| POST | `/api/v0/embed/agent` | `{key}` → `{agent: {display, color, voice: {input, output}}}` before any conversation; not rate-gated (reads cost nothing). `start`/`session` return the same `agent` |
+| POST | `/api/v0/embed/transcribe` | body `audio/wav`, 16 kHz mono 16-bit PCM, at most **2 MiB** (`413 payload_too_large`), 0.4–60 s (`400 audio_too_short`, `413 audio_too_long`), anything else `415 unsupported_audio` → `{text}` (at most 8 000 characters). Not posted to the conversation: the widget puts it in the input for the visitor to read, change and send |
+| POST | `/api/v0/embed/speak` | `{turn_id}` → `audio/mpeg` (`204` when nothing is speakable). Only a `completed` assistant turn of *this* visitor's conversation that no worker holds any more (`404 turn_not_found`, `409 turn_not_final`): the content as stored after the output filter ruled, never text from the client; Markdown is turned into speakable prose, and at most 3 000 characters (to the last whole sentence) are spoken |
+| GET | `/api/v0/embed/recorder.js` | the audio worklet the widget records with — served under the embed CORS a cross-origin worklet needs |
+
+A direction that is off answers `404 voice_not_enabled`; a failing backend
+`503 voice_unavailable` (the real error is in the activity log and the server
+log). Both calls go through `admit` first, so they count against the
+visitor's and the IP's rate like a message and are refused once the owner's
+budget is spent. A spoken turn is cached in memory per turn, pool and voice
+(256 entries, 64 MiB at most), so replaying costs no second synthesis; a
+replay still counts against the rate.
+
+**Usage and log.** Each call that reaches a backend is a usage row of the
+agent run (`kind` `transcription` with the recording's seconds, or `speech`
+with the characters spoken; `agent_id` set, so it spends the owner's
+budget) and an `llm_exchange` in the conversation's chain with `purpose:
+transcription` or `speech`, the visitor on the event and, for speech, the
+`turn_id`. The transcription event keeps the request without the audio
+(`file: {content_type, bytes, seconds}`) and the transcript; the speech
+event keeps the text sent and `{content_type, bytes}` of the audio. The
+chain is anchored after each call. **Audio is never stored**: a recording
+lives in memory for the request, and spoken audio only in the bounded cache.
+
+**Widget** (`web/embed/voice.ts`, `audio.ts`, `theme.ts`). A microphone
+button when `voice.input`: held down it records until release, a short
+click starts a recording the next click (or Enter/Space) sends; a
+recording stops by itself at 60 s; Escape or *Cancel* throws it away; a
+refused permission, a missing microphone or an insecure page each get their
+own message. A speaker toggle when `voice.output`: off until the visitor
+switches it on (that click unlocks audio, so nothing ever autoplays), then
+every answer that finishes is read aloud; *Stop* ends it. Playback decodes
+into Web Audio, so no `blob:` URL is needed. Animations stop under
+`prefers-reduced-motion`. The recorder logic is a pure state machine
+(`micStep`) with unit tests.
+
+**Builder.** The setup's *Website* step binds the colour and `publish.voice`
+(`readColor`/`writeColor`, `readVoice`/`writeVoice` in `agent-setup.ts`);
+choosing a pool grants it to the agent. `GET /api/v0/agent-resources`
+lists `voice_pools: {speech, transcription}` the manager holds.
+
+**Tests.** `tests/it/embed/voice.rs` (transcript returned and not sent, no
+audio in the log, disabled → 404, body cap with a finite oversize and
+"endless" body, length and format, visitor rate, owner budget, only a final
+answer of this visitor spoken from the stored text, cache, owner's voice,
+`describe`, worklet, voice pools); `spec.rs` and `spec/model.rs`;
+`web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color}.test.ts`,
+`web/src/lib/agent-setup.test.ts`.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -3134,6 +3216,7 @@ use `regex`, and hashing uses the token helpers.
 | #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
 | #116 setup assistant | §2 | overview, routed step assistant and single-step modal over the same spec; admin-mapped model choices (`agents.pool_*`, `tiers` on `agent-resources`); five starter templates validated in six languages ([built](#what-116-built)) |
 | #117 prompt assistant | §2, §5 | `POST …/assist/suggest` and `…/assist/improve`: a proposal per setup step and test cases, each piece checked against the draft and dropped with a reason; writes nothing; a usage row of the manager's and an `assist_suggested` event ([built](#what-117-built)) |
+| #119 widget voice | §5 | `publish.voice` with a named, granted pool per direction; `POST /api/v0/embed/{transcribe,speak,agent}`; transcript returned to the visitor, never sent for them; only a final stored answer is spoken; audio never stored; widget colour from `profile.color` ([built](#what-119-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred

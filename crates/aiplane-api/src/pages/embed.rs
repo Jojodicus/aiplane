@@ -49,6 +49,9 @@ use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 use tokio::time::Instant;
 
+mod voice;
+pub use voice::{recorder, speak, transcribe};
+
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
 /// Largest request body a public embed route reads. A message is capped at
@@ -243,8 +246,44 @@ fn refused(refusal: &Refusal, lang: Lang) -> Response {
     resp
 }
 
+/// The agent as the widget shows it: its name, its colour, and which
+/// directions of voice it offers, so the widget draws a microphone and a
+/// speaker only for those.
 fn agent_json(live: &Live) -> Value {
-    json!({ "display": live.agent.principal.display })
+    let spec = live.spec.agent().unwrap_or(AgentSpec::empty());
+    let voice = &spec.publish.voice;
+    json!({
+        "display": live.agent.principal.display,
+        "color": spec.profile.color(),
+        "voice": {
+            "input": voice.input_pool().is_some(),
+            "output": voice.output_pool().is_some(),
+        },
+    })
+}
+
+/// POST /api/v0/embed/agent — the agent behind an embed key, before any
+/// conversation: what the widget needs to draw itself. Costs the agent
+/// nothing, so it is not gated by rates.
+pub async fn describe(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let body: StartBody = or_return!(
+        super::read_json_capped(req.into_body(), "the agent body", MAX_BODY_BYTES).await
+    );
+    let Some(key_hash) = token::hash_embed_key(body.key.trim()) else {
+        return embed_key_invalid();
+    };
+    let key = match embed_keys::find_by_hash(&state.db, &key_hash).await {
+        Ok(Some(k)) => k,
+        Ok(None) => return embed_key_invalid(),
+        Err(err) => return internal(err),
+    };
+    if key.revoked_at.is_some() {
+        return embed_key_revoked();
+    }
+    let live = or_return!(live_agent(&state, &key.principal_id, None).await);
+    or_return!(check_origin(&key, &live.spec, &headers));
+    json_ok(StatusCode::OK, json!({ "agent": agent_json(&live) }))
 }
 
 #[derive(Deserialize)]

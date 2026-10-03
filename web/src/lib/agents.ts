@@ -125,6 +125,8 @@ export interface AgentVersion {
 /** What the signed-in manager holds, and so may grant (`GET /api/v0/agent-resources`). */
 export interface AgentResources {
 	pools: string[];
+	/** Speech and transcription pools the manager holds, for `publish.voice`. */
+	voice_pools?: { speech: string[]; transcription: string[] };
 	tools: { id: string; name: string; description: string | null }[];
 	connectors: { key: string; name: string; tools: string[] }[];
 	skills: string[];

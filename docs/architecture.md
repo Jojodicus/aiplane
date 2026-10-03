@@ -146,7 +146,7 @@ in the tree. No routing, no `AppState`, no tool registry:
 The optional subsystems — what a deployment switches on at `/admin/settings`
 and can run entirely without: `rag/`, `skills.rs`, `comfyui/` (client, store, manifest,
 runner, scheduler), `push/`, `github/`, `geoip/`, `typst.rs`, `image_gen.rs`,
-`chat_attachments.rs`, `embeddings.rs`, `speech.rs`, `pdf.rs`, `ocr.rs`,
+`chat_attachments.rs`, `embeddings.rs`, `speech.rs`, `vad.rs` (silence trimming ahead of Whisper), `pdf.rs`, `ocr.rs`,
 `search_settings.rs`, and `document_canvas.rs` (the chat canvas store, shared
 by the chat document endpoints and the document tools above).
 
@@ -244,7 +244,6 @@ The binary and its routing glue — deliberately thin:
 - `spa.rs` — serves the built SvelteKit SPA from `AIPLANE_STATIC_DIR`: content-type map, cache policy, traversal guard, and the `index.html` history fallback. Its `GET /` + `GET /{*name}` catch-all is registered **last**, because rama matches in registration order.
 - `first_run.rs` — the layer that redirects everything to `/setup` until setup completes, with an allowlist for the SPA's static shell.
 - `body_limit.rs` — the request body cap every route sits behind. The layer reads the body itself (a declared length over the cap is refused before anything is read; otherwise reading stops as the running total passes it) and hands the handler buffered bytes, so no handler can drain an unbounded body: 1 MiB by default, 64 MiB on the large-body routes (`/v1/*`, `/api/v0/chat/*`, transcription, feedback, skill uploads), `413 payload_too_large` past it — in the Anthropic envelope (`request_too_large`) on `/v1/messages` and `/v1/messages/count_tokens`, like every other error there. `/hooks`, `/a2a` and `/api/v0/embed` read through their own tighter caps and are passed through. The cap is not matched on the path: `router.rs` registers each group of routes under its own endpoint layer, `.with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT | UPLOAD | ANTHROPIC_UPLOAD | HANDLER_CAPPED))`, so a route takes the cap of the group it is written in; a route added under `HANDLER_CAPPED` must cap its own read, and the architecture test reads that group out of the router and checks its handlers.
-- `vad.rs` — neural voice-activity detection, trimming silence off uploaded voice notes before Whisper sees them.
 
 `main.rs` wires it all: config → db → upstreams → tools → rbac → SessionStore →
 OIDC → `rama_server::router::serve`. The lib target exists so the integration

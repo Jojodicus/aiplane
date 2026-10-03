@@ -19,3 +19,4 @@ pub mod search_settings;
 pub mod skills;
 pub mod speech;
 pub mod typst;
+pub mod vad;
