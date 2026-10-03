@@ -1,0 +1,944 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! Architecture tests: the cross-cutting invariants a feature test does not
+//! see, checked by scanning the workspace's production source.
+//!
+//! Each scan is a tripwire, not a proof: it looks for the call shape that
+//! breaks the invariant and fails when a file outside the rule's allow-list
+//! uses it. Every allow-list entry names the file and why it may; an entry
+//! that no longer matches anything fails too, so the lists cannot rot into
+//! blanket exemptions. How to add one: `docs/testing.md` → "Architecture
+//! tests".
+//!
+//! Comments and `#[cfg(test)]` items are blanked before matching, and so are
+//! string literal contents except where a rule matches a literal on purpose
+//! (the spec keys), so prose about a forbidden call never trips a rule.
+//! Test code — `tests/` directories, `tests.rs`, `#[cfg(test)]` items,
+//! `examples/` — is out of scope: it talks to in-process mocks.
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// One production `.rs` file, masked twice over the same byte offsets.
+struct Source {
+    /// Relative to `crates/`, with `/` separators.
+    rel: String,
+    /// Comments, test items and string literal contents blanked.
+    code: String,
+    /// Comments and test items blanked; string literals kept.
+    text: String,
+}
+
+/// A rule's exception: a file (or a directory, with a trailing `/`) and why.
+struct Allowed {
+    path: &'static str,
+    why: &'static str,
+}
+
+fn crates_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crate lives under crates/")
+        .to_path_buf()
+}
+
+fn is_test_or_example(rel: &str) -> bool {
+    rel.split('/')
+        .any(|part| matches!(part, "tests" | "examples" | "benches" | "target"))
+        || rel.ends_with("/tests.rs")
+}
+
+fn production_sources() -> &'static [Source] {
+    static SOURCES: OnceLock<Vec<Source>> = OnceLock::new();
+    SOURCES.get_or_init(|| {
+        let root = crates_dir();
+        let mut out = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).expect("readable directory").flatten() {
+                let path = entry.path();
+                let rel = path
+                    .strip_prefix(&root)
+                    .expect("under crates/")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if is_test_or_example(&rel) {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else if rel.ends_with(".rs") {
+                    let src = fs::read_to_string(&path).expect("readable source");
+                    let (code, text) = mask(&src);
+                    out.push(Source { rel, code, text });
+                }
+            }
+        }
+        out.sort_by(|a, b| a.rel.cmp(&b.rel));
+        out
+    })
+}
+
+fn is_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn blank(buf: &mut [u8], range: std::ops::Range<usize>) {
+    for b in &mut buf[range] {
+        if *b != b'\n' {
+            *b = b' ';
+        }
+    }
+}
+
+/// `(code, text)` for `src`, both the same length as `src` with newlines
+/// kept, so an offset or line number in either is one in the file.
+fn mask(src: &str) -> (String, String) {
+    let bytes = src.as_bytes();
+    let mut code = bytes.to_vec();
+    let mut text = bytes.to_vec();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        let rest = &bytes[i..];
+        if rest.starts_with(b"//") {
+            let end = rest.iter().position(|&b| b == b'\n').map_or(n, |p| i + p);
+            blank(&mut code, i..end);
+            blank(&mut text, i..end);
+            i = end;
+        } else if rest.starts_with(b"/*") {
+            let mut depth = 0;
+            let mut j = i;
+            while j < n {
+                if bytes[j..].starts_with(b"/*") {
+                    depth += 1;
+                    j += 2;
+                } else if bytes[j..].starts_with(b"*/") {
+                    depth -= 1;
+                    j += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+            blank(&mut code, i..j);
+            blank(&mut text, i..j);
+            i = j;
+        } else if let Some((open, hashes)) = raw_string_start(bytes, i) {
+            let mut close = vec![b'"'];
+            close.extend(std::iter::repeat_n(b'#', hashes));
+            let body = i + open;
+            let end = bytes[body..]
+                .windows(close.len())
+                .position(|w| w == close.as_slice())
+                .map_or(n, |p| body + p);
+            blank(&mut code, body..end);
+            i = (end + close.len()).min(n);
+        } else if bytes[i] == b'"' {
+            let mut j = i + 1;
+            while j < n && bytes[j] != b'"' {
+                j += if bytes[j] == b'\\' { 2 } else { 1 };
+            }
+            blank(&mut code, i + 1..j.min(n));
+            i = j + 1;
+        } else if bytes[i] == b'\'' {
+            i = skip_char_literal(bytes, i, &mut code);
+        } else {
+            i += 1;
+        }
+    }
+    for range in test_items(&code) {
+        blank(&mut code, range.clone());
+        blank(&mut text, range);
+    }
+    // Every blanked range covers whole characters, so both stay valid UTF-8.
+    (
+        String::from_utf8_lossy(&code).into_owned(),
+        String::from_utf8_lossy(&text).into_owned(),
+    )
+}
+
+/// `r"`, `r#"`, `br"`, `br#"` at `i` (not inside an identifier): the length
+/// of the opener and the number of `#`.
+fn raw_string_start(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
+    if i > 0 && is_ident(bytes[i - 1]) {
+        return None;
+    }
+    let mut j = i;
+    if bytes.get(j) == Some(&b'b') {
+        j += 1;
+    }
+    if bytes.get(j) != Some(&b'r') {
+        return None;
+    }
+    j += 1;
+    let hashes = bytes[j..].iter().take_while(|&&b| b == b'#').count();
+    j += hashes;
+    (bytes.get(j) == Some(&b'"')).then_some((j + 1 - i, hashes))
+}
+
+/// Past a char literal at `i`, blanking it in `code`; past just the quote
+/// when it opens a lifetime.
+fn skip_char_literal(bytes: &[u8], i: usize, code: &mut [u8]) -> usize {
+    if bytes.get(i + 1) == Some(&b'\\') {
+        let end = bytes[i + 2..]
+            .iter()
+            .position(|&b| b == b'\'')
+            .map_or(bytes.len(), |p| i + 2 + p);
+        blank(code, i + 1..end);
+        return end + 1;
+    }
+    let width = match bytes.get(i + 1) {
+        Some(b) if *b < 0x80 => 1,
+        Some(b) if *b >= 0xF0 => 4,
+        Some(b) if *b >= 0xE0 => 3,
+        Some(_) => 2,
+        None => return i + 1,
+    };
+    if bytes.get(i + 1 + width) == Some(&b'\'') {
+        blank(code, i + 1..i + 1 + width);
+        i + 2 + width
+    } else {
+        i + 1
+    }
+}
+
+/// The byte ranges of every `#[cfg(test)]` item in masked `code`.
+fn test_items(bytes: &[u8]) -> Vec<std::ops::Range<usize>> {
+    const ATTR: &[u8] = b"#[cfg(test)]";
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(p) = bytes[from..].windows(ATTR.len()).position(|w| w == ATTR) {
+        let start = from + p;
+        let mut j = start + ATTR.len();
+        while j < bytes.len() && bytes[j] != b'{' && bytes[j] != b';' {
+            j += 1;
+        }
+        let end = if j < bytes.len() && bytes[j] == b'{' {
+            let mut depth = 0usize;
+            let mut k = j;
+            loop {
+                match bytes.get(k) {
+                    Some(b'{') => depth += 1,
+                    Some(b'}') => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    None => break,
+                    _ => {}
+                }
+                k += 1;
+            }
+            (k + 1).min(bytes.len())
+        } else {
+            (j + 1).min(bytes.len())
+        };
+        out.push(start..end);
+        from = end;
+    }
+    out
+}
+
+fn line_of(s: &str, offset: usize) -> usize {
+    s[..offset].bytes().filter(|&b| b == b'\n').count() + 1
+}
+
+/// Every offset in `hay` where `needle` starts.
+fn offsets(hay: &str, needle: &str) -> Vec<usize> {
+    hay.match_indices(needle).map(|(i, _)| i).collect()
+}
+
+fn allowed<'a>(list: &'a [Allowed], rel: &str) -> Option<&'a Allowed> {
+    list.iter().find(|a| {
+        if a.path.ends_with('/') {
+            rel.starts_with(a.path)
+        } else {
+            rel == a.path
+        }
+    })
+}
+
+/// Fails with `rule` when `hits` has a file outside `list`, or `list` has an
+/// entry no hit needs any more.
+fn assert_within(rule: &str, list: &[Allowed], hits: &[(String, usize, String)]) {
+    let violations: Vec<String> = hits
+        .iter()
+        .filter(|(rel, _, _)| allowed(list, rel).is_none())
+        .map(|(rel, line, what)| format!("crates/{rel}:{line}: {what}"))
+        .collect();
+    let used: BTreeSet<&str> = hits
+        .iter()
+        .filter_map(|(rel, _, _)| allowed(list, rel).map(|a| a.path))
+        .collect();
+    let stale: Vec<String> = list
+        .iter()
+        .filter(|a| !used.contains(a.path))
+        .map(|a| format!("{} ({})", a.path, a.why))
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "{rule}\n\nviolations:\n  {}\n\nRoute the call through the shared mechanism, or — if this \
+         file genuinely needs the exception — add it to the rule's allow-list in \
+         crates/aiplane/tests/it/architecture.rs with the reason (docs/testing.md → \
+         \"Architecture tests\").",
+        violations.join("\n  ")
+    );
+    assert!(
+        stale.is_empty(),
+        "{rule}\n\nthese allow-list entries no longer match anything; remove them so the \
+         exception cannot be reused silently:\n  {}",
+        stale.join("\n  ")
+    );
+}
+
+/// `(file, line, matched)` for every needle in the chosen view.
+fn scan(needles: &[&str], view: fn(&Source) -> &str) -> Vec<(String, usize, String)> {
+    let mut hits = Vec::new();
+    for src in production_sources() {
+        let hay = view(src);
+        for needle in needles {
+            for at in offsets(hay, needle) {
+                hits.push((src.rel.clone(), line_of(hay, at), (*needle).to_string()));
+            }
+        }
+    }
+    hits
+}
+
+// ---------------------------------------------------------------------------
+// Outbound HTTP clients.
+
+/// Where a reqwest client may be built. Everything else takes one of these
+/// (`AppState::http`, a provider context, a pinned client) as an argument.
+/// "Guarded" means the destination comes from outside the operator's own
+/// configuration and is checked against `net_guard` before connecting.
+/// The MCP transport is not listed because rmcp builds its own client inside
+/// the crate; its destinations are the admin-curated connector catalog.
+const OUTBOUND_CLIENTS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-runtime/src/agents/a2a_client/guard.rs",
+        why: "guarded: resolve-and-pin with net_guard, no redirects — the one client for \
+              destinations an agent's owner chooses",
+    },
+    Allowed {
+        path: "aiplane-core/src/server/auth/mcp_oauth.rs",
+        why: "guarded: validate_outbound_url (net_guard) on the admin-curated MCP catalog",
+    },
+    Allowed {
+        path: "aiplane-features/src/server/push/mod.rs",
+        why: "guarded: a push endpoint must classify as public (net_guard)",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/server/state.rs",
+        why: "operator-configured: AppState's shared client for the upstream pools, \
+              embeddings, rerank and image generation backends",
+    },
+    Allowed {
+        path: "aiplane-core/src/server/upstreams/health.rs",
+        why: "operator-configured: health probes of the upstream pools",
+    },
+    Allowed {
+        path: "aiplane-core/src/server/auth/oidc.rs",
+        why: "operator-configured: the OIDC provider",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/server/tools/sandbox/mod.rs",
+        why: "operator-configured: the sandbox runner",
+    },
+    Allowed {
+        path: "aiplane-features/src/server/comfyui/client.rs",
+        why: "operator-configured: the ComfyUI server",
+    },
+    Allowed {
+        path: "aiplane-tools/src/search_web.rs",
+        why: "operator-configured: the search provider (SearXNG URL or a fixed API host)",
+    },
+    Allowed {
+        path: "aiplane-features/src/server/geoip/update.rs",
+        why: "fixed host: the IP2Location download",
+    },
+    Allowed {
+        path: "aiplane-tools/src/wikipedia.rs",
+        why: "fixed host: `<lang>.wikipedia.org`, `lang` validated as a short alphanumeric code",
+    },
+    Allowed {
+        path: "aiplane-tools/src/currency.rs",
+        why: "fixed host: api.frankfurter.app",
+    },
+    Allowed {
+        path: "aiplane-tools/src/netcheck.rs",
+        why: "fixed hosts: Cloudflare DoH and rdap.org (redirects followed for RDAP bootstrap)",
+    },
+    Allowed {
+        path: "aiplane-tools/src/fetch_url.rs",
+        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
+              to be moved onto the a2a guard's resolve-and-pin client",
+    },
+    Allowed {
+        path: "aiplane-tools/src/load_image_url.rs",
+        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
+              to be moved onto the a2a guard's resolve-and-pin client",
+    },
+];
+
+/// The names `code` can build a reqwest client by: the full paths, plus
+/// whatever a `use reqwest::…` brings `Client` / `ClientBuilder` in as.
+fn reqwest_client_names(code: &str) -> Vec<String> {
+    let mut names = vec![
+        "reqwest::Client".to_string(),
+        "reqwest::ClientBuilder".to_string(),
+    ];
+    for at in offsets(code, "use reqwest::") {
+        let stmt = &code[at + "use reqwest::".len()..];
+        let stmt = &stmt[..stmt.find(';').unwrap_or(stmt.len())];
+        for item in stmt.split([',', '{', '}']) {
+            let mut words = item.split_whitespace();
+            let (Some(name), alias) = (words.next(), words.nth(1)) else {
+                continue;
+            };
+            if matches!(name, "Client" | "ClientBuilder") {
+                names.push(alias.unwrap_or(name).to_string());
+            }
+        }
+    }
+    names
+}
+
+#[test]
+fn outbound_http_clients_are_built_only_at_the_vetted_sites() {
+    let mut hits = Vec::new();
+    for src in production_sources() {
+        let code = src.code.as_str();
+        let mut needles = vec!["reqwest::get(".to_string()];
+        for name in reqwest_client_names(code) {
+            needles.push(format!("{name}::new("));
+            needles.push(format!("{name}::builder("));
+        }
+        for needle in &needles {
+            for at in offsets(code, needle) {
+                // `SandboxClient::new(` or `comfyui::Client::new(` is another
+                // type that happens to end in an imported name.
+                let bare = !needle.starts_with("reqwest::");
+                let longer_path = at > 0 && {
+                    let before = code.as_bytes()[at - 1];
+                    is_ident(before) || before == b':'
+                };
+                if bare && longer_path {
+                    continue;
+                }
+                hits.push((src.rel.clone(), line_of(code, at), needle.clone()));
+            }
+        }
+    }
+    assert_within(
+        "A reqwest client is built outside the vetted sites. A new client is a new place \
+         the gateway connects from: a destination a user, a model or an agent's owner can \
+         choose must go through the net_guard-checked, pinned client \
+         (aiplane-runtime agents/a2a_client/guard.rs), and one only the operator configures \
+         should reuse AppState::http.",
+        OUTBOUND_CLIENTS,
+        &hits,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unbounded request body reads.
+
+/// Where a body may be read frame by frame or collected whole: the readers
+/// everything else calls.
+const BODY_READERS: &[Allowed] = &[
+    Allowed {
+        path: "session-core/src/chrome.rs",
+        why: "the readers: read_body_capped, read_body_prefix, and read_body_to_bytes (for \
+              routes behind BodyLimitLayer)",
+    },
+    Allowed {
+        path: "sandbox-runner/src/server.rs",
+        why: "KNOWN GAP: the runner's /run reads its body uncapped; it listens on a private \
+              network only the gateway reaches, which sizes the request",
+    },
+];
+
+/// Where `read_body_to_bytes` (and `read_json`, its JSON wrapper) may drain
+/// a body whole: the handlers behind the router, whose `BodyLimitLayer` has
+/// already buffered the body up to the route's cap.
+const BEHIND_BODY_LIMIT: &[Allowed] = &[
+    Allowed {
+        path: "aiplane/src/rama_server/",
+        why: "routed through BodyLimitLayer",
+    },
+    Allowed {
+        path: "aiplane-api/src/",
+        why: "routed through BodyLimitLayer",
+    },
+    Allowed {
+        path: "session-core/src/chrome.rs",
+        why: "the definition",
+    },
+];
+
+/// The handler modules behind each prefix `BodyLimitLayer` passes through
+/// uncapped (`body_limit::HANDLER_CAPPED_PREFIXES`). They must read through
+/// a capped reader of their own.
+const HANDLER_CAPPED_MODULES: &[(&str, &[&str])] = &[
+    (
+        "/hooks/",
+        &[
+            "aiplane-api/src/pages/webhooks.rs",
+            "aiplane-api/src/pages/rag.rs",
+        ],
+    ),
+    ("/a2a/", &["aiplane-api/src/pages/a2a/"]),
+    ("/api/v0/embed/", &["aiplane-api/src/pages/embed.rs"]),
+];
+
+#[test]
+fn request_bodies_are_read_only_through_the_capped_readers() {
+    let hits = scan(
+        &[
+            "BodyExt",
+            "http_body_util",
+            ".try_into_json(",
+            ".try_into_string(",
+        ],
+        |s| s.code.as_str(),
+    );
+    assert_within(
+        "A body is read outside session_core::chrome. Reading frames or collecting a body \
+         by hand bypasses the cap; call read_body_capped (or read_body_prefix), or \
+         read_body_to_bytes in a handler behind BodyLimitLayer.",
+        BODY_READERS,
+        &hits,
+    );
+
+    let drains = scan(&["read_body_to_bytes(", "read_json("], |s| s.code.as_str());
+    assert_within(
+        "read_body_to_bytes / read_json drains a body without a cap of its own, which is \
+         only bounded behind the router's BodyLimitLayer.",
+        BEHIND_BODY_LIMIT,
+        &drains,
+    );
+
+    let prefixes: BTreeSet<&str> = HANDLER_CAPPED_MODULES.iter().map(|(p, _)| *p).collect();
+    let passed_through: BTreeSet<&str> = aiplane::rama_server::body_limit::HANDLER_CAPPED_PREFIXES
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(
+        prefixes, passed_through,
+        "BodyLimitLayer passes a different set of prefixes through uncapped than this test \
+         knows handler modules for; list the modules serving the new prefix in \
+         HANDLER_CAPPED_MODULES so their reads are checked"
+    );
+    let uncapped: Vec<String> = drains
+        .iter()
+        .filter(|(rel, _, _)| {
+            HANDLER_CAPPED_MODULES
+                .iter()
+                .flat_map(|(_, modules)| modules.iter())
+                .any(|m| {
+                    if m.ends_with('/') {
+                        rel.starts_with(m)
+                    } else {
+                        rel == m
+                    }
+                })
+        })
+        .map(|(rel, line, what)| format!("crates/{rel}:{line}: {what}"))
+        .collect();
+    assert!(
+        uncapped.is_empty(),
+        "these handlers sit behind a prefix BodyLimitLayer passes through uncapped, so \
+         their whole-body read has no bound at all; read through read_body_capped / \
+         read_json_capped / read_body_prefix:\n  {}",
+        uncapped.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Agent spec JSON.
+
+/// Where an agent spec's JSON may be read by key: the validator walk, and
+/// the few places that must keep JSON (docs/agents.md → "The typed spec").
+const SPEC_JSON_READERS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-runtime/src/agents/spec.rs",
+        why: "the validator: the path-reporting walk over the JSON before it is typed",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/spec/",
+        why: "the validator's per-kind walks",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/state.rs",
+        why: "StateSchema compiles `state` from the same JSON the walk checks",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/verifier/host_jwt.rs",
+        why: "seal_secrets rewrites a verifier's secret in the stored JSON before it is \
+              saved; a typed round trip would re-serialize the whole spec",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/a2a_client/mod.rs",
+        why: "seal_secrets rewrites a route's credential in the stored JSON before it is \
+              saved; the A2A task answer also has a `state` of its own",
+    },
+    Allowed {
+        path: "aiplane-agents/src/db/agent_analytics.rs",
+        why: "an audit row's `routes` detail, not a spec",
+    },
+];
+
+/// The spec's top-level keys and the keys of its parts whose names give a
+/// raw read away.
+const SPEC_KEYS: &[&str] = &[
+    "profile",
+    "main",
+    "state",
+    "verifiers",
+    "router",
+    "routes",
+    "finish",
+    "on_tool_unavailable",
+    "publish",
+    "tool_resources",
+    "bind",
+    "when",
+];
+
+#[test]
+fn agent_spec_json_is_read_only_by_the_validator() {
+    let mut needles = Vec::new();
+    for key in SPEC_KEYS {
+        for accessor in [".get(", ".get_mut(", ".remove("] {
+            needles.push(format!("{accessor}\"{key}\")"));
+        }
+        for accessor in [".pointer(", ".pointer_mut("] {
+            needles.push(format!("{accessor}\"/{key}\""));
+            needles.push(format!("{accessor}\"/{key}/"));
+        }
+        needles.push(format!("[\"{key}\"]"));
+    }
+    let needles: Vec<&str> = needles.iter().map(String::as_str).collect();
+    let hits = scan(&needles, |s| s.text.as_str());
+    assert_within(
+        "An agent spec is read as raw JSON outside the validator. Runtime code reads the \
+         typed AgentSpec (agents::spec::model) that the validator produced, from \
+         CompiledSpec::agent(); a default belongs in the type's accessor, not at the read.",
+        SPEC_JSON_READERS,
+        &hits,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Model tool dispatch.
+
+/// Who may hand a round's calls to the runner, and the grant-narrowed
+/// source each one must name so the calls resolve through it.
+const DISPATCHERS: &[(Allowed, Option<&str>)] = &[
+    (
+        Allowed {
+            path: "aiplane-runtime/src/server/tools/runner.rs",
+            why: "the runner itself: run_with_tools hands its rounds to the guarded executor",
+        },
+        None,
+    ),
+    (
+        Allowed {
+            path: "aiplane-runtime/src/openai_driver.rs",
+            why: "the chat and agent driver: GrantedToolSource, with an agent run's \
+                  RunToolSource layered over it",
+        },
+        Some("GrantedToolSource"),
+    ),
+    (
+        Allowed {
+            path: "aiplane-runtime/src/openai_driver/resume.rs",
+            why: "resumes a call with the source the driver built (GrantedToolSource)",
+        },
+        None,
+    ),
+    (
+        Allowed {
+            path: "aiplane/src/rama_server/proxy.rs",
+            why: "the /v1 loops: DiscoverableToolSource over the token's RBAC-bounded layer",
+        },
+        Some("DiscoverableToolSource"),
+    ),
+];
+
+/// Who may call `Tool::run` directly rather than through the runner.
+const DIRECT_TOOL_RUNS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-runtime/src/server/tools/runner.rs",
+        why: "the runner, after resolving the call through the round's source",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/bind.rs",
+        why: "a bound tool wraps a granted tool and only narrows its arguments",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/server/tools/ask_first.rs",
+        why: "AskFirst wraps a granted tool and runs it once the user approved",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/server/tools/mcp/manager.rs",
+        why: "the MCP overlay's wrappers around a connector's tools",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/verifier/lookup.rs",
+        why: "a lookup verifier runs its tool only after checking the principal's grant",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/verifier/mod.rs",
+        why: "a connector verifier resolves through the principal's grant-bounded MCP layer",
+    },
+];
+
+/// `.run(<context>, …)`: a `Tool::run` call, told from other `run` methods
+/// by its first argument being a tool context.
+fn tool_run_calls(src: &Source) -> Vec<usize> {
+    let code = src.code.as_str();
+    offsets(code, ".run(")
+        .into_iter()
+        .filter(|&at| {
+            let arg = code[at + ".run(".len()..].trim_start();
+            let first: String = arg
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            first.ends_with("ctx") || first == "ToolContext"
+        })
+        .collect()
+}
+
+#[test]
+fn model_tool_calls_dispatch_only_through_the_grant() {
+    let hits = scan(
+        &[
+            "execute_tool_calls(",
+            "execute_tool_calls_guarded(",
+            "run_with_tools(",
+        ],
+        |s| s.code.as_str(),
+    );
+    let allow: Vec<Allowed> = DISPATCHERS
+        .iter()
+        .map(|(a, _)| Allowed {
+            path: a.path,
+            why: a.why,
+        })
+        .collect();
+    assert_within(
+        "A round's tool calls are dispatched outside the grant-narrowed loops. A model can \
+         name any tool, so every loop resolves calls through GrantedToolSource (chat, agent \
+         runs) or DiscoverableToolSource (/v1); see docs/tools-rbac.md.",
+        &allow,
+        &hits,
+    );
+    for (a, gate) in DISPATCHERS {
+        let Some(gate) = gate else { continue };
+        let src = production_sources()
+            .iter()
+            .find(|s| s.rel == a.path)
+            .unwrap_or_else(|| panic!("{} is gone; update DISPATCHERS", a.path));
+        assert!(
+            src.code.contains(gate),
+            "crates/{} dispatches tool calls but no longer builds {gate}, the source that \
+             narrows them to the grant",
+            a.path
+        );
+    }
+
+    let mut runs = Vec::new();
+    for src in production_sources() {
+        for at in tool_run_calls(src) {
+            runs.push((src.rel.clone(), line_of(&src.code, at), ".run(ctx…)".into()));
+        }
+    }
+    assert_within(
+        "A tool is run directly instead of through the runner. Resolve the call through the \
+         round's grant-narrowed source; a wrapper that runs an inner tool belongs in the \
+         allow-list with its reason.",
+        DIRECT_TOOL_RUNS,
+        &runs,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The scanner itself.
+
+#[test]
+fn the_mask_blanks_comments_strings_and_test_items_but_keeps_lines() {
+    let src = "let a = \"Client::new()\"; // Client::new()\n\
+               /* Client::new() */ let c = '\"'; let l: &'static str = r#\"x\"#;\n\
+               #[cfg(test)]\nmod tests { fn f() { Client::new(); } }\nClient::new();\n";
+    let (code, text) = mask(src);
+    assert_eq!(code.len(), src.len());
+    assert_eq!(code.lines().count(), src.lines().count());
+    assert_eq!(offsets(&code, "Client::new(").len(), 1, "{code}");
+    assert_eq!(line_of(&code, offsets(&code, "Client::new(")[0]), 5);
+    assert!(text.contains("\"Client::new()\""), "{text}");
+    assert!(!text.contains("fn f()"), "{text}");
+    assert_eq!(
+        reqwest_client_names("use reqwest::{Client as Http, Url};"),
+        ["reqwest::Client", "reqwest::ClientBuilder", "Http"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Crate direction.
+
+/// The crate stack of AGENTS.md, bottom (0) up. A crate may depend only on
+/// crates on a lower level; siblings share one, so neither depends on the
+/// other.
+const STACK: &[(&str, u8)] = &[
+    ("shared", 0),
+    ("session-core", 1),
+    ("aiplane-core", 2),
+    ("aiplane-features", 3),
+    ("aiplane-agents", 3),
+    ("aiplane-runtime", 4),
+    ("aiplane-tools", 5),
+    ("aiplane-api", 5),
+    ("aiplane", 6),
+];
+
+/// Members outside the stack, with the workspace crates each may use.
+/// Nothing may depend on them.
+const OUTSIDE_THE_STACK: &[(&str, &[&str])] = &[
+    // A separate service binary; it shares only the wire types.
+    ("sandbox-runner", &["shared"]),
+];
+
+/// The workspace members, and `(crate, dependency, kind)` for every
+/// dependency between them, from `cargo metadata`, so renamed,
+/// target-specific and workspace-inherited dependencies all count.
+fn workspace_edges() -> (Vec<String>, Vec<(String, String, String)>) {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| env!("CARGO").to_string());
+    let workspace = crates_dir()
+        .parent()
+        .expect("crates/ lives in the workspace root")
+        .to_path_buf();
+    let out = std::process::Command::new(cargo)
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .current_dir(&workspace)
+        .output()
+        .expect("cargo metadata runs");
+    assert!(
+        out.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("cargo metadata prints JSON");
+    let packages = meta["packages"].as_array().expect("packages");
+    let members: Vec<String> = packages
+        .iter()
+        .filter_map(|p| p["name"].as_str().map(str::to_string))
+        .collect();
+    let mut edges = Vec::new();
+    for p in packages {
+        let from = p["name"].as_str().expect("a package has a name");
+        for d in p["dependencies"].as_array().into_iter().flatten() {
+            let to = d["name"].as_str().expect("a dependency has a name");
+            if !members.iter().any(|m| m == to) {
+                continue;
+            }
+            let kind = d["kind"].as_str().unwrap_or("normal").to_string();
+            edges.push((from.to_string(), to.to_string(), kind));
+        }
+    }
+    (members, edges)
+}
+
+/// Why `from` may not depend on `to`, or `None` when it may.
+fn edge_violation(from: &str, to: &str) -> Option<String> {
+    let level = |name: &str| STACK.iter().find(|(n, _)| *n == name).map(|(_, l)| *l);
+    if let Some((_, allowed)) = OUTSIDE_THE_STACK.iter().find(|(n, _)| *n == from) {
+        return (!allowed.contains(&to))
+            .then(|| format!("{from} stands outside the stack and may use only {allowed:?}"));
+    }
+    if OUTSIDE_THE_STACK.iter().any(|(n, _)| *n == to) {
+        return Some(format!(
+            "{to} stands outside the stack; nothing depends on it"
+        ));
+    }
+    match (level(from), level(to)) {
+        (Some(f), Some(t)) if t < f => None,
+        (Some(f), Some(t)) if t == f => Some(format!(
+            "{from} and {to} are siblings on level {f}; neither may depend on the other"
+        )),
+        (Some(f), Some(t)) => Some(format!(
+            "{to} (level {t}) sits above {from} (level {f}); a crate may depend only on \
+             crates beneath it"
+        )),
+        _ => Some(format!(
+            "{from} -> {to} involves a crate this test does not place in the stack"
+        )),
+    }
+}
+
+#[test]
+fn workspace_crates_depend_only_down_the_stack() {
+    let (members, edges) = workspace_edges();
+    assert!(
+        edges
+            .iter()
+            .any(|(from, to, _)| from == "aiplane-runtime" && to == "aiplane-core"),
+        "cargo metadata reported no aiplane-runtime -> aiplane-core edge; the test is not \
+         reading the dependency graph it means to check: {edges:?}"
+    );
+    let unplaced: Vec<&String> = members
+        .iter()
+        .filter(|m| {
+            !STACK.iter().any(|(n, _)| n == m) && !OUTSIDE_THE_STACK.iter().any(|(n, _)| n == m)
+        })
+        .collect();
+    assert!(
+        unplaced.is_empty(),
+        "these workspace members have no place in the crate stack: {unplaced:?}. Decide \
+         where they sit, document it in AGENTS.md → \"The gateway crate stack\" and \
+         docs/architecture.md#crate-boundaries, and add them to STACK (or \
+         OUTSIDE_THE_STACK) in crates/aiplane/tests/it/architecture.rs"
+    );
+    let wrong: Vec<String> = edges
+        .iter()
+        .filter_map(|(from, to, kind)| {
+            edge_violation(from, to).map(|why| format!("{from} -> {to} ({kind}): {why}"))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "dependencies against the crate stack:\n  {}\n\nAn upward or sideways edge collapses \
+         a layer, and every build of the lower crate pays for the upper one. Move the code \
+         the lower crate needs down, or the caller up; see AGENTS.md → \"The gateway crate \
+         stack\" and docs/architecture.md#crate-boundaries.",
+        wrong.join("\n  ")
+    );
+}
+
+#[test]
+fn the_stack_rule_refuses_upward_and_sideways_edges() {
+    assert_eq!(edge_violation("aiplane-runtime", "aiplane-core"), None);
+    assert!(edge_violation("aiplane-core", "aiplane-agents").is_some());
+    assert!(edge_violation("aiplane-features", "aiplane-agents").is_some());
+    assert!(edge_violation("aiplane-api", "aiplane-tools").is_some());
+    assert!(edge_violation("session-core", "aiplane-core").is_some());
+    assert!(edge_violation("aiplane", "sandbox-runner").is_some());
+    assert_eq!(edge_violation("sandbox-runner", "shared"), None);
+    assert!(edge_violation("sandbox-runner", "session-core").is_some());
+}

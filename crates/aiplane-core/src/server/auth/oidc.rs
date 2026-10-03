@@ -189,6 +189,8 @@ impl OidcClient {
             issuer.trim_end_matches('/')
         );
 
+        // Vetted outbound client: the IdP is the operator's own configuration.
+        #[allow(clippy::disallowed_methods)]
         let http = reqwest::Client::builder()
             // Don't follow redirects — SSRF defence; also forces misconfigured
             // IdPs to expose their redirect quirks instead of silently hiding

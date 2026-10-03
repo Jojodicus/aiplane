@@ -81,6 +81,13 @@ Two rules keep it that way, and both are easy to break by accident:
    or an agent table's accessors; `session-core` must not name an agent, a
    visitor or a principal. One such reference collapses a layer.
 
+The dependency half of rule 2 is checked: `workspace_crates_depend_only_down_the_stack`
+(`crates/aiplane/tests/it/architecture.rs`) reads `cargo metadata` and fails on
+any edge — normal, build or dev — from a crate to one above it or beside it,
+naming the edge. A new crate fails it until it has a level there. Naming a type
+across layers without a Cargo edge is impossible, so the edge check covers
+rule 2 for types; it cannot see code that merely *belongs* higher (rule 1).
+
 **When adding code, put it as high in the stack as it will go.** Something only
 belongs in `aiplane-core` if code below the page layer actually needs it. Adding a
 reference from `aiplane-core` to a page — or pushing a module downward for
@@ -277,5 +284,8 @@ Start in [`docs/README.md`](docs/README.md) for the index. The topical docs:
 - **When you discover a missing piece** — an undocumented invariant, a non-obvious gotcha — add it to the relevant doc. Don't rely on conversation history.
 - **Tests live next to the code.** Unit tests in `#[cfg(test)] mod tests`, integration tests in `crates/aiplane/tests/`. Run `mise run verify` before declaring a task done.
 - **Verify cheaply, then once for real.** Compiling dominates this workspace: a full `mise run verify` is ~20 minutes, of which ~19 are linking test binaries, not running tests. Iterate with `mise run test-crate <crate>` (seconds), then run the full gate **once**, at the end, after every fix you already know about is in. Starting it earlier means paying it twice. Don't kill a cargo process to unstick a parallel mise task — they share one `target/` lock, and killing one fails its sibling. See [`docs/dev-workflow.md`](docs/dev-workflow.md) → "The feedback ladder".
+- **Review per merge, not at the end.** Run `/code-review` on a branch before it is merged, and `/security-review` as well when the change touches anything reachable without login (`/hooks`, `/a2a`, `/api/v0/embed`, OAuth callbacks, `/setup`, the public probes) or anything that fetches a URL someone other than the operator chose. Fix or answer every finding before the merge. One review over a whole epic at the end is too big to read: the agent-builder epic (#75) needed two review rounds, a `/simplify` pass and five architecture refactors (#105–#109) because its ~74k lines were reviewed once.
+- **Design docs name their shared mechanisms.** A design doc for a change that needs a cross-cutting building block gets a **"Shared mechanisms"** section listing the existing ones the change must use (`net_guard` + the pinned client for outbound URLs, `read_capped` / `read_body_capped` / `BodyLimitLayer` for bodies, the typed `AgentSpec`, `GrantedToolSource` for tool dispatch, …) and any new one it introduces. A new cross-cutting block lands, with its tests, **before** the features that use it — otherwise parallel work re-implements it (#75 grew three capped body readers and five IP classifiers that way). The architecture tests (`docs/testing.md` → "Architecture tests") enforce the existing ones; a new one gets a test there too.
+- **Delegating work?** Use the brief template in [`docs/dev-workflow.md`](docs/dev-workflow.md#delegating-work-to-an-agent): it carries the helpers to search for first, the crate placement to justify, the invariants to keep and the memory limits a Rust-building agent runs under.
 - **Never cut a release unprompted.** A release is a git tag and nothing else (see [`docs/releases.md`](docs/releases.md)), and pushing one moves `:production`, which every auto-updating installation picks up that night. "Ship it" / "finish X" is not a release request; wait until someone asks for one in so many words.
 - **If a hard rule is in your way**, surface it to the user. Don't quietly bypass.

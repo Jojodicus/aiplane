@@ -99,6 +99,9 @@ async fn run(State(state): State<Arc<RunnerState>>, req: Request) -> Response {
     }
 }
 
+// KNOWN GAP (architecture test BODY_READERS): uncapped. The runner listens on
+// a private network only the gateway reaches, and the gateway sizes requests.
+#[allow(clippy::disallowed_methods)]
 async fn read_body(body: rama::http::Body) -> Result<rama::bytes::Bytes, String> {
     use rama::http::body::util::BodyExt;
     body.collect()

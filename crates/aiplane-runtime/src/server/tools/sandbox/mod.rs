@@ -179,6 +179,8 @@ const EGRESS_NO: u8 = 2;
 
 impl SandboxClient {
     pub fn new(cfg: Arc<SandboxConfig>, runtime: crate::server::state::RuntimeHandle) -> Arc<Self> {
+        // Vetted outbound client: the sandbox runner is the operator's own.
+        #[allow(clippy::disallowed_methods)]
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
             .user_agent(concat!("aiplane/", env!("CARGO_PKG_VERSION"), " sandbox"))

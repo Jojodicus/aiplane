@@ -99,6 +99,58 @@ Two habits that cost more than any tooling change:
   `target/` and one lock; `Blocking waiting for file lock` is normal, and
   killing one of them fails its sibling task and buys another full run.
 
+## Delegating work to an agent
+
+Parallel agents are how the agent-builder epic (#75) grew three capped body
+readers, five IP classifiers and ~6k lines of agent code in `aiplane-core`:
+each brief said *what* to build and nothing about what already existed or where
+it belonged. A brief for delegated work carries the following, filled in — not
+just "see AGENTS.md":
+
+```markdown
+## Task
+<issue / goal, the acceptance criteria, and what is out of scope>
+
+## Before writing code
+- Search for an existing helper first and name what you found (or that you
+  found nothing): `rg -n '<verb>|<noun>' crates/`, the "Shared mechanisms" of
+  the design doc, docs/architecture.md → "Crate boundaries". Reuse beats a
+  second copy; a missing block is reported back, not improvised.
+- Crate placement: say which crate the new code goes in and why it cannot go
+  higher (AGENTS.md → "The gateway crate stack").
+
+## Invariants to keep
+- Outbound URLs a user, model or agent owner chooses: the net_guard-pinned
+  client (`a2a_client::guard::pin`); operator backends: `AppState::http`.
+- Bodies: `read_body_capped` / `read_json_capped` / `read_capped`; whole-body
+  drains only behind `BodyLimitLayer`.
+- Agent specs: the typed `AgentSpec`, never the JSON.
+- Tool calls: through `GrantedToolSource` / `DiscoverableToolSource`.
+- <anything specific to this task>
+The architecture tests check the first four (docs/testing.md).
+
+## Tests
+- Test-first. Size-probe inputs are finite (cap + 1, or a bounded "endless"
+  stream such as `common::endless_body()`), never an unbounded stream.
+
+## Build discipline
+- One Rust-building agent at a time on this machine; run every cargo/mise
+  command as `CARGO_BUILD_JOBS=4 mise run …`.
+- Climb the feedback ladder (check → test-crate → lint-crate) and run
+  `mise run verify` once, at the end.
+- Commits per item; never `--no-verify`; never push or merge unless asked.
+
+## Report
+- What changed and where, the helpers reused, anything left undone, and the
+  verify result.
+```
+
+Why the build discipline: two agents building this workspace at once each run a
+full parallel `rustc` fan-out plus a linker per test binary, and the machine
+runs out of memory long before either finishes — see "A memory crash: read the
+newest JetsamEvent report first" below. `CARGO_BUILD_JOBS=4` keeps one build's
+peak to a level the rest of the machine survives.
+
 ### Why the build profiles look like that
 
 The root `Cargo.toml` sets `debug = "line-tables-only"` for the workspace and
@@ -430,6 +482,50 @@ Build scripts need the same treatment and cannot import from the workspace —
 `crates/aiplane-api/build.rs` repeats the list. A build run from inside a hook
 would otherwise resolve `HEAD` in the calling repository and stamp a foreign
 SHA into `AIPLANE_GIT_SHA`, defeating the AGPL §13 source link it exists for.
+
+### Size-probe tests: finite inputs only
+
+**Symptom.** The machine freezes or reboots during a test run; afterwards the
+only trace is a test process that grew to ~75 GB. It happened three times in a
+row.
+
+**Cause.** A TDD red test for a body cap fed an *endless* stream to a handler
+that did not have the cap yet — which is the point of a red test. Without the
+cap the handler buffers for as long as the stream lasts, and an endless stream
+lasts until memory runs out. The test's own timeout does not help: by the time
+it fires, gigabytes are allocated, and the OS kills or freezes something else
+first.
+
+**Prevention.** A test that probes a size limit sends a *finite* input that is
+merely far over the limit: `cap + 1` bytes with a declared length, or for the
+"no `Content-Length`" case a bounded stream such as `common::endless_body()`
+(8 MiB, `crates/aiplane/tests/it/common/mod.rs`) or the 8 MiB chunked peer in
+`capped_read.rs`'s tests. Against a missing cap such a test fails cleanly — the
+handler reads it all and answers something other than 413 — instead of taking
+the machine down. Put a `tokio::time::timeout` around the call as well, so a
+handler that waits for more input fails rather than hangs.
+
+### A memory crash: read the newest JetsamEvent report first
+
+**Symptom.** Builds, tests or the whole desktop die without a Rust error; a
+terminal shows `Killed: 9`, or the machine was simply restarted.
+
+**Cause.** On macOS that is usually *jetsam*, the kernel's out-of-memory
+killer. Guessing at the cause (a test? the linker? two parallel builds?) wastes
+the next hour, because each guess costs a rebuild.
+
+**Prevention.** Read the evidence first. Every jetsam kill writes
+`/Library/Logs/DiagnosticReports/JetsamEvent-<date>.ips`:
+
+```bash
+ls -t /Library/Logs/DiagnosticReports/JetsamEvent-*.ips | head -1
+```
+
+The report lists every process with its resident pages at the moment of the
+kill (`rpages` × the page size, 16 KiB on Apple silicon) and marks the one
+killed: the largest entries name the culprit — a test binary at tens of GB is a
+size-probe test (above), many `rustc`/`ld` entries are concurrent builds (one
+Rust-building agent at a time, `CARGO_BUILD_JOBS=4`).
 
 ### A seed/import marker may only be burned once the decision is final
 

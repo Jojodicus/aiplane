@@ -1,0 +1,17 @@
+# cargo-nextest settings for `mise run test`, `test-crate` and `verify`.
+# See docs/testing.md → "Runaway tests".
+
+[profile.default]
+# A test running past 60 s is reported SLOW; at the second period (120 s) it
+# is killed. The slowest legitimate test takes ~5 s (measured: full workspace,
+# 3205 tests, 4 threads), so this only ever fires on a runaway — an unbounded
+# body read, a stream that never ends, a lost wake-up — before it can eat the
+# machine's memory or hang the gate.
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# The live, env-gated binaries talk to real infrastructure (a sandbox runner
+# and S3, a Nextcloud container) and legitimately take longer; without their
+# gate they skip in milliseconds.
+[[profile.default.overrides]]
+filter = "binary(sandbox_e2e_live) | binary(nextcloud_e2e_live)"
+slow-timeout = { period = "60s", terminate-after = 10 }

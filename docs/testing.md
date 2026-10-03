@@ -13,6 +13,85 @@
 | **SPA unit** | `web/src/lib/*.test.ts` | `mise run test-web` — Node's own `node --test` with type stripping, no jsdom. Covers the framework-free halves of the SPA (the chat event fold in `chat-protocol.ts`, markdown rendering), which is what pins client-side wire behaviour. |
 | **E2E (browser ↔ gateway)** | `e2e/*.test.mjs` | Playwright + Node's `node:test` against a running `mise run dev`. The SPA suites are `e2e/spa*.test.mjs` (shell boot, signed-out OIDC redirect, signed-in identity, tokens, admin, a full chat turn streaming in); the rest cover the anonymous sign-in funnel and plain-`fetch` checks of the public HTTP surface. See `e2e/README.md`. |
 
+## Architecture tests
+
+Feature tests check what a feature does; they cannot see that a new file
+skipped a shared mechanism. The cross-cutting invariants are therefore checked
+by tests that read the workspace's own source, in
+`crates/aiplane/tests/it/architecture.rs`:
+
+| Test | Invariant | Shared mechanism |
+|---|---|---|
+| `outbound_http_clients_are_built_only_at_the_vetted_sites` | a reqwest client (`Client::new`/`builder`, `ClientBuilder::new`, `reqwest::get`, under any `use` alias) is built only in the listed files | the net_guard-checked, pinned client in `agents/a2a_client/guard.rs` for destinations a user, model or agent owner chooses; `AppState::http` for operator-configured backends |
+| `request_bodies_are_read_only_through_the_capped_readers` | nothing outside `session_core::chrome` names `BodyExt`; `read_body_to_bytes`/`read_json` appear only behind `BodyLimitLayer` (`aiplane/src/rama_server/`, `aiplane-api/src/`) and never in the modules serving a prefix the layer passes through (`HANDLER_CAPPED_PREFIXES`) | `read_body_capped`, `read_body_prefix`, `read_json_capped`, `BodyLimitLayer` |
+| `agent_spec_json_is_read_only_by_the_validator` | no JSON accessor (`.get`, `.get_mut`, `.remove`, `.pointer`, `[..]`) names a spec key (`publish`, `routes`, `main`, …) outside the validator | the typed `AgentSpec` from `CompiledSpec::agent()` |
+| `workspace_crates_depend_only_down_the_stack` | every dependency between workspace members (normal, build, dev; from `cargo metadata --no-deps --offline`) points to a lower level of the AGENTS.md stack; siblings (`-features`/`-agents`, `-tools`/`-api`) never depend on each other; `sandbox-runner` uses only `shared` and nothing uses it; every member has a level | the stack in AGENTS.md → "The gateway crate stack" |
+| `model_tool_calls_dispatch_only_through_the_grant` | only the chat/agent driver, its resume path and the `/v1` loops hand calls to the runner, and each still builds its gate (`GrantedToolSource`, `DiscoverableToolSource`); `Tool::run` is called directly only by the runner and the listed wrappers/verifiers | `GrantedToolSource` (+ `RunToolSource` over it), `DiscoverableToolSource` |
+
+How they work: each production `.rs` file under `crates/` (not `tests/`,
+`tests.rs`, `examples/`, or a `#[cfg(test)]` item) is masked — comments
+blanked, string literal contents blanked except for the spec-key rule, which
+matches the literal on purpose — and searched for the call shape that breaks
+the rule. A hit outside the rule's allow-list fails with the file and line. An
+allow-list entry that no longer matches anything fails too, so an exception
+cannot outlive its reason. A scan is a tripwire, not a proof: it catches the
+silent omission in a new file, which is how every one of these invariants was
+actually broken.
+
+The allow-lists are deliberately short, and every entry carries its reason.
+Entries marked **KNOWN GAP** are real violations that predate the test
+(`fetch_url` and `load_image_url` fetch model-chosen URLs without `net_guard`;
+`sandbox-runner` reads its request body uncapped). They are listed so the test
+can land green and stop the next one; fixing them removes the entry.
+
+Not covered yet: outbound *response* bodies read with reqwest's
+`.bytes()`/`.text()`/`.json()` instead of `capped_read::read_capped` — about 40
+files do, most against operator-configured upstreams, which is too many to
+allow-list file by file.
+
+**Adding one.** Write it in `architecture.rs` next to the others: the needles,
+the view (`code` with literals blanked, or `text` with them kept), an
+`Allowed { path, why }` list, and `assert_within` with a message that names the
+shared mechanism to use instead. Then prove it: add the violation to a
+production file (an undeclared `.rs` file under some `src/` is enough — the
+scan reads files, not the module tree), watch the test fail naming it, remove
+it. Prefer a `clippy.toml` entry as well where clippy can resolve the path (see
+below), so the editor points at the line.
+
+### The same rules in `clippy.toml`
+
+Where a rule is a call clippy can resolve by path, the workspace `clippy.toml`
+lists it under `disallowed-methods`, so `mise run lint` (and the editor) points
+at the line: `reqwest::Client::new`, `reqwest::Client::builder`,
+`reqwest::ClientBuilder::new`, `reqwest::get` and
+`http_body_util::BodyExt::collect` (which rama's `body::util::BodyExt`
+re-exports). Each production site on the scan's allow-list carries
+`#[allow(clippy::disallowed_methods)]` with a comment saying why; test modules
+and the integration crates allow it once at the module or crate root, because
+tests build plain clients and drain bodies to talk to their in-process mocks.
+The spec-key and dispatch rules have no clippy form — what they forbid is a
+`serde_json::Value` accessor or a `Tool::run` call that is fine elsewhere — so
+only the scan checks them.
+
+## Runaway tests
+
+`.config/nextest.toml` gives every test `slow-timeout = { period = "60s",
+terminate-after = 2 }`: nextest reports a test SLOW after 60 s and kills it at
+120 s. Measured on the full workspace (3205 tests, `NEXTEST_TEST_THREADS=4`),
+the slowest legitimate test takes ~5.3 s
+(`agents::run::tests::verifiers::a_forward_in_the_round_of_the_lookup_that_opens_its_route_is_dispatched`),
+so the limit only ever catches a runaway — a lost wake-up, a stream that never
+ends, a body read without a cap. The live binaries (`sandbox_e2e_live`,
+`nextcloud_e2e_live`) get ten periods instead, since they talk to real
+infrastructure. If a new test legitimately needs more than a minute, give it a
+per-test `[[profile.default.overrides]]` entry with the reason rather than
+raising the default.
+
+The timeout is a backstop, not the protection: a test that buffers without
+bound can allocate tens of GB long before 120 s are up. Size-probe tests use
+finite inputs (`docs/dev-workflow.md` → "Size-probe tests: finite inputs
+only").
+
 ## Style: test-first, Chicago / Classicist
 
 Write the test before the code — red, green, refactor (**TDD**). Tests are **state-based**: assert on observable results, exercising real collaborators (in-memory SQLite, `wiremock` upstreams, the actual `ToolRegistry` / `UpstreamRegistry`) rather than interaction mocks. Behaviour-verification (London-school) mocks are the exception, reserved for collaborators you genuinely can't stand up in-process — and the test says why in a comment. The mocking philosophy below is the practical edge of this: we fake only the things that reach outside the process.

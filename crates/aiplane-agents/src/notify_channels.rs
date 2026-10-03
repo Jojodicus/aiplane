@@ -149,6 +149,9 @@ pub fn validate_webhook_url(kind: ChannelKind, raw: &str) -> Result<String, Stri
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use wiremock::matchers::{body_json, method, path};

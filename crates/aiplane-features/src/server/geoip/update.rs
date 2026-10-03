@@ -68,6 +68,8 @@ fn should_update(db_path: &Path) -> bool {
 }
 
 async fn update_once(db_path: &Path, token: &str) -> anyhow::Result<()> {
+    // Vetted outbound client: a fixed host, the IP2Location download.
+    #[allow(clippy::disallowed_methods)]
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .user_agent(concat!(

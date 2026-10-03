@@ -30,6 +30,10 @@
 //
 // Each test drives the real `WebdavProvider` — no mock server anywhere.
 
+// The client here talks to the throwaway Nextcloud container; clippy.toml's
+// outbound rule is about production paths.
+#![allow(clippy::disallowed_methods)]
+
 use std::collections::BTreeMap;
 
 use aiplane_features::server::rag::source::{

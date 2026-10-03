@@ -23,6 +23,8 @@ const USER_AGENT: &str = concat!("aiplane/", env!("CARGO_PKG_VERSION"), " netche
 /// Shared HTTP client for the DoH / RDAP calls. Built per-invocation (these
 /// tools fire infrequently); redirects are followed so RDAP bootstrap
 /// (`rdap.org` → the authoritative registry server) works.
+// Vetted outbound client: fixed hosts (Cloudflare DoH, rdap.org).
+#[allow(clippy::disallowed_methods)]
 fn http_client() -> Result<reqwest::Client, ToolError> {
     reqwest::Client::builder()
         .timeout(TIMEOUT)

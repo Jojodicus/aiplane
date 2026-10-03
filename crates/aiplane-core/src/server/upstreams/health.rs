@@ -56,6 +56,8 @@ const DETECT_CONCURRENCY: usize = 8;
 /// actually serving. A fresh connection per probe costs nothing at this
 /// cadence and removes that whole class of false alarms. (Real traffic uses
 /// the pooled `state.http` client.)
+// Vetted outbound client: it probes the operator's own upstream pools.
+#[allow(clippy::disallowed_methods)]
 fn probe_client() -> reqwest::Client {
     reqwest::Client::builder()
         .pool_max_idle_per_host(0)
@@ -785,6 +787,9 @@ async fn run_probe(
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -1212,6 +1217,7 @@ mod tests {
 /// unit test and produces exactly the silent failure the feature exists to
 /// remove.
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // see `tests` above
 mod detection_wiring {
     use super::*;
     use crate::server::upstreams::config::{

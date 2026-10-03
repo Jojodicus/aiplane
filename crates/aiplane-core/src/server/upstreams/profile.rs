@@ -620,6 +620,9 @@ fn props_n_ctx(props: &serde_json::Value) -> Option<i64> {
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -827,6 +830,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // see `tests` above
 mod detect_tests {
     use super::*;
     use serde_json::json;
@@ -1100,6 +1104,7 @@ mod detect_tests {
 ///   cargo nextest run -p aiplane-core live_ollama --run-ignored all
 /// ```
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // see `tests` above
 mod live_ollama {
     use super::*;
 

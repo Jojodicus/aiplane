@@ -7,6 +7,10 @@
 //! nextest still runs each #[test] in its own process, so tests that touch
 //! process-global state (env vars) stay isolated.
 
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules in clippy.toml are about production paths.
+#![allow(clippy::disallowed_methods)]
+
 mod a2a;
 mod admin_json_api;
 mod agent_analytics;
@@ -14,6 +18,7 @@ mod agent_evaluation;
 mod agent_test_chat;
 mod agents;
 mod anthropic_messages;
+mod architecture;
 mod ask_feedback;
 mod automatic_routing;
 mod body_limit;
