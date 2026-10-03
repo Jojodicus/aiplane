@@ -2995,12 +2995,30 @@ system message says to ignore instructions in it.
 
 `steps` (each `null` or empty when nothing is offered):
 - `task: {orchestration}` — `main.instructions.orchestration`;
-- `tone: {response, chips}` — `main.instructions.response`, plus up to 8
-  short tone labels for the UI;
+- `tone: {chips, language, response}` — `main.instructions.response` as the
+  task-and-tone step holds it: `chips` are the step's tone ids (`friendly`,
+  `factual`, `casual`, `brief`, `detailed`, `formal`, `informal`; the schema
+  enumerates them and the review drops any other word), `language` is
+  `visitor`, an answer-language code or `null`, and `response` is only the
+  further text no chip or language stands for. The lines each chip and
+  language stand for live in `assist::tone` (a port of `TONE_LINES` /
+  `responseText`, pinned against `agent-setup.ts` by a test), so an
+  architect's tone is written exactly as the step reads it back;
 - `scope: {topics, refusal, strict}` — `scope` (an existing `classifier_pool`
   is kept);
 - `abilities: [{id, name, why}]` — tools for `main.tools`, which the UI grants
-  when applied;
+  when applied; `name` is the title the ability card shows. Never
+  `rag_search` / `rag_list_collections`: knowledge search without a
+  collection finds nothing, so it is offered as knowledge (dropped with a
+  reason if the model names it anyway);
+- `knowledge: [{id, name, why}]` — knowledge bases (RAG collections) the
+  manager may read and so grant, chosen by name; applying one does what its
+  knowledge card does: the collection and `rag_search` granted, the search
+  bound to it as a constant when it is the only one, `rag_list_collections`
+  added when there are several (`review::set_knowledge`, a port of
+  `setKnowledge`). Dropped when the manager may not grant `rag_search`;
+- `missing_knowledge: [subject]` — what the agent must know about that none
+  of those knowledge bases covers; the UI says an admin has to add one;
 - `slots: [{name, label, type, def}]` — `state.<name> = def`. `type` is a
   friendly kind: `text` (string, ≤200, the setup's shape), `long_text` (string, ≤2000), `email`,
   `number`, `whole_number` (integer), `yes_no` (boolean), `choice` (enum of
@@ -3008,10 +3026,12 @@ system message says to ignore instructions in it.
 - `identity: {method, why}` — `none`, `website_login`, `email_code` or
   `lookup`; a recommendation only, since each needs a connector or a key the
   identity step asks for;
-- `handoffs: [{name, topic, target, target_name, condition: {slot, equals},
-  route}]` — `routes.<name> = route`: `when` is `{slot, eq}` (the value typed
-  like the slot) or `{slot, set: true}`, the target `agent` (with `task`) or
-  `human: {}`;
+- `handoffs: [{name, topic, target, target_name, details, identity, route}]`
+  — a rule of the hand-off step, `routes.<name> = route` in the shape
+  `assist::handoffs::write` gives it. The model picks a `condition`:
+  `always`, `details` (wait until every slot of the details step is set —
+  a qualified lead) or `identity`. A rule about a topic the draft already
+  hands off is left out;
 - `tests: [{name, kind, script, expect}]` — the body `POST …/tests` takes, at
   most 6. Every case expects `finished: true`; an `out_of_scope` case expects
   the draft's refusal in the answer (and is dropped when there is none yet).
@@ -3019,19 +3039,21 @@ system message says to ignore instructions in it.
 `dropped: [{step, item?, reason}]` lists what was left out and why, in words.
 
 **What may be offered.** The model is given — and its schema enumerates —
-exactly the tools this manager holds and may grant (ids with friendly names)
-and the agents shared with them (not the agent itself) plus `human` as
-targets. Because a backend may ignore the schema, the review checks again: an
+exactly the tools this manager holds and may grant (ids with friendly names,
+knowledge search aside), the knowledge bases they may read (by name;
+`json_agent_resources::grantable_collections`, the list `GET
+/api/v0/agent-resources` serves) and the agents shared with them (not the
+agent itself) plus `human` as targets. Because a backend may ignore the schema, the review checks again: an
 ability or a target outside those lists is dropped, never offered.
 
 **Validation per piece.** Pieces are applied in step order to the draft the
 manager is editing (`current_draft`, else the stored draft), each checked with
 `spec::validate` at the `Draft` stage against the agent's grants as stored now
-plus the tools of the abilities offered so far (applying an ability grants
-it). A piece is kept when it adds no issue the draft did not already have —
+plus the tools and collections offered so far (applying an ability or a
+knowledge base grants it). A piece is kept when it adds no issue the draft did not already have —
 so a draft that is invalid already does not sink the proposal — and dropped
 with the issues it would add. Later pieces build on kept earlier ones: a
-hand-off gating on a proposed slot holds only if that slot was kept. A slot or
+hand-off waiting for the details gates on the slots that were kept. A slot or
 route name the draft already has is kept as it is, not replaced. Names are
 made spec identifiers (`Order Number` → `order_number`). A step whose JSON
 does not read is dropped whole; the others stand.
@@ -3069,12 +3091,14 @@ invalid_assist_input`, 413). Model timeouts 120 s (suggest) and 60 s
 
 **Tests.** `agents/assist/review/tests.rs` (a good proposal applied to the
 draft passes `spec::check` at draft and publish stage; an ungrantable ability
-never offered; an invalid slot dropped with the validator's reason and the
-hand-off depending on it with it; targets limited to shared agents and
-people; unreadable steps dropped whole; test-case rules; existing names kept;
+never offered; tone chips only by the step's ids; knowledge by knowledge
+base, never as the search tools, and wired like its card; an invalid slot
+dropped with the validator's reason and a details hand-off gating on the
+slots that were kept; targets limited to shared agents and people; unreadable steps dropped whole; test-case rules; existing names kept;
 the schema's enums); `tests/it/agent_assist.rs` (the endpoint end to end on a
 scripted model: checked steps, every offered test case accepted by the tests
-route, nothing written, the event and the usage row; a prompt-injection
+route, nothing written, the event and the usage row; knowledge bases offered
+by name and refused without knowledge search; a prompt-injection
 scenario; improve; the rate refusing with `Retry-After` and per manager; bad
 input and missing shares refused before the model is asked; a failed model
 call recorded and answered `502`).
@@ -3119,7 +3143,8 @@ be named by its id or its name.
 
 **`changes`** (`assist::changes_schema`): `display`, `pool`, `task`, `tone`,
 `scope`, `abilities` and `slots` in the prompt assistant's step shape, plus
-`handoffs: [{topic, target, identity?}]` and `fallback_to_person`.
+`knowledge: [{name, why}]`, `handoffs: [{topic, target, details?,
+identity?}]` and `fallback_to_person`.
 `apply_changes` runs the same `Reviewer` as `review`: each piece is applied
 to the stored draft and kept when it adds no validator issue, else dropped
 with the reason. An ability is offered only when it is one of the person's
@@ -3136,12 +3161,13 @@ setup assistant as what it is, not as "set up in the advanced editor":
 - hand-offs are the hand-off step's rules: `assist::handoffs` is a port of
   `readHandoffs` / `writeHandoffs` / `deriveBind` from
   `web/src/lib/agent-setup.ts` (routes `when: {all: [topic eq, request set,
-  (verified provenance)]}`, `task` `Request about {topic}: {request}`, the
+  (one `set` leaf per detail slot), (verified provenance)]}`, `task`
+  `Request about {topic}: {request}`, the
   `topic` enum and `request` slots, `router.order`, the `fallback` route). A
   rule whose topic exists replaces it; other routes stay as they are. The
   bind comes from the specialist's live spec; `identity` is honoured only
-  when the agent has an identity check (otherwise kept without it, with a
-  note). `web/src/lib/fixtures/architect-draft.json` is a draft written by
+  when the agent has an identity check, `details` only when it collects
+  details (otherwise kept without it, with a note). `web/src/lib/fixtures/architect-draft.json` is a draft written by
   `apply_changes` (pinned in `review/tests.rs`) that `agent-setup.test.ts`
   reads back as rules and friendly slots, and writes back unchanged.
 
