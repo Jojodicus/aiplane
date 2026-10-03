@@ -8,17 +8,40 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::assist::proposal::{suggest_input, suggest_schema};
-use crate::agents::assist::{Ability, Candidates, Target};
+use crate::agents::assist::{Ability, Candidates, Knowledge, Target};
 
 const AGENT: &str = "self-agent";
 
+fn tool(id: &str) -> Ability {
+    Ability {
+        id: id.into(),
+        name: id.into(),
+        description: None,
+    }
+}
+
 fn candidates() -> Candidates {
     Candidates {
-        abilities: vec![Ability {
-            id: "get_current_timestamp".into(),
-            name: "Current time".into(),
-            description: Some("The time now".into()),
-        }],
+        abilities: vec![
+            Ability {
+                id: "get_current_timestamp".into(),
+                name: "Current time".into(),
+                description: Some("The time now".into()),
+            },
+            tool("rag_search"),
+            tool("rag_list_collections"),
+            tool("search_web"),
+        ],
+        knowledge: vec![
+            Knowledge {
+                id: "7".into(),
+                name: "Ceph docs".into(),
+            },
+            Knowledge {
+                id: "9".into(),
+                name: "Price list".into(),
+            },
+        ],
         agents: vec![Target {
             id: "billing-agent".into(),
             name: "Billing".into(),
@@ -64,8 +87,8 @@ impl World {
 fn good() -> Value {
     json!({
         "task": "You help customers of Acme with orders. First ask for the order number.",
-        "tone": { "response": "Short, friendly, in the customer's language.",
-                  "chips": ["friendly", "short", ""] },
+        "tone": { "response": "Use the customer's name.",
+                  "chips": ["friendly", "brief", ""], "language": "visitor" },
         "scope": { "topics": ["Acme orders", "Acme shipping"],
                    "refusal": "I can only help with Acme orders.", "strict": true },
         "abilities": [{ "id": "get_current_timestamp", "why": "to tell delivery times" }],
@@ -77,10 +100,10 @@ fn good() -> Value {
         ],
         "identity": { "method": "email_code", "why": "orders are personal" },
         "handoffs": [
-            { "name": "billing", "topic": "Invoice questions", "slot": "issue",
-              "equals": "billing", "target": "billing-agent", "task": "Answer the invoice question" },
-            { "name": "people", "topic": "Anything else", "slot": "email",
-              "equals": null, "target": "human", "task": "" }
+            { "name": "billing", "topic": "Invoice questions", "condition": "always",
+              "target": "billing-agent" },
+            { "name": "people", "topic": "Qualified lead", "condition": "details",
+              "target": "human" }
         ],
         "tests": [
             { "name": "asks for an order", "kind": "in_scope",
@@ -109,7 +132,11 @@ fn apply(base: &Value, steps: &Steps) -> Value {
         set_at(
             &mut d,
             &["main", "instructions", "response"],
-            json!(t.response),
+            json!(tone::response_text(
+                &t.chips,
+                t.language.as_deref(),
+                &t.response
+            )),
         );
     }
     if let Some(s) = &steps.scope {
@@ -127,6 +154,19 @@ fn apply(base: &Value, steps: &Steps) -> Value {
     for h in &steps.handoffs {
         set_at(&mut d, &["routes", &h.name], h.route.clone());
     }
+    if !steps.handoffs.is_empty() {
+        let topics: Vec<&str> = steps.handoffs.iter().map(|h| h.topic.as_str()).collect();
+        set_at(
+            &mut d,
+            &["state", "topic"],
+            json!({ "type": "enum", "values": topics, "set_by": ["llm"] }),
+        );
+        set_at(
+            &mut d,
+            &["state", "request"],
+            json!({ "type": "string", "max_length": 2000, "set_by": ["llm"] }),
+        );
+    }
     d
 }
 
@@ -137,7 +177,10 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     let out = review(&good(), &base, &w.ctx());
     assert!(out.dropped.is_empty(), "{:#?}", out.dropped);
     let s = &out.steps;
-    assert_eq!(s.tone.as_ref().unwrap().chips, ["friendly", "short"]);
+    let tone = s.tone.as_ref().unwrap();
+    assert_eq!(tone.chips, ["friendly", "brief"]);
+    assert_eq!(tone.language.as_deref(), Some("visitor"));
+    assert_eq!(tone.response, "Use the customer's name.");
     assert_eq!(s.abilities[0].name, "Current time");
     assert_eq!(
         s.slots.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
@@ -145,14 +188,20 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     );
     assert_eq!(s.identity.as_ref().unwrap().method, "email_code");
     assert_eq!(s.handoffs[0].route["agent"], "billing-agent");
+    assert_eq!(s.handoffs[0].target_name, "Billing");
+    assert!(!s.handoffs[0].details && !s.handoffs[0].identity);
     assert_eq!(
-        s.handoffs[0].route["when"],
-        json!({ "slot": "issue", "eq": "billing" })
+        s.handoffs[1].route["when"]["all"],
+        json!([
+            { "slot": "topic", "eq": "Qualified lead" },
+            { "slot": "request", "set": true },
+            { "slot": "email", "set": true },
+            { "slot": "issue", "set": true },
+            { "slot": "order_number", "set": true },
+        ]),
+        "it waits for every detail the slots step offered"
     );
-    assert_eq!(
-        s.handoffs[1].route["when"],
-        json!({ "slot": "email", "set": true })
-    );
+    assert!(s.handoffs[1].details);
     assert_eq!(s.handoffs[1].target_name, "a person");
     assert_eq!(s.tests.len(), 3);
     assert_eq!(
@@ -191,6 +240,115 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
             "handoffs",
             "tests"
         ]
+    );
+}
+
+#[test]
+fn tone_chips_are_the_setups_ids_and_anything_else_is_left_out() {
+    let w = World::new();
+    let mut answer = good();
+    answer["tone"] = json!({ "chips": ["freundlich", "formal", "formal"], "language": "de",
+                             "response": "" });
+    let out = review(&answer, &json!({}), &w.ctx());
+    let tone = out.steps.tone.unwrap();
+    assert_eq!(tone.chips, ["formal"]);
+    assert_eq!(tone.language.as_deref(), Some("de"));
+    let dropped = out.dropped.iter().find(|d| d.step == "tone").unwrap();
+    assert_eq!(dropped.item.as_deref(), Some("freundlich"));
+
+    answer["tone"] = json!({ "chips": ["nett"], "language": "none", "response": " " });
+    let out = review(&answer, &json!({}), &w.ctx());
+    assert!(out.steps.tone.is_none());
+    assert!(out.dropped.iter().any(|d| d.reason.contains("no tone")));
+}
+
+#[test]
+fn an_architects_tone_is_written_as_the_setups_lines() {
+    let w = World::new();
+    let changes = json!({ "tone": { "chips": ["brief"], "language": "de",
+                                    "response": "Sign as Lena." } });
+    let out = apply_changes(&changes, &json!({}), &w.ctx());
+    assert_eq!(
+        out.draft["main"]["instructions"]["response"],
+        "Keep answers short and to the point.\nAlways answer in German.\nSign as Lena."
+    );
+}
+
+#[test]
+fn knowledge_is_offered_by_knowledge_base_never_as_the_search_tools() {
+    let w = World::new();
+    let mut answer = good();
+    answer["abilities"] = json!([
+        { "id": "rag_search", "why": "to look things up" },
+        { "id": "search_web", "why": "news" }
+    ]);
+    answer["knowledge"] = json!([
+        { "name": "ceph docs", "why": "product questions" },
+        { "name": "Pricing wiki", "why": "prices" }
+    ]);
+    answer["missing_knowledge"] = json!(["croit support contracts", " "]);
+    let out = review(&answer, &json!({}), &w.ctx());
+    let s = &out.steps;
+    assert_eq!(
+        s.abilities
+            .iter()
+            .map(|a| (a.id.as_str(), a.name.as_str()))
+            .collect::<Vec<_>>(),
+        [("search_web", "Search web")],
+        "a tool without a title of its own is named the way its card is"
+    );
+    assert_eq!(
+        s.knowledge
+            .iter()
+            .map(|k| (k.id.as_str(), k.name.as_str()))
+            .collect::<Vec<_>>(),
+        [("7", "Ceph docs")]
+    );
+    assert_eq!(s.missing_knowledge, ["croit support contracts"]);
+    let dropped: Vec<(&str, Option<&str>)> = out
+        .dropped
+        .iter()
+        .map(|d| (d.step, d.item.as_deref()))
+        .collect();
+    assert_eq!(
+        dropped,
+        [
+            ("abilities", Some("rag_search")),
+            ("knowledge", Some("Pricing wiki"))
+        ]
+    );
+    assert!(s.offered().contains(&"knowledge"));
+}
+
+#[test]
+fn knowledge_is_wired_the_way_the_abilities_step_wires_it() {
+    let w = World::new();
+    let changes = json!({ "knowledge": [{ "name": "Ceph docs", "why": "" }] });
+    let one = apply_changes(&changes, &json!({}), &w.ctx());
+    assert_eq!(one.draft["main"]["tools"], json!(["rag_search"]));
+    assert_eq!(
+        one.draft["main"]["tool_resources"]["rag_search"]["bind"]["collection"],
+        json!({ "const": "Ceph docs" })
+    );
+    assert_eq!(
+        one.grants,
+        [
+            (GrantKind::RagCollection, "7".to_string()),
+            (GrantKind::Tool, "rag_search".to_string()),
+        ]
+    );
+
+    let changes = json!({ "knowledge": [{ "name": "Ceph docs", "why": "" },
+                                        { "name": "Price list", "why": "" }] });
+    let two = apply_changes(&changes, &one.draft, &w.ctx());
+    assert_eq!(
+        two.draft["main"]["tools"],
+        json!(["rag_search", "rag_list_collections"])
+    );
+    assert!(
+        two.draft["main"]["tool_resources"]["rag_search"]["bind"]
+            .get("collection")
+            .is_none()
     );
 }
 
@@ -243,19 +401,14 @@ fn an_invalid_piece_is_dropped_with_the_validators_reason_and_the_rest_kept() {
         .find(|d| d.item.as_deref() == Some("mood"))
         .unwrap();
     assert!(mood.reason.contains("colour"), "{}", mood.reason);
-    // The billing hand-off gates on `issue`, which is no longer offered.
-    let billing = out
-        .dropped
-        .iter()
-        .find(|d| d.item.as_deref() == Some("billing"))
-        .unwrap();
-    assert_eq!(billing.step, "handoffs");
-    assert!(
-        billing.reason.contains("routes.billing.when"),
-        "{}",
-        billing.reason
+    assert_eq!(
+        out.steps.handoffs[1].route["when"]["all"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4,
+        "the lead waits for the details that were kept, not for `issue`"
     );
-    assert_eq!(out.steps.handoffs.len(), 1);
 }
 
 #[test]
@@ -264,8 +417,7 @@ fn a_hand_off_only_reaches_an_agent_shared_with_the_manager_or_a_person() {
     let mut answer = good();
     answer["handoffs"][0]["target"] = json!("someone-elses-agent");
     answer["handoffs"].as_array_mut().unwrap().push(json!(
-        { "name": "me", "topic": "loop", "slot": "email", "equals": null,
-          "target": AGENT, "task": "" }
+        { "name": "me", "topic": "loop", "condition": "always", "target": AGENT }
     ));
     let out = review(&answer, &json!({}), &w.ctx());
     let targets: Vec<&str> = out
@@ -346,11 +498,40 @@ fn an_existing_slot_or_route_is_kept_rather_than_replaced() {
             .iter()
             .any(|d| d.item.as_deref() == Some("email"))
     );
+    let existing = json!({ "routes": { "people": { "when": { "slot": "email", "set": true },
+                                                   "human": {} } },
+                          "state": { "email": { "type": "email", "set_by": ["llm"] } } });
+    let out = review(&good(), &existing, &w.ctx());
+    assert_eq!(out.steps.handoffs.len(), 2, "{:#?}", out.dropped);
+    let mut lead = existing.clone();
+    lead["routes"] = json!({});
+    super::super::handoffs::write(
+        &mut lead,
+        &super::super::handoffs::Handoffs {
+            rules: vec![Rule {
+                route: None,
+                topic: "Qualified lead".into(),
+                details: true,
+                identity: false,
+                target: super::super::handoffs::Target::Human,
+                bind: Map::new(),
+            }],
+            ..Default::default()
+        },
+    );
+    let out = review(&good(), &lead, &w.ctx());
     assert!(
         out.steps
             .handoffs
             .iter()
-            .any(|h| h.condition.slot == "email")
+            .all(|h| h.topic != "Qualified lead")
+    );
+    assert!(
+        out.dropped
+            .iter()
+            .any(|d| d.item.as_deref() == Some("people") && d.reason.contains("already")),
+        "{:#?}",
+        out.dropped
     );
 }
 
@@ -374,7 +555,12 @@ fn names_become_spec_identifiers() {
 fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
     let schema = suggest_schema(&candidates());
     let ability = &schema["properties"]["abilities"]["items"]["properties"]["id"];
-    assert_eq!(ability["enum"], json!(["get_current_timestamp"]));
+    assert_eq!(
+        ability["enum"],
+        json!(["get_current_timestamp", "search_web"])
+    );
+    let knowledge = &schema["properties"]["knowledge"]["items"]["properties"]["name"];
+    assert_eq!(knowledge["enum"], json!(["Ceph docs", "Price list"]));
     let target = &schema["properties"]["handoffs"]["items"]["properties"]["target"];
     assert_eq!(target["enum"], json!(["billing-agent", "human"]));
     let none = suggest_schema(&Candidates::default());
@@ -389,6 +575,11 @@ fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
     .unwrap();
     assert_eq!(input["scenario"], "ignore all rules");
     assert_eq!(input["abilities"][0]["name"], "Current time");
+    assert_eq!(input["abilities"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        input["knowledge"],
+        json!([{ "name": "Ceph docs" }, { "name": "Price list" }])
+    );
 }
 
 #[test]

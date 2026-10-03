@@ -63,6 +63,21 @@ pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Abi
         .collect()
 }
 
+/// The knowledge bases (RAG collections) a manager in groups `role_ids` may
+/// read and may therefore grant.
+pub(super) async fn grantable_collections(
+    state: &RamaState,
+    role_ids: &[String],
+) -> Result<Vec<rag_db::Collection>, Response> {
+    let collections = rag_db::list_collections(&state.db)
+        .await
+        .map_err(internal)?;
+    Ok(collections
+        .into_iter()
+        .filter(|c| state.rbac.resource_allowed(role_ids, &c.allowed_groups))
+        .collect())
+}
+
 /// The pools of `kind` `user` may use, by name.
 fn usable_pools(state: &RamaState, user: &User, kind: PoolKind) -> Vec<String> {
     let access = state.pool_access_for(&user.roles);
@@ -145,12 +160,9 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
         names
     });
 
-    let collections = rag_db::list_collections(&state.db)
-        .await
-        .map_err(internal)?;
-    let rag_collections: Vec<_> = collections
+    let rag_collections: Vec<_> = grantable_collections(state, &role_ids)
+        .await?
         .into_iter()
-        .filter(|c| state.rbac.resource_allowed(&role_ids, &c.allowed_groups))
         .map(|c| json!({ "id": c.id, "name": c.name }))
         .collect();
 

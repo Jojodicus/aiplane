@@ -270,7 +270,7 @@ impl Fx {
 fn proposal(billing: &str, secret: &str) -> Value {
     json!({
         "task": "You help Acme customers with their orders. First ask for the order number.",
-        "tone": { "response": "Short and friendly.", "chips": ["friendly", "short"] },
+        "tone": { "response": "Sign as Acme.", "chips": ["friendly", "brief"], "language": "en" },
         "scope": { "topics": ["Acme orders"], "refusal": "I can only help with Acme orders.",
                    "strict": true },
         "abilities": [
@@ -284,10 +284,9 @@ fn proposal(billing: &str, secret: &str) -> Value {
         ],
         "identity": { "method": "none", "why": "orders are looked up by number" },
         "handoffs": [
-            { "name": "billing", "topic": "Invoices", "slot": "issue", "equals": "billing",
-              "target": billing, "task": "Answer the invoice question" },
-            { "name": "leak", "topic": "Everything", "slot": "issue", "equals": null,
-              "target": secret, "task": "" }
+            { "name": "billing", "topic": "Invoices", "condition": "details",
+              "target": billing },
+            { "name": "leak", "topic": "Everything", "condition": "always", "target": secret }
         ],
         "tests": [
             { "name": "order status", "kind": "in_scope", "messages": ["Where is my order?"],
@@ -336,6 +335,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     );
     assert_eq!(steps["scope"]["strict"], true);
     assert_eq!(
+        steps["tone"],
+        json!({ "chips": ["friendly", "brief"], "language": "en", "response": "Sign as Acme." })
+    );
+    assert_eq!(
         steps["abilities"],
         json!([{ "id": "get_current_timestamp",
         "name": steps["abilities"][0]["name"], "why": "delivery times" }])
@@ -344,6 +347,12 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     assert_eq!(steps["handoffs"].as_array().unwrap().len(), 1);
     assert_eq!(steps["handoffs"][0]["route"]["agent"], fx.billing.as_str());
     assert_eq!(steps["handoffs"][0]["target_name"], "billing");
+    assert_eq!(steps["handoffs"][0]["details"], true);
+    assert_eq!(
+        steps["handoffs"][0]["route"]["when"]["all"][2],
+        json!({ "slot": "issue", "set": true }),
+        "the hand-off waits for the details the proposal collects"
+    );
     assert_eq!(
         steps["tests"][1]["expect"]["answer"]["contains"],
         json!(["I can only help with Acme orders."])
@@ -387,6 +396,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     assert_eq!(
         schema["properties"]["abilities"]["items"]["properties"]["id"]["enum"],
         json!(["get_current_timestamp"])
+    );
+    assert_eq!(
+        schema["properties"]["tone"]["properties"]["chips"]["items"]["enum"][0],
+        "friendly"
     );
     let targets = &schema["properties"]["handoffs"]["items"]["properties"]["target"]["enum"];
     assert_eq!(*targets, json!([fx.billing, "human"]));
@@ -463,6 +476,70 @@ async fn a_scenario_that_tries_to_take_over_cannot_make_the_endpoint_write_anyth
         serde_json::from_str(sent["messages"][1]["content"].as_str().unwrap()).unwrap();
     assert_eq!(input["scenario"], injection);
     assert_eq!(input["current"]["task"], "Old.");
+}
+
+/// Knowledge is offered by knowledge base, never as the search tools: the
+/// model is told the collections the manager may read, and a knowledge base
+/// the manager could not let the agent search is left out with the reason.
+#[tokio::test]
+async fn knowledge_bases_are_offered_by_name_and_need_knowledge_search() {
+    let fx = fixture(answer(&json!({
+        "knowledge": [{ "name": "Ceph docs", "why": "product questions" }],
+        "missing_knowledge": ["croit support contracts"],
+    })))
+    .await;
+    aiplane_core::server::db::rag::create_collection(
+        &fx.state.db,
+        &aiplane_core::server::db::rag::NewCollection {
+            name: "Ceph docs".into(),
+            description: None,
+            git_url: String::new(),
+            git_ref: "main".into(),
+            pat: None,
+            source: Default::default(),
+            profile_id: None,
+            extraction_model: None,
+            embedding_model: "embed-test".into(),
+            include_globs: Vec::new(),
+            exclude_globs: Vec::new(),
+            chunk_size: 400,
+            chunk_overlap: 40,
+            search_mode: aiplane_core::server::db::rag::SearchMode::Versioned,
+            refresh_interval_mins: 0,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = fx
+        .suggest(&fx.alice, json!({ "scenario": "Answers Ceph questions." }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["steps"]["knowledge"], json!([]));
+    assert_eq!(
+        body["steps"]["missing_knowledge"],
+        json!(["croit support contracts"])
+    );
+    let dropped = &body["dropped"][0];
+    assert_eq!(dropped["step"], "knowledge");
+    assert_eq!(dropped["item"], "Ceph docs");
+    assert!(
+        dropped["reason"]
+            .as_str()
+            .unwrap()
+            .contains("knowledge search"),
+        "{dropped}"
+    );
+
+    let sent = &fx.model_requests().await[0];
+    let input: Value =
+        serde_json::from_str(sent["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(input["knowledge"], json!([{ "name": "Ceph docs" }]));
+    let schema = &sent["response_format"]["json_schema"]["schema"];
+    assert_eq!(
+        schema["properties"]["knowledge"]["items"]["properties"]["name"]["enum"],
+        json!(["Ceph docs"])
+    );
 }
 
 #[tokio::test]

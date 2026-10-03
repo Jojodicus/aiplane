@@ -32,6 +32,7 @@ import {
 	setKnowledge,
 	slotDef,
 	slotKind,
+	slotLabel,
 	slotsForIdentity,
 	stepForPath,
 	voiceMissing,
@@ -39,6 +40,7 @@ import {
 	suggestedMethod,
 	suggestedRules,
 	suggestedSlotRows,
+	suggestedTone,
 	templateSpec,
 	tierOf,
 	topicsNeedingIdentity,
@@ -212,7 +214,7 @@ test('a stored secret stays sealed until a new one is typed', () => {
 test('changing the identity method moves the hand-off gates to the new writer', () => {
 	const spec: Spec = {};
 	writeIdentity(spec, identity({ method: 'email_code' }), labels);
-	writeHandoffs(spec, { rules: [{ route: null, topic: 'Invoices', identity: true, target: { kind: 'agent', id: 'a1' }, bind: {} }], fallback: false, custom: [] });
+	writeHandoffs(spec, { rules: [{ route: null, topic: 'Invoices', details: false, identity: true, target: { kind: 'agent', id: 'a1' }, bind: {} }], fallback: false, custom: [] });
 	assert.deepEqual(spec.routes.invoices.when.all[2], { slot: 'verified', provenance: 'verifier:identity' });
 	writeIdentity(spec, identity({ method: 'signed_in' }), labels);
 	assert.deepEqual(spec.routes.invoices.when.all[2], { slot: 'verified', provenance: 'host' });
@@ -224,9 +226,9 @@ test('hand-off sentences become routes with derived gates, and read back unchang
 	writeIdentity(spec, identity({ method: 'email_code', connector: 'erp' }), labels);
 	const model: Handoffs = {
 		rules: [
-			{ route: null, topic: 'Invoices', identity: true, target: { kind: 'agent', id: 'billing-id' }, bind: { customer: 'state.verified.customer' } },
-			{ route: null, topic: 'Technik', identity: false, target: { kind: 'human' }, bind: {} },
-			{ route: null, topic: '  ', identity: false, target: { kind: 'human' }, bind: {} }
+			{ route: null, topic: 'Invoices', details: false, identity: true, target: { kind: 'agent', id: 'billing-id' }, bind: { customer: 'state.verified.customer' } },
+			{ route: null, topic: 'Technik', details: false, identity: false, target: { kind: 'human' }, bind: {} },
+			{ route: null, topic: '  ', details: false, identity: false, target: { kind: 'human' }, bind: {} }
 		],
 		fallback: true,
 		custom: ['legacy']
@@ -248,8 +250,8 @@ test('hand-off sentences become routes with derived gates, and read back unchang
 	const back = readHandoffs(throughEditor(spec));
 	assert.deepEqual(back, {
 		rules: [
-			{ route: 'invoices', topic: 'Invoices', identity: true, target: { kind: 'agent', id: 'billing-id' }, bind: { customer: 'state.verified.customer' } },
-			{ route: 'technik', topic: 'Technik', identity: false, target: { kind: 'human' }, bind: {} }
+			{ route: 'invoices', topic: 'Invoices', details: false, identity: true, target: { kind: 'agent', id: 'billing-id' }, bind: { customer: 'state.verified.customer' } },
+			{ route: 'technik', topic: 'Technik', details: false, identity: false, target: { kind: 'human' }, bind: {} }
 		],
 		fallback: true,
 		custom: ['legacy']
@@ -262,6 +264,37 @@ test('hand-off sentences become routes with derived gates, and read back unchang
 	assert.deepEqual(spec.router, { kind: 'rules', order: ['legacy'] });
 	writeHandoffs(spec, { rules: [], fallback: false, custom: [] });
 	assert.equal(spec.router, undefined);
+});
+
+test('a hand-off can wait until every detail is collected, and follows the details step', () => {
+	const spec: Spec = {};
+	writeSlots(spec, [
+		{ key: 'company', label: 'Company', kind: 'text', values: [] },
+		{ key: 'email', label: 'E-mail', kind: 'email', values: [] }
+	]);
+	writeHandoffs(spec, { rules: [{ route: null, topic: 'Qualifizierte Vertriebsanfrage', details: true, identity: false, target: { kind: 'human' }, bind: {} }], fallback: false, custom: [] });
+	assert.deepEqual(spec.routes.qualifizierte_vertriebsanfrage.when.all, [
+		{ slot: 'topic', eq: 'Qualifizierte Vertriebsanfrage' },
+		{ slot: 'request', set: true },
+		{ slot: 'company', set: true },
+		{ slot: 'email', set: true }
+	]);
+	const back = readHandoffs(throughEditor(spec));
+	assert.deepEqual(back.custom, []);
+	assert.equal(back.rules[0].details, true);
+
+	writeSlots(spec, [...readSlots(spec), { key: 'size', label: 'Storage size', kind: 'text', values: [], fresh: true }]);
+	assert.deepEqual(
+		spec.routes.qualifizierte_vertriebsanfrage.when.all.slice(2).map((leaf: Spec) => leaf.slot),
+		['company', 'email', 'storage_size'],
+		'a new detail joins the gate'
+	);
+
+	writeIdentity(spec, identity({ method: 'email_code', connector: 'erp' }), labels);
+	writeHandoffs(spec, { ...readHandoffs(spec), rules: [{ ...readHandoffs(spec).rules[0], identity: true }] });
+	const both = readHandoffs(throughEditor(spec)).rules[0];
+	assert.equal(both.details && both.identity, true);
+	assert.deepEqual(spec.routes.qualifizierte_vertriebsanfrage.when.all.at(-1), { slot: 'verified', provenance: 'verifier:identity' });
 });
 
 test('a specialist’s route values come from trusted slots or the confirmed identity', () => {
@@ -427,7 +460,7 @@ test('the checklist points each open item at the step that fixes it', () => {
 test('each section sums itself up in one line', () => {
 	const spec = templateSpec('support', tr);
 	writeScope(spec, { topics: ['Ceph', 'Licences'], refusal: 'No.', strict: true });
-	writeHandoffs(spec, { rules: [{ route: null, topic: 'Invoices', identity: false, target: { kind: 'agent', id: 'b1' }, bind: {} }], fallback: true, custom: [] });
+	writeHandoffs(spec, { rules: [{ route: null, topic: 'Invoices', details: false, identity: false, target: { kind: 'agent', id: 'b1' }, bind: {} }], fallback: true, custom: [] });
 	const ctx = {
 		tr: (key: string, args?: Record<string, string | number>) => (args ? `${key}(${Object.values(args).join('|')})` : key),
 		grants: [grant('rag_collection', '7')],
@@ -465,9 +498,32 @@ test('a proposal maps onto the steps: identity cards, friendly details, hand-off
 	writeSlots(spec, [...existing, ...rows]);
 	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.kind), ['email', 'text', 'whole_number', 'choice']);
 
-	const rules = suggestedRules([{ topic: 'Invoices', target: 'b1' }, { topic: 'invoices', target: 'human' }, { topic: 'Returns', target: 'human' }], []);
-	assert.deepEqual(rules.map((r) => [r.topic, r.target]), [['Invoices', { kind: 'agent', id: 'b1' }], ['Returns', { kind: 'human' }]]);
+	const rules = suggestedRules([{ topic: 'Invoices', target: 'b1' }, { topic: 'invoices', target: 'human' }, { topic: 'Returns', target: 'human', details: true }], []);
+	assert.deepEqual(rules.map((r) => [r.topic, r.target, r.details]), [['Invoices', { kind: 'agent', id: 'b1' }, false], ['Returns', { kind: 'human' }, true]]);
 	assert.deepEqual(suggestedRules([{ topic: 'Returns', target: 'human' }], rules), []);
+});
+
+test('a proposed tone selects its chips by id and keeps only the rest as free text', () => {
+	const current = { tones: ['detailed' as const], language: null, extra: 'old' };
+	assert.deepEqual(suggestedTone({ chips: ['formal', 'friendly', 'freundlich'], language: 'de', response: 'Sign as Lena.' }, current), {
+		tones: ['friendly', 'formal'],
+		language: 'de',
+		extra: 'Sign as Lena.'
+	});
+	assert.deepEqual(suggestedTone({ chips: [], language: null, response: `${TONE_LINES.brief}\nAnswer in the language the visitor writes in.` }, current), {
+		tones: ['brief'],
+		language: 'visitor',
+		extra: ''
+	});
+	assert.equal(suggestedTone({ chips: ['brief'], language: null, response: '' }, { ...current, language: 'fr' }).language, 'fr');
+});
+
+test('a slot is named by its label, the managed ones from the catalog', () => {
+	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
+	assert.equal(slotLabel(spec, 'speicher_groesse', tr), 'Speichergröße');
+	assert.equal(slotLabel(spec, 'firma', tr), 'Firma');
+	assert.equal(slotLabel(spec, 'topic', tr), '«agents-slot-label-topic»');
+	assert.equal(slotLabel(spec, 'gone', tr), 'Gone');
 });
 
 test('details keep the order they were given, and unordered slots follow by name', () => {

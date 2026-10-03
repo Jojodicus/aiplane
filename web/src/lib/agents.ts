@@ -10,6 +10,7 @@
  * attached to the field they are about (by `path`).
  */
 import type { ActivityPage, Verification } from './agent-activity.ts';
+import type { InboxContext } from './inbox.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request } from './api.ts';
@@ -150,6 +151,12 @@ export interface Unmet {
 	slot?: string;
 	kind: string;
 	message: string;
+	/** `not_equal`: the value; `not_in`: the values. */
+	expected?: unknown;
+	/** `wrong_provenance`: who must have written the slot. */
+	required?: string;
+	/** `too_old`: how old it may be. */
+	max_age?: string;
 }
 
 export interface SlotDebug {
@@ -208,6 +215,8 @@ export interface Suspension {
 	tool?: string;
 	options: ('allow_once' | 'deny' | 'value')[];
 	expires_at: string;
+	/** A hand-off to a person in the test chat: what the Inbox would show whoever answers it. */
+	context?: InboxContext;
 }
 
 export interface TestTurn {
@@ -225,12 +234,19 @@ export interface TestTurn {
 export interface AssistSuggestion {
 	steps: {
 		task?: { orchestration: string } | null;
-		tone?: { response: string; chips: string[] } | null;
+		/** `chips` are tone ids (`TONES`); `language` is `visitor`, an answer language code, or `null`; `response` the rest. */
+		tone?: { response: string; chips: string[]; language?: string | null } | null;
 		scope?: { topics: string[]; refusal: string; strict: boolean } | null;
+		/** Tools by id, `name` the title their card shows; knowledge search comes as `knowledge` instead. */
 		abilities?: { id: string; name: string; why: string }[];
+		/** Knowledge bases (RAG collections) by id, switched on like their cards. */
+		knowledge?: { id: string; name: string; why: string }[];
+		/** Subjects no knowledge base the manager may grant covers. */
+		missing_knowledge?: string[];
 		slots?: { name: string; label: string; type: string; def: Spec }[];
 		identity?: { method: string; why: string } | null;
-		handoffs?: { name: string; topic: string; target: string; target_name: string; condition: unknown; route: Spec }[];
+		/** Rules of the hand-off step: waiting for all details and/or a confirmed identity. */
+		handoffs?: { name: string; topic: string; target: string; target_name: string; details: boolean; identity: boolean; route: Spec }[];
 		tests?: { name: string; kind: string; script: CaseBody['script']; expect: CaseBody['expect'] }[];
 	};
 	/** What the assistant left out, and why, in words. */
@@ -533,6 +549,30 @@ export function describeBindSource(source: unknown): string {
 /* ---- the test chat -------------------------------------------------- */
 
 /** The Fluent key that says what a suspended test turn waits for. */
+const GATE_HINTS: Record<string, string> = {
+	missing: 'agents-gate-missing',
+	invalid: 'agents-gate-invalid',
+	must_be_unset: 'agents-gate-must-be-unset',
+	not_equal: 'agents-gate-not-equal',
+	not_in: 'agents-gate-not-in',
+	wrong_provenance: 'agents-gate-wrong-provenance',
+	too_old: 'agents-gate-too-old'
+};
+
+const shown = (v: unknown) => (v === undefined ? '' : typeof v === 'string' ? `“${v}”` : JSON.stringify(v));
+
+/**
+ * What keeps a gate closed, in words a manager reads: the slot by its
+ * `label`, the condition from the catalog. A condition without a slot (an
+ * excluded branch, the classifier's veto) keeps the server's message.
+ */
+export function gateHint(unmet: Unmet, label: string, tr: (key: string, args?: Record<string, string | number>) => string): string {
+	const key = GATE_HINTS[unmet.kind];
+	if (!key || !unmet.slot) return unmet.message;
+	const expected = Array.isArray(unmet.expected) ? unmet.expected.map(shown).join(', ') : shown(unmet.expected);
+	return tr(key, { slot: label, expected, required: unmet.required ?? '', age: unmet.max_age ?? '' });
+}
+
 export function suspensionLabel(kind: Suspension['kind']): string {
 	switch (kind) {
 		case 'secure_input':

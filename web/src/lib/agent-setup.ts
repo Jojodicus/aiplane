@@ -433,6 +433,19 @@ export function readSlots(spec: Spec): SlotRow[] {
 		}));
 }
 
+const MANAGED_LABELS: Record<string, string> = {
+	[TOPIC_SLOT]: 'agents-slot-label-topic',
+	[REQUEST_SLOT]: 'agents-slot-label-request',
+	[VERIFIED_SLOT]: 'agents-slot-label-verified'
+};
+
+/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key made readable. */
+export function slotLabel(spec: Spec, key: string, tr: (key: string) => string): string {
+	if (MANAGED_LABELS[key]) return tr(MANAGED_LABELS[key]);
+	const description = spec?.state?.[key]?.description;
+	return typeof description === 'string' && description.trim() ? description.trim() : humanize(key);
+}
+
 /** The key a row is saved under; a fresh row's follows its label. */
 export function slotKeys(rows: SlotRow[], reserved: Iterable<string>): string[] {
 	const taken = new Set(reserved);
@@ -445,7 +458,9 @@ export function slotKeys(rows: SlotRow[], reserved: Iterable<string>): string[] 
 	});
 }
 
+/** Writes the details; a hand-off waiting for all of them is regated on the new set. */
 export function writeSlots(spec: Spec, rows: SlotRow[]): void {
+	const handoffs = readHandoffs(spec);
 	const before = (spec.state ?? {}) as Record<string, Spec>;
 	const managed = Object.entries(before).filter(([key]) => MANAGED_SLOTS.has(key));
 	const keys = slotKeys(rows, managed.map(([k]) => k));
@@ -455,6 +470,7 @@ export function writeSlots(spec: Spec, rows: SlotRow[]): void {
 	});
 	for (const [key, def] of managed) next[key] = def;
 	spec.state = next;
+	if (handoffs.rules.some((r) => r.details)) writeHandoffs(spec, handoffs);
 }
 
 /** Slots the identity check reads, which the details step may not remove. */
@@ -628,6 +644,8 @@ export interface Rule {
 	/** The route it was read from; `null` for a new rule. */
 	route: string | null;
 	topic: string;
+	/** Only once every detail of the details step is set: one `set` leaf per slot, rewritten whenever the rules or the details are. */
+	details: boolean;
 	identity: boolean;
 	target: Target;
 	/** What the route passes the specialist, derived from its live spec ([`deriveBind`]). */
@@ -660,17 +678,22 @@ function targetOf(route: Spec): Target | null {
 	return null;
 }
 
+/** A gate leaf "detail `slot` is collected". */
+const isDetailLeaf = (leaf: Spec) =>
+	!!leaf && typeof leaf.slot === 'string' && !MANAGED_SLOTS.has(leaf.slot) && leaf.set === true && Object.keys(leaf).length === 2;
+
 /** The rule a route is, when it has exactly the shape [`writeHandoffs`] gives one. */
 export function ruleOf(name: string, route: Spec): Rule | null {
 	const target = targetOf(route ?? {});
 	const all = route?.when?.all;
 	if (!target || !Array.isArray(all) || Object.keys(route.when).length !== 1) return null;
-	const [topic, request, verified, ...rest] = all;
-	if (rest.length || !same(request, REQUEST_SET)) return null;
+	const [topic, request, ...rest] = all;
+	const verified = rest.length && !isDetailLeaf(rest[rest.length - 1]) ? rest.pop() : undefined;
+	if (!rest.every(isDetailLeaf) || !same(request, REQUEST_SET)) return null;
 	if (!topic || topic.slot !== TOPIC_SLOT || typeof topic.eq !== 'string' || Object.keys(topic).length !== 2) return null;
 	if (verified && !(verified.slot === VERIFIED_SLOT && typeof verified.provenance === 'string' && Object.keys(verified).length === 2)) return null;
 	if (target.kind === 'agent' && route.task !== HANDOFF_TASK) return null;
-	return { route: name, topic: topic.eq, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	return { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
 }
 
 const isFallback = (name: string, route: Spec) =>
@@ -697,6 +720,7 @@ export function readHandoffs(spec: Spec): Handoffs {
 export function writeHandoffs(spec: Spec, h: Handoffs): void {
 	const before = (spec.routes ?? {}) as Record<string, Spec>;
 	const writer = identityWriter(spec);
+	const details = readSlots(spec).map((row) => row.key);
 	const rules = h.rules.filter((r) => r.topic.trim());
 	const taken = new Set([...h.custom, FALLBACK_ROUTE]);
 	const routes: Record<string, Spec> = {};
@@ -708,6 +732,7 @@ export function writeHandoffs(spec: Spec, h: Handoffs): void {
 		taken.add(name);
 		ruleNames.push(name);
 		const when: Spec[] = [{ slot: TOPIC_SLOT, eq: topic }, { ...REQUEST_SET }];
+		if (rule.details) when.push(...details.map((slot) => ({ slot, set: true })));
 		if (rule.identity && writer) when.push({ slot: VERIFIED_SLOT, provenance: writer });
 		const prev = rule.route ? before[rule.route] : undefined;
 		const route: Spec = { description: topic, when: { all: when } };
@@ -1120,6 +1145,25 @@ export function suggestedMethod(method: string): IdentityMethod | null {
 	return SUGGESTED_METHOD[method] ?? null;
 }
 
+/**
+ * A proposed tone (chips by id, the answer language, the rest as text) as
+ * the step's model. Lines of the text a chip or the language stands for
+ * select it too; a proposal that names no language keeps the current one.
+ */
+export function suggestedTone(
+	tone: { chips: string[]; language?: string | null; response: string },
+	current: Pick<Basics, 'tones' | 'language' | 'extra'>
+): Pick<Basics, 'tones' | 'language' | 'extra'> {
+	const read = readBasics({ main: { instructions: { response: tone.response } } });
+	const chips = new Set<string>([...tone.chips, ...read.tones]);
+	const proposed = tone.language === 'visitor' || ANSWER_LANGUAGES.includes(tone.language as AnswerLanguage) ? (tone.language as Language) : null;
+	return {
+		tones: TONES.filter((t) => chips.has(t)),
+		language: proposed ?? read.language ?? current.language,
+		extra: read.extra
+	};
+}
+
 /** Proposed details as rows of the details step: their own key, a friendly kind where one fits, and none twice. */
 export function suggestedSlotRows(slots: { name: string; label: string; def: Spec }[], existing: SlotRow[]): SlotRow[] {
 	const taken = new Set(existing.map((r) => r.key));
@@ -1134,7 +1178,7 @@ export function suggestedSlotRows(slots: { name: string; label: string; def: Spe
 }
 
 /** Proposed hand-offs as the sentences of the hand-off step; the gate, task and slots follow from them. */
-export function suggestedRules(handoffs: { topic: string; target: string }[], existing: Rule[]): Rule[] {
+export function suggestedRules(handoffs: { topic: string; target: string; details?: boolean; identity?: boolean }[], existing: Rule[]): Rule[] {
 	const topics = new Set(existing.map((r) => r.topic.trim().toLowerCase()));
 	return handoffs
 		.filter((h) => {
@@ -1143,5 +1187,5 @@ export function suggestedRules(handoffs: { topic: string; target: string }[], ex
 			topics.add(topic);
 			return true;
 		})
-		.map((h) => ({ route: null, topic: h.topic.trim(), identity: false, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
+		.map((h) => ({ route: null, topic: h.topic.trim(), details: !!h.details, identity: !!h.identity, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
 }

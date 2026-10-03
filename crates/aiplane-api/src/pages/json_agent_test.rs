@@ -17,6 +17,12 @@
 //! any of the agent's conversations, and any decision in a test
 //! conversation, where the manager is the visitor too. A resumed test turn
 //! answers with the debug view too, so it shows what the decision changed.
+//!
+//! A test turn that hands off to a person carries the hand-off's context on
+//! its suspension (`suspension.context`: the visitor's last message, the
+//! collected slots, the inbox), the same the Inbox shows staff for a live
+//! conversation. A test-chat pause never reaches the Inbox; the manager
+//! answers it in the test chat.
 
 use std::sync::Arc;
 
@@ -31,6 +37,7 @@ use super::json_agents::{agent_at, parse_spec};
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, raw_path_segment};
 use aiplane_agents::db::agents::{Access, AgentRow};
+use aiplane_runtime::agents::human::handoff_of;
 use aiplane_runtime::agents::profile::{AgentRunError, RunOptions};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use aiplane_runtime::agents::run::draft::{DRAFT_VERSION, collect_debug, run_draft_turn};
@@ -131,6 +138,21 @@ async fn with_debug(
     let mut out = reply_json(reply);
     out["draft_version"] = json!(DRAFT_VERSION);
     out["debug"] = json!(debug);
+    if reply
+        .suspension
+        .as_ref()
+        .is_some_and(|s| s.kind == chat::SuspensionKind::HumanAnswer)
+    {
+        let stored = chat::get_suspension(&state.db, &reply.turn_id)
+            .await
+            .map_err(internal)?;
+        if let Some(context) = stored
+            .as_ref()
+            .and_then(|s| handoff_of(s.run_context.as_ref()))
+        {
+            out["suspension"]["context"] = context.clone();
+        }
+    }
     Ok(out)
 }
 

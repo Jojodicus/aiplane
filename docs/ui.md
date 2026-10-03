@@ -558,7 +558,11 @@ are in `web/src/lib/components/agents/`.
   /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
   buffer is flagged with a Save button. Replies are plain (the turn is
   synchronous); clicking a reply shows its debug: slots with value and
-  provenance, each route's gate with what keeps it closed, a strict scope's
+  provenance, each by its label from the spec (`slotLabel`; the hand-off and
+  identity slots by catalog name) with the id in small print, each route's
+  gate with what keeps it closed (`gateHint`: the unmet condition in catalog
+  words with the slot's label, the server's message only for a condition
+  without a slot), a strict scope's
   topic-guard verdict, the routing decision, sub-agent calls with outcome, and
   tool-call decisions. "New conversation"
   drops the `session_id`.
@@ -570,7 +574,12 @@ are in `web/src/lib/components/agents/`.
   reply replaces the paused one, since the same turn continued. In a test
   conversation the resume answers with a fresh debug view too, so a verifier's
   slot or a gate the decision opened shows on the reply. In a test
-  conversation the manager may answer a `secure_input` too.
+  conversation the manager may answer a `secure_input` too. A hand-off to a
+  person (`human_answer`) shows its context under the question — the
+  visitor's last message and what the agent collected, by slot label — and a
+  line saying that in a live conversation it lands in the Inbox of the
+  agent's managers and responders. The card sits in the bubble's column of
+  the daisyUI `chat` grid (`col-start-2`).
 - **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
   /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name
@@ -632,7 +641,7 @@ that every step round-trips through the advanced editor's
   | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
   | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`, the row's position as `order` (the server hands object keys back sorted, so the list order lives there); a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
-  | Hand-offs | sentences: "When it is about [topic] and [always / the identity is confirmed], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]" | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: verified, provenance})]}`, `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |
+  | Hand-offs | sentences: "When it is about [topic] and [always / all details are collected / the identity is confirmed / both], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]"; the topic field grows with its text | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: <detail>, set: true} per slot of the details step), ({slot: verified, provenance})]}` — saving the details step regates a rule that waits for them — `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |
   | Website | the websites (one per line), a widget sketch, *Create embed code* | `publish.origins` (each reduced to its origin); the key itself is created through the embed-keys API and shown once |
   | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` (#99) |
 
@@ -678,10 +687,13 @@ that every step round-trips through the advanced editor's
   *Suggest a setup* sends the scenario, the chosen template and the current
   buffer to `POST …/assist/suggest`; the proposal is kept on the workspace
   (`ws.suggestion`) and every step shows its part in an `AiSuggestion`
-  (`SuggestionBox`) with *Apply* / *Dismiss*: the task, the tone (read back
-  into chips, language and free text), the topics, the tools (granted when
-  applied), the details (`suggestedSlotRows`), the identity card
-  (`suggestedMethod`), the hand-offs as sentences (`suggestedRules`) and, on
+  (`SuggestionBox`) with *Apply* / *Dismiss*: the task, the tone (chips by
+  their ids and translated labels, the answer language, and only the rest as
+  free text — `suggestedTone`), the topics, the tools by their card titles
+  (granted when applied) and the knowledge bases (switched on as their cards
+  are), with a note per subject no knowledge base covers yet, the details
+  (`suggestedSlotRows`), the identity card (`suggestedMethod`), the
+  hand-offs as sentences with their condition (`suggestedRules`) and, on
   the last step, test conversations. Applying edits the step's model like a
   manual edit, so it reaches the spec only through the normal save; the
   endpoint writes nothing. What the assistant left out is listed on the start

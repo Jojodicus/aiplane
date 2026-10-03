@@ -6,10 +6,13 @@
 		testTurnLabel,
 		type AgentError,
 		type ResumeDecision,
+		type Spec,
 		type Suspension,
 		type TestDebug,
 		type TestTurn
 	} from '$lib/agents';
+	import { slotLabel } from '$lib/agent-setup';
+	import { slotText } from '$lib/inbox';
 	import { t } from '$lib/i18n.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DebugPanel from './DebugPanel.svelte';
@@ -19,10 +22,12 @@
 	 * visitor would talk to the published one, and shows the manager-only
 	 * debug view beside it. The agent's tools really run, as the agent's
 	 * principal. A conversation is the server's `session_id`; "new
-	 * conversation" simply forgets it.
+	 * conversation" simply forgets it. A hand-off to a person shows what the
+	 * Inbox would show whoever answers it, slots by their labels in `spec`.
 	 */
-	let { agentId, dirty, onsave, onturn }: {
+	let { agentId, spec = {}, dirty, onsave, onturn }: {
 		agentId: string;
+		spec?: Spec;
 		dirty: boolean;
 		onsave: () => Promise<void>;
 		onturn?: (debug: TestDebug | null) => void;
@@ -166,10 +171,30 @@
 							</div>
 							{#if message.status === 'suspended' && message.suspension}
 								{@const waiting = message.suspension}
-								<div class="card card-border bg-base-200 mt-1 w-full max-w-md">
+								<div class="card card-border bg-base-200 col-start-2 mt-1 w-full max-w-md">
 									<div class="card-body gap-2 p-3 text-sm">
 										<p>{t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}</p>
-										{#if waiting.message}<p class="text-base-content/70">{waiting.message}</p>{/if}
+										{#if waiting.message}<p class="font-semibold">{waiting.message}</p>{/if}
+										{#if waiting.context?.visitor_message}
+											<div>
+												<p class="text-xs font-semibold text-base-content/60">{t('inbox-visitor-message')}</p>
+												<blockquote class="whitespace-pre-wrap break-words border-l-2 border-base-300 pl-3">{waiting.context.visitor_message}</blockquote>
+											</div>
+										{/if}
+										{#if waiting.context?.slots?.length}
+											<div>
+												<p class="text-xs font-semibold text-base-content/60">{t('inbox-slots')}</p>
+												<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+													{#each waiting.context.slots as slot (slot.slot)}
+														<dt class="text-base-content/70">{slotLabel(spec, slot.slot, t)}</dt>
+														<dd class="m-0 break-words">{slotText(slot) ?? t('inbox-slot-trusted', { by: slot.set_by ?? '' })}</dd>
+													{/each}
+												</dl>
+											</div>
+										{/if}
+										{#if waiting.kind === 'human_answer'}
+											<p class="text-xs text-base-content/60">{t('agents-test-handoff-inbox-hint')}</p>
+										{/if}
 										<p class="text-xs text-base-content/60">
 											{t('agents-test-expires', { at: new Date(waiting.expires_at).toLocaleString() })}
 										</p>
@@ -234,7 +259,7 @@
 		<div class="min-h-0 overflow-y-auto rounded-box border border-base-300 p-3">
 			<h3 class="mb-3 font-semibold">{t('agents-debug-heading')}</h3>
 			{#if shown}
-				<DebugPanel debug={shown} />
+				<DebugPanel debug={shown} {spec} />
 			{:else}
 				<p class="text-sm text-base-content/60">{t('agents-debug-empty')}</p>
 			{/if}
