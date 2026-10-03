@@ -492,6 +492,10 @@ pub struct OpenAiDriver {
     /// suspension and the decision that settles its waiting call. `None` for
     /// a turn starting fresh. See [`crate::suspend`].
     pub resume: Option<crate::suspend::ResumeFrom>,
+    /// A built-in persona this conversation runs as (the agent architect):
+    /// its system prompt and its tools replace the person's chat tools.
+    /// `None` for an ordinary chat and for every agent run.
+    pub persona: Option<Arc<crate::persona::ChatPersona>>,
 }
 
 impl OpenAiDriver {
