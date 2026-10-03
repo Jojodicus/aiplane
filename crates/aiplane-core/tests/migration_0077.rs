@@ -8,7 +8,11 @@
 //!
 //! - **The squash is not the same schema.** `fixtures/schema_after_agent_builder.txt`
 //!   is the normalized schema the unsquashed chain produced, dumped before
-//!   it was deleted. A fresh database migrated to 0077 must match it.
+//!   it was deleted, plus what later unpushed work added to 0077 (the agent
+//!   architect's tables, #118). A fresh database migrated to 0077 must match
+//!   it. While 0077 is unpushed and gets amended, regenerate the fixture with
+//!   `UPDATE_SCHEMA_FIXTURE=1` and review the diff: every changed line must be
+//!   one the amendment meant.
 //! - **The upgrade loses rows.** 0077 rebuilds `chat_sessions`, the parent of
 //!   ten tables, all `ON DELETE CASCADE`, and adds columns to
 //!   `gateway_groups`, `usage_events` and `mcp_tool_audit`. With foreign keys
@@ -212,6 +216,12 @@ async fn a_fresh_database_gets_the_schema_the_unsquashed_chain_produced() {
         .await
         .expect("migrates to 0077");
     let actual = schema(&pool).await;
+    if std::env::var_os("UPDATE_SCHEMA_FIXTURE").is_some() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/schema_after_agent_builder.txt");
+        std::fs::write(&path, &actual).expect("writes the schema fixture");
+        return;
+    }
     if actual != SCHEMA_AFTER_AGENT_BUILDER {
         let first_difference = actual
             .lines()
@@ -219,8 +229,9 @@ async fn a_fresh_database_gets_the_schema_the_unsquashed_chain_produced() {
             .find(|(a, f)| a != f);
         panic!(
             "0077 no longer produces the schema of the chain it replaced \
-             (tests/fixtures/schema_after_agent_builder.txt). 0077 is pinned, so this means \
-             an earlier migration or the dump changed. First difference (actual, fixture): \
+             (tests/fixtures/schema_after_agent_builder.txt). Either an earlier migration or \
+             the dump changed, or an amendment to the unpushed 0077 needs the fixture \
+             regenerated (UPDATE_SCHEMA_FIXTURE=1). First difference (actual, fixture): \
              {first_difference:?}"
         );
     }

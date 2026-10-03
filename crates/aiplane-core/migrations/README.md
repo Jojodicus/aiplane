@@ -34,9 +34,20 @@ production DB."
    `ALTER TABLE new RENAME` dance.
 3. **Need to update a comment?** Put the prose in the migration's
    *commit message*, or in this README — not in the `.sql`.
-4. **In-flight on a branch, not yet merged?** Editing your own
-   migration is fine as long as the file hasn't reached prod yet.
-   The moment it lands on `main`, rule (1) kicks in.
+4. **Not pushed yet?** A migration that is not on `origin/main` has
+   run on no installation, so it is amended rather than followed by a
+   new one: all unpushed work shares one migration (today
+   `0077_agent_builder.sql`, which squashed the agent-builder chain and
+   took the agent architect's tables in #118). Amending it means, in
+   the same commit: replace its line in
+   `tests/migration-checksums.txt` with the one
+   `no_released_migration_has_been_modified` prints, regenerate
+   `tests/fixtures/schema_after_agent_builder.txt` with
+   `UPDATE_SCHEMA_FIXTURE=1 mise run test-crate aiplane-core migration_0077`
+   and review its diff, and keep `tests/migration_0077.rs` passing (the
+   lossless upgrade from the last pushed migration). Developers whose
+   local database already ran the old bytes must recreate it. The
+   moment the migration is pushed, rule (1) applies.
 
 ### Migrations run with foreign keys off
 
