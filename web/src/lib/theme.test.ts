@@ -67,6 +67,10 @@ test('every text-on-fill pair in both themes reaches WCAG AA (4.5:1)', () => {
 	}
 });
 
+test('a plain button keeps a visible edge on a card', () => {
+	assert.match(css, /:where\(\.btn:not\([^)]*\)\)\s*\{\s*border-color:\s*var\(--color-base-300\)/);
+});
+
 test('focused fields ring in the primary colour, invalid ones in error', () => {
 	assert.match(css, /:where\(\.input, \.select, \.textarea\):is\(:focus, :focus-within\)\s*\{\s*--input-color:\s*var\(--color-primary\)/, 'no primary focus ring on fields');
 	assert.match(css, /\[aria-invalid="true"\][\s\S]*?--input-color:\s*var\(--color-error\)/, 'aria-invalid fields are not marked');

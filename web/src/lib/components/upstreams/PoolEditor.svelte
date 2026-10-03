@@ -94,17 +94,17 @@
 	<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('pools-field-name')}</span>
-			<input class="input input-sm font-mono w-full" bind:value={name} required />
+			<input class="input font-mono w-full" bind:value={name} required />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('pools-field-kind')}</span>
-			<select class="select select-sm w-full" bind:value={kind}>
+			<select class="select w-full" bind:value={kind}>
 				{#each poolKinds as option (option)}<option value={option}>{option}</option>{/each}
 			</select>
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('pools-field-strategy')}</span>
-			<select class="select select-sm w-full font-mono" bind:value={strategy}>
+			<select class="select w-full font-mono" bind:value={strategy}>
 				{#each poolStrategies as option (option)}<option value={option}>{option}</option>{/each}
 			</select>
 			<span class="text-xs text-base-content/50">{t('pools-field-strategy-hint')}</span>
@@ -112,11 +112,11 @@
 	</div>
 	<label class="flex flex-col gap-1">
 		<span class="text-xs text-base-content/70">{t('pools-field-fallback-offline')}</span>
-		<input class="input input-sm font-mono w-full" bind:value={fallbackOffline} placeholder={t('pools-field-fallback-offline-placeholder')} />
+		<input class="input font-mono w-full" bind:value={fallbackOffline} placeholder={t('pools-field-fallback-offline-placeholder')} />
 	</label>
 	<label class="flex flex-col gap-1">
 		<span class="text-xs text-base-content/70">{t('pools-field-models')}</span>
-		<input class="input input-sm font-mono w-full" bind:value={models} />
+		<input class="input font-mono w-full" bind:value={models} />
 		<span class="text-xs text-base-content/50">{t('pools-field-models-hint')}</span>
 	</label>
 	<div class="flex flex-col gap-1">
@@ -128,11 +128,11 @@
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 			<label class="flex flex-col gap-1">
 				<span class="text-xs text-base-content/70">{t('pools-field-voices')}</span>
-				<textarea class="textarea textarea-sm font-mono w-full" rows="3" bind:value={voices}></textarea>
+				<textarea class="textarea font-mono w-full" rows="3" bind:value={voices}></textarea>
 			</label>
 			<label class="flex flex-col gap-1">
 				<span class="text-xs text-base-content/70">{t('pools-field-offer-voices')}</span>
-				<textarea class="textarea textarea-sm font-mono w-full" rows="3" bind:value={offerVoices}></textarea>
+				<textarea class="textarea font-mono w-full" rows="3" bind:value={offerVoices}></textarea>
 			</label>
 		</div>
 	{/if}

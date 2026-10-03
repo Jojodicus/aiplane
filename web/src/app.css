@@ -163,6 +163,14 @@ h1, h2, h3, .card-title {
         --input-color: var(--color-primary);
     }
 
+    /* daisyUI's plain `btn` is a `base-200` fill with a border of the same
+     * colour, which vanishes on a `base-200` card. The line colour gives it
+     * the mockup's edge. Zero specificity (`:where`), so a Tailwind
+     * `border-*` on a button still wins. */
+    :where(.btn:not(.btn-ghost, .btn-link, .btn-outline, .btn-dash, .btn-soft, .btn-primary, .btn-secondary, .btn-accent, .btn-neutral, .btn-info, .btn-success, .btn-warning, .btn-error)) {
+        border-color: var(--color-base-300);
+    }
+
     .input[aria-invalid="true"], .input:has(> input[aria-invalid="true"]),
     .select[aria-invalid="true"], .textarea[aria-invalid="true"],
     .input-error, .select-error, .textarea-error {

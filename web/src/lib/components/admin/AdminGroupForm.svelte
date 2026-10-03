@@ -134,7 +134,7 @@
 	}
 </script>
 
-<article class="card border border-base-300 bg-base-100">
+<article class="card">
 	<div class="card-body gap-3 p-4">
 		<form class="flex flex-col gap-3" onsubmit={(event) => { event.preventDefault(); save(); }}>
 			<h2 class="font-semibold">{group?.name ?? t('groups-new-heading')}</h2>
@@ -142,11 +142,11 @@
 			<div class="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
 				<label class="flex flex-col gap-1">
 					<span class="label-text text-xs">{t('groups-field-name')}</span>
-					<input class="input input-sm w-full font-mono {group ? 'bg-base-200' : ''}" bind:value={name} readonly={group !== null} required placeholder={group ? undefined : 'developers'} />
+					<input class="input w-full font-mono {group ? 'bg-base-200' : ''}" bind:value={name} readonly={group !== null} required placeholder={group ? undefined : 'developers'} />
 				</label>
 				<label class="flex flex-col gap-1">
 					<span class="label-text text-xs">{t('groups-field-description')}</span>
-					<input class="input input-sm w-full" bind:value={description} />
+					<input class="input w-full" bind:value={description} />
 				</label>
 			</div>
 			<div class="flex flex-wrap gap-4">
@@ -155,16 +155,16 @@
 			</div>
 			<label class="flex flex-col gap-1">
 				<span class="label-text text-xs">{t('groups-field-oidc')}</span>
-				<input class="input input-sm w-full" bind:value={oidcValues} list="group-oidc-values" placeholder={t('groups-oidc-values-placeholder')} />
+				<input class="input w-full" bind:value={oidcValues} list="group-oidc-values" placeholder={t('groups-oidc-values-placeholder')} />
 				<span class="text-xs text-base-content/60">{t('groups-field-oidc-help')}</span>
 			</label>
 			<div class="flex flex-col gap-1">
 				<span class="label-text text-xs">{t('groups-field-tools')}</span>
-				<SearchableSelect multiple bind:values={tools} options={toolOptions} size="sm" ariaLabel={t('groups-field-tools')} summary={summaryFor(t('multi-select-wildcard-tools'))} />
+				<SearchableSelect multiple bind:values={tools} options={toolOptions} ariaLabel={t('groups-field-tools')} summary={summaryFor(t('multi-select-wildcard-tools'))} />
 			</div>
 			<div class="flex flex-col gap-1">
 				<span class="label-text text-xs">{t('groups-field-skills')}</span>
-				<SearchableSelect multiple bind:values={skills} options={skillOptions} size="sm" ariaLabel={t('groups-field-skills')} summary={summaryFor(t('multi-select-wildcard-skills'))} />
+				<SearchableSelect multiple bind:values={skills} options={skillOptions} ariaLabel={t('groups-field-skills')} summary={summaryFor(t('multi-select-wildcard-skills'))} />
 			</div>
 			{#if mcpToolsUnknown}
 				<div class="alert alert-info py-2 text-xs"><span>{t('multi-select-mcp-none-cached')}</span></div>
