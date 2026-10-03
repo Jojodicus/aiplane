@@ -136,8 +136,10 @@ not needed) and `why`.
 - `handoffs`: when to pass the conversation on. `name` a short identifier, `topic` what the \
 request is about in a few words, `condition` `details` when it should wait until every piece of \
 information in `slots` is collected (a qualified lead, an order with all its data), `identity` \
-when only once the visitor's identity is confirmed, otherwise `always`; `target` an id from \
-`agents` or \"human\".
+when only once the visitor's identity is confirmed, otherwise `always`; `target` \"human\" \
+when the scenario hands over to people (a team, a department, staff, \"our sales\"), an id from \
+`agents` only when it hands over to another assistant — an agent whose name merely resembles the \
+team is not that team.
 - `tests`: 3 to 6 test conversations. `kind` is `in_scope` or `out_of_scope`; include at least \
 one `out_of_scope` case with an off-topic question. `messages` are what the visitor says, \
 `answer_contains`/`answer_not_contains` short words the answer must or must not contain.
@@ -376,6 +378,12 @@ mod tests {
 
     /// The tone ids alone do not say that `formal` means "Sie": a scenario
     /// asking for it landed in the free text instead of selecting the chip.
+    #[test]
+    fn the_instructions_send_a_team_to_people_not_to_a_namesake_agent() {
+        assert!(SUGGEST_INSTRUCTIONS.contains("hands over to people (a team, a department"));
+        assert!(SUGGEST_INSTRUCTIONS.contains("is not that team"));
+    }
+
     #[test]
     fn the_instructions_say_what_the_forms_of_address_mean() {
         assert!(SUGGEST_INSTRUCTIONS.contains("`formal` is the polite form of address"));
