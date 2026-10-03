@@ -154,20 +154,12 @@ pub async fn webhook_trigger(
     };
 
     let drive = DriveParams {
-        principal: aiplane_core::server::principal::Principal::User {
-            id: hook.user_id.clone(),
-            roles,
-        },
-        run: None,
+        actor: aiplane_runtime::agent_run::Actor::person(hook.user_id.clone(), roles),
         session_id: session_id.clone(),
         assistant_turn_id: assistant_turn_id.clone(),
         model: hook.model.clone(),
         source: UsageSource::Webhook,
         history_limit,
-        finish: None,
-        budget: None,
-        injection: Default::default(),
-        agent: None,
     };
 
     if hook.synchronous {

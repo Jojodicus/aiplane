@@ -303,20 +303,12 @@ async fn try_run_action(
     crate::server::headless::drive(
         state,
         crate::server::headless::DriveParams {
-            principal: aiplane_core::server::principal::Principal::User {
-                id: action.user_id.clone(),
-                roles,
-            },
-            run: None,
+            actor: crate::agent_run::Actor::person(action.user_id.clone(), roles),
             session_id: session_id.clone(),
             assistant_turn_id: assistant_turn_id.clone(),
             model: action.model.clone(),
             source: aiplane_core::server::db::usage::UsageSource::Scheduled,
             history_limit,
-            finish: None,
-            budget: None,
-            injection: Default::default(),
-            agent: None,
         },
     )
     .await;

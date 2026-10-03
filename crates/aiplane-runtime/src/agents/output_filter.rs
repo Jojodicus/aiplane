@@ -25,7 +25,7 @@ use session_core::db as chat;
 use session_core::i18n::{Lang, t};
 
 use super::human::REQUEST_HUMAN;
-use super::profile::AgentRun;
+use super::profile::AgentSurface;
 use super::router::FORWARD_TOOL_NAME;
 use super::spec::AgentSpec;
 use super::state::{Provenance, StateSchema};
@@ -285,7 +285,7 @@ async fn child_turns(
 /// value came from a verified slot, which is trusted on its own anyway.
 async fn trusted_text(
     state: &RamaState,
-    run: &AgentRun,
+    run: &AgentSurface,
     session_id: &str,
     turn_id: &str,
 ) -> Result<Vec<Evidence>, aiplane_core::server::db::DbError> {
@@ -344,7 +344,7 @@ pub struct Delivery<'a> {
 pub async fn guard_answer(
     state: &RamaState,
     filter: &OutputFilter,
-    run: &AgentRun,
+    run: &AgentSurface,
     at: Delivery<'_>,
     answer: String,
 ) -> String {

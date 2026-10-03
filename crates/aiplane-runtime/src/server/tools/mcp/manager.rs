@@ -824,7 +824,7 @@ impl Tool for AuditedTool {
         let tool_id = self.inner.id().to_string();
         let principal = ctx.principal.clone();
         let session = ctx.session_id.clone();
-        let chain = ctx.run.clone();
+        let chain = ctx.agent.as_ref().map(|a| a.chain().clone());
         let args_summary = if self.sensitive_args() {
             Some(REDACTED_ARGS.to_string())
         } else {
@@ -1359,7 +1359,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
-            run: None,
+            agent: None,
             call_id: None,
         };
         let audited = AuditedTool {

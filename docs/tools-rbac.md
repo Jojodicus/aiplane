@@ -80,9 +80,10 @@ dependency doesn't change the trait signature:
   `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
   through `ctx.person(tool_id)`, which refuses with a message naming the
   principal when there is no person behind the call.
-- **Agent run** — `run: Option<Arc<RunChain>>`, the call chain when the call
-  is part of an agent run (`ctx.agent_active()`); `None` everywhere else. See
-  [`agents.md`](agents.md#the-call-chain).
+- **Agent run** — `agent: Option<Arc<AgentRun>>`, the one value an agent run
+  carries (its principal, call chain, finish contract, budget and injection
+  scan) when the call is part of one (`ctx.agent_active()`, `ctx.chain()`);
+  `None` everywhere else. See [`agents.md`](agents.md#the-call-chain).
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -576,8 +577,8 @@ client tool in one turn.
 Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
 seconds, tokens }`. A chat turn derives it from the conversation's effort level
 (`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
-so interactive behaviour is unchanged. A headless run may pass one in
-`DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
+so interactive behaviour is unchanged. An agent run may carry one
+(`AgentRun::with_budget`); `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
 `seconds` and `tokens` are optional (`None` = unlimited). An agent run takes
 its budget from `main.budget` in its spec (rounds default to the `standard`
 effort cap). A sub-agent run gets its own budget from its own spec, never a
@@ -611,8 +612,9 @@ of `execute_tool_calls`, so the chat driver, the headless runs, the resume path
 and both `/v1` loops share it. Client-owned calls never pass through the
 gateway and are not scanned. `server/tools/injection.rs` holds the rest.
 
-A run carries an `InjectionScan { policy, classifier }`: `OpenAiDriver::injection`
-and `DriveParams::injection`. `RunProfile` sets `Flag` for every agent run,
+An agent run carries an `InjectionScan { policy, classifier }`
+(`AgentRun::with_injection`); every other turn runs with the default.
+`RunProfile` sets `Flag` for every agent run,
 main agent and sub-agent alike, so a sub-agent's `finish` result reaches the
 main agent screened like any other tool result. The
 default is `Off`, which skips scanning entirely, so the result reaches the model
@@ -664,11 +666,11 @@ not a result for a run nobody watches, so a non-interactive run can be given a
 `aiplane_runtime::finish::FinishContract` — a JSON schema — and then ends in
 exactly one of two ways: a schema-valid `finish(result)` call
 (`RunOutcome::Finished { result }`), or a structured
-`RunOutcome::Incomplete { reason, summary }`. `headless::drive` takes the
-contract in `DriveParams::finish` and returns the outcome; it is the entry
-point for scheduled actions, webhooks, and later sub-agents. Runs without a
-contract — every chat turn, every `/v1` request — are unchanged, and no
-`finish` tool is offered to them.
+`RunOutcome::Incomplete { reason, summary }`. The contract belongs to an
+agent run (`AgentRun::with_contract`; `RunProfile` gives one to every routed
+sub-agent), and `headless::drive` returns the outcome. Runs without a
+contract — every chat turn, every scheduled action and webhook, every `/v1`
+request — are unchanged, and no `finish` tool is offered to them.
 
 Inside the chat driver, with a contract:
 

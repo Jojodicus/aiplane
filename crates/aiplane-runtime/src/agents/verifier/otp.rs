@@ -220,7 +220,7 @@ impl Flow<'_> {
     }
 
     async fn ip_hash(&self) -> Option<String> {
-        let visitor = self.ctx.run.as_ref()?.visitor_id.clone()?;
+        let visitor = self.ctx.chain()?.visitor_id.clone()?;
         let session = visitor_sessions::get(&self.run.state.db, &visitor)
             .await
             .ok()

@@ -264,7 +264,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
-            run: None,
+            agent: None,
             call_id: None,
         };
         let err = UploadAttachment
@@ -314,7 +314,7 @@ mod tests {
             model: None,
             suspend: Default::default(),
             granted_tools: None,
-            run: None,
+            agent: None,
             call_id: None,
         };
         let err = UploadAttachment

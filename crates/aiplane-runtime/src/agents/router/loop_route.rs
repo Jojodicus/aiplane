@@ -168,7 +168,7 @@ impl ForwardRequest {
         };
         let caller = Caller {
             principal_id: ctx.principal.subject_id(),
-            chain: ctx.run.as_deref(),
+            chain: ctx.chain(),
         };
         record_finished(&ctx.db, caller, &about, &outcome).await;
         Ok(outcome)

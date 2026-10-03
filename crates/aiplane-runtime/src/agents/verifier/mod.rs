@@ -398,7 +398,7 @@ pub(crate) async fn audit(run: &VerifierRun, ctx: &ToolContext, detail: Value) {
         AuditKind::VerifierOutcome,
         &run.principal.id,
         None,
-        ctx.run.as_deref(),
+        ctx.chain(),
         detail,
     )
     .await;

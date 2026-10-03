@@ -181,7 +181,7 @@ impl ForwardRequest {
             access: PoolAccess::for_system_pools(&self.spec.principal, [pool.as_str()]),
             pool,
             principal: self.spec.principal.clone(),
-            run: ctx.run.clone(),
+            run: ctx.agent.as_ref().map(|a| a.chain().clone()),
         }
     }
 
@@ -366,7 +366,7 @@ impl ForwardRequest {
         let (about, outcome) = self.run_child(ctx, child).await?;
         let caller = Caller {
             principal_id: ctx.principal.subject_id(),
-            chain: ctx.run.as_deref(),
+            chain: ctx.chain(),
         };
         dispatch_result(&ctx.db, caller, about, &bound, outcome).await
     }
@@ -400,7 +400,7 @@ impl ForwardRequest {
         if let Some((seconds, tokens)) = child.cap {
             profile.budget = profile.budget.capped(seconds, tokens);
         }
-        let Some(parent) = ctx.run.as_deref() else {
+        let Some(parent) = ctx.chain() else {
             return Err(ToolError::Failed(
                 "forward_request only works inside an agent run. Do not retry.".into(),
             ));
@@ -443,11 +443,10 @@ impl ForwardRequest {
         }
         ctx.audit(AuditKind::SubAgentDispatched, about.clone())
             .await;
-        let outcome = drive(
-            &self.state,
-            profile.drive_params(&session_id, &turn_id, Arc::new(chain)),
-        )
-        .await;
+        let params = profile
+            .drive_params(&session_id, &turn_id, Arc::new(chain))
+            .map_err(|e| ToolError::Failed(format!("{e}. Nothing was forwarded.")))?;
+        let outcome = drive(&self.state, params).await;
         Ok((about, outcome))
     }
 }

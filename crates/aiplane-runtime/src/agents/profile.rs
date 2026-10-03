@@ -41,6 +41,7 @@ use super::spec::model::Route;
 use super::spec_cache::CompiledSpec;
 use super::state::{self, StateSchema, StateSnapshot, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
+use crate::agent_run::{Actor, AgentRun, MismatchedRun};
 use crate::budget::{Budget, SpendMeter};
 use crate::finish::FinishContract;
 use crate::rama_server::state::RamaState;
@@ -85,6 +86,8 @@ pub enum AgentRunError {
          that turn's resume route (or let it expire) before sending the next message"
     )]
     DecisionPending { session: String, turn: String },
+    #[error(transparent)]
+    Mismatched(#[from] MismatchedRun),
     #[error("reading or writing the agent run failed: {0}")]
     Db(#[from] DbError),
 }
@@ -135,7 +138,7 @@ pub struct RunProfile {
     pub budget: Budget,
     pub finish: Option<FinishContract>,
     pub injection: InjectionScan,
-    pub run: Arc<AgentRun>,
+    pub surface: Arc<AgentSurface>,
     /// `None` when the spec configures no identifier patterns.
     pub output_filter: Option<OutputFilter>,
 }
@@ -285,7 +288,7 @@ impl RunProfile {
             Role::Main => ToolBinds::from_spec(spec),
             Role::SubAgent { route_binds } => ToolBinds::from_spec(spec).with_route(route_binds),
         };
-        let run = AgentRun {
+        let surface = AgentSurface {
             name: principal.name.clone(),
             instructions: spec.main.instructions.text(),
             conversation,
@@ -305,8 +308,21 @@ impl RunProfile {
             model,
             finish,
             injection: InjectionScan::new(InjectionPolicy::Flag),
-            run: Arc::new(run),
+            surface: Arc::new(surface),
             output_filter,
+        })
+    }
+
+    /// The run of this profile in `chain`, whose running frame must be this
+    /// profile's principal.
+    pub fn agent_run(&self, chain: Arc<RunChain>) -> Result<AgentRun, MismatchedRun> {
+        let run = AgentRun::new(self.principal.clone(), chain)?
+            .with_surface(self.surface.clone())
+            .with_budget(self.budget)
+            .with_injection(self.injection.clone());
+        Ok(match &self.finish {
+            Some(contract) => run.with_contract(contract.clone()),
+            None => run,
         })
     }
 
@@ -316,20 +332,15 @@ impl RunProfile {
         session_id: &str,
         assistant_turn_id: &str,
         chain: Arc<RunChain>,
-    ) -> DriveParams {
-        DriveParams {
-            principal: aiplane_core::server::principal::Principal::System(self.principal.clone()),
-            run: Some(chain),
+    ) -> Result<DriveParams, MismatchedRun> {
+        Ok(DriveParams {
+            actor: Actor::Agent(Arc::new(self.agent_run(chain)?)),
             session_id: session_id.to_string(),
             assistant_turn_id: assistant_turn_id.to_string(),
             model: self.model.clone(),
             source: UsageSource::Scheduled,
             history_limit: None,
-            finish: self.finish.clone(),
-            budget: Some(self.budget),
-            injection: self.injection.clone(),
-            agent: Some(self.run.clone()),
-        }
+        })
     }
 }
 
@@ -364,8 +375,11 @@ struct Synthetic {
     phase: ToolPhase,
 }
 
-/// What the driver consults on every round of an agent run.
-pub struct AgentRun {
+/// What an agent's spec puts in front of the model on every round of its run:
+/// the system message, the offered and synthetic tools, bound arguments and
+/// permissions, the conversation state, and the pools its model calls use.
+/// Part of the run's [`AgentRun`].
+pub struct AgentSurface {
     name: String,
     instructions: String,
     conversation: Option<Conversation>,
@@ -380,7 +394,7 @@ pub struct AgentRun {
     spend: Option<Arc<SpendMeter>>,
 }
 
-impl AgentRun {
+impl AgentSurface {
     /// Count `tokens` this run's round spent against the allowance it runs
     /// inside, if any.
     pub fn record_spend(&self, tokens: u64) {
@@ -517,19 +531,22 @@ fn route_summary(
 /// `inner` unchanged.
 pub struct RunToolSource<'a> {
     inner: &'a dyn ToolSource,
-    run: Option<&'a AgentRun>,
+    run: Option<&'a AgentSurface>,
 }
 
 impl<'a> RunToolSource<'a> {
     pub fn new(inner: &'a dyn ToolSource, run: Option<&'a AgentRun>) -> Self {
-        Self { inner, run }
+        Self {
+            inner,
+            run: run.and_then(AgentRun::surface),
+        }
     }
 
     /// A granted tool as this run offers it: its bound arguments filled in,
     /// behind an approval when its permission asks for one. A withheld tool
     /// is refused outright, so nobody is asked to approve a call that could
     /// not run.
-    fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
+    fn bound(&self, run: &AgentSurface, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
         let bound: Arc<dyn Tool> = match run.binds.for_tool(tool.id(), &tool.schema()) {
             Ok(binds) if binds.is_empty() => tool,
             Ok(binds) => Arc::new(BoundTool::new(
@@ -609,11 +626,11 @@ mod tests {
 
     /// A run whose `lookup` tool binds `message` from the route: `message`
     /// is then a subject parameter, and `company_echo` declares it unbound.
-    fn run() -> AgentRun {
+    fn run() -> AgentSurface {
         let spec = json!({ "main": { "tool_resources": {
             "lookup": { "bind": { "message": "route.customer" } }
         } } });
-        AgentRun {
+        AgentSurface {
             name: "billing".into(),
             instructions: String::new(),
             conversation: None,

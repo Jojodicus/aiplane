@@ -9,8 +9,8 @@
 //! visitor, and what let it" is answerable afterwards.
 
 use aiplane_core::server::db::agent_audit::AuditKind;
-use aiplane_core::server::principal::Principal;
 
+use crate::agent_run::AgentRun;
 use crate::server::tools::ToolContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,9 +20,9 @@ pub(super) enum CallPolicy {
     /// A person's chat called a tool of their grant the conversation had not
     /// turned on yet; the call runs and enables it (miss recovery).
     AutoEnabled,
-    /// A system principal called a tool outside its grants. Never runs: a
-    /// principal holds exactly what was granted, and nothing is enabled on
-    /// the fly.
+    /// An agent run called a tool outside its principal's grants. Never
+    /// runs: a principal holds exactly what was granted, and nothing is
+    /// enabled on the fly.
     NotGranted,
     /// The person switched the tool off for this conversation.
     DisabledInConversation,
@@ -32,11 +32,12 @@ pub(super) enum CallPolicy {
 }
 
 impl CallPolicy {
+    /// `agent`: the turn's agent run, `None` for a person's turn.
     /// `known`: some source of the turn has the tool, granted or not.
     /// `granted`: the principal's grant-narrowed source has it, the only
     /// source a call ever runs from.
     pub(super) fn decide(
-        principal: &Principal,
+        agent: Option<&AgentRun>,
         known: bool,
         granted: bool,
         disabled_in_conversation: bool,
@@ -45,7 +46,7 @@ impl CallPolicy {
         if !known {
             Self::UnknownTool
         } else if !granted {
-            if principal.system().is_some() {
+            if agent.is_some() {
                 Self::NotGranted
             } else {
                 Self::UnknownTool
@@ -54,7 +55,7 @@ impl CallPolicy {
             Self::DisabledInConversation
         } else if offered {
             Self::Granted
-        } else if principal.system().is_some() {
+        } else if agent.is_some() {
             Self::NotGranted
         } else {
             Self::AutoEnabled
@@ -76,10 +77,10 @@ impl CallPolicy {
     }
 }
 
-/// What the model reads instead of a result when a system principal calls a
-/// tool it does not hold.
-pub(super) fn not_granted_message(tool: &str, principal: &Principal) -> String {
-    let name = principal.system().map_or("", |sp| sp.name.as_str());
+/// What the model reads instead of a result when an agent run calls a tool its
+/// principal does not hold.
+pub(super) fn not_granted_message(tool: &str, agent: Option<&AgentRun>) -> String {
+    let name = agent.map_or("", |run| run.system_principal().name.as_str());
     format!(
         "Tool `{tool}` is not granted to `{name}`, so it cannot be used in this run. Only call a \
          tool whose schema was provided to you; if the task needs this one, say so in your answer."
@@ -107,24 +108,34 @@ mod tests {
 
     use super::*;
     use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
+    use aiplane_core::server::run_chain::{Frame, RunChain};
 
-    fn person() -> Principal {
-        ToolContext::test_user("u1")
+    fn person() -> Option<&'static AgentRun> {
+        None
     }
 
-    fn agent() -> Principal {
-        Principal::System(SystemPrincipal {
-            id: "p1".into(),
-            name: "support-website".into(),
-            grants: Arc::new(GrantSet::default()),
-        })
+    fn agent() -> Option<&'static AgentRun> {
+        static RUN: std::sync::OnceLock<AgentRun> = std::sync::OnceLock::new();
+        Some(RUN.get_or_init(|| {
+            let principal = SystemPrincipal {
+                id: "p1".into(),
+                name: "support-website".into(),
+                grants: Arc::new(GrantSet::default()),
+            };
+            let chain = Arc::new(RunChain::root(
+                "s1",
+                None,
+                Frame::for_principal(&principal, None),
+            ));
+            AgentRun::new(principal, chain).unwrap()
+        }))
     }
 
     #[test]
     fn an_offered_tool_is_granted_for_anyone() {
         for who in [person(), agent()] {
             assert_eq!(
-                CallPolicy::decide(&who, true, true, false, true),
+                CallPolicy::decide(who, true, true, false, true),
                 CallPolicy::Granted
             );
         }
@@ -133,10 +144,10 @@ mod tests {
     #[test]
     fn only_a_person_gets_an_unoffered_tool_auto_enabled() {
         assert_eq!(
-            CallPolicy::decide(&person(), true, true, false, false),
+            CallPolicy::decide(person(), true, true, false, false),
             CallPolicy::AutoEnabled
         );
-        let refused = CallPolicy::decide(&agent(), true, true, false, false);
+        let refused = CallPolicy::decide(agent(), true, true, false, false);
         assert_eq!(refused, CallPolicy::NotGranted);
         assert!(!refused.allows());
     }
@@ -145,11 +156,11 @@ mod tests {
     fn unknown_and_disabled_tools_never_run() {
         for who in [person(), agent()] {
             assert_eq!(
-                CallPolicy::decide(&who, false, false, false, true),
+                CallPolicy::decide(who, false, false, false, true),
                 CallPolicy::UnknownTool
             );
             assert_eq!(
-                CallPolicy::decide(&who, true, true, true, true),
+                CallPolicy::decide(who, true, true, true, true),
                 CallPolicy::DisabledInConversation
             );
         }
@@ -160,18 +171,18 @@ mod tests {
     #[test]
     fn a_tool_outside_the_grant_never_runs_even_when_offered() {
         assert_eq!(
-            CallPolicy::decide(&agent(), true, false, false, true),
+            CallPolicy::decide(agent(), true, false, false, true),
             CallPolicy::NotGranted
         );
         assert_eq!(
-            CallPolicy::decide(&person(), true, false, false, true),
+            CallPolicy::decide(person(), true, false, false, true),
             CallPolicy::UnknownTool
         );
     }
 
     #[test]
     fn the_refusal_names_the_tool_and_the_principal() {
-        let message = not_granted_message("run_in_sandbox", &agent());
+        let message = not_granted_message("run_in_sandbox", agent());
         assert!(message.contains("`run_in_sandbox`"), "{message}");
         assert!(message.contains("`support-website`"), "{message}");
     }

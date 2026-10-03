@@ -26,6 +26,7 @@ use session_core::db::{self as chat, ToolCallStatus, Turn, TurnRole, TurnStatus}
 use session_core::driver::{SessionContext, SessionDriver, TurnError, TurnOutcome};
 use session_core::workers::{SteerNote, TurnUpdate};
 
+use crate::agent_run::{Actor, AgentRun};
 use crate::budget::{Budget, Clock, Limit};
 use crate::finish::{
     FINISH_NUDGE, FINISH_TOOL_NAME, FinishRun, IncompleteReason, RunOutcome, gateway_summary,
@@ -481,26 +482,22 @@ pub struct OpenAiDriver {
     /// tables). Never stored in `user_content` — it's a per-turn request-time
     /// overlay, so continuing the same thread in text mode is unaffected.
     pub voice_mode: bool,
-    /// A non-interactive run's completion contract: the turn ends only via a
-    /// schema-valid `finish` call or an incomplete outcome, settled into this
-    /// slot. `None` for every interactive turn.
-    pub finish: Option<Arc<FinishRun>>,
-    /// What this run may spend. `None` derives it from the conversation's
-    /// effort level, which is every interactive turn.
-    pub budget: Option<Budget>,
-    /// How gateway-owned tool results are screened for prompt injection
-    /// before the model sees them. Off for every interactive turn.
-    pub injection: crate::server::tools::injection::InjectionScan,
     /// Where the run reads "now" for its `seconds` limit.
     pub clock: Clock,
     /// Set when this turn was suspended and is being continued: the claimed
     /// suspension and the decision that settles its waiting call. `None` for
     /// a turn starting fresh. See [`crate::suspend`].
     pub resume: Option<crate::suspend::ResumeFrom>,
-    /// Set on an agent run: its system message replaces the chat one, its
-    /// synthetic tools are layered over the granted ones and its bound
-    /// arguments applied. See [`crate::agents::profile`].
-    pub agent: Option<Arc<crate::agents::profile::AgentRun>>,
+}
+
+impl OpenAiDriver {
+    /// The agent run this turn is, `None` for a person's turn. It rides in
+    /// the tool context, the one place the turn keeps it: its contract,
+    /// budget and injection scan, and the spec's system message, synthetic
+    /// tools and bound arguments. See [`crate::agent_run`].
+    pub fn agent(&self) -> Option<&AgentRun> {
+        self.tool_ctx.agent.as_deref()
+    }
 }
 
 /// Build the per-turn [`ToolContext`] for a persisted chat session — the single
@@ -515,12 +512,9 @@ pub struct OpenAiDriver {
 pub struct TurnFacts {
     /// Who the turn acts as. For a person, the roles are also the tool gate:
     /// the real roles grant their normal tools, an empty vec runs with no
-    /// group grant at all (the scheduler's "tools off"). A system principal
-    /// is gated by its grants alone.
-    pub principal: aiplane_core::server::principal::Principal,
-    /// The agent call chain, on an agent run. Its running frame must be
-    /// `principal`.
-    pub run: Option<Arc<aiplane_core::server::run_chain::RunChain>>,
+    /// group grant at all (the scheduler's "tools off"). An agent run is
+    /// gated by its principal's grants alone.
+    pub actor: Actor,
     pub session_id: String,
     pub assistant_turn_id: String,
     /// The caller's source IP. `None` headless — the scheduler has no request.
@@ -543,8 +537,7 @@ pub struct TurnFacts {
 
 pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolContext {
     let TurnFacts {
-        principal,
-        run,
+        actor,
         session_id,
         assistant_turn_id,
         client_ip,
@@ -553,17 +546,14 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
         pool_access,
         suspendable,
     } = facts;
+    let principal = actor.principal();
+    let agent = actor.agent().cloned();
     // Session paths: whatever the user's groups reach. Bearer paths hand in
     // their own, already narrowed by the token's allowlist.
-    debug_assert!(
-        run.as_ref()
-            .is_none_or(|run| run.current().principal_id == principal.subject_id()),
-        "an agent run acts as its chain's running principal"
-    );
     let pool_access = pool_access.unwrap_or_else(|| state.pool_access_for_principal(&principal));
     ToolContext {
         principal,
-        run,
+        agent,
         call_id: None,
         token_id: None,
         pool_access,
@@ -678,12 +668,10 @@ impl SessionDriver for OpenAiDriver {
                     aiplane_core::server::upstreams::PoolKind::Chat,
                 )
                 .unwrap_or(routing_model);
-            let access = self
-                .agent
-                .as_deref()
-                .map_or_else(aiplane_core::server::upstreams::PoolAccess::all, |run| {
-                    run.pools().clone()
-                });
+            let access = self.agent().and_then(AgentRun::surface).map_or_else(
+                aiplane_core::server::upstreams::PoolAccess::all,
+                |surface| surface.pools().clone(),
+            );
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(&state, &session_id, &model, &access)
                     .await;
@@ -843,7 +831,7 @@ async fn classify_and_dispatch_tool_calls(
         let known = granted || crate::server::tools::ToolSource::contains(every_tool, &acc.name);
         let key = crate::server::tools::catalog::entry_key_for(&acc.name);
         let policy = CallPolicy::decide(
-            &d.tool_ctx.principal,
+            d.agent(),
             known,
             granted,
             granted && disabled_keys.contains(key),
@@ -887,10 +875,7 @@ async fn classify_and_dispatch_tool_calls(
                 }
                 None
             }
-            CallPolicy::NotGranted => Some(call_policy::not_granted_message(
-                &acc.name,
-                &d.tool_ctx.principal,
-            )),
+            CallPolicy::NotGranted => Some(call_policy::not_granted_message(&acc.name, d.agent())),
             // Hard block: the user switched this tool off for the
             // conversation. Don't run it, don't auto-enable it — answer
             // the call with a refusal the model can read and adapt to.
@@ -981,16 +966,17 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         crate::server::tools::GrantedToolSource::new(&every_tool, granted.iter().cloned());
     // An agent run's synthetic tools are no grant: they sit over the
     // grant-narrowed source, never inside it.
-    let tool_source =
-        crate::agents::profile::RunToolSource::new(&granted_source, d.agent.as_deref());
-    let agent_offer = d.agent.as_ref().map(|a| a.offered(&granted));
+    let tool_source = crate::agents::profile::RunToolSource::new(&granted_source, d.agent());
+    let surface = d.agent().and_then(AgentRun::surface);
+    let finish = d.agent().and_then(AgentRun::finish);
+    let agent_offer = surface.map(|s| s.offered(&granted));
     let tool_ctx = ToolContext {
         granted_tools: Some(Arc::new(granted.into_iter().collect())),
         ..d.tool_ctx.clone()
     };
 
-    let access = match d.agent.as_deref() {
-        Some(run) => run.pools().clone(),
+    let access = match surface {
+        Some(surface) => surface.pools().clone(),
         None => d.state.pool_access_for_principal(&d.tool_ctx.principal),
     };
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
@@ -1029,9 +1015,9 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // with more than one leading system message ("System message must be at the
     // beginning"). See `leading_system_message`.
     let summary = compaction.as_ref().map(|c| c.summary.as_str());
-    let leading = match d.agent.as_ref() {
-        Some(agent) => {
-            agent
+    let leading = match surface {
+        Some(surface) => {
+            surface
                 .system_message(&d.state.db, &ctx.session_id, summary)
                 .await
         }
@@ -1042,7 +1028,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         }
     };
     messages.insert(0, leading);
-    if let Some(run) = d.finish.as_ref() {
+    if let Some(run) = finish {
         runner::merge_into_leading_system_message(&mut messages, run.contract().instructions());
     }
 
@@ -1135,7 +1121,15 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             serving.dialect,
         )
         .await;
-    let budget = d.budget.unwrap_or_else(|| Budget::from_effort(effort));
+    let budget = d
+        .agent()
+        .and_then(AgentRun::budget)
+        .unwrap_or_else(|| Budget::from_effort(effort));
+    let injection = d
+        .agent()
+        .map(AgentRun::injection)
+        .cloned()
+        .unwrap_or_default();
     let max_rounds = budget.rounds();
     // A resumed run continues against what it had spent before the pause.
     let run_started = resume::started_at((d.clock)(), d.resume.as_ref());
@@ -1159,9 +1153,9 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
     // carry no API token, so token fields stay `None`. Skipped entirely when
     // metrics are disabled — no extra DB read on the kill-switched path.
     let metrics_on = d.state.usage.is_enabled();
-    let user_email = match (metrics_on, d.tool_ctx.principal.system()) {
+    let user_email = match (metrics_on, d.agent()) {
         (false, _) => String::new(),
-        (true, Some(sp)) => sp.name.clone(),
+        (true, Some(run)) => run.system_principal().name.clone(),
         (true, None) => aiplane_core::server::db::users::find_by_id(
             &d.state.db,
             d.tool_ctx.principal.subject_id(),
@@ -1284,12 +1278,12 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // or the model would ask for it again. So must one the resumed call
         // just set — a verifier writes its slots exactly there.
         if (round > start_round || d.resume.is_some())
-            && let Some(agent) = d.agent.as_ref().filter(|a| a.has_conversation_state())
+            && let Some(surface) = surface.filter(|s| s.has_conversation_state())
         {
-            messages[0] = agent
+            messages[0] = surface
                 .system_message(&d.state.db, &ctx.session_id, summary)
                 .await;
-            if let Some(run) = d.finish.as_ref() {
+            if let Some(run) = finish {
                 runner::merge_into_leading_system_message(
                     &mut messages,
                     run.contract().instructions(),
@@ -1371,12 +1365,12 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         }
         runner::inject_tools(&mut request_body, &tool_source, &allowed_tools)
             .map_err(upstream_err)?;
-        if let Some(run) = d.finish.as_ref() {
+        if let Some(run) = finish {
             run.contract().inject(&mut request_body);
         }
         if closing {
             runner::prepare_closing_round(&mut request_body);
-        } else if final_round && let Some(run) = d.finish.as_ref() {
+        } else if final_round && let Some(run) = finish {
             run.contract().prepare_final_round(&mut request_body);
             tracing::info!(
                 max_rounds,
@@ -1719,8 +1713,8 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             .or_else(|| Some(round_tokens.0.unwrap_or(0) + round_tokens.1.unwrap_or(0)))
             .map_or(0, |t| t.max(0) as u64);
         tokens_used += spent;
-        if let Some(agent) = &d.agent {
-            agent.record_spend(spent);
+        if let Some(surface) = surface {
+            surface.record_spend(spent);
         }
 
         // Track the context size for the compaction trigger. Persisted only
@@ -1798,7 +1792,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 completion_tokens = ?round_tokens.1,
                 "upstream stopped at the output-token limit; finalizing the turn as truncated"
             );
-            if let Some(run) = d.finish.as_ref() {
+            if let Some(run) = finish {
                 run.settle(RunOutcome::Incomplete {
                     reason: IncompleteReason::OutputTruncated,
                     summary: round_content.trim().to_string(),
@@ -1809,7 +1803,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             });
         }
 
-        if final_round && let Some(run) = d.finish.as_ref() {
+        if final_round && let Some(run) = finish {
             let mut collected: Vec<ToolCallAcc> = tool_acc.into_values().collect();
             ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
             return close_contracted_run(
@@ -1866,7 +1860,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
 
         // A contracted run is not over because the model stopped calling
         // tools: it gets the text back with a nudge, and the round is spent.
-        if tool_acc.is_empty() && d.finish.is_some() {
+        if tool_acc.is_empty() && finish.is_some() {
             messages.push(serde_json::json!({"role": "assistant", "content": round_content}));
             messages.push(serde_json::json!({"role": "user", "content": FINISH_NUDGE}));
             continue;
@@ -1912,7 +1906,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         // the replayed assistant message, and the tool results.
         ensure_unique_tool_call_ids(&mut collected, round as usize, &mut seen_tool_call_ids);
         let mut finish_refusals: Vec<ToolCallAcc> = Vec::new();
-        if let Some(run) = d.finish.as_ref() {
+        if let Some(run) = finish {
             if let [call] = collected.as_slice()
                 && call.name == FINISH_TOOL_NAME
             {
@@ -1992,7 +1986,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             &tool_ctx,
             &call_refs,
             &mut repeated_calls,
-            &d.injection,
+            &injection,
         )
         .await
         {
@@ -2017,7 +2011,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                     .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
                 }
                 let _ = ctx.broadcast.send(TurnUpdate::Tick);
-                if let Some(run) = d.finish.as_ref() {
+                if let Some(run) = finish {
                     run.settle(RunOutcome::Incomplete {
                         reason: IncompleteReason::RepeatedToolCall {
                             tool: stop.tool.clone(),
@@ -3307,7 +3301,7 @@ fn emit_usage(
             agent_id: None,
             chain: None,
         }
-        .in_run(d.tool_ctx.run.as_deref()),
+        .in_run(d.tool_ctx.chain()),
     );
 }
 
@@ -3351,7 +3345,7 @@ fn emit_selector_usage(
             agent_id: None,
             chain: None,
         }
-        .in_run(d.tool_ctx.run.as_deref()),
+        .in_run(d.tool_ctx.chain()),
     );
 }
 

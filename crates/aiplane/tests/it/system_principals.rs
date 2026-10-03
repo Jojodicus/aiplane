@@ -755,8 +755,7 @@ async fn every_grant_change_is_audited_with_who_what_and_when() {
 async fn headless_run(
     fx: &Fixture,
     owner: aiplane_runtime::server::headless::Owner<'_>,
-    principal: Principal,
-    run: Option<Arc<aiplane_core::server::run_chain::RunChain>>,
+    actor: aiplane_runtime::agent_run::Actor,
 ) -> Value {
     use aiplane_runtime::server::headless::{self, DriveParams, OpenParams};
     let (session_id, turn_id) = headless::open_session(
@@ -774,17 +773,12 @@ async fn headless_run(
     headless::drive(
         &Arc::new(fx.state.clone()),
         DriveParams {
-            principal,
-            run,
+            actor,
             session_id,
             assistant_turn_id: turn_id,
             model: "model-a".into(),
             source: aiplane_core::server::db::usage::UsageSource::Scheduled,
             history_limit: None,
-            finish: None,
-            budget: None,
-            injection: Default::default(),
-            agent: None,
         },
     )
     .await;
@@ -814,9 +808,13 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
     .await
     .unwrap();
 
-    let persons = headless_run(&fx, Owner::User("alice"), person_principal("alice"), None)
-        .await
-        .to_string();
+    let persons = headless_run(
+        &fx,
+        Owner::User("alice"),
+        aiplane_runtime::agent_run::Actor::person("alice", vec![]),
+    )
+    .await
+    .to_string();
     assert!(persons.contains("alice@example.com"), "{persons}");
     assert!(persons.contains("brand"), "{persons}");
     let personal_hits_before = fx.personal_mcp_hits.load(Ordering::SeqCst);
@@ -840,8 +838,9 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
             parent_turn_id: None,
             agent_version: Some(1),
         },
-        Principal::System(principal),
-        Some(chain),
+        aiplane_runtime::agent_run::Actor::Agent(Arc::new(
+            aiplane_runtime::agent_run::AgentRun::new(principal, chain).unwrap(),
+        )),
     )
     .await;
 

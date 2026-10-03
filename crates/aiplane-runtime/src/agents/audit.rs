@@ -48,7 +48,7 @@ impl ToolContext {
             kind,
             self.principal.subject_id(),
             None,
-            self.run.as_deref(),
+            self.chain(),
             detail,
         )
         .await;

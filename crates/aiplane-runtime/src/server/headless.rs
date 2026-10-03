@@ -20,8 +20,9 @@
 //!
 //! After [`drive`] returns, read the finished assistant turn
 //! (`session_core::db::get_turn`) to classify the outcome or return its text.
-//! A run given a [`FinishContract`] instead gets its structured
-//! [`RunOutcome`] back from [`drive`] (see [`crate::finish`]).
+//! An agent run under a [`FinishContract`](crate::finish::FinishContract)
+//! instead gets its structured [`RunOutcome`] back from [`drive`] (see
+//! [`crate::finish`]).
 //!
 //! [`OpenAiDriver`]: crate::openai_driver::OpenAiDriver
 
@@ -30,14 +31,13 @@ use std::sync::Arc;
 use session_core::db as chat;
 use uuid::Uuid;
 
-use crate::budget::{Budget, Clock};
-use crate::finish::{FinishContract, FinishRun, IncompleteReason, RunOutcome};
+use crate::agent_run::Actor;
+use crate::budget::Clock;
+use crate::finish::{IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use crate::suspend::ResumeFrom;
 use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::{DbError, Pool};
-use aiplane_core::server::principal::Principal;
-use aiplane_core::server::run_chain::RunChain;
 
 /// Who a freshly-minted run session belongs to.
 #[derive(Debug, Clone, Copy)]
@@ -115,13 +115,11 @@ pub async fn open_session(db: &Pool, p: OpenParams<'_>) -> Result<(String, Strin
 /// Inputs to [`drive`].
 pub struct DriveParams {
     /// Who the run acts as. A person is gated by their roles: pass their real
-    /// roles to offer their normal tools, or an empty vec to offer none. A
-    /// system principal is offered exactly its grants, and none of any
-    /// person's memory, connectors or skills.
-    pub principal: Principal,
-    /// The agent call chain, on an agent run. Its running frame must be
-    /// `principal`; every tool call is then audited with it.
-    pub run: Option<Arc<RunChain>>,
+    /// roles to offer their normal tools, or an empty vec to offer none. An
+    /// agent run is offered exactly its principal's grants, and none of any
+    /// person's memory, connectors or skills; every tool call is audited with
+    /// its chain, and its contract, budget and injection scan apply.
+    pub actor: Actor,
     pub session_id: String,
     pub assistant_turn_id: String,
     pub model: String,
@@ -130,33 +128,19 @@ pub struct DriveParams {
     /// fresh-chat default). Callers that reuse a session set this to bound the
     /// replayed history.
     pub history_limit: Option<usize>,
-    /// When `Some`, the run ends only through a schema-valid `finish` call or
-    /// a structured incomplete outcome, and [`drive`] returns which. `None`
-    /// runs the turn exactly as an interactive chat turn would.
-    pub finish: Option<FinishContract>,
-    /// What the run may spend. `None` takes the round cap of the session's
-    /// effort level and no time or token limit.
-    pub budget: Option<Budget>,
-    /// How tool results are screened for prompt injection. The default is
-    /// off, exactly as an interactive chat turn runs.
-    pub injection: crate::server::tools::injection::InjectionScan,
-    /// The agent this run executes: its system message, synthetic tools and
-    /// bound arguments (see [`crate::agents::profile`]). `None` for every run
-    /// that is not an agent's.
-    pub agent: Option<Arc<crate::agents::profile::AgentRun>>,
 }
 
 /// Drive an already-opened turn to completion through the `OpenAiDriver`.
 ///
-/// Returns the run's [`RunOutcome`] when it was given a finish contract, and
-/// `None` otherwise.
+/// Returns the run's [`RunOutcome`] when it is an agent run under a finish
+/// contract, and `None` otherwise.
 pub async fn drive(state: &Arc<RamaState>, p: DriveParams) -> Option<RunOutcome> {
     drive_with_clock(state, p, crate::budget::system_clock()).await
 }
 
 /// Continue a suspended agent run: `resume` holds its claimed suspension and
 /// the decision (or the resumed sub-agent's result) that settles the
-/// waiting call. Only an agent run (`p.agent`) can have paused.
+/// waiting call.
 pub async fn drive_resumed(
     state: &Arc<RamaState>,
     p: DriveParams,
@@ -180,48 +164,20 @@ async fn drive_inner(
     clock: Clock,
     resume: Option<ResumeFrom>,
 ) -> Option<RunOutcome> {
-    if let Some(run) = &p.run
-        && run.current().principal_id != p.principal.subject_id()
-    {
-        let message = format!(
-            "the run's call chain names `{}` as the running agent, but the run was started as \
-             `{}`; refusing to run it as either",
-            run.current().name,
-            p.principal.subject_id()
-        );
-        tracing::error!(turn = %p.assistant_turn_id, %message, "agent run identity mismatch");
-        if let Err(err) = chat::finalize_turn(
-            &state.db,
-            &p.assistant_turn_id,
-            chat::TurnStatus::Errored,
-            Some(&message),
-        )
-        .await
-        {
-            tracing::warn!(error = %err, "recording the refused agent run");
-        }
-        return p.finish.map(|_| RunOutcome::Incomplete {
-            reason: IncompleteReason::Failed { message },
-            summary: String::new(),
-        });
-    }
-    let finish = p.finish.map(FinishRun::new);
+    let agent = p.actor.agent().cloned();
     // An agent run stops when its conversation's turn is cancelled (A2A
     // `CancelTask`); a sub-agent run shares its root conversation's flag.
-    let cancel = p
-        .run
+    let cancel = agent
         .as_ref()
-        .and_then(|run| state.agent_turns.cancel_flag(&run.root_session))
+        .and_then(|run| state.agent_turns.cancel_flag(&run.chain().root_session))
         .unwrap_or_default();
     let session_id = p.session_id.clone();
-    let person = p.principal.user_id().map(str::to_string);
-    let persons_run = person.is_some();
+    let person = p.actor.person_id().map(str::to_string);
     let assistant_turn_id = p.assistant_turn_id.clone();
     let tool_ctx = crate::openai_driver::build_tool_context(
         state,
         crate::openai_driver::TurnFacts {
-            principal: p.principal,
-            run: p.run,
+            actor: p.actor,
             session_id: p.session_id.clone(),
             assistant_turn_id: p.assistant_turn_id.clone(),
             // Headless: no request, so no client IP, and nobody watching the
@@ -244,12 +200,8 @@ async fn drive_inner(
         source: p.source,
         history_limit: p.history_limit,
         voice_mode: false,
-        finish: finish.clone(),
-        budget: p.budget,
-        injection: p.injection,
         clock,
         resume,
-        agent: p.agent,
     });
 
     // No registry slot and a throwaway broadcast channel: a headless run has no
@@ -269,11 +221,12 @@ async fn drive_inner(
         steers: session_core::workers::SteerInbox::default(),
     };
     session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
-    if persons_run {
+    let Some(agent) = agent else {
         announce_if_waiting(state, &assistant_turn_id).await;
-    }
+        return None;
+    };
 
-    let run = finish?;
+    let run = agent.finish()?;
     Some(match run.take() {
         Some(outcome) => outcome,
         None => unsettled_outcome(&state.db, &session_id, &assistant_turn_id).await,
@@ -325,9 +278,11 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::agent_run::AgentRun;
+    use crate::budget::Budget;
     use crate::finish::{FINISH_TOOL_NAME, FinishContract, IncompleteReason, RunOutcome};
     use crate::server::tools::injection::{InjectionPolicy, InjectionScan};
-    use aiplane_core::server::run_chain::{CallSite, Frame};
+    use aiplane_core::server::run_chain::{CallSite, Frame, RunChain};
     use aiplane_core::server::upstreams::{
         self,
         config::{BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig},
@@ -484,31 +439,63 @@ mod tests {
         (session_id, assistant_turn_id)
     }
 
-    fn params(session_id: &str, turn_id: &str, finish: Option<FinishContract>) -> DriveParams {
+    fn params(session_id: &str, turn_id: &str, actor: Actor) -> DriveParams {
         DriveParams {
-            principal: crate::server::tools::ToolContext::test_user("u1"),
-            run: None,
+            actor,
             session_id: session_id.into(),
             assistant_turn_id: turn_id.into(),
             model: MODEL.into(),
             source: UsageSource::Scheduled,
             history_limit: None,
-            finish,
-            budget: None,
-            injection: Default::default(),
-            agent: None,
+        }
+    }
+
+    fn person() -> Actor {
+        Actor::person("u1", vec![])
+    }
+
+    /// The agent `triage`, granted `company_echo`, running under `contract`
+    /// at the root of `session_id`.
+    async fn triage(
+        state: &Arc<RamaState>,
+        session_id: &str,
+        contract: FinishContract,
+    ) -> AgentRun {
+        let principal = principal(state, "triage", &["company_echo"]).await;
+        let chain = Arc::new(RunChain::root(
+            session_id,
+            None,
+            Frame::for_principal(&principal, None),
+        ));
+        AgentRun::new(principal, chain)
+            .unwrap()
+            .with_contract(contract)
+    }
+
+    /// A person's run without a contract, `triage`'s run under one.
+    async fn actor_for(
+        state: &Arc<RamaState>,
+        session_id: &str,
+        finish: Option<FinishContract>,
+        tweak: impl FnOnce(AgentRun) -> AgentRun,
+    ) -> Actor {
+        match finish {
+            None => person(),
+            Some(contract) => {
+                Actor::Agent(Arc::new(tweak(triage(state, session_id, contract).await)))
+            }
         }
     }
 
     async fn run(deltas: Vec<Value>, finish: Option<FinishContract>, effort: &str) -> Run {
-        run_with(deltas, finish, effort, |_| {}).await
+        run_with(deltas, finish, effort, |run| run).await
     }
 
     async fn run_with(
         deltas: Vec<Value>,
         finish: Option<FinishContract>,
         effort: &str,
-        tweak: impl FnOnce(&mut DriveParams),
+        tweak: impl FnOnce(AgentRun) -> AgentRun,
     ) -> Run {
         let upstream = MockServer::start().await;
         Mock::given(method("POST"))
@@ -522,9 +509,8 @@ mod tests {
             .await;
         let state = state_for(&upstream.uri()).await;
         let (session_id, turn_id) = open(&state, effort).await;
-        let mut p = params(&session_id, &turn_id, finish);
-        tweak(&mut p);
-        let outcome = drive(&state, p).await;
+        let actor = actor_for(&state, &session_id, finish, tweak).await;
+        let outcome = drive(&state, params(&session_id, &turn_id, actor)).await;
         let requests = upstream
             .received_requests()
             .await
@@ -576,7 +562,10 @@ mod tests {
         .await;
         assert_eq!(r.outcome, finished(json!({"status": "resolved"})));
         assert_eq!(r.requests.len(), 1);
-        assert_eq!(offered_tools(&r.requests[0]), [FINISH_TOOL_NAME]);
+        assert_eq!(
+            offered_tools(&r.requests[0]),
+            ["company_echo", FINISH_TOOL_NAME]
+        );
         let system = r.requests[0]["messages"][0]["content"].as_str().unwrap();
         assert!(system.contains("non-interactive run"), "{system}");
         assert_eq!(r.turn.turn.status, session_core::db::TurnStatus::Completed);
@@ -748,7 +737,7 @@ mod tests {
             ],
             Some(contract()),
             "standard",
-            |p| p.injection = InjectionScan::new(policy),
+            |run| run.with_injection(InjectionScan::new(policy)),
         )
         .await
     }
@@ -829,7 +818,8 @@ mod tests {
             .await;
         let state = state_for(&upstream.uri()).await;
         let (session_id, turn_id) = open(&state, "standard").await;
-        let outcome = drive(&state, params(&session_id, &turn_id, Some(contract()))).await;
+        let actor = actor_for(&state, &session_id, Some(contract()), |run| run).await;
+        let outcome = drive(&state, params(&session_id, &turn_id, actor)).await;
         let Some(RunOutcome::Incomplete {
             reason: IncompleteReason::Failed { message },
             ..
@@ -857,9 +847,11 @@ mod tests {
             .await;
         let state = state_for(&upstream.uri()).await;
         let (session_id, turn_id) = open(&state, "max").await;
-        let mut p = params(&session_id, &turn_id, Some(contract()));
-        p.budget = Some(budget);
-        let outcome = drive_with_clock(&state, p, clock).await;
+        let actor = actor_for(&state, &session_id, Some(contract()), |run| {
+            run.with_budget(budget)
+        })
+        .await;
+        let outcome = drive_with_clock(&state, params(&session_id, &turn_id, actor), clock).await;
         let requests = upstream
             .received_requests()
             .await
@@ -938,7 +930,7 @@ mod tests {
         assert_eq!(offered_tools(requests.last().unwrap()), [FINISH_TOOL_NAME]);
     }
 
-    struct AgentRun {
+    struct SubAgentRun {
         state: Arc<RamaState>,
         session_id: String,
         principal: aiplane_core::server::principal::SystemPrincipal,
@@ -992,7 +984,7 @@ mod tests {
 
     /// A sub-agent `billing`, called by the main agent `support-website` for
     /// visitor `v-42`, runs `deltas` headlessly as its own principal.
-    async fn agent_run(deltas: Vec<Value>) -> AgentRun {
+    async fn agent_run(deltas: Vec<Value>) -> SubAgentRun {
         let upstream = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
@@ -1045,13 +1037,10 @@ mod tests {
         )
         .await
         .unwrap();
+        let run = AgentRun::new(billing.clone(), chain.clone()).unwrap();
         drive(
             &state,
-            DriveParams {
-                principal: aiplane_core::server::principal::Principal::System(billing.clone()),
-                run: Some(chain.clone()),
-                ..params(&session_id, &turn_id, None)
-            },
+            params(&session_id, &turn_id, Actor::Agent(Arc::new(run))),
         )
         .await;
         let requests = upstream
@@ -1065,7 +1054,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        AgentRun {
+        SubAgentRun {
             state,
             session_id,
             principal: billing,
@@ -1202,65 +1191,6 @@ mod tests {
         assert_eq!(chain["frames"][0]["name"], "support-website");
         assert_eq!(chain["frames"][1]["name"], "billing");
         assert_eq!(chain["frames"][1]["principal_id"], r.principal.id.as_str());
-    }
-
-    #[tokio::test]
-    async fn a_run_whose_chain_names_another_agent_is_refused_before_any_round() {
-        let upstream = MockServer::start().await;
-        let state = state_for(&upstream.uri()).await;
-        open(&state, "standard").await;
-        let main = principal(&state, "support-website", &["company_echo"]).await;
-        let other = principal(&state, "billing", &["company_echo"]).await;
-        let (session_id, turn_id) = open_session(
-            &state.db,
-            OpenParams {
-                owner: Owner::Run {
-                    principal_id: &other.id,
-                    parent_turn_id: None,
-                    agent_version: None,
-                },
-                title: "t",
-                prompt: "p",
-                model: MODEL,
-                existing_session: None,
-            },
-        )
-        .await
-        .unwrap();
-        let outcome = drive(
-            &state,
-            DriveParams {
-                principal: aiplane_core::server::principal::Principal::System(other),
-                run: Some(Arc::new(RunChain::root(
-                    &session_id,
-                    None,
-                    Frame::for_principal(&main, None),
-                ))),
-                ..params(&session_id, &turn_id, Some(contract()))
-            },
-        )
-        .await;
-        assert!(
-            matches!(
-                outcome,
-                Some(RunOutcome::Incomplete {
-                    reason: IncompleteReason::Failed { .. },
-                    ..
-                })
-            ),
-            "{outcome:?}"
-        );
-        assert!(upstream.received_requests().await.unwrap().is_empty());
-        let turn = chat::get_turn(&state.db, &session_id, &turn_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(turn.status, chat::TurnStatus::Errored);
-        assert!(
-            turn.error_message
-                .unwrap_or_default()
-                .contains("`support-website`"),
-        );
     }
 
     #[tokio::test]

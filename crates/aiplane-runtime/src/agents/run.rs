@@ -175,7 +175,7 @@ impl crate::server::tools::ToolContext {
     /// tree started in: a routed sub-agent speaks the language of the
     /// conversation that dispatched it.
     pub(crate) async fn conversation_lang(&self) -> Lang {
-        match self.run.as_deref() {
+        match self.chain() {
             Some(chain) => {
                 conversation_lang(&self.db, &chain.agent().principal_id, &chain.root_session).await
             }
@@ -216,7 +216,7 @@ pub async fn drive_opened_from(
     resume: Option<ResumeFrom>,
 ) -> Result<AgentReply, AgentRunError> {
     let chain = root_chain(profile, turn);
-    let params = profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone());
+    let params = profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone())?;
     match resume {
         Some(resume) => drive_resumed(state, params, resume).await,
         None => {
@@ -262,7 +262,7 @@ pub async fn drive_opened_from(
             chain: &chain,
             lang: conversation_lang(&state.db, &profile.principal.id, &turn.session_id).await,
         };
-        answer = Some(guard_answer(state, filter, &profile.run, at, text).await);
+        answer = Some(guard_answer(state, filter, &profile.surface, at, text).await);
     }
     Ok(AgentReply {
         status: done

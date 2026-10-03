@@ -20,6 +20,7 @@ use session_core::driver::{SessionContext, TurnError};
 use session_core::workers::TurnUpdate;
 
 use super::{OpenAiDriver, ToolResultBudget, cap_tool_result, persist_err};
+use crate::agent_run::AgentRun;
 use crate::server::tools::runner::{self, ToolCallRef, ToolResultRecord};
 use crate::server::tools::{ToolContext, ToolSource, extract_content_parts};
 use crate::suspend::{
@@ -134,7 +135,7 @@ pub(super) async fn pause(
             rounds = budget_used.rounds,
             "turn suspended for a decision"
         );
-        if d.tool_ctx.run.is_some() {
+        if d.tool_ctx.agent_active() {
             d.tool_ctx
                 .audit(
                     AuditKind::RunSuspended,
@@ -235,7 +236,10 @@ pub(super) async fn resume_into(
                         tools,
                         &tool_ctx,
                         std::slice::from_ref(&call),
-                        &d.injection,
+                        &d.agent()
+                            .map(AgentRun::injection)
+                            .cloned()
+                            .unwrap_or_default(),
                     )
                     .await
                     .pop()
@@ -494,8 +498,7 @@ mod tests {
         let tool_ctx = build_tool_context(
             state,
             TurnFacts {
-                principal: crate::server::tools::ToolContext::test_user("u1"),
-                run: None,
+                actor: crate::agent_run::Actor::person("u1", vec![]),
                 session_id: session_id.into(),
                 assistant_turn_id: "a-turn".into(),
                 client_ip: None,
@@ -511,10 +514,6 @@ mod tests {
             source: aiplane_core::server::db::usage::UsageSource::Chat,
             history_limit: None,
             voice_mode: false,
-            finish: None,
-            budget: None,
-            injection: Default::default(),
-            agent: None,
             clock: crate::budget::system_clock(),
             resume,
         });
