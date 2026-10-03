@@ -802,6 +802,13 @@ fn urlencode_segment(s: &str) -> String {
 /// dropping the model's inputs.
 const STAGE_TOTAL_MAX_BYTES: usize = 50 * 1024 * 1024;
 
+// A full staging budget, base64-inflated, must still fit the runner's `/run`
+// limit with room for the code and inline files.
+const _: () = assert!(
+    STAGE_TOTAL_MAX_BYTES.div_ceil(3) * 4 + 8 * 1024 * 1024
+        <= shared::sandbox::MAX_RUN_REQUEST_BYTES
+);
+
 /// A file the model asked to pull into the run by attachment id.
 #[derive(Deserialize)]
 struct AttachmentArg {

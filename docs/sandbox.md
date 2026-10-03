@@ -88,6 +88,12 @@ runner itself: `systemctl status sandbox-runner.service` /
                                               + bearer download URL (/v1 path)
 ```
 
+The runner reads a `/run` body up to `shared::sandbox::MAX_RUN_REQUEST_BYTES`
+(96 MiB) and answers `413` past it — a declared `Content-Length` over the limit
+before a byte is read, a chunked body the moment its running total passes it.
+The limit leaves room for the 50 MiB staging budget once base64 has inflated it;
+a compile-time check in the gateway's sandbox client keeps the two in step.
+
 The **gold image** baked for step 4 is a batteries-included "system-engineer
 shell": python + data/science stack, LibreOffice, pandoc, typst, ffmpeg, duckdb,
 ripgrep/jq, tshark, tesseract OCR, headless chromium. Default per call: **no

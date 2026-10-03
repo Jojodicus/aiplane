@@ -17,6 +17,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The largest `POST /run` body the runner reads; past it the runner answers
+/// `413`. Room for the gateway's 50 MiB staging budget once base64 has
+/// inflated it (about 67 MiB), plus the code and inline files.
+pub const MAX_RUN_REQUEST_BYTES: usize = 96 * 1024 * 1024;
+
 /// Interpreter the sandbox runs the submitted `code` with. A single
 /// generic tool plus a handful of specialized wrappers all funnel down
 /// to "run this Python or this shell script", which covers document

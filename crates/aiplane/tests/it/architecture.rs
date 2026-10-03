@@ -451,8 +451,8 @@ const BODY_READERS: &[Allowed] = &[
     },
     Allowed {
         path: "sandbox-runner/src/server.rs",
-        why: "KNOWN GAP: the runner's /run reads its body uncapped; it listens on a private \
-              network only the gateway reaches, which sizes the request",
+        why: "the runner's own capped /run reader (413 past MAX_RUN_REQUEST_BYTES): it stands \
+              outside the crate stack and cannot use session_core::chrome",
     },
 ];
 
@@ -497,6 +497,7 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
             "http_body_util",
             ".try_into_json(",
             ".try_into_string(",
+            ".into_data_stream(",
         ],
         |s| s.code.as_str(),
     );

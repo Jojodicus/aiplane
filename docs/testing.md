@@ -23,7 +23,7 @@ by tests that read the workspace's own source, in
 | Test | Invariant | Shared mechanism |
 |---|---|---|
 | `outbound_http_clients_are_built_only_at_the_vetted_sites` | a reqwest client (`Client::new`/`builder`, `ClientBuilder::new`, `reqwest::get`, under any `use` alias) is built only in the listed files | the net_guard-checked, pinned client in `aiplane-core/src/server/outbound_guard.rs` for destinations a user, model or agent owner chooses; `AppState::http` for operator-configured backends |
-| `request_bodies_are_read_only_through_the_capped_readers` | nothing outside `session_core::chrome` names `BodyExt`; `read_body_to_bytes`/`read_json` appear only behind `BodyLimitLayer` (`aiplane/src/rama_server/`, `aiplane-api/src/`) and never in the modules serving a prefix the layer passes through (`HANDLER_CAPPED_PREFIXES`) | `read_body_capped`, `read_body_prefix`, `read_json_capped`, `BodyLimitLayer` |
+| `request_bodies_are_read_only_through_the_capped_readers` | nothing outside `session_core::chrome` names `BodyExt` or drains a body with `into_data_stream` (the sandbox runner, outside the stack, has its own capped `/run` reader); `read_body_to_bytes`/`read_json` appear only behind `BodyLimitLayer` (`aiplane/src/rama_server/`, `aiplane-api/src/`) and never in the modules serving a prefix the layer passes through (`HANDLER_CAPPED_PREFIXES`) | `read_body_capped`, `read_body_prefix`, `read_json_capped`, `BodyLimitLayer` |
 | `agent_spec_json_is_read_only_by_the_validator` | no JSON accessor (`.get`, `.get_mut`, `.remove`, `.pointer`, `[..]`) names a spec key (`publish`, `routes`, `main`, …) outside the validator | the typed `AgentSpec` from `CompiledSpec::agent()` |
 | `workspace_crates_depend_only_down_the_stack` | every dependency between workspace members (normal, build, dev; from `cargo metadata --no-deps --offline`) points to a lower level of the AGENTS.md stack; siblings (`-features`/`-agents`, `-tools`/`-api`) never depend on each other; `sandbox-runner` uses only `shared` and nothing uses it; every member has a level | the stack in AGENTS.md → "The gateway crate stack" |
 | `model_tool_calls_dispatch_only_through_the_grant` | only the chat/agent driver, its resume path and the `/v1` loops hand calls to the runner, and each still builds its gate (`GrantedToolSource`, `DiscoverableToolSource`); `Tool::run` is called directly only by the runner and the listed wrappers/verifiers | `GrantedToolSource` (+ `RunToolSource` over it), `DiscoverableToolSource` |
@@ -39,9 +39,9 @@ silent omission in a new file, which is how every one of these invariants was
 actually broken.
 
 The allow-lists are deliberately short, and every entry carries its reason.
-Entries marked **KNOWN GAP** are real violations that predate the test
-(`sandbox-runner` reads its request body uncapped). They are listed so the test
-can land green and stop the next one; fixing them removes the entry.
+An entry marked **KNOWN GAP** would be a real violation that predates its
+test, listed so the test can land green and stop the next one; fixing it
+removes the entry. There are none at the moment.
 
 Not covered yet: outbound *response* bodies read with reqwest's
 `.bytes()`/`.text()`/`.json()` instead of `capped_read::read_capped` — about 40
