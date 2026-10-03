@@ -124,7 +124,7 @@ pub enum AuditKind {
     /// A turn of an agent run ended: its status, answer or error.
     TurnFinished,
     /// A slot of the conversation's state was written: old and new value,
-    /// provenance, writer.
+    /// and its provenance (who wrote it).
     StateWritten,
     /// The retention sweeper deleted a whole conversation chain of the log.
     ActivitySwept,

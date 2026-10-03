@@ -90,7 +90,6 @@ pub async fn put(
                 "old": old,
                 "new": value,
                 "provenance": provenance,
-                "writer": provenance,
                 "set_at": set_at,
             }),
         )
@@ -348,5 +347,35 @@ pub(crate) mod tests {
             previous = detail["new"].clone();
         }
         assert_eq!(for_session(&pool, "s1").await.unwrap()[0].value, previous);
+    }
+
+    /// The event names who wrote the slot once, as `provenance`, the
+    /// column's own name.
+    #[tokio::test]
+    async fn a_write_event_names_its_provenance_once() {
+        let pool = fresh().await;
+        seed_agent_session(&pool, "s1").await;
+        put_committed(
+            &pool,
+            "s1",
+            "verified",
+            &json!({"customer_id": "K-1"}),
+            "verifier:otp",
+            at("2026-10-02T10:00:00Z"),
+        )
+        .await
+        .unwrap();
+        let detail: String =
+            sqlx::query_scalar("SELECT detail FROM agent_audit WHERE kind = 'state_written'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let detail: Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["provenance"], "verifier:otp");
+        assert_eq!(
+            detail.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["new", "old", "provenance", "set_at", "slot"],
+            "{detail}"
+        );
     }
 }
