@@ -1150,10 +1150,16 @@ mod tests {
             "the change's grants ride with its revision"
         );
 
-        let same = update_draft(&pool, id, r#"{"v":1}"#, "alice", DraftChange::default())
-            .await
-            .unwrap()
-            .unwrap();
+        let same = update_draft(
+            &pool,
+            id,
+            r#"{"v":"tooled"}"#,
+            "alice",
+            DraftChange::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(same.revision, None, "an unchanged draft adds no revision");
 
         let mut last = None;
