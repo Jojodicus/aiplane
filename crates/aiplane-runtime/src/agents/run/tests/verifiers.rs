@@ -605,6 +605,10 @@ async fn a_lookup_vouches_with_its_own_provenance_and_caps_its_attempts() {
     let sent = requests(&main).await;
     let miss = tool_answer(&sent, "k3");
     assert!(miss.contains("not_confirmed"), "{miss}");
+    assert!(
+        miss.contains("\"attempts_left\": 1"),
+        "the count the attempt was admitted against: {miss}"
+    );
     let hit = tool_answer(&sent, "k5");
     assert!(
         hit.contains("\"verified\": true") && hit.contains("\"low\""),
