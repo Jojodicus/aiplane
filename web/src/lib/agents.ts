@@ -620,3 +620,23 @@ export interface Granted {
 	tools: { id: string; name: string }[];
 	skills: string[];
 }
+
+const GERMAN_LETTERS: Record<string, string> = { ä: 'ae', ö: 'oe', ü: 'ue', ß: 'ss' };
+
+/**
+ * The agent's id (its system principal's name: lowercase letters, digits and
+ * dashes, at most 48) derived from the name a person types, so creating an
+ * agent asks for one name, not two.
+ */
+export function agentIdFromName(name: string): string {
+	const id = name
+		.toLowerCase()
+		.replace(/[äöüß]/g, (c) => GERMAN_LETTERS[c])
+		.normalize('NFKD')
+		.replace(/[̀-ͯ]/g, '')
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 48)
+		.replace(/-+$/, '');
+	return id || 'agent';
+}

@@ -4,7 +4,7 @@
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
-	import { agentsApi, type AgentError, type AgentSummary } from '$lib/agents';
+	import { agentIdFromName, agentsApi, type AgentError, type AgentSummary } from '$lib/agents';
 	import { locale, t } from '$lib/i18n.svelte';
 
 	let agents = $state<AgentSummary[]>([]);
@@ -12,9 +12,10 @@
 	let error = $state<string | null>(null);
 
 	let creating = $state(false);
-	let name = $state('');
 	let display = $state('');
+	let customId = $state<string | null>(null);
 	let description = $state('');
+	const id = $derived(customId ?? agentIdFromName(display));
 	let createError = $state<string | null>(null);
 	let busy = $state(false);
 
@@ -34,7 +35,7 @@
 		busy = true;
 		createError = null;
 		try {
-			const agent = await agentsApi.create({ name: name.trim(), display: display.trim() || undefined, description });
+			const agent = await agentsApi.create({ name: id, display: display.trim(), description });
 			await goto(`${base}/agents/${agent.id}/setup/start`);
 		} catch (err) {
 			createError = (err as AgentError).message;
@@ -88,7 +89,7 @@
 
 {#snippet createActions()}
 	<button class="btn btn-ghost" type="button" onclick={() => (creating = false)}>{t('admin-cancel')}</button>
-	<button class="btn btn-primary" type="submit" form="agent-create" disabled={busy || !name.trim()}>{t('agents-create-submit')}</button>
+	<button class="btn btn-primary" type="submit" form="agent-create" disabled={busy || !display.trim() || !id}>{t('agents-create-submit')}</button>
 {/snippet}
 
 <Modal bind:open={creating} title={t('agents-create')} footer={createActions}>
@@ -96,13 +97,22 @@
 		{#if createError}<div class="alert alert-error text-sm" role="alert"><span>{createError}</span></div>{/if}
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-name')}</span>
-			<input class="input w-full font-mono" bind:value={name} required maxlength="48" placeholder="support-website" />
-			<span class="text-xs text-base-content/60">{t('agents-create-name-hint')}</span>
+			<!-- svelte-ignore a11y_autofocus -->
+			<input class="input w-full" bind:value={display} required maxlength="80" placeholder="Harald" autofocus />
+			<span class="text-xs text-base-content/60">{t('agents-create-name-help')}</span>
 		</label>
-		<label class="flex flex-col gap-1">
-			<span class="label-text">{t('agents-create-display')}</span>
-			<input class="input w-full" bind:value={display} placeholder="croit Support" />
-		</label>
+		{#if customId === null}
+			<p class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
+				<span>{t('agents-create-id')}</span><code class="font-mono">{id || '…'}</code>
+				<button class="btn btn-ghost btn-xs" type="button" onclick={() => (customId = id)}>{t('agents-create-id-change')}</button>
+			</p>
+		{:else}
+			<label class="flex flex-col gap-1">
+				<span class="label-text">{t('agents-create-id')}</span>
+				<input class="input input-sm w-full font-mono" bind:value={customId} required maxlength="48" pattern="[a-z0-9]+(-[a-z0-9]+)*" />
+				<span class="text-xs text-base-content/60">{t('agents-create-name-hint')}</span>
+			</label>
+		{/if}
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-description')}</span>
 			<textarea class="textarea w-full" bind:value={description}></textarea>
