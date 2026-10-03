@@ -249,6 +249,7 @@ agents-setup-todo-site = 指定智能体显示的网站，以免其他网站嵌�
 agents-setup-proposal-ready = 建议已生成。每一步都会显示它的部分——采用合适的，其余可忽略。
 agents-setup-dropped = 未采纳：
 agents-setup-suggest-dismiss = 忽略
+agents-setup-suggest-noted = 知道了
 agents-error-network = 无法连接到服务器。请检查网络连接后重试。
 agents-error-rate = 当前请求过多。请稍候再试。
 agents-error-rate-retry = 当前请求过多。请在 { $seconds } 秒后重试。

@@ -256,6 +256,7 @@ agents-setup-todo-site = Indiquez le site sur lequel l’agent apparaît, pour q
 agents-setup-proposal-ready = Une proposition est prête. Chaque étape en montre sa partie : appliquez ce qui convient, écartez le reste.
 agents-setup-dropped = Écarté :
 agents-setup-suggest-dismiss = Écarter
+agents-setup-suggest-noted = Compris
 agents-error-network = Le serveur est injoignable. Vérifiez votre connexion et réessayez.
 agents-error-rate = Trop de requêtes pour le moment. Patientez un instant et réessayez.
 agents-error-rate-retry = Trop de requêtes pour le moment. Réessayez dans { $seconds } secondes.

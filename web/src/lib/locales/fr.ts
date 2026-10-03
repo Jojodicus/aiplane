@@ -769,6 +769,7 @@ export const fr: Catalog = {
  "agents-setup-strict-needs": "Une garde stricte des sujets nécessite au moins un sujet et une réponse pour les autres sujets.",
  "agents-setup-suggest-dismiss": "Écarter",
  "agents-setup-suggest-knowledge-missing": "Aucune base de connaissances sur « {topic} » n’est encore connectée — demandez à un admin d’en ajouter une.",
+ "agents-setup-suggest-noted": "Compris",
  "agents-setup-suggest-task": "Mission proposée",
  "agents-setup-suggest-tests": "Conversations de test proposées",
  "agents-setup-suggest-tone": "Ton proposé",

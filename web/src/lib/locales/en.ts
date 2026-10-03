@@ -769,6 +769,7 @@ export const en: Catalog = {
  "agents-setup-strict-needs": "A strict topic guard needs at least one topic and an answer for other topics.",
  "agents-setup-suggest-dismiss": "Dismiss",
  "agents-setup-suggest-knowledge-missing": "No knowledge base about “{topic}” is connected yet — ask an admin to add one.",
+ "agents-setup-suggest-noted": "Got it",
  "agents-setup-suggest-task": "Proposed task",
  "agents-setup-suggest-tests": "Proposed test conversations",
  "agents-setup-suggest-tone": "Proposed tone",

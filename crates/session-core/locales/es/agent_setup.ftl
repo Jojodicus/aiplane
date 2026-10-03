@@ -256,6 +256,7 @@ agents-setup-todo-site = Indique el sitio web en el que aparece el agente, para 
 agents-setup-proposal-ready = Hay una propuesta lista. Cada paso muestra ahora su parte: aplique lo que encaje y descarte el resto.
 agents-setup-dropped = Descartado:
 agents-setup-suggest-dismiss = Descartar
+agents-setup-suggest-noted = Entendido
 agents-error-network = No se pudo contactar con el servidor. Comprueba tu conexión e inténtalo de nuevo.
 agents-error-rate = Demasiadas solicitudes en este momento. Espera un momento e inténtalo de nuevo.
 agents-error-rate-retry = Demasiadas solicitudes en este momento. Inténtalo de nuevo en { $seconds } segundos.

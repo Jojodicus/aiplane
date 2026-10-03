@@ -783,6 +783,7 @@ export const ru: Catalog = {
  "agents-setup-strict-needs": "Строгому стражу тем нужны хотя бы одна тема и ответ на другие темы.",
  "agents-setup-suggest-dismiss": "Отклонить",
  "agents-setup-suggest-knowledge-missing": "База знаний по теме «{topic}» ещё не подключена — попросите администратора добавить её.",
+ "agents-setup-suggest-noted": "Понятно",
  "agents-setup-suggest-task": "Предложенная задача",
  "agents-setup-suggest-tests": "Предложенные тестовые разговоры",
  "agents-setup-suggest-tone": "Предложенный тон",

@@ -12,14 +12,16 @@
 	 * through the step's own model, so the spec is written like any other
 	 * edit (and saved on Next / Apply). A box can stand for several parts
 	 * (the abilities box: tools, knowledge bases and missing knowledge). An
-	 * `onapply` that throws keeps the box, with the reason in it.
+	 * `onapply` that throws keeps the box, with the reason in it. Without an
+	 * `onapply` the box only informs (knowledge that is missing), so it offers
+	 * an acknowledgement instead of Apply.
 	 */
 	type Part = keyof AssistSuggestion['steps'];
-	let { part, label = null, children, onapply }: {
+	let { part, label = null, children, onapply = null }: {
 		part: Part | Part[];
 		label?: string | null;
 		children: Snippet;
-		onapply: () => void | Promise<void>;
+		onapply?: (() => void | Promise<void>) | null;
 	} = $props();
 	const ws = useWorkspace();
 
@@ -33,7 +35,7 @@
 		busy = true;
 		error = null;
 		try {
-			await onapply();
+			await onapply?.();
 			settle();
 		} catch (err) {
 			error = t('agents-setup-grant-failed', { reason: setupErrorMessage(err as AgentError, t) });
@@ -48,8 +50,12 @@
 		{@render children()}
 		{#if error}<p class="m-0 mt-2 text-error">{error}</p>{/if}
 		{#snippet actions()}
-			<button class="btn btn-primary btn-sm" type="button" disabled={busy} onclick={() => void apply()}>{t('agents-setup-apply')}</button>
-			<button class="btn btn-ghost btn-sm" type="button" disabled={busy} onclick={settle}>{t('agents-setup-suggest-dismiss')}</button>
+			{#if onapply}
+				<button class="btn btn-primary btn-sm" type="button" disabled={busy} onclick={() => void apply()}>{t('agents-setup-apply')}</button>
+				<button class="btn btn-ghost btn-sm" type="button" disabled={busy} onclick={settle}>{t('agents-setup-suggest-dismiss')}</button>
+			{:else}
+				<button class="btn btn-sm" type="button" onclick={settle}>{t('agents-setup-suggest-noted')}</button>
+			{/if}
 		{/snippet}
 	</AiSuggestion>
 {/if}

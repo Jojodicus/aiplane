@@ -762,6 +762,7 @@ export const zh: Catalog = {
  "agents-setup-strict-needs": "严格的主题守卫至少需要一个主题和一条针对其他主题的回复。",
  "agents-setup-suggest-dismiss": "忽略",
  "agents-setup-suggest-knowledge-missing": "尚未连接关于“{topic}”的知识库——请联系管理员添加。",
+ "agents-setup-suggest-noted": "知道了",
  "agents-setup-suggest-task": "建议的任务",
  "agents-setup-suggest-tests": "建议的测试对话",
  "agents-setup-suggest-tone": "建议的语气",

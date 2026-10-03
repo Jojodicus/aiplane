@@ -132,7 +132,7 @@
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-abilities-lead')}</p>
 	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
-	<SuggestionBox part={['abilities', 'knowledge', 'missing_knowledge']} onapply={applySuggested}>
+	<SuggestionBox part={['abilities', 'knowledge', 'missing_knowledge']} onapply={suggested.length || suggestedKnowledge.length ? applySuggested : null}>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0">
 			{#each suggestedKnowledge as k (k.id)}
 				<li><span class="font-semibold">{t('agents-setup-knowledge-desc', { name: k.name })}</span>{#if k.why} — {k.why}{/if}</li>

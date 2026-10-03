@@ -769,6 +769,7 @@ export const de: Catalog = {
  "agents-setup-strict-needs": "Ein strenger Themen-Wächter braucht mindestens ein Thema und eine Antwort für andere Themen.",
  "agents-setup-suggest-dismiss": "Verwerfen",
  "agents-setup-suggest-knowledge-missing": "Zu „{topic}“ ist noch keine Wissensbasis angebunden — bitten Sie einen Admin, eine hinzuzufügen.",
+ "agents-setup-suggest-noted": "Verstanden",
  "agents-setup-suggest-task": "Vorgeschlagene Aufgabe",
  "agents-setup-suggest-tests": "Vorgeschlagene Testgespräche",
  "agents-setup-suggest-tone": "Vorgeschlagener Ton",

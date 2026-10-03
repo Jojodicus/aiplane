@@ -769,6 +769,7 @@ export const es: Catalog = {
  "agents-setup-strict-needs": "Un guardián estricto necesita al menos un tema y una respuesta para otros temas.",
  "agents-setup-suggest-dismiss": "Descartar",
  "agents-setup-suggest-knowledge-missing": "Todavía no hay ninguna base de conocimiento sobre «{topic}» — pida a un admin que añada una.",
+ "agents-setup-suggest-noted": "Entendido",
  "agents-setup-suggest-task": "Tarea propuesta",
  "agents-setup-suggest-tests": "Conversaciones de prueba propuestas",
  "agents-setup-suggest-tone": "Tono propuesto",

@@ -256,6 +256,7 @@ agents-setup-todo-site = Geben Sie die Website an, auf der der Agent erscheint, 
 agents-setup-proposal-ready = Ein Vorschlag liegt vor. Jeder Schritt zeigt jetzt seinen Teil – übernehmen Sie, was passt, und verwerfen Sie den Rest.
 agents-setup-dropped = Weggelassen:
 agents-setup-suggest-dismiss = Verwerfen
+agents-setup-suggest-noted = Verstanden
 agents-error-network = Der Server ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.
 agents-error-rate = Gerade zu viele Anfragen. Warten Sie einen Moment und versuchen Sie es erneut.
 agents-error-rate-retry = Gerade zu viele Anfragen. Versuchen Sie es in { $seconds } Sekunden erneut.
