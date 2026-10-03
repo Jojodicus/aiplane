@@ -556,6 +556,7 @@ async fn support_example_scripted(
             session_id: None,
             message: "Hi, I am Alice Example and my March invoice is wrong.",
             visitor_id: Some("v-1"),
+            lang: None,
         },
     )
     .await
@@ -587,6 +588,7 @@ async fn support_example_scripted(
             session_id: Some(&first.session_id),
             message: "Done, I entered the code.",
             visitor_id: Some("v-1"),
+            lang: None,
         },
     )
     .await
@@ -858,6 +860,7 @@ async fn the_model_can_never_select_a_closed_route() {
             session_id: None,
             message: "My invoice is wrong.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -933,6 +936,7 @@ async fn a_rules_router_dispatches_the_first_open_route_in_its_order() {
             session_id: None,
             message: "My printer is on fire.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -990,6 +994,7 @@ async fn a_forward_in_the_round_that_sets_its_slot_sees_the_slot() {
                 session_id: None,
                 message: "My printer is on fire.",
                 visitor_id: None,
+                lang: None,
             },
         )
         .await
@@ -1057,6 +1062,7 @@ async fn each_sub_agent_spends_its_own_budget() {
             session_id: None,
             message: "Help.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -1119,6 +1125,7 @@ async fn a_sub_agents_result_reaches_the_main_agent_screened_as_data() {
             session_id: None,
             message: "Help.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -1188,6 +1195,7 @@ async fn a_sub_agent_that_routes_back_to_its_caller_is_refused() {
             session_id: None,
             message: "Help.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -1224,6 +1232,7 @@ async fn a_closed_gate_lists_what_each_route_is_missing() {
             session_id: None,
             message: "Hello",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -1254,6 +1263,7 @@ async fn a_run_on_an_unpublished_or_unknown_agent_is_refused_with_the_reason() {
         session_id: None,
         message: "hi",
         visitor_id: None,
+        lang: None,
     };
     let err = run_turn(
         &world.state,
@@ -1396,6 +1406,7 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
             session_id: None,
             message: "My printer is broken.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -1489,6 +1500,7 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
             session_id: None,
             message: "Go.",
             visitor_id: None,
+            lang: None,
         },
     )
     .await

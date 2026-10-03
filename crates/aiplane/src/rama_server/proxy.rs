@@ -361,6 +361,7 @@ fn proxy_tool_ctx(
         // A `/v1` request is never an agent run, even on a `gws_` token: the
         // caller drives the loop, so there is no chain to carry.
         run: None,
+        call_id: None,
         token_id: Some(token_id),
         pool_access,
         db: state.db.clone(),

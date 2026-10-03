@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::{DbError, a2a_contexts, agents as agents_db};
 use aiplane_core::server::run_chain::{CallSite, Frame, MAX_DEPTH, RunChain};
 use serde_json::{Value, json};
@@ -272,7 +272,6 @@ async fn rebuild(
     state: &Arc<RamaState>,
     levels: &[Level],
     options: &RunOptions,
-    lang: Lang,
 ) -> Result<(Vec<RunProfile>, Vec<Arc<RunChain>>, OpenedTurn), AgentRunError> {
     let mut profiles: Vec<RunProfile> = Vec::with_capacity(levels.len());
     let mut chains: Vec<Arc<RunChain>> = Vec::with_capacity(levels.len());
@@ -286,12 +285,8 @@ async fn rebuild(
             Role::SubAgent { route_binds: binds }
         };
         let source = source_of(state, &level.session).await?;
-        let options = RunOptions {
-            lang,
-            ..options.clone()
-        };
         let profile =
-            RunProfile::load_from(state, &level.session.principal_id, source, role, &options)
+            RunProfile::load_from(state, &level.session.principal_id, source, role, options)
                 .await?;
         let chain = match i {
             0 => {
@@ -304,7 +299,7 @@ async fn rebuild(
                     caller: a2a_contexts::get(&state.db, &root.session.id)
                         .await?
                         .map(|c| c.caller()),
-                    lang,
+                    lang: None,
                 };
                 let chain = root_chain(&profile, &turn);
                 opened = Some(turn);
@@ -342,22 +337,19 @@ async fn rebuild(
 ///
 /// The run speaks the language the conversation's turn was asked in, not
 /// the one of whoever decided: staff answer from the inbox in theirs, and a
-/// timeout has none. `fallback_lang` is only for a conversation that
-/// recorded no language.
+/// timeout has none.
 pub async fn run_claimed(
     state: &Arc<RamaState>,
     claimed: ClaimedResume,
     options: RunOptions,
-    fallback_lang: Lang,
 ) -> Result<AgentReply, AgentRunError> {
     let ClaimedResume {
         levels,
         decision,
         by,
     } = claimed;
-    let lang = levels[0].session.lang.unwrap_or(fallback_lang);
-    let options = RunOptions { lang, ..options };
-    let (profiles, chains, opened) = match rebuild(state, &levels, &options, lang).await {
+    let lang = levels[0].session.lang.unwrap_or(Lang::En);
+    let (profiles, chains, opened) = match rebuild(state, &levels, &options).await {
         Ok(rebuilt) => rebuilt,
         Err(err) => {
             fail(state, &levels, &err.to_string()).await;
@@ -369,7 +361,7 @@ pub async fn run_claimed(
         ResumedBy::Staff { user_id } => Some(user_id.as_str()),
         _ => None,
     };
-    if let Err(err) = agent_audit::record_run_event_by(
+    super::audit::record(
         &state.db,
         AuditKind::RunResumed,
         &profiles[0].principal.id,
@@ -385,10 +377,7 @@ pub async fn run_claimed(
             "waiting_turn": innermost.turn_id,
         }),
     )
-    .await
-    {
-        tracing::warn!(error = %err, "recording an agent resume");
-    }
+    .await;
     tracing::info!(
         turn = %opened.turn_id,
         depth = levels.len(),
@@ -541,9 +530,7 @@ pub async fn resume_expired(state: &Arc<RamaState>) {
                 tokio::spawn(async move {
                     let _hold = hold;
                     let turn = claimed.turn_id().to_string();
-                    if let Err(err) =
-                        run_claimed(&state, claimed, RunOptions::default(), Lang::En).await
-                    {
+                    if let Err(err) = run_claimed(&state, claimed, RunOptions::default()).await {
                         tracing::warn!(error = %err, %turn, "an expired agent request could not resume");
                     }
                 });

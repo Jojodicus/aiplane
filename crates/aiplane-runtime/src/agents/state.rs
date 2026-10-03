@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use aiplane_core::server::db::agent_state::{self, StoredSlot};
 use aiplane_core::server::db::{DbError, Pool};
@@ -32,7 +33,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::slot_tools::set_tool_name;
-use super::spec::SpecIssue;
+use super::spec::{SpecIssue, type_name};
 
 /// Who wrote a slot's current value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -177,13 +178,13 @@ impl SlotDef {
             }
             SlotType::Integer => {
                 if value.as_i64().is_none() && value.as_u64().is_none() {
-                    return Err(format!("must be a whole number, not {}", kind(value)));
+                    return Err(format!("must be a whole number, not {}", type_name(value)));
                 }
                 self.range(value)
             }
             SlotType::Number => {
                 if !value.is_number() {
-                    return Err(format!("must be a number, not {}", kind(value)));
+                    return Err(format!("must be a number, not {}", type_name(value)));
                 }
                 self.range(value)
             }
@@ -191,12 +192,12 @@ impl SlotDef {
                 if value.is_boolean() {
                     Ok(())
                 } else {
-                    Err(format!("must be true or false, not {}", kind(value)))
+                    Err(format!("must be true or false, not {}", type_name(value)))
                 }
             }
             SlotType::Subject(schema) => {
                 if !value.is_object() {
-                    return Err(format!("must be an object, not {}", kind(value)));
+                    return Err(format!("must be an object, not {}", type_name(value)));
                 }
                 let errors = schema
                     .as_ref()
@@ -214,7 +215,7 @@ impl SlotDef {
     /// A string slot's text, within its length bounds.
     fn text<'v>(&self, value: &'v Value) -> Result<&'v str, String> {
         let Some(text) = value.as_str() else {
-            return Err(format!("must be text, not {}", kind(value)));
+            return Err(format!("must be text, not {}", type_name(value)));
         };
         let len = text.chars().count() as u64;
         if let Some(min) = self.min_length
@@ -405,6 +406,57 @@ pub struct AgentState {
 
 const MISSING: SlotState = SlotState::Missing;
 
+/// One run's read of its conversation's state, shared by everything that
+/// consults it during a turn — the system message, the gates, bound
+/// arguments, the router and the handoff — and read again only after a tool
+/// of [`crate::server::tools::ToolPhase::WritesState`] ran ([`Self::written`]).
+/// The writers themselves read the database: a verifier must see what a
+/// `set_<slot>` before it in the same round wrote.
+#[derive(Debug, Default)]
+pub struct StateSnapshot {
+    writes: AtomicU64,
+    held: tokio::sync::Mutex<Option<HeldState>>,
+}
+
+#[derive(Debug)]
+struct HeldState {
+    writes: u64,
+    session_id: String,
+    state: Arc<AgentState>,
+}
+
+impl StateSnapshot {
+    /// The state of `session_id`, read once per write. Holding the lock over
+    /// the read makes a round's concurrent readers share one.
+    pub async fn get(
+        &self,
+        pool: &Pool,
+        schema: &StateSchema,
+        session_id: &str,
+    ) -> Result<Arc<AgentState>, DbError> {
+        let mut held = self.held.lock().await;
+        let writes = self.writes.load(Ordering::SeqCst);
+        if let Some(h) = held
+            .as_ref()
+            .filter(|h| h.writes == writes && h.session_id == session_id)
+        {
+            return Ok(h.state.clone());
+        }
+        let state = Arc::new(AgentState::load(pool, schema, session_id).await?);
+        *held = Some(HeldState {
+            writes,
+            session_id: session_id.to_string(),
+            state: state.clone(),
+        });
+        Ok(state)
+    }
+
+    /// A tool wrote the state: the next [`Self::get`] reads it again.
+    pub fn written(&self) {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 impl AgentState {
     pub async fn load(
         pool: &Pool,
@@ -546,12 +598,16 @@ pub fn render_view(views: &[SlotView]) -> String {
                 v.slot,
                 by.as_ref().map(ToString::to_string).unwrap_or_default()
             ),
-            (SlotStatus::Missing, ..) => format!("{}: missing{}", v.slot, how_to_set(v)),
+            (SlotStatus::Missing, ..) => format!(
+                "{}: missing{}",
+                v.slot,
+                how_to_set(v.tool.as_deref(), &v.set_by)
+            ),
             (SlotStatus::Invalid, ..) => format!(
                 "{}: invalid: {}{}",
                 v.slot,
                 v.reason.as_deref().unwrap_or_default(),
-                how_to_set(v)
+                how_to_set(v.tool.as_deref(), &v.set_by)
             ),
         };
         out.push_str("\n- ");
@@ -560,14 +616,17 @@ pub fn render_view(views: &[SlotView]) -> String {
     out
 }
 
-fn how_to_set(v: &SlotView) -> String {
-    match &v.tool {
+/// The tail of a message about a slot: who can set it. `tool` is its
+/// `set_<slot>` when the model may.
+pub(crate) fn how_to_set(tool: Option<&str>, set_by: &[Provenance]) -> String {
+    match tool {
         Some(tool) => format!(" — call {tool}"),
-        None => format!(" — set by {}, not by you", writers(&v.set_by)),
+        None => format!(" — set by {}, not by you", writers(set_by)),
     }
 }
 
-fn writers(set_by: &[Provenance]) -> String {
+/// `verifier:otp or host`.
+pub(crate) fn writers(set_by: &[Provenance]) -> String {
     let names: Vec<String> = set_by.iter().map(ToString::to_string).collect();
     names.join(" or ")
 }
@@ -591,17 +650,6 @@ fn is_email(s: &str) -> bool {
                 && !l.ends_with('-')
                 && l.chars().all(|c| c.is_alphanumeric() || c == '-')
         })
-}
-
-fn kind(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "a boolean",
-        Value::Number(_) => "a number",
-        Value::String(_) => "text",
-        Value::Array(_) => "an array",
-        Value::Object(_) => "an object",
-    }
 }
 
 /// `1`, not `1.0`, for a bound written as a whole number.
@@ -1046,6 +1094,36 @@ pub(crate) mod tests {
         assert!(
             rendered.contains("verified: missing — set by verifier:otp or host, not by you"),
             "{rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_reads_the_state_again_only_after_a_write() {
+        let pool = pool_with_session("s1").await;
+        let s = schema();
+        let snapshot = StateSnapshot::default();
+        let plan = |state: &AgentState| state.valid("plan").map(|e| e.value.clone());
+        assert_eq!(plan(&snapshot.get(&pool, &s, "s1").await.unwrap()), None);
+        write_trusted(
+            &pool,
+            &s,
+            "s1",
+            "plan",
+            json!("pro"),
+            TrustedWriter::Host,
+            at("2026-10-02T12:00:00Z"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            plan(&snapshot.get(&pool, &s, "s1").await.unwrap()),
+            None,
+            "no tool reported a write, so the turn keeps its read"
+        );
+        snapshot.written();
+        assert_eq!(
+            plan(&snapshot.get(&pool, &s, "s1").await.unwrap()),
+            Some(json!("pro"))
         );
     }
 

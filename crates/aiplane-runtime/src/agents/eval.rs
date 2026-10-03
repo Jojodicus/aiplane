@@ -727,6 +727,7 @@ pub async fn run_case(
                         session_id: session.as_deref(),
                         message,
                         visitor_id: None,
+                        lang: None,
                     },
                     spec,
                     options.clone(),

@@ -8,7 +8,7 @@
 //! the run's call chain, so "which agent called what, through whom, for which
 //! visitor, and what let it" is answerable afterwards.
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::Principal;
 
 use crate::server::tools::ToolContext;
@@ -89,28 +89,16 @@ pub(super) fn not_granted_message(tool: &str, principal: &Principal) -> String {
 /// Record one decision when the call is part of an agent run. Best-effort: the
 /// decision stands whether or not the row lands.
 pub(super) async fn audit(ctx: &ToolContext, call_id: &str, tool: &str, policy: CallPolicy) {
-    let Some(chain) = ctx.run.as_deref() else {
+    if !ctx.agent_active() {
         return;
-    };
+    }
     let detail = serde_json::json!({
         "tool": tool,
         "call_id": call_id,
-        "turn_id": ctx.assistant_turn_id,
-        "session_id": ctx.session_id,
         "decision": if policy.allows() { "allowed" } else { "denied" },
         "policy": policy.as_str(),
     });
-    if let Err(err) = agent_audit::record_run_event(
-        &ctx.db,
-        AuditKind::ToolCall,
-        &chain.current().principal_id,
-        Some(chain),
-        detail,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, tool, "recording an agent run's tool decision");
-    }
+    ctx.audit(AuditKind::ToolCall, detail).await;
 }
 
 #[cfg(test)]

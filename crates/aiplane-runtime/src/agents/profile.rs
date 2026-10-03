@@ -27,7 +27,6 @@ use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use serde_json::{Value, json};
-use session_core::i18n::Lang;
 use shared::api::ToolDef;
 
 use super::approval::Permissions;
@@ -37,7 +36,8 @@ use super::human::{RequestHuman, human_routes};
 use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
-use super::state::{self, AgentState, StateSchema, render_view};
+use super::spec_cache::CompiledSpec;
+use super::state::{self, StateSchema, StateSnapshot, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
 use crate::budget::{Budget, SpendMeter};
 use crate::finish::FinishContract;
@@ -97,10 +97,6 @@ pub struct RunOptions {
     /// router makes on its own: a caller can swap it for a test double, or a
     /// deterministic stand-in, without faking an upstream.
     pub classifier: Option<Arc<dyn RouteClassifier>>,
-    /// The language of text the gateway itself puts in an answer (the
-    /// output filter's fallback). English until the caller knows the
-    /// visitor's.
-    pub lang: Lang,
     /// Where every run started with these options adds the tokens it spends:
     /// set by a `loop` route, whose budget covers all of its child runs (and
     /// anything they dispatch). `None` counts nowhere.
@@ -112,7 +108,6 @@ impl Default for RunOptions {
         Self {
             now: state::system_clock(),
             classifier: None,
-            lang: Lang::En,
             spend: None,
         }
     }
@@ -192,34 +187,33 @@ impl RunProfile {
         let principal = sp::load_active(&state.db, agent_id)
             .await?
             .ok_or_else(|| AgentRunError::Unavailable(agent_id.to_string()))?;
-        let (version, text) = match source {
-            SpecSource::Live => agents_db::live(&state.db, agent_id)
+        let compiled = match source {
+            SpecSource::Live => state
+                .agent_specs
+                .live(&state.db, agent_id)
                 .await?
                 .ok_or_else(|| AgentRunError::NotLive(principal.name.clone()))?,
-            SpecSource::Pinned(v) => agents_db::version(&state.db, agent_id, v)
+            SpecSource::Pinned(v) => state
+                .agent_specs
+                .version(&state.db, agent_id, v)
                 .await?
-                .map(|row| (row.version, row.spec))
                 .ok_or_else(|| AgentRunError::MissingVersion {
                     agent: principal.name.clone(),
                     version: v,
                 })?,
-            SpecSource::Draft(spec) => (agents_db::DRAFT_VERSION, spec.to_string()),
+            SpecSource::Draft(spec) => {
+                Arc::new(CompiledSpec::compile(agents_db::DRAFT_VERSION, spec))
+            }
         };
+        let version = compiled.version;
         let bad = |message: String| AgentRunError::BadSpec {
             agent: principal.name.clone(),
             version,
             message,
         };
-        let spec: Value =
-            serde_json::from_str(&text).map_err(|e| bad(format!("it is not JSON ({e})")))?;
-        let schema = Arc::new(
-            StateSchema::from_spec(&spec)
-                .map_err(|i| bad(format!("at `{}`, {}", i.path, i.message)))?,
-        );
-        let gates = Arc::new(
-            RouteGates::from_spec(&spec)
-                .map_err(|i| bad(format!("at `{}`, {}", i.path, i.message)))?,
-        );
+        let spec = &compiled.spec;
+        let parts = compiled.parts().map_err(|m| bad(m.to_string()))?;
+        let (schema, gates) = (parts.schema.clone(), parts.gates.clone());
         let pool = spec
             .pointer("/main/pool")
             .and_then(Value::as_str)
@@ -240,8 +234,7 @@ impl RunProfile {
             }
         };
 
-        let output_filter = OutputFilter::from_spec(&spec)
-            .map_err(|e| bad(format!("`publish.output_filter`: {e}")))?;
+        let output_filter = parts.output_filter.clone().map_err(bad)?;
         let mut synthetic: BTreeMap<String, Synthetic> = BTreeMap::new();
         let mut add = |tool: Arc<dyn Tool>, phase: ToolPhase| {
             synthetic.insert(tool.id().to_string(), Synthetic { tool, phase });
@@ -259,10 +252,11 @@ impl RunProfile {
                 schema: schema.clone(),
                 options: options.clone(),
             };
-            for tool in verifier::tools(&Verifiers::from_spec(&spec), &run) {
+            for tool in verifier::tools(&Verifiers::from_spec(spec), &run) {
                 add(tool, ToolPhase::WritesState);
             }
         }
+        let snapshot = Arc::new(StateSnapshot::default());
         let routes = spec.get("routes").cloned().unwrap_or_else(|| json!({}));
         let conversation = (!schema.is_empty() || !gates.is_empty()).then(|| Conversation {
             schema: schema.clone(),
@@ -278,6 +272,7 @@ impl RunProfile {
                 routes,
                 router: spec.get("router").cloned(),
                 main_pool: pool,
+                snapshot: snapshot.clone(),
             });
             if matches!(role, Role::Main)
                 && let Some(human) = RequestHuman::new(router.clone(), options.clone())
@@ -288,12 +283,12 @@ impl RunProfile {
             add(Arc::new(forward), ToolPhase::ActsOnState);
         }
         let binds = match role {
-            Role::Main => ToolBinds::from_spec(&spec),
-            Role::SubAgent { route_binds } => ToolBinds::from_spec(&spec).with_route(route_binds),
+            Role::Main => ToolBinds::from_spec(spec),
+            Role::SubAgent { route_binds } => ToolBinds::from_spec(spec).with_route(route_binds),
         };
         let run = AgentRun {
             name: principal.name.clone(),
-            instructions: instructions(&spec),
+            instructions: instructions(spec),
             conversation,
             tools: spec
                 .pointer("/main/tools")
@@ -305,13 +300,14 @@ impl RunProfile {
                 .collect(),
             synthetic,
             binds,
-            permissions: Permissions::from_spec(&spec),
+            permissions: Permissions::from_spec(spec),
             schema: (!schema.is_empty()).then_some(schema),
+            snapshot,
             pools,
             spend: options.spend.clone(),
         };
         Ok(Self {
-            budget: budget(&spec),
+            budget: budget(spec),
             principal,
             version,
             model,
@@ -411,6 +407,8 @@ pub struct AgentRun {
     binds: ToolBinds,
     permissions: Permissions,
     schema: Option<Arc<StateSchema>>,
+    /// This turn's read of the conversation state; see [`StateSnapshot`].
+    snapshot: Arc<StateSnapshot>,
     pools: PoolAccess,
     spend: Option<Arc<SpendMeter>>,
 }
@@ -435,6 +433,10 @@ impl AgentRun {
     /// granted (`granted`), then the synthetic ones.
     pub fn state_schema(&self) -> Option<&Arc<StateSchema>> {
         self.schema.as_ref()
+    }
+
+    pub fn state_snapshot(&self) -> &StateSnapshot {
+        &self.snapshot
     }
 
     pub fn offered(&self, granted: &[String]) -> Vec<String> {
@@ -466,11 +468,13 @@ impl AgentRun {
             parts.push(self.instructions.clone());
         }
         if let Some(c) = &self.conversation {
-            let state = AgentState::load(db, &c.schema, session_id)
+            let state = self
+                .snapshot
+                .get(db, &c.schema, session_id)
                 .await
                 .unwrap_or_else(|err| {
                     tracing::warn!(error = %err, session_id, "agent state unreadable; shown as empty");
-                    AgentState::default()
+                    Arc::default()
                 });
             let view = render_view(&state.view(&c.schema));
             if !view.is_empty() {
@@ -557,7 +561,12 @@ impl<'a> RunToolSource<'a> {
     fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
         let bound: Arc<dyn Tool> = match run.binds.for_tool(tool.id(), &tool.schema()) {
             Ok(binds) if binds.is_empty() => tool,
-            Ok(binds) => Arc::new(BoundTool::new(tool, binds, run.schema.clone())),
+            Ok(binds) => Arc::new(BoundTool::new(
+                tool,
+                binds,
+                run.schema.clone(),
+                run.snapshot.clone(),
+            )),
             Err(unbound) => return Arc::new(WithheldTool::new(tool, unbound)),
         };
         run.permissions.gate(bound)
@@ -613,6 +622,12 @@ impl ToolSource for RunToolSource<'_> {
             .and_then(|r| r.synthetic.get(id))
             .map_or(ToolPhase::Concurrent, |s| s.phase)
     }
+
+    fn state_written(&self) {
+        if let Some(run) = self.run {
+            run.snapshot.written();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -637,6 +652,7 @@ mod tests {
                 .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
             permissions: Permissions::default(),
             schema: None,
+            snapshot: Arc::default(),
             pools: PoolAccess::all(),
             spend: None,
         }

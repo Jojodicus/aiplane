@@ -20,7 +20,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use shared::api::ToolDef;
 
-use super::state::{AgentState, StateSchema};
+use super::state::{AgentState, StateSchema, StateSnapshot};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
 /// Where one bound argument's value comes from.
@@ -249,8 +249,9 @@ impl Tool for WithheldTool {
 pub struct BoundTool {
     inner: Arc<dyn Tool>,
     binds: BTreeMap<String, BindSource>,
-    /// For slot sources, read from the conversation at call time.
+    /// For slot sources, read from the run's state at call time.
     schema: Option<Arc<StateSchema>>,
+    snapshot: Arc<StateSnapshot>,
 }
 
 impl BoundTool {
@@ -258,11 +259,13 @@ impl BoundTool {
         inner: Arc<dyn Tool>,
         binds: BTreeMap<String, BindSource>,
         schema: Option<Arc<StateSchema>>,
+        snapshot: Arc<StateSnapshot>,
     ) -> Self {
         Self {
             inner,
             binds,
             schema,
+            snapshot,
         }
     }
 
@@ -272,17 +275,17 @@ impl BoundTool {
             .values()
             .any(|s| matches!(s, BindSource::State(_)));
         let state = match (&self.schema, ctx.session_id.as_deref()) {
-            (Some(schema), Some(session)) if needs_state => {
-                AgentState::load(&ctx.db, schema, session)
-                    .await
-                    .map_err(|e| {
-                        ToolError::Failed(format!(
-                            "reading the conversation state to fill `{}`'s bound arguments: {e}",
-                            self.inner.id()
-                        ))
-                    })?
-            }
-            _ => AgentState::default(),
+            (Some(schema), Some(session)) if needs_state => self
+                .snapshot
+                .get(&ctx.db, schema, session)
+                .await
+                .map_err(|e| {
+                    ToolError::Failed(format!(
+                        "reading the conversation state to fill `{}`'s bound arguments: {e}",
+                        self.inner.id()
+                    ))
+                })?,
+            _ => Arc::default(),
         };
         let mut values = Map::new();
         for (arg, source) in &self.binds {
@@ -490,6 +493,7 @@ mod tests {
             inner.clone(),
             BTreeMap::from([("customer_id".into(), BindSource::Const(json!("K-12345")))]),
             None,
+            Arc::default(),
         );
         let params = bound.schema().function.parameters;
         assert_eq!(params["properties"], json!({"year": {"type": "integer"}}));
@@ -514,6 +518,7 @@ mod tests {
         let db = crate::agents::state::tests::pool_with_session(&session).await;
         let schema = Arc::new(schema());
         let inner = Arc::new(Lookup(Mutex::default()));
+        let snapshot = Arc::new(StateSnapshot::default());
         let bound = BoundTool::new(
             inner.clone(),
             BTreeMap::from([(
@@ -521,6 +526,7 @@ mod tests {
                 BindSource::State("verified.customer_id".into()),
             )]),
             Some(schema.clone()),
+            snapshot.clone(),
         );
         let ctx = ToolContext {
             session_id: Some(session.clone()),
@@ -545,6 +551,7 @@ mod tests {
         )
         .await
         .unwrap();
+        snapshot.written();
         bound.run(ctx, json!({"year": 2026})).await.unwrap();
         assert_eq!(
             inner.0.lock().unwrap().as_slice(),

@@ -433,6 +433,20 @@ pub async fn live(pool: &Pool, id: &str) -> Result<Option<(i64, String)>, DbErro
         .transpose()
 }
 
+/// The number of agent `id`'s live version, without its spec: what a caller
+/// holding compiled versions reads to know which one is live. `None` when it
+/// was never published or does not exist.
+pub async fn live_version(pool: &Pool, id: &str) -> Result<Option<i64>, DbError> {
+    let row = sqlx::query("SELECT live_version FROM agents WHERE principal_id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row
+        .map(|r| r.try_get::<Option<i64>, _>("live_version"))
+        .transpose()?
+        .flatten())
+}
+
 /// Every published agent's live spec, by agent id. What the spec validator
 /// walks the sub-agent graph over.
 pub async fn live_specs(pool: &Pool) -> Result<HashMap<String, String>, DbError> {
@@ -758,16 +772,20 @@ mod tests {
         let draft_only = agent(&pool, "billing", "alice").await;
         let id = &a.principal.id;
         assert_eq!(live(&pool, id).await.unwrap(), None);
+        assert_eq!(live_version(&pool, id).await.unwrap(), None);
         publish(&pool, id, "one", "alice").await.unwrap();
         publish(&pool, id, "two", "alice").await.unwrap();
         assert_eq!(live(&pool, id).await.unwrap(), Some((2, "two".to_string())));
+        assert_eq!(live_version(&pool, id).await.unwrap(), Some(2));
         set_live(&pool, id, 1, "alice").await.unwrap();
         assert_eq!(live(&pool, id).await.unwrap(), Some((1, "one".to_string())));
+        assert_eq!(live_version(&pool, id).await.unwrap(), Some(1));
 
         let specs = live_specs(&pool).await.unwrap();
         assert_eq!(specs.get(id.as_str()).map(String::as_str), Some("one"));
         assert!(!specs.contains_key(&draft_only.principal.id));
         assert_eq!(live(&pool, "nope").await.unwrap(), None);
+        assert_eq!(live_version(&pool, "nope").await.unwrap(), None);
     }
 
     #[tokio::test]

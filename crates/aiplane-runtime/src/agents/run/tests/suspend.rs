@@ -59,6 +59,7 @@ pub(super) async fn visitor_says(world: &World, agent: &str, message: &str) -> A
             session_id: None,
             message,
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -114,10 +115,7 @@ pub(super) async fn wait_settled(world: &World, session: &str, turn: &str) -> ch
             .await
             .unwrap()
             .unwrap();
-        if !matches!(
-            t.status,
-            chat::TurnStatus::InProgress | chat::TurnStatus::Suspended
-        ) {
+        if t.status.is_terminal() {
             return t;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -173,7 +171,7 @@ async fn a_secure_input_reaches_the_tool_and_nothing_else() {
     );
 
     let claimed = claim(&world.state, resume()).await.unwrap();
-    let done = run_claimed(&world.state, claimed, RunOptions::default(), Lang::En)
+    let done = run_claimed(&world.state, claimed, RunOptions::default())
         .await
         .unwrap();
     assert_eq!(done.status, chat::TurnStatus::Completed);
@@ -335,7 +333,7 @@ async fn a_paused_sub_agent_pauses_its_caller_and_one_staff_decision_resumes_bot
     );
 
     let claimed = claim(&world.state, resume(staff())).await.unwrap();
-    let done = run_claimed(&world.state, claimed, RunOptions::default(), Lang::En)
+    let done = run_claimed(&world.state, claimed, RunOptions::default())
         .await
         .unwrap();
     assert_eq!(done.status, chat::TurnStatus::Completed);
@@ -444,7 +442,7 @@ async fn a_paused_agent_run_survives_a_restart() {
     )
     .await
     .unwrap();
-    let done = run_claimed(&after.state, claimed, RunOptions::default(), Lang::En)
+    let done = run_claimed(&after.state, claimed, RunOptions::default())
         .await
         .unwrap();
     assert_eq!(done.status, chat::TurnStatus::Completed);
@@ -470,6 +468,7 @@ async fn a_new_message_waits_while_the_conversation_waits_for_a_decision() {
             session_id: Some(&paused.session_id),
             message: "and then?",
             visitor_id: None,
+            lang: None,
         },
     )
     .await;

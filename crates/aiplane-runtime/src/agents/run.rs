@@ -27,6 +27,8 @@ pub struct AgentTurn<'a> {
     pub message: &'a str,
     /// The visitor session behind the conversation, for the call chain.
     pub visitor_id: Option<&'a str>,
+    /// The language the message was written in; see [`OpenedTurn::lang`].
+    pub lang: Option<Lang>,
 }
 
 /// How the turn ended.
@@ -123,7 +125,7 @@ pub async fn run_turn_with(
         turn_id,
         visitor_id: turn.visitor_id.map(str::to_string),
         caller: None,
-        lang: options.lang,
+        lang: turn.lang,
     };
     drive_opened(state, &profile, &opened).await
 }
@@ -142,10 +144,44 @@ pub struct OpenedTurn {
     pub visitor_id: Option<String>,
     /// The remote caller behind the conversation, on an A2A task.
     pub caller: Option<RemoteCaller>,
-    /// The language of text the gateway itself puts in the answer. A new
-    /// turn records it on the conversation; a resume reads it back from
-    /// there, whoever gives the decision.
-    pub lang: Lang,
+    /// The language this turn was asked in, when the caller knows it: the
+    /// public endpoint and the A2A task take it from the request, `run_turn`
+    /// from [`AgentTurn::lang`]. Driving the turn
+    /// records it on the conversation (`chat_sessions.lang`), the one place
+    /// a run reads its language from ([`conversation_lang`]); `None` keeps
+    /// the recorded one, as a resume does, whoever gives the decision.
+    pub lang: Option<Lang>,
+}
+
+/// The language principal `principal_id`'s conversation `session_id` was
+/// last asked in: what the gateway's own text in it is written in. English
+/// when it recorded none or cannot be read.
+pub(crate) async fn conversation_lang(
+    db: &aiplane_core::server::db::Pool,
+    principal_id: &str,
+    session_id: &str,
+) -> Lang {
+    match chat::get_principal_session(db, principal_id, session_id).await {
+        Ok(session) => session.and_then(|s| s.lang).unwrap_or(Lang::En),
+        Err(err) => {
+            tracing::warn!(error = %err, session_id, "reading the conversation's language; using English");
+            Lang::En
+        }
+    }
+}
+
+impl crate::server::tools::ToolContext {
+    /// [`conversation_lang`] of the visitor's conversation this call's run
+    /// tree started in: a routed sub-agent speaks the language of the
+    /// conversation that dispatched it.
+    pub(crate) async fn conversation_lang(&self) -> Lang {
+        match self.run.as_deref() {
+            Some(chain) => {
+                conversation_lang(&self.db, &chain.agent().principal_id, &chain.root_session).await
+            }
+            None => Lang::En,
+        }
+    }
 }
 
 /// The call chain of a main agent's turn: the conversation is its root.
@@ -184,9 +220,11 @@ pub async fn drive_opened_from(
     match resume {
         Some(resume) => drive_resumed(state, params, resume).await,
         None => {
-            chat::set_run_lang(&state.db, &turn.session_id, turn.lang)
-                .await
-                .map_err(DbError::from)?;
+            if let Some(lang) = turn.lang {
+                chat::set_run_lang(&state.db, &turn.session_id, lang)
+                    .await
+                    .map_err(DbError::from)?;
+            }
             drive(state, params).await
         }
     };
@@ -222,18 +260,9 @@ pub async fn drive_opened_from(
             session_id: &turn.session_id,
             turn_id: &turn.turn_id,
             chain: &chain,
-            lang: turn.lang,
+            lang: conversation_lang(&state.db, &profile.principal.id, &turn.session_id).await,
         };
-        answer = Some(
-            guard_answer(
-                state,
-                filter,
-                profile.run.state_schema().map(|s| &**s),
-                at,
-                text,
-            )
-            .await,
-        );
+        answer = Some(guard_answer(state, filter, &profile.run, at, text).await);
     }
     Ok(AgentReply {
         status: done

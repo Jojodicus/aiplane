@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 use session_core::db::{self as chat, Decision, ToolCallStatus, TurnRole, TurnStatus};
 use session_core::i18n::{Lang, t};
@@ -36,7 +36,7 @@ use super::gate::{GateInput, GateStatus};
 use super::profile::RunOptions;
 use super::router::RouterSpec;
 use super::spec::parse_duration;
-use super::state::{AgentState, SlotStatus, StateSchema};
+use super::state::SlotStatus;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
@@ -127,11 +127,13 @@ async fn context(
     ctx: &ToolContext,
     route: &HumanRoute,
     question: &str,
-    schema: &StateSchema,
-    lang: Lang,
+    spec: &RouterSpec,
 ) -> Result<Value, ToolError> {
+    let schema = &*spec.schema;
     let session = ctx.session_id.as_deref().unwrap_or_default();
-    let state = AgentState::load(&ctx.db, schema, session)
+    let state = spec
+        .snapshot
+        .get(&ctx.db, schema, session)
         .await
         .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
     let slots: Vec<Value> = state
@@ -157,7 +159,7 @@ async fn context(
         "question": question,
         "visitor_message": visitor_message,
         "slots": slots,
-        "lang": lang.code(),
+        "lang": ctx.conversation_lang().await.code(),
         "inbox": route.inbox,
         "notify": route.notify,
     });
@@ -190,8 +192,7 @@ pub async fn hand_off(
     ctx: &ToolContext,
     route: &HumanRoute,
     question: &str,
-    schema: &StateSchema,
-    lang: Lang,
+    spec: &RouterSpec,
     via: &str,
 ) -> Result<Value, ToolError> {
     match &ctx.suspend {
@@ -207,25 +208,17 @@ pub async fn hand_off(
         )),
         Suspend::Available => {
             let question = session_core::text::truncate_chars(question.trim(), MAX_QUESTION_CHARS);
-            let handoff = context(ctx, route, &question, schema, lang).await?;
-            if let Err(err) = agent_audit::record_run_event(
-                &ctx.db,
+            let handoff = context(ctx, route, &question, spec).await?;
+            ctx.audit(
                 AuditKind::HumanHandoff,
-                ctx.principal.subject_id(),
-                ctx.run.as_deref(),
                 json!({
-                    "session_id": ctx.session_id,
-                    "turn_id": ctx.assistant_turn_id,
                     "route": route.name,
                     "via": via,
                     "timeout_secs": route.timeout.as_secs(),
                     "transcript": route.transcript,
                 }),
             )
-            .await
-            {
-                tracing::warn!(error = %err, "recording a human handoff");
-            }
+            .await;
             Ok(tool_suspend(SuspendRequest::human_answer(
                 question,
                 route.timeout,
@@ -259,7 +252,10 @@ impl RequestHuman {
                 "request_human only works inside an agent conversation. Do not retry.".into(),
             )
         })?;
-        let state = AgentState::load(&ctx.db, &self.spec.schema, session)
+        let state = self
+            .spec
+            .snapshot
+            .get(&ctx.db, &self.spec.schema, session)
             .await
             .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
         let input = GateInput {
@@ -305,15 +301,7 @@ impl RequestHuman {
                     .collect::<Vec<_>>(),
             }));
         };
-        hand_off(
-            ctx,
-            route,
-            question,
-            &self.spec.schema,
-            self.options.lang,
-            REQUEST_HUMAN,
-        )
-        .await
+        hand_off(ctx, route, question, &self.spec, REQUEST_HUMAN).await
     }
 }
 
@@ -376,19 +364,14 @@ impl Tool for RequestHuman {
 }
 
 /// A handoff nobody answered in time: the waiting call is settled as
-/// unanswered and the turn ends with the catalog's message in the visitor's
-/// language — no model call, so the visitor reads exactly what the owner's
-/// deployment ships, not a guess.
+/// unanswered and the turn ends with the catalog's message in `lang`, the
+/// conversation's — no model call, so the visitor reads exactly what the
+/// owner's deployment ships, not a guess.
 pub(crate) async fn end_unanswered(
     db: &aiplane_core::server::db::Pool,
     suspension: &chat::TurnSuspension,
-    fallback_lang: Lang,
+    lang: Lang,
 ) -> Result<String, chat::DbError> {
-    let lang = handoff_of(suspension.run_context.as_ref())
-        .and_then(|h| h.get("lang"))
-        .and_then(Value::as_str)
-        .and_then(Lang::from_code)
-        .unwrap_or(fallback_lang);
     let message = t(lang, "agent-human-no-answer");
     chat::complete_tool_call(
         db,

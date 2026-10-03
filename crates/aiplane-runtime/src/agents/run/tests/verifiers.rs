@@ -210,6 +210,7 @@ async fn says(world: &World, agent: &str, options: &RunOptions, message: &str) -
             session_id: None,
             message,
             visitor_id: None,
+            lang: None,
         },
         options.clone(),
     )
@@ -243,7 +244,7 @@ async fn types(
     )
     .await
     .unwrap();
-    run_claimed(&world.state, claimed, options.clone(), Lang::En)
+    run_claimed(&world.state, claimed, options.clone())
         .await
         .unwrap()
 }
@@ -527,7 +528,7 @@ async fn a_conversation_cannot_send_more_codes_than_its_limit() {
     )
     .await
     .unwrap();
-    let done = run_claimed(&world.state, claimed, options.clone(), Lang::En)
+    let done = run_claimed(&world.state, claimed, options.clone())
         .await
         .unwrap();
     assert_eq!(done.status, chat::TurnStatus::Completed, "{done:?}");

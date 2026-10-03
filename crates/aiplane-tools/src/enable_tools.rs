@@ -515,6 +515,7 @@ mod tests {
                 granted.iter().map(|id| id.to_string()).collect(),
             )),
             run: None,
+            call_id: None,
         }
     }
 

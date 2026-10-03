@@ -33,7 +33,7 @@ pub mod otp;
 use std::sync::Arc;
 
 use aiplane_core::server::crypto::sha256_hex;
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::limits::Rate;
 use aiplane_core::server::principal::SystemPrincipal;
 use jiff::SignedDuration;
@@ -450,17 +450,15 @@ pub(crate) async fn audit(run: &VerifierRun, ctx: &ToolContext, detail: Value) {
         map.insert("session_id".into(), json!(ctx.session_id));
         map.insert("turn_id".into(), json!(ctx.assistant_turn_id));
     }
-    if let Err(err) = agent_audit::record_run_event(
+    crate::agents::audit::record(
         &run.state.db,
         AuditKind::VerifierOutcome,
         &run.principal.id,
+        None,
         ctx.run.as_deref(),
         detail,
     )
-    .await
-    {
-        tracing::warn!(error = %err, agent = %run.principal.name, "verifier audit write failed");
-    }
+    .await;
 }
 
 /// The conversation of a call, or the refusal to give the model.

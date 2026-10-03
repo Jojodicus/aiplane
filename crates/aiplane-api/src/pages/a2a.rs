@@ -1006,7 +1006,7 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
         turn_id: task_id.clone(),
         visitor_id: None,
         caller: Some(context.caller()),
-        lang: call.lang,
+        lang: Some(call.lang),
     };
     let run = {
         let state = state.clone();
@@ -1084,7 +1084,6 @@ async fn continue_task(
     .await
     .map_err(|err| resume_refused(err, call.lang, task_id))?;
     audit(call, "input", &context, task_id).await;
-    let lang = call.lang;
     let run = {
         let state = state.clone();
         let task = task_id.to_string();
@@ -1093,7 +1092,7 @@ async fn continue_task(
             let _hold = hold;
             let inner = tokio::spawn({
                 let state = state.clone();
-                async move { runner.resume(state, claimed, lang).await }
+                async move { runner.resume(state, claimed).await }
             });
             if let Err(err) = inner.await {
                 tracing::error!(error = %err, task = %task, "A2A task resume panicked");

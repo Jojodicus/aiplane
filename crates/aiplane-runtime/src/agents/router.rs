@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource, usage_from_value};
 use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
 use aiplane_core::server::run_chain::{CallSite, Frame, RunChain};
@@ -42,11 +42,10 @@ use super::bind::{BindSource, render_task};
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
 use super::human::{answered, hand_off, human_routes};
 use super::profile::{Role, RunOptions, RunProfile, pool_model};
-use super::state::{AgentState, SlotView, StateSchema};
+use super::state::{AgentState, SlotView, StateSchema, StateSnapshot};
 use crate::finish::{IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, drive, open_session};
-use crate::server::tools::runner::current_call_id;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{ChildPause, Suspend, SuspendRequest, tool_suspend};
 use session_core::db::{Decision, TurnRole};
@@ -84,6 +83,17 @@ pub struct RouterSpec {
     pub routes: Value,
     pub router: Option<Value>,
     pub main_pool: String,
+    pub snapshot: Arc<StateSnapshot>,
+}
+
+/// What [`ForwardRequest::task_and_binds`] makes of an open route.
+enum TaskOutcome {
+    Ready {
+        task: String,
+        route_binds: BTreeMap<String, Value>,
+    },
+    /// The answer to the model that says the task cannot be written yet.
+    Unwritten(Value),
 }
 
 pub struct ForwardRequest {
@@ -182,20 +192,6 @@ impl ForwardRequest {
         }
     }
 
-    async fn audit(&self, ctx: &ToolContext, kind: AuditKind, detail: Value) {
-        if let Err(err) = agent_audit::record_run_event(
-            &ctx.db,
-            kind,
-            ctx.principal.subject_id(),
-            ctx.run.as_deref(),
-            detail,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, kind = kind.as_str(), "recording a routing event");
-        }
-    }
-
     async fn forward(&self, ctx: &ToolContext) -> Result<Value, ToolError> {
         let Some(session_id) = ctx.session_id.as_deref() else {
             return Err(ToolError::Failed(
@@ -204,7 +200,10 @@ impl ForwardRequest {
                     .into(),
             ));
         };
-        let state = AgentState::load(&ctx.db, &self.spec.schema, session_id)
+        let state = self
+            .spec
+            .snapshot
+            .get(&ctx.db, &self.spec.schema, session_id)
             .await
             .map_err(|e| ToolError::Failed(format!("reading the conversation state: {e}")))?;
         let input = GateInput {
@@ -223,8 +222,7 @@ impl ForwardRequest {
             .map(|(name, status)| json!({ "route": name, "gate": status }))
             .collect();
         if open.is_empty() {
-            self.audit(
-                ctx,
+            ctx.audit(
                 AuditKind::RouteDecision,
                 json!({ "routes": gate_json, "picked": null, "reason": "no_open_route" }),
             )
@@ -243,8 +241,7 @@ impl ForwardRequest {
         let picked = match self.choose(ctx, &open, &state).await {
             Ok(picked) => picked,
             Err(message) => {
-                self.audit(
-                    ctx,
+                ctx.audit(
                     AuditKind::RouteDecision,
                     json!({ "routes": gate_json, "picked": null, "reason": message }),
                 )
@@ -261,8 +258,7 @@ impl ForwardRequest {
                 "route `{picked}` closed while it was being picked: {missing:?}"
             ))
         })?;
-        self.audit(
-            ctx,
+        ctx.audit(
             AuditKind::RouteDecision,
             json!({ "routes": gate_json, "picked": picked }),
         )
@@ -270,22 +266,20 @@ impl ForwardRequest {
         self.dispatch(ctx, route, &state).await
     }
 
-    /// The route's task rendered from state and its `bind` values resolved,
-    /// or (inner `Err`) the answer that says the task cannot be written yet.
-    #[allow(clippy::type_complexity)]
+    /// The route's task rendered from state and its `bind` values resolved.
     fn task_and_binds(
         &self,
         name: &str,
         spec: &Value,
         state: &AgentState,
-    ) -> Result<Result<(String, BTreeMap<String, Value>), Value>, ToolError> {
+    ) -> Result<TaskOutcome, ToolError> {
         let task = match render_task(
             spec.get("task").and_then(Value::as_str).unwrap_or_default(),
             state,
         ) {
             Ok(task) => task,
             Err(missing) => {
-                return Ok(Err(json!({
+                return Ok(TaskOutcome::Unwritten(json!({
                     "forwarded": false,
                     "route": name,
                     "reason": "task_incomplete",
@@ -307,7 +301,7 @@ impl ForwardRequest {
             })?;
             route_binds.insert(arg, value);
         }
-        Ok(Ok((task, route_binds)))
+        Ok(TaskOutcome::Ready { task, route_binds })
     }
 
     fn a2a<'a>(
@@ -322,7 +316,6 @@ impl ForwardRequest {
             principal: &self.spec.principal,
             route,
             route_spec,
-            lang: self.options.lang,
         }
     }
 
@@ -336,15 +329,15 @@ impl ForwardRequest {
         let spec = self.spec.routes.get(name).cloned().unwrap_or_default();
         if spec.get("a2a").is_some() {
             let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                Ok(both) => both,
-                Err(unwritten) => return Ok(unwritten),
+                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                TaskOutcome::Unwritten(answer) => return Ok(answer),
             };
             return self.a2a(ctx, name, &spec).start(&task, &route_binds).await;
         }
         if let Some(looped) = spec.get("loop") {
             let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                Ok(both) => both,
-                Err(unwritten) => return Ok(unwritten),
+                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                TaskOutcome::Unwritten(answer) => return Ok(answer),
             };
             return self.run_loop(ctx, name, looped, &task, route_binds).await;
         }
@@ -358,19 +351,11 @@ impl ForwardRequest {
                 Some(description) => description,
                 None => last_visitor_message(ctx).await,
             };
-            return hand_off(
-                ctx,
-                &human,
-                &question,
-                &self.spec.schema,
-                self.options.lang,
-                FORWARD_TOOL_NAME,
-            )
-            .await;
+            return hand_off(ctx, &human, &question, &self.spec, FORWARD_TOOL_NAME).await;
         };
         let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-            Ok(both) => both,
-            Err(unwritten) => return Ok(unwritten),
+            TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+            TaskOutcome::Unwritten(answer) => return Ok(answer),
         };
         let bound = json!(route_binds);
         let child = ChildRun {
@@ -426,7 +411,7 @@ impl ForwardRequest {
         };
         let site = CallSite {
             turn_id: ctx.assistant_turn_id.clone().unwrap_or_default(),
-            tool_call_id: current_call_id().unwrap_or_default(),
+            tool_call_id: ctx.call_id.clone().unwrap_or_default(),
         };
         let chain = parent
             .enter(
@@ -460,7 +445,7 @@ impl ForwardRequest {
         if let (Some(Value::Object(extra)), Some(map)) = (child.detail, about.as_object_mut()) {
             map.extend(extra);
         }
-        self.audit(ctx, AuditKind::SubAgentDispatched, about.clone())
+        ctx.audit(AuditKind::SubAgentDispatched, about.clone())
             .await;
         let outcome = drive(
             &self.state,
@@ -572,17 +557,15 @@ pub(crate) async fn record_finished(
 ) {
     let mut finished = about.clone();
     finished["outcome"] = json!(outcome);
-    if let Err(err) = agent_audit::record_run_event(
+    super::audit::record(
         db,
         AuditKind::SubAgentFinished,
         caller.principal_id,
+        None,
         caller.chain,
         finished,
     )
-    .await
-    {
-        tracing::warn!(error = %err, "recording a sub-agent's outcome");
-    }
+    .await;
 }
 
 impl Tool for ForwardRequest {

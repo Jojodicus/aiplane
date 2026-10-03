@@ -16,6 +16,7 @@
 pub mod a2a;
 pub mod a2a_client;
 pub mod approval;
+pub(crate) mod audit;
 pub mod bind;
 pub mod embed;
 pub mod eval;
@@ -31,5 +32,6 @@ pub mod router;
 pub mod run;
 pub mod slot_tools;
 pub mod spec;
+pub mod spec_cache;
 pub mod state;
 pub mod verifier;

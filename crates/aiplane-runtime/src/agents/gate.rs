@@ -31,8 +31,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::slot_tools::set_tool_name;
-use super::spec::{LEAF_KEYS, SpecIssue, index, join, parse_duration};
-use super::state::{AgentState, Provenance, SlotState, SlotView, StateSchema};
+use super::spec::{LEAF_KEYS, SpecIssue, format_duration, index, join, parse_duration};
+use super::state::{self, AgentState, Provenance, SlotState, SlotView, StateSchema, writers};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cond {
@@ -246,22 +246,6 @@ impl Leaf {
     }
 }
 
-fn writers(set_by: &[Provenance]) -> String {
-    let names: Vec<String> = set_by.iter().map(ToString::to_string).collect();
-    names.join(" or ")
-}
-
-/// `15m`, `2h`, `1d` — the unit a spec author would have written.
-fn human_duration(d: SignedDuration) -> String {
-    let secs = d.as_secs();
-    match secs {
-        s if s != 0 && s % 86_400 == 0 => format!("{}d", s / 86_400),
-        s if s != 0 && s % 3_600 == 0 => format!("{}h", s / 3_600),
-        s if s != 0 && s % 60 == 0 => format!("{}m", s / 60),
-        s => format!("{s}s"),
-    }
-}
-
 /// Why a gate is closed, for one leaf.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -446,7 +430,7 @@ fn eval_leaf(leaf: &Leaf, input: GateInput<'_>, path: &str, out: &mut Vec<Unmet>
     if let Some(max_age) = leaf.max_age
         && input.now.duration_since(entry.set_at) > max_age
     {
-        let limit = human_duration(max_age);
+        let limit = format_duration(max_age);
         push(
             Problem::TooOld {
                 max_age: limit.clone(),
@@ -459,8 +443,10 @@ fn eval_leaf(leaf: &Leaf, input: GateInput<'_>, path: &str, out: &mut Vec<Unmet>
 /// The tail of a message about `slot`: who can fix it.
 fn how_to_set(schema: &StateSchema, slot: &str) -> String {
     match schema.slot(slot) {
-        Some(def) if def.model_writable() => format!(" — call {}", set_tool_name(slot)),
-        Some(def) => format!(" — it is set by {}, not by you", writers(&def.set_by)),
+        Some(def) => state::how_to_set(
+            def.model_writable().then(|| set_tool_name(slot)).as_deref(),
+            &def.set_by,
+        ),
         None => " — it is not declared in this agent's state".into(),
     }
 }

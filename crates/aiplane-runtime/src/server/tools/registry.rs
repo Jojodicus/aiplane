@@ -162,6 +162,10 @@ pub trait ToolSource: Send + Sync {
     fn phase(&self, _id: &str) -> ToolPhase {
         ToolPhase::Concurrent
     }
+
+    /// A call of [`ToolPhase::WritesState`] just ran, so whatever this source
+    /// holds of the run's state is stale.
+    fn state_written(&self) {}
 }
 
 /// The order a round's calls run in. Phases run one after the other, each

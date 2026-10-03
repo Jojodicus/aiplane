@@ -141,6 +141,7 @@ async fn run_loop(
             session_id: None,
             message: VISITOR,
             visitor_id: None,
+            lang: None,
         },
     )
     .await
@@ -361,6 +362,7 @@ async fn the_test_chat_debug_view_shows_every_iteration() {
             session_id: None,
             message: VISITOR,
             visitor_id: None,
+            lang: None,
         },
         &draft_spec,
         RunOptions::default(),

@@ -51,7 +51,7 @@ async fn decide(world: &World, agent: &str, paused: &AgentReply, decision: Decis
     )
     .await
     .unwrap();
-    run_claimed(&world.state, claimed, RunOptions::default(), Lang::En)
+    run_claimed(&world.state, claimed, RunOptions::default())
         .await
         .unwrap()
 }
@@ -292,11 +292,9 @@ async fn a_handoff_nobody_answers_tells_the_visitor_so_in_their_language() {
             session_id: None,
             message: "Ich wurde doppelt belastet.",
             visitor_id: None,
+            lang: Some(Lang::De),
         },
-        RunOptions {
-            lang: Lang::De,
-            ..RunOptions::default()
-        },
+        RunOptions::default(),
     )
     .await
     .unwrap();
@@ -566,11 +564,9 @@ async fn visitor_in(world: &World, agent: &str, lang: Lang, message: &str) -> Ag
             session_id: None,
             message,
             visitor_id: None,
+            lang: Some(lang),
         },
-        RunOptions {
-            lang,
-            ..RunOptions::default()
-        },
+        RunOptions::default(),
     )
     .await
     .unwrap();
@@ -578,7 +574,7 @@ async fn visitor_in(world: &World, agent: &str, lang: Lang, message: &str) -> Ag
     paused
 }
 
-async fn staff_in(world: &World, agent: &str, paused: &AgentReply, lang: Lang) -> AgentReply {
+async fn staff_in(world: &World, agent: &str, paused: &AgentReply) -> AgentReply {
     let claimed = claim(
         &world.state,
         AgentResume {
@@ -588,13 +584,13 @@ async fn staff_in(world: &World, agent: &str, paused: &AgentReply, lang: Lang) -
     )
     .await
     .unwrap();
-    run_claimed(&world.state, claimed, RunOptions::default(), lang)
+    run_claimed(&world.state, claimed, RunOptions::default())
         .await
         .unwrap()
 }
 
 #[tokio::test]
-async fn a_staff_member_resuming_in_german_leaves_an_english_visitor_in_english() {
+async fn a_resume_by_staff_leaves_an_english_visitor_in_english() {
     let main = llm(vec![
         call("e1", ECHO, json!({"message": "hello"})),
         text("RE-999 is refunded."),
@@ -604,7 +600,7 @@ async fn a_staff_member_resuming_in_german_leaves_an_english_visitor_in_english(
     let agent = resuming(&world).await;
     let paused = visitor_in(&world, &agent, Lang::En, "Refund me, please.").await;
 
-    let done = staff_in(&world, &agent, &paused, Lang::De).await;
+    let done = staff_in(&world, &agent, &paused).await;
     assert_eq!(
         done.answer.as_deref(),
         Some(session_core::i18n::t(Lang::En, "agent-output-withheld").as_str())
@@ -623,7 +619,7 @@ async fn a_handoff_after_a_resume_is_recorded_in_the_visitors_language() {
     let agent = resuming(&world).await;
     let paused = visitor_in(&world, &agent, Lang::De, "Bitte erstatten.").await;
 
-    let handed_off = staff_in(&world, &agent, &paused, Lang::En).await;
+    let handed_off = staff_in(&world, &agent, &paused).await;
     let waiting = handed_off.suspension.expect("handed off to a person");
     assert_eq!(waiting.kind, SuspensionKind::HumanAnswer);
     let pending = chat::pending_by_request(world.db(), &waiting.request_id)

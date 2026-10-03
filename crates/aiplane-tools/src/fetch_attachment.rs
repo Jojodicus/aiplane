@@ -1139,6 +1139,7 @@ mod tests {
             suspend: Default::default(),
             granted_tools: None,
             run: None,
+            call_id: None,
         }
     }
 
@@ -1204,6 +1205,7 @@ mod tests {
             suspend: Default::default(),
             granted_tools: None,
             run: None,
+            call_id: None,
         };
         let err = FetchAttachment::new(None)
             .run(ctx, json!({"id": "nope"}))

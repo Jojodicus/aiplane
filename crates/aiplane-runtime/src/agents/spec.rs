@@ -376,7 +376,8 @@ pub fn is_origin(s: &str) -> bool {
         && port.is_none_or(|p| p.parse::<u16>().is_ok_and(|n| n > 0))
 }
 
-fn type_name(v: &Value) -> &'static str {
+/// What kind of JSON value `v` is, as a message names it: `a string`.
+pub(crate) fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",

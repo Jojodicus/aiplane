@@ -728,6 +728,11 @@ grants.
   and `drive_params` turns that into `DriveParams`. `DriveParams.agent` and
   `OpenAiDriver.agent` carry the `AgentRun` into the ordinary headless loop.
   There is no second driver.
+  - *Compiled once*: a published version is immutable, so its parsed spec,
+    `StateSchema`, `RouteGates` and `OutputFilter` are built once per
+    `(agent, version)` and shared (`agents::spec_cache`, at most 256, least
+    recently used first). Which version is live is read fresh for a run and
+    held for 5 s on a visitor admission.
   - *Model*: `main.pool` names a pool and a request names a model, so the run
     uses the first model (by name) of a healthy backend of that pool that the
     principal's pool grant reaches.
@@ -745,6 +750,9 @@ grants.
   memory and no connector listing. When the agent has state or routes it is
   rebuilt before every round after the first, so a slot set in round *n* shows
   in round *n+1*.
+  Everything that reads the state during a turn (the system message, gates,
+  bound arguments, `forward_request`, `request_human`, the output filter)
+  shares one `StateSnapshot`, read again only after a `WritesState` call ran.
 - **Tools** (`RunToolSource`, the `AgentToolSource` of the sketch above;
   [`tools-rbac.md`](tools-rbac.md#tool-sources)).
   The run offers the spec's `main.tools` that are also in the principal's grant
@@ -778,8 +786,8 @@ grants.
      placeholder that cannot be filled answers `task_incomplete`.
   2. Resolve the route's `bind` against the state.
   3. Load the sub-agent's profile with those values and enter the chain
-     (`CallSite { turn_id, tool_call_id }`; the call id comes from
-     `runner::current_call_id`, a task-local set around every `Tool::run`).
+     (`CallSite { turn_id, tool_call_id }`; the call id is
+     `ToolContext::call_id`, which the runner sets on each call's context).
   4. Open a child session owned by the sub-agent's principal
      (`parent_turn_id` = the main turn) and `drive` it with its own budget,
      contract, grants and injection policy.
@@ -900,10 +908,10 @@ grants.
   row carries `error`.
 - **One call site, both entry points.** `drive_opened` runs the filter, so
   `run_turn` and the public endpoint's runner are both covered.
-- **Language.** `OpenedTurn.lang` picks the catalog language of the fallback
-  text: `RunOptions.lang` (default English) for `run_turn`, the request's
-  `Accept-Language` for a visitor message, and the conversation's recorded
-  language on a resume ([Suspend and resume](#suspend-and-resume-82)).
+- **Language.** The fallback text is in the conversation's recorded language
+  (`chat_sessions.lang`, [Suspend and resume](#suspend-and-resume-82)):
+  `AgentTurn.lang` for `run_turn` (English when unset), the request's
+  `Accept-Language` for a visitor message.
 - **No early peek.** The turn row is terminal before the filter has ruled, so
   the embed endpoint treats a session as unfinished while `AgentTurns` still
   holds its claim (`is_running`): the snapshot shows the turn in progress and
@@ -1037,13 +1045,15 @@ agent runs pause and resume durably, sub-agent runs included.
   from the inbox in their own, and the timeout sweeper has none. Every new
   turn (`drive_opened`, so `run_turn`, the embed and A2A runners and a
   queued message alike) records `OpenedTurn.lang` as `chat_sessions.lang`
-  (migration `0093`), and `run_claimed` reads it back for `RunOptions.lang`
-  and `OpenedTurn.lang`. That covers the output filter's fallback texts, a
-  timed-out handoff's `agent-human-no-answer`, and the `lang` of a handoff
-  the resumed run records. The language argument of `run_claimed` (and
-  `AgentTurnRunner::resume`) is only the fallback for a conversation that
-  recorded none (one whose last turn started before `0093`); the inbox and
-  the sweeper pass English.
+  (migration `0093`) when the caller sets one: the public endpoint and an A2A
+  task from the request, `run_turn` from `AgentTurn.lang`. That column is the
+  only source of the run's language: the output filter's fallback texts, a
+  timed-out handoff's `agent-human-no-answer`, the `lang` a handoff records,
+  a verifier's and the A2A client's prompts all read it
+  (`ToolContext::conversation_lang`, through the chain's root conversation, so
+  a routed sub-agent speaks its caller's). A resume passes none, and a
+  conversation that recorded none (one whose last turn started before `0093`)
+  is English.
 - **Secure values.** A `value` goes to the requesting tool through
   `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
   `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's
@@ -1160,9 +1170,8 @@ runs. Migration `0087_human_in_the_loop.sql`.
   `deny` is a tool error the model explains.
 - **Nobody answers.** When a handoff's deadline passes, `run_claimed` does not
   ask the model: the waiting call is settled as unanswered and the turn ends
-  with `agent-human-no-answer` in the language recorded at the handoff
-  (`RunOptions.lang`, which the public runner now sets from the visitor's
-  `Accept-Language`). A message queued behind it runs afterwards as usual.
+  with `agent-human-no-answer` in the conversation's recorded language (the
+  visitor's `Accept-Language` on the public endpoint). A message queued behind it runs afterwards as usual.
 - **Responders** (`agent_responders`, `db::agent_responders`). Users or
   groups who answer an agent's approvals and handoffs without a share — the
   support staff of §2. They need no `can_manage_agents`. Managed with a share

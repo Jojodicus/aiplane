@@ -387,7 +387,7 @@ fn visitor_turn(mut t: TurnWithTools, lang: Lang) -> TurnWithTools {
     turn.reasoning_elapsed_ms = None;
     turn.reasoning_started_at = None;
     if turn.role == TurnRole::Assistant {
-        if !is_terminal(turn.status) {
+        if !turn.status.is_terminal() {
             turn.content = None;
         }
         if turn.status == TurnStatus::Errored {
@@ -395,13 +395,6 @@ fn visitor_turn(mut t: TurnWithTools, lang: Lang) -> TurnWithTools {
         }
     }
     t
-}
-
-fn is_terminal(status: TurnStatus) -> bool {
-    matches!(
-        status,
-        TurnStatus::Completed | TurnStatus::Cancelled | TurnStatus::Errored
-    )
 }
 
 async fn visitor_turns(
@@ -534,7 +527,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         turn_id: assistant_turn_id.clone(),
         visitor_id: Some(v.session.id.clone()),
         caller: None,
-        lang,
+        lang: Some(lang),
     };
     let state_for_run = state.clone();
     let turn_id = assistant_turn_id.clone();
@@ -709,7 +702,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         let _hold = hold;
         let run = tokio::spawn({
             let state = state.clone();
-            async move { runner.resume(state, claimed, lang).await }
+            async move { runner.resume(state, claimed).await }
         });
         if let Err(err) = run.await {
             tracing::error!(error = %err, turn = %resumed, "agent resume panicked");
@@ -879,7 +872,7 @@ async fn tail_buffered(
             return;
         }
         match chat::get_turn(&state.db, &session_id, &turn_id).await {
-            Ok(Some(t)) if is_terminal(t.status) && !state.agent_turns.is_running(&session_id) => {
+            Ok(Some(t)) if t.status.is_terminal() && !state.agent_turns.is_running(&session_id) => {
                 for event in final_events(&t, lang) {
                     let _ = tx.unbounded_send(Ok(sse_json(&event)));
                 }
@@ -899,9 +892,7 @@ async fn tail_buffered(
                 let _ = tx.unbounded_send(Ok(sse_json(&frame)));
                 return;
             }
-            Ok(Some(t))
-                if matches!(t.status, TurnStatus::InProgress | TurnStatus::Suspended)
-                    || is_terminal(t.status) => {}
+            Ok(Some(_)) => {}
             Ok(_) => {
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;

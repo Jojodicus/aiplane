@@ -95,6 +95,7 @@ async fn lookup_agent_says(action: &str, rounds: Vec<Value>, message: &str) -> A
             session_id: None,
             message,
             visitor_id: None,
+            lang: None,
         },
     )
     .await

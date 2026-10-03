@@ -305,6 +305,7 @@ mod tests {
             suspend: Default::default(),
             granted_tools: None,
             run: None,
+            call_id: None,
         }
     }
 

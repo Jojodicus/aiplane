@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::agent_retention::{self, Swept};
 use aiplane_core::server::db::{DbError, Pool, agents as agents_db};
 use jiff::{SignedDuration, Timestamp};
@@ -52,10 +52,11 @@ pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>
         if gone.is_empty() {
             continue;
         }
-        if let Err(err) = agent_audit::record_run_event(
+        super::audit::record(
             pool,
             AuditKind::ConversationsSwept,
             &id,
+            None,
             None,
             json!({
                 "retention_days": days,
@@ -63,10 +64,7 @@ pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>
                 "sub_agent_runs": gone.sub_agent_runs,
             }),
         )
-        .await
-        {
-            tracing::warn!(error = %err, agent = %id, "recording a retention sweep");
-        }
+        .await;
         swept.insert(id, gone);
     }
     Ok(swept)

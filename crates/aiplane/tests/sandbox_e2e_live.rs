@@ -141,6 +141,7 @@ fn ctx(pool: db::Pool, asst_turn: &str) -> ToolContext {
         suspend: Default::default(),
         granted_tools: None,
         run: None,
+        call_id: None,
     }
 }
 

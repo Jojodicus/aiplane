@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_core::server::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 use session_core::db::{
     self as chat, BudgetUsed, Decision, DenyReason, PendingCall, SuspensionKind, ToolCallStatus,
@@ -135,20 +135,20 @@ pub(super) async fn pause(
             "turn suspended for a decision"
         );
         if d.tool_ctx.run.is_some() {
-            record_run_event(
-                d,
-                AuditKind::RunSuspended,
-                json!({
-                    "session_id": ctx.session_id,
-                    "turn_id": suspension.turn_id,
-                    "request_id": suspension.request_id,
-                    "kind": suspension.kind,
-                    "tool": suspension.tool_call.name,
-                    "child_turn": suspension.child_turn,
-                    "expires_at": suspension.expires_at,
-                }),
-            )
-            .await;
+            d.tool_ctx
+                .audit(
+                    AuditKind::RunSuspended,
+                    json!({
+                        "session_id": ctx.session_id,
+                        "turn_id": suspension.turn_id,
+                        "request_id": suspension.request_id,
+                        "kind": suspension.kind,
+                        "tool": suspension.tool_call.name,
+                        "child_turn": suspension.child_turn,
+                        "expires_at": suspension.expires_at,
+                    }),
+                )
+                .await;
         }
     }
     let _ = ctx.broadcast.send(TurnUpdate::Tick);
@@ -185,20 +185,6 @@ async fn check_child(
                   start or that is not waiting; the turn was stopped"
             .into(),
     })
-}
-
-async fn record_run_event(d: &OpenAiDriver, kind: AuditKind, detail: Value) {
-    if let Err(err) = agent_audit::record_run_event(
-        &d.state.db,
-        kind,
-        d.tool_ctx.principal.subject_id(),
-        d.tool_ctx.run.as_deref(),
-        detail,
-    )
-    .await
-    {
-        tracing::warn!(error = %err, kind = kind.as_str(), "recording a suspend event");
-    }
 }
 
 /// How a resume left the turn.
