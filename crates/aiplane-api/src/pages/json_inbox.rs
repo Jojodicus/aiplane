@@ -25,7 +25,7 @@ use session_core::chat_json::json_stream_response;
 use session_core::db as chat;
 use session_core::i18n::Lang;
 
-use super::json_agent_test::resume_error;
+use super::agent_errors::resume_error;
 use super::json_agents::agent_at;
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
@@ -33,6 +33,7 @@ use aiplane_core::server::db::agent_channels::{self, ChannelKind, NewChannel};
 use aiplane_core::server::db::agents::{Access, SubjectKind};
 use aiplane_core::server::db::{agent_responders, gateway_groups, users};
 use aiplane_features::server::notify_channels::validate_webhook_url;
+use aiplane_runtime::agents::embed::{self as embed_rt, TurnWork};
 use aiplane_runtime::agents::inbox::{self, Standing, Viewer};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim};
 use aiplane_runtime::rama_server::state::RamaState;
@@ -158,20 +159,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(claimed) => claimed,
         Err(err) => return resume_error(err),
     };
-    let session_id = item.session_id.clone();
-    let turn_id = item.turn_id.clone();
-    let state_for_run = state.clone();
-    tokio::spawn(async move {
-        let _hold = hold;
-        let run = tokio::spawn({
-            let state = state_for_run.clone();
-            async move { runner.resume(state, claimed).await }
-        });
-        if let Err(err) = run.await {
-            tracing::error!(error = %err, turn = %turn_id, "agent resume from the inbox panicked");
-        }
-        super::embed::settle_unfinished(&state_for_run, &session_id, &turn_id).await;
-    });
+    embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
     json_ok(StatusCode::ACCEPTED, json!({ "turn_id": item.turn_id }))
 }
 

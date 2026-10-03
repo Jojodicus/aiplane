@@ -22,7 +22,6 @@
 //! turn is terminal (`OutputPolicy::Buffered`).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use jiff::Timestamp;
 use rama::http::service::web::extract::State;
@@ -33,15 +32,19 @@ use session_core::chat_json::{ChatEvent, SseTx, json_stream_response, sse_json};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 use session_core::i18n::{self, Lang, t, t_args};
 
+use super::turn_wait::{TurnWait, Waited};
 use super::{bad_request, internal, json_error, json_ok};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal};
+use aiplane_runtime::agents::embed::{
+    self as embed_rt, Admission, OpenedTurn, Refusal, ReleaseWatch, TurnWork,
+};
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
 };
+use aiplane_runtime::agents::spec_cache::CompiledSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 
@@ -61,19 +64,6 @@ const MAX_MESSAGE_CHARS: usize = 8_000;
 /// token, and stops an anonymous client from making the gateway buffer more.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
-/// How often the event stream re-reads the running turn when no claim
-/// release woke it. A backstop only: the answer is delivered whole, and the
-/// release of the turn's claim is what ends the wait.
-const FALLBACK_POLL: Duration = Duration::from_secs(2);
-
-/// An SSE comment at this interval keeps proxies and the widget from
-/// treating a long-running turn as a dead connection.
-const KEEPALIVE: Duration = Duration::from_secs(15);
-
-/// A stream ends with `idle` after this long even if the turn is still
-/// running; the widget re-attaches and gets a fresh snapshot.
-const STREAM_LIMIT: Duration = Duration::from_secs(600);
-
 /// What a visitor reads when a turn errored, in their language — the same
 /// Fluent message an A2A caller gets for a failed task. The real message (an
 /// upstream status, a tool failure) is for the agent's owner, not an
@@ -82,12 +72,8 @@ fn visitor_error(lang: Lang) -> String {
     t(lang, "embed-error-generic")
 }
 
-fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
-    json_error(status, code, message)
-}
-
 fn embed_key_invalid() -> Response {
-    refuse(
+    json_error(
         StatusCode::UNAUTHORIZED,
         "embed_key_invalid",
         "this embed key is not known to the gateway — copy the key from the agent's embed \
@@ -96,7 +82,7 @@ fn embed_key_invalid() -> Response {
 }
 
 fn embed_key_revoked() -> Response {
-    refuse(
+    json_error(
         StatusCode::FORBIDDEN,
         "embed_key_revoked",
         "this website's embed key was revoked — the site owner needs to create a new key for \
@@ -105,7 +91,7 @@ fn embed_key_revoked() -> Response {
 }
 
 fn visitor_session_invalid() -> Response {
-    refuse(
+    json_error(
         StatusCode::UNAUTHORIZED,
         "visitor_session_invalid",
         "this request needs a visitor token in `Authorization: Bearer gwv_…` — start a \
@@ -114,7 +100,7 @@ fn visitor_session_invalid() -> Response {
 }
 
 fn visitor_session_expired() -> Response {
-    refuse(
+    json_error(
         StatusCode::UNAUTHORIZED,
         "visitor_session_expired",
         "this conversation ended after a period without activity — start a new one with POST \
@@ -131,7 +117,7 @@ fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(),
         .and_then(|v| v.to_str().ok())
         .filter(|o| !o.is_empty());
     let Some(origin) = origin else {
-        return Err(refuse(
+        return Err(json_error(
             StatusCode::FORBIDDEN,
             "origin_not_allowed",
             "the request carries no `Origin` header — the agent can only be used from a web page \
@@ -139,7 +125,7 @@ fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(),
         ));
     };
     if !key.allows(origin) {
-        return Err(refuse(
+        return Err(json_error(
             StatusCode::FORBIDDEN,
             "origin_not_allowed",
             &format!(
@@ -151,7 +137,7 @@ fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(),
     if embed_rt::spec_allows_origin(spec, origin) {
         return Ok(());
     }
-    Err(refuse(
+    Err(json_error(
         StatusCode::FORBIDDEN,
         "origin_not_allowed",
         &format!(
@@ -167,7 +153,7 @@ fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(),
 struct Live {
     agent: AgentRow,
     version: i64,
-    spec: Value,
+    spec: Arc<CompiledSpec>,
 }
 
 async fn live_agent(
@@ -182,7 +168,7 @@ async fn live_agent(
         return Err(embed_key_revoked());
     };
     if agent.principal.disabled_at.is_some() {
-        return Err(refuse(
+        return Err(json_error(
             StatusCode::FORBIDDEN,
             "agent_disabled",
             "this assistant has been switched off by its owner — try again later or use the \
@@ -190,7 +176,7 @@ async fn live_agent(
         ));
     }
     let not_published = || {
-        refuse(
+        json_error(
             StatusCode::CONFLICT,
             "agent_not_published",
             "this assistant has no published version yet — its owner needs to publish it before \
@@ -200,13 +186,14 @@ async fn live_agent(
     let Some(version) = pinned.or(agent.live_version) else {
         return Err(not_published());
     };
-    let Some(row) = agents_db::version(&state.db, principal_id, version)
+    let Some(spec) = state
+        .agent_specs
+        .version(&state.db, principal_id, version)
         .await
         .map_err(internal)?
     else {
         return Err(not_published());
     };
-    let spec = serde_json::from_str(&row.spec).unwrap_or(Value::Null);
     Ok(Live {
         agent,
         version,
@@ -243,7 +230,7 @@ async fn admit(
 fn refused(refusal: &Refusal, lang: Lang) -> Response {
     let retry = refusal.retry_after_secs();
     let mut resp = match refusal {
-        Refusal::Rate(_) => refuse(
+        Refusal::Rate(_) => json_error(
             StatusCode::TOO_MANY_REQUESTS,
             "visitor_rate_limited",
             &t_args(
@@ -252,7 +239,7 @@ fn refused(refusal: &Refusal, lang: Lang) -> Response {
                 &i18n::args([("seconds", retry.into())]),
             ),
         ),
-        Refusal::Budget(_) => refuse(
+        Refusal::Budget(_) => json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_unavailable",
             &t(lang, "agent-embed-unavailable"),
@@ -292,12 +279,12 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
         return embed_key_revoked();
     }
     let live = or_return!(live_agent(&state, &key.principal_id, None).await);
-    or_return!(check_origin(&key, &live.spec, &headers));
+    or_return!(check_origin(&key, &live.spec.spec, &headers));
     let lang = Lang::from_request(&headers);
     or_return!(admit(&state, &key.principal_id, None, ip.as_deref(), lang).await);
 
     let (visitor_token, token_hash) = token::mint_visitor();
-    let idle_ttl = embed_rt::idle_ttl(&live.spec);
+    let idle_ttl = embed_rt::idle_ttl(&live.spec.spec);
     let started = visitor_sessions::start(
         &state.db,
         &NewVisitorSession {
@@ -364,7 +351,7 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
         .map_err(internal)?
         .and_then(|run| run.agent_version);
     let live = live_agent(state, &session.principal_id, pinned).await?;
-    check_origin(&key, &live.spec, req.headers())?;
+    check_origin(&key, &live.spec.spec, req.headers())?;
     let session = visitor_sessions::slide(&state.db, &session, now)
         .await
         .map_err(internal)?;
@@ -471,7 +458,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         .await
     );
     let Some(runner) = state.agent_turns.runner() else {
-        return refuse(
+        return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_runtime_unavailable",
             "this gateway cannot run agent conversations yet — the message was not stored; try \
@@ -480,7 +467,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
     };
     let session_id = v.session.session_id.clone();
     let turn_in_progress = || {
-        refuse(
+        json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",
             "the assistant is still answering the previous message — wait for its answer on \
@@ -503,13 +490,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(err) => return internal(err),
     }
 
-    let model = v
-        .live
-        .spec
-        .pointer("/main/pool")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let model = v.live.spec.main_pool().unwrap_or_default().to_string();
     if let Err(err) = chat::create_user_turn(&state.db, &session_id, &user_turn_id, text).await {
         return internal(err);
     }
@@ -529,16 +510,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         caller: None,
         lang: Some(lang),
     };
-    let state_for_run = state.clone();
-    let turn_id = assistant_turn_id.clone();
-    tokio::spawn(async move {
-        let _claim = claim;
-        let run = tokio::spawn(async move { runner.run(state_for_run, turn).await });
-        if let Err(err) = run.await {
-            tracing::error!(error = %err, turn = %turn_id, "agent turn runner panicked");
-        }
-        settle_unfinished(&state, &session_id, &turn_id).await;
-    });
+    embed_rt::spawn_guarded(state, runner, claim, TurnWork::Run(turn));
 
     json_ok(
         StatusCode::ACCEPTED,
@@ -552,15 +524,12 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
 
 /// The user turn waiting behind the conversation's pending decision, if the
 /// visitor already sent one. It runs once the decision is settled.
-async fn queued_message(state: &RamaState, session_id: &str) -> Result<Option<String>, Response> {
-    let turns = chat::list_turns(&state.db, session_id)
-        .await
-        .map_err(internal)?;
-    Ok(turns
+fn queued_message(turns: &[TurnWithTools]) -> Option<String> {
+    turns
         .last()
         .filter(|t| t.turn.role == TurnRole::User)
         .filter(|_| turns.iter().any(|t| t.turn.status == TurnStatus::Suspended))
-        .map(|t| t.turn.id.clone()))
+        .map(|t| t.turn.id.clone())
 }
 
 /// A message sent while the conversation waits for a decision is stored and
@@ -573,16 +542,16 @@ async fn queue_behind_decision(
     text: &str,
     lang: Lang,
 ) -> Response {
-    match queued_message(state, session_id).await {
-        Ok(Some(_)) => {
-            return refuse(
+    match chat::turn_before(&state.db, session_id, i64::MAX).await {
+        Ok(Some(last)) if last.role == TurnRole::User => {
+            return json_error(
                 StatusCode::CONFLICT,
                 "turn_in_progress",
                 &t(lang, "agent-embed-message-waiting"),
             );
         }
-        Ok(None) => {}
-        Err(resp) => return resp,
+        Ok(_) => {}
+        Err(err) => return internal(err),
     }
     let user_turn_id = uuid::Uuid::new_v4().to_string();
     if let Err(err) = chat::create_user_turn(&state.db, session_id, &user_turn_id, text).await {
@@ -595,7 +564,7 @@ async fn queue_behind_decision(
 }
 
 fn not_waiting(lang: Lang) -> Response {
-    refuse(
+    json_error(
         StatusCode::CONFLICT,
         "not_suspended",
         &t(lang, "agent-embed-not-waiting"),
@@ -606,14 +575,14 @@ fn not_waiting(lang: Lang) -> Response {
 /// it; the rest names the same codes as the staff route.
 fn visitor_resume_refused(err: AgentResumeError, lang: Lang) -> Response {
     match err {
-        AgentResumeError::StaffOnly { .. } => refuse(
+        AgentResumeError::StaffOnly { .. } => json_error(
             StatusCode::FORBIDDEN,
             "decision_for_staff",
             &t(lang, "agent-embed-decision-for-staff"),
         ),
         AgentResumeError::Refused(ResumeRefused::NotSuspended)
         | AgentResumeError::Refused(ResumeRefused::StaleRequest { .. }) => not_waiting(lang),
-        other => super::json_agent_test::resume_error(other),
+        other => super::agent_errors::resume_error(other),
     }
 }
 
@@ -656,7 +625,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         .await
     );
     let Some(runner) = state.agent_turns.runner() else {
-        return refuse(
+        return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_runtime_unavailable",
             "this gateway cannot run agent conversations yet — try again after the gateway has \
@@ -665,7 +634,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     };
     let session_id = v.session.session_id.clone();
     let busy = || {
-        refuse(
+        json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",
             "the assistant is busy with this conversation right now — wait for it on \
@@ -697,18 +666,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(claimed) => claimed,
         Err(err) => return visitor_resume_refused(err, lang),
     };
-    let resumed = turn_id.clone();
-    tokio::spawn(async move {
-        let _hold = hold;
-        let run = tokio::spawn({
-            let state = state.clone();
-            async move { runner.resume(state, claimed).await }
-        });
-        if let Err(err) = run.await {
-            tracing::error!(error = %err, turn = %resumed, "agent resume panicked");
-        }
-        settle_unfinished(&state, &session_id, &resumed).await;
-    });
+    embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
     json_ok(StatusCode::ACCEPTED, json!({ "turn_id": turn_id }))
 }
 
@@ -742,7 +700,7 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         &state,
         &v.session.principal_id,
         &v.session.session_id,
-        &v.live.spec,
+        &v.live.spec.spec,
         &body.token,
         Timestamp::now(),
     )
@@ -757,31 +715,8 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
                 IdentityError::KeysUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
                 IdentityError::Storage(_) => return internal(err),
             };
-            refuse(status, err.code(), &err.to_string())
+            json_error(status, err.code(), &err.to_string())
         }
-    }
-}
-
-/// The runner contract says the turn is terminal when `run` returns; a
-/// runner that broke it (or panicked) must not leave the visitor waiting
-/// forever with every later message refused as `turn_in_progress`.
-pub(crate) async fn settle_unfinished(state: &RamaState, session_id: &str, turn_id: &str) {
-    match chat::get_turn(&state.db, session_id, turn_id).await {
-        Ok(Some(t)) if t.status == TurnStatus::InProgress => {
-            tracing::warn!(turn = %turn_id, "agent turn runner returned with the turn unfinished");
-            if let Err(err) = chat::finalize_turn(
-                &state.db,
-                turn_id,
-                TurnStatus::Errored,
-                Some("the agent run ended without finishing its turn"),
-            )
-            .await
-            {
-                tracing::warn!(error = %err, turn = %turn_id, "erroring an unfinished agent turn");
-            }
-        }
-        Ok(_) => {}
-        Err(err) => tracing::warn!(error = %err, turn = %turn_id, "reading an agent turn"),
     }
 }
 
@@ -802,7 +737,7 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let turns = or_return!(visitor_turns(&state, &session_id, lang).await);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
-    let queued = or_return!(queued_message(&state, &session_id).await);
+    let queued = queued_message(&turns);
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let snapshot = ChatEvent::Snapshot {
         live_turn_id: live.clone(),
@@ -846,30 +781,23 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
     })
 }
 
-/// Until a turn claim is released, or `fallback` has passed.
-pub(crate) async fn await_release(
-    releases: &mut aiplane_runtime::agents::embed::ReleaseWatch,
-    fallback: Duration,
-) {
-    if let Ok(Err(_)) = tokio::time::timeout(fallback, releases.changed()).await {
-        tokio::time::sleep(fallback).await;
-    }
-}
-
 async fn tail_buffered(
     state: Arc<RamaState>,
     session_id: String,
     turn_id: String,
     lang: Lang,
-    mut releases: aiplane_runtime::agents::embed::ReleaseWatch,
+    releases: ReleaseWatch,
     tx: SseTx,
 ) {
-    let started = tokio::time::Instant::now();
-    let mut last_sent = started;
+    let mut wait = TurnWait::new(releases);
     loop {
-        await_release(&mut releases, FALLBACK_POLL).await;
-        if tx.is_closed() {
-            return;
+        match wait.next(&tx).await {
+            Waited::Reread => {}
+            Waited::Expired => {
+                let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
+                return;
+            }
+            Waited::Gone => return,
         }
         match chat::get_turn(&state.db, &session_id, &turn_id).await {
             Ok(Some(t)) if t.status.is_terminal() && !state.agent_turns.is_running(&session_id) => {
@@ -902,14 +830,6 @@ async fn tail_buffered(
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;
             }
-        }
-        if started.elapsed() >= STREAM_LIMIT {
-            let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
-            return;
-        }
-        if last_sent.elapsed() >= KEEPALIVE {
-            let _ = tx.unbounded_send(Ok(rama::bytes::Bytes::from_static(b": working\n\n")));
-            last_sent = tokio::time::Instant::now();
         }
     }
 }

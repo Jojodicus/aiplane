@@ -1477,7 +1477,7 @@ untrusted audiences.
     /api/v0/embed/session` for the transcript, or `…/events`. After the TTL
     either answers `401 visitor_session_expired`, and the widget starts a new
     session.
-- **Routes** (`aiplane-api::pages::embed`, routed in `gateway`):
+- **Routes** (`aiplane-api::pages::embed`; the key routes in `pages::json_embed_keys`; routed in `gateway`):
 
   | Method | Path | Purpose |
   |---|---|---|
@@ -1503,7 +1503,7 @@ untrusted audiences.
 - **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
   turn runs. Without one, `idle` and the stream ends. With one, the stream
   re-reads that one turn (never the conversation) whenever a turn claim is
-  released (`AgentTurns::releases`), at the latest every 2 s, and — the A2A
+  released (`AgentTurns::releases`; a 30 s safety re-read covers a release that never comes; `pages::turn_wait`), and — the A2A
   task streams alike — once it is terminal, sends its whole
   answer as one `turn_delta` with `full: true` and then `turn_finalized`.
   *Deviation:* the "`status` events" above are SSE comment lines (`:
@@ -2142,7 +2142,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   the task or the model's input; the caller in `run_resumed`'s chain); an
   approval the caller cannot give; the streamed task, answer and status. Unit
   tests: `agents/a2a.rs` (opt-in, card, derived skills, state mapping),
-  `agents/spec/a2a.rs` (validation), `pages/a2a.rs` (parts, configuration,
+  `agents/spec/a2a.rs` (validation), `pages/a2a/` (parts, configuration,
   versions, error shape), `db/a2a_contexts.rs`, `run_chain.rs`,
   `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
   `principal_grants` rebuild keeps every grant).
