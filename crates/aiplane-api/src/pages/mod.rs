@@ -464,6 +464,7 @@ pub use tool_toggles::{
 // every signed-in user; the list is scoped to the tools their roles
 // grant. Re-export the two handler entry points for the router.
 pub mod a2a;
+pub mod architect;
 mod agent_errors;
 pub mod embed;
 pub mod json_admin;

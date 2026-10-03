@@ -86,7 +86,7 @@ pub async fn test_turn(State(state): State<Arc<RamaState>>, req: Request) -> Res
 
 /// One test-chat turn against `agent`'s draft, with its debug view.
 pub(super) async fn draft_test_turn(
-    state: &RamaState,
+    state: &Arc<RamaState>,
     agent: &AgentRow,
     message: &str,
     session_id: Option<&str>,

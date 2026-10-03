@@ -240,6 +240,46 @@ pub fn suggest_schema(candidates: &Candidates) -> Value {
     }))
 }
 
+/// The shape of an architect's `changes` ([`super::apply_changes`]): the
+/// proposal's draft steps, each optional, plus the agent's name and model.
+/// Not strict: what may be granted or targeted is checked when applied.
+pub fn changes_schema() -> Value {
+    let to_strings = |s: &[&str]| s.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "display": { "type": "string", "description": "the agent's name as visitors see it" },
+            "pool": { "type": "string", "description": "a chat pool from list_grantable `pools`" },
+            "task": { "type": "string" },
+            "tone": object(json!({ "response": { "type": "string" }, "chips": strings() })),
+            "scope": object(json!({
+                "topics": strings(),
+                "refusal": { "type": "string" },
+                "strict": { "type": "boolean" },
+            })),
+            "abilities": { "type": "array", "items": object(json!({
+                "id": { "type": "string" },
+                "why": { "type": "string" },
+            })) },
+            "slots": { "type": "array", "items": object(json!({
+                "name": { "type": "string" },
+                "label": { "type": "string" },
+                "type": one_of(to_strings(SLOT_TYPES)),
+                "choices": strings(),
+            })) },
+            "handoffs": { "type": "array", "items": object(json!({
+                "name": { "type": "string" },
+                "topic": { "type": "string" },
+                "slot": { "type": "string" },
+                "equals": { "type": ["string", "null"] },
+                "target": { "type": "string", "description": "an agent id, or \"human\"" },
+                "task": { "type": "string" },
+            })) },
+        },
+    })
+}
+
 pub fn improve_schema() -> Value {
     object(json!({ "suggestion": { "type": "string" }, "why": { "type": "string" } }))
 }
