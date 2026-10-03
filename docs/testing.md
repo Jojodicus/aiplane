@@ -73,6 +73,25 @@ The spec-key and dispatch rules have no clippy form — what they forbid is a
 `serde_json::Value` accessor or a `Tool::run` call that is fine elsewhere — so
 only the scan checks them.
 
+## Runaway tests
+
+`.config/nextest.toml` gives every test `slow-timeout = { period = "60s",
+terminate-after = 2 }`: nextest reports a test SLOW after 60 s and kills it at
+120 s. Measured on the full workspace (3205 tests, `NEXTEST_TEST_THREADS=4`),
+the slowest legitimate test takes ~5.3 s
+(`agents::run::tests::verifiers::a_forward_in_the_round_of_the_lookup_that_opens_its_route_is_dispatched`),
+so the limit only ever catches a runaway — a lost wake-up, a stream that never
+ends, a body read without a cap. The live binaries (`sandbox_e2e_live`,
+`nextcloud_e2e_live`) get ten periods instead, since they talk to real
+infrastructure. If a new test legitimately needs more than a minute, give it a
+per-test `[[profile.default.overrides]]` entry with the reason rather than
+raising the default.
+
+The timeout is a backstop, not the protection: a test that buffers without
+bound can allocate tens of GB long before 120 s are up. Size-probe tests use
+finite inputs (`docs/dev-workflow.md` → "Size-probe tests: finite inputs
+only").
+
 ## Style: test-first, Chicago / Classicist
 
 Write the test before the code — red, green, refactor (**TDD**). Tests are **state-based**: assert on observable results, exercising real collaborators (in-memory SQLite, `wiremock` upstreams, the actual `ToolRegistry` / `UpstreamRegistry`) rather than interaction mocks. Behaviour-verification (London-school) mocks are the exception, reserved for collaborators you genuinely can't stand up in-process — and the test says why in a comment. The mocking philosophy below is the practical edge of this: we fake only the things that reach outside the process.
