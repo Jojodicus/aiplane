@@ -16,6 +16,7 @@ mod admin_json_api;
 mod agent_activity;
 mod agent_analytics;
 mod agent_evaluation;
+mod agent_assist;
 mod agent_test_chat;
 mod agents;
 mod anthropic_messages;

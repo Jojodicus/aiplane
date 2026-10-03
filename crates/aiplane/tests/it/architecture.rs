@@ -728,6 +728,11 @@ const SPEC_JSON_READERS: &[Allowed] = &[
               saved; the A2A task answer also has a `state` of its own",
     },
     Allowed {
+        path: "aiplane-runtime/src/agents/assist/",
+        why: "the prompt assistant builds spec fragments onto a draft that need not be valid \
+              yet, and hands every result to the validator; it never runs a spec",
+    },
+    Allowed {
         path: "aiplane-agents/src/db/agent_analytics.rs",
         why: "an audit row's `routes` detail, not a spec",
     },
