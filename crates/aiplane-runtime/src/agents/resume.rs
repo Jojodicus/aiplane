@@ -487,9 +487,12 @@ async fn run_queued(
     )
     .await
     .map_err(DbError::from)?;
-    state
-        .agent_turns
-        .hand_over(&resumed.session_id, &resumed.turn_id, &turn_id);
+    state.chats.hand_over(
+        &profile.principal.id,
+        &resumed.session_id,
+        &resumed.turn_id,
+        &turn_id,
+    );
     let next = OpenedTurn {
         turn_id,
         ..resumed.clone()
@@ -509,7 +512,9 @@ pub async fn resume_expired(state: &Arc<RamaState>) {
         }
     };
     for e in expired {
-        let Some(hold) = state.agent_turns.claim(&e.session_id, &e.turn_id) else {
+        let Some(hold) =
+            super::embed::claim(&state.chats, &e.principal_id, &e.session_id, &e.turn_id)
+        else {
             continue;
         };
         let claimed = claim(

@@ -131,6 +131,7 @@ pub(super) struct TaskView {
 
 pub(super) async fn task_view(
     state: &RamaState,
+    principal_id: &str,
     lang: Lang,
     session_id: &str,
     task_id: &str,
@@ -154,7 +155,7 @@ pub(super) async fn task_view(
         .await
         .map_err(RpcError::internal)?
         .filter(|t| t.role == TurnRole::User);
-    let held = state.agent_turns.holds(session_id, task_id);
+    let held = state.chats.holds(principal_id, session_id, task_id);
     let state = TaskState::of(turn.status, held);
 
     let answer = (state == TaskState::Completed)
@@ -268,6 +269,7 @@ async fn respond(
     }
     let view = task_view(
         &call.state,
+        &call.served.agent.principal.id,
         call.lang,
         session_id,
         task_id,
@@ -380,7 +382,7 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
     let state = &call.state;
     let existing = resolve_context(call, p.context_id.as_deref()).await?;
     admit(call, existing.as_ref().map(|c| c.session_id.as_str())).await?;
-    let Some(runner) = state.agent_turns.runner() else {
+    let Some(runner) = state.agent_runner.clone() else {
         return Err(RpcError::runtime_unavailable());
     };
     let context = match existing {
@@ -390,7 +392,8 @@ async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Resp
     let session_id = context.session_id.clone();
     let user_turn = uuid::Uuid::new_v4().to_string();
     let task_id = uuid::Uuid::new_v4().to_string();
-    let Some(hold) = state.agent_turns.claim(&session_id, &task_id) else {
+    let agent = &call.served.agent.principal.id;
+    let Some(hold) = embed_rt::claim(&state.chats, agent, &session_id, &task_id) else {
         return Err(RpcError::task_in_progress(""));
     };
     ensure_idle(call, &session_id).await?;
@@ -437,7 +440,8 @@ async fn continue_task(
         )));
     }
     let session_id = context.session_id.clone();
-    match TaskState::of(turn.status, state.agent_turns.holds(&session_id, task_id)) {
+    let agent = &call.served.agent.principal.id;
+    match TaskState::of(turn.status, state.chats.holds(agent, &session_id, task_id)) {
         TaskState::Working => return Err(RpcError::task_in_progress(task_id)),
         s if s.is_terminal() => {
             return Err(RpcError::unsupported(format!(
@@ -449,10 +453,10 @@ async fn continue_task(
         _ => {}
     }
     admit(call, Some(&session_id)).await?;
-    let Some(runner) = state.agent_turns.runner() else {
+    let Some(runner) = state.agent_runner.clone() else {
         return Err(RpcError::runtime_unavailable());
     };
-    let Some(hold) = state.agent_turns.claim(&session_id, task_id) else {
+    let Some(hold) = embed_rt::claim(&state.chats, agent, &session_id, task_id) else {
         return Err(RpcError::task_in_progress(task_id));
     };
     let decision = crate::pages::chat::json_api::decision_from(
@@ -500,7 +504,15 @@ pub(super) async fn get_task(call: &Call, params: &Value) -> Result<Response, Rp
     let id = task_id_param(params)?;
     let history = history_length(params.get("historyLength"), "params.historyLength")?;
     let (context, _) = find_task(call, &id).await?;
-    let view = task_view(&call.state, call.lang, &context.session_id, &id, history).await?;
+    let view = task_view(
+        &call.state,
+        &call.served.agent.principal.id,
+        call.lang,
+        &context.session_id,
+        &id,
+        history,
+    )
+    .await?;
     Ok(result_response(&call.id, view.task))
 }
 
@@ -520,32 +532,37 @@ pub(super) async fn cancel_task(call: &Call, params: &Value) -> Result<Response,
     let id = task_id_param(params)?;
     let (context, turn) = find_task(call, &id).await?;
     let session_id = &context.session_id;
-    let turns = &call.state.agent_turns;
-    match TaskState::of(turn.status, turns.holds(session_id, &id)) {
+    let agent = &call.served.agent.principal.id;
+    let workers = &call.state.chats;
+    match TaskState::of(turn.status, workers.holds(agent, session_id, &id)) {
         s if s.is_terminal() => return Err(not_cancelable(&id, s)),
         TaskState::Working => {
-            let mut releases = turns.releases(session_id);
-            if !turns.cancel(session_id, &id) {
+            if !workers.cancel_turn(agent, session_id, &id) {
                 return Err(not_cancelable(&id, TaskState::Working));
             }
-            let _ = tokio::time::timeout(CANCEL_WAIT, async {
-                while turns.holds(session_id, &id) {
-                    if releases.changed().await.is_err() {
-                        std::future::pending::<()>().await;
-                    }
-                }
-            })
+            let _ = tokio::time::timeout(
+                CANCEL_WAIT,
+                embed_rt::released(workers, agent, session_id, &id),
+            )
             .await;
         }
         _ => {
-            let Some(_hold) = turns.claim(session_id, &id) else {
+            let Some(_hold) = embed_rt::claim(workers, agent, session_id, &id) else {
                 return Err(RpcError::task_in_progress(&id));
             };
             cancel_paused(call, &id).await?;
         }
     }
     audit(call, "cancel", &context, &id).await;
-    let view = task_view(&call.state, call.lang, session_id, &id, None).await?;
+    let view = task_view(
+        &call.state,
+        &call.served.agent.principal.id,
+        call.lang,
+        session_id,
+        &id,
+        None,
+    )
+    .await?;
     Ok(result_response(&call.id, view.task))
 }
 
@@ -576,7 +593,9 @@ pub(super) async fn subscribe(call: &Call, params: &Value) -> Result<Response, R
     let (context, turn) = find_task(call, &id).await?;
     let state = TaskState::of(
         turn.status,
-        call.state.agent_turns.holds(&context.session_id, &id),
+        call.state
+            .chats
+            .holds(&call.served.agent.principal.id, &context.session_id, &id),
     );
     if state.is_terminal() {
         return Err(RpcError::unsupported(format!(

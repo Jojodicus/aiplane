@@ -165,12 +165,9 @@ async fn drive_inner(
     resume: Option<ResumeFrom>,
 ) -> Option<RunOutcome> {
     let agent = p.actor.agent().cloned();
-    // An agent run stops when its conversation's turn is cancelled (A2A
-    // `CancelTask`); a sub-agent run shares its root conversation's flag.
-    let cancel = agent
+    let worker = agent
         .as_ref()
-        .and_then(|run| state.agent_turns.cancel_flag(&run.chain().root_session))
-        .unwrap_or_default();
+        .map(|run| AgentWorker::of(state, run.chain(), &p.session_id, &p.assistant_turn_id));
     let person = p.actor.person_id().map(str::to_string);
     let assistant_turn_id = p.assistant_turn_id.clone();
     let tool_ctx = crate::openai_driver::build_tool_context(
@@ -203,10 +200,13 @@ async fn drive_inner(
         resume,
     });
 
-    // No registry slot and a throwaway broadcast channel: a headless run has no
-    // live viewer to tail it. The DB is the source of truth, so dropping every
-    // frame is fine.
-    let (broadcast, _rx) = tokio::sync::broadcast::channel(16);
+    // A person's headless run takes no registry slot — it must not count
+    // against their chat's parallel limit — and has no live viewer, so its
+    // frames go to a throwaway channel; the DB is the source of truth.
+    let (cancel, broadcast) = match &worker {
+        Some(worker) => (worker.cancel.clone(), worker.broadcast.clone()),
+        None => (Default::default(), tokio::sync::broadcast::channel(16).0),
+    };
     let ctx = session_core::driver::SessionContext {
         user_id: person,
         session_id: p.session_id,
@@ -220,6 +220,7 @@ async fn drive_inner(
         steers: session_core::workers::SteerInbox::default(),
     };
     session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
+    drop(worker);
     let Some(agent) = agent else {
         announce_if_waiting(state, &assistant_turn_id).await;
         return None;
@@ -227,6 +228,68 @@ async fn drive_inner(
 
     agent.contract()?;
     Some(agent.take_outcome())
+}
+
+/// The worker an agent run reports on and stops by, in the session worker
+/// registry (`RamaState::chats`).
+///
+/// A turn of the conversation the run tree started in runs on the worker
+/// that claimed it (`agents::embed::claim`): that claim outlives the turn,
+/// until the output filter has ruled, and is what the conversation's streams
+/// wait on. Any other agent turn — a sub-agent's child run, or a root turn
+/// started without a claim (the test chat, an evaluation) — registers a
+/// worker of its own for as long as it runs. Every one of them stops when
+/// the root conversation's turn is cancelled (A2A `CancelTask`, shutdown).
+struct AgentWorker {
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    broadcast: tokio::sync::broadcast::Sender<session_core::workers::TurnUpdate>,
+    _own: Option<crate::agents::embed::TurnClaim>,
+}
+
+impl AgentWorker {
+    fn of(
+        state: &RamaState,
+        chain: &aiplane_core::server::run_chain::RunChain,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Self {
+        let principal = &chain.current().principal_id;
+        let root = state
+            .chats
+            .get(&chain.agent().principal_id, &chain.root_session);
+        if let Some(root) = &root
+            && root.session_id == session_id
+            && root.turn_id == turn_id
+        {
+            return Self {
+                cancel: root.cancel.clone(),
+                broadcast: root.broadcast.clone(),
+                _own: None,
+            };
+        }
+        let own = crate::agents::embed::claim(&state.chats, principal, session_id, turn_id);
+        if own.is_none() {
+            tracing::warn!(
+                session = session_id,
+                turn = turn_id,
+                "another turn holds this agent conversation; running unregistered"
+            );
+        }
+        let cancel = match (&root, &own) {
+            (Some(root), _) => root.cancel.clone(),
+            (None, Some(own)) => own.worker().cancel.clone(),
+            (None, None) => Default::default(),
+        };
+        let broadcast = own.as_ref().map_or_else(
+            || tokio::sync::broadcast::channel(16).0,
+            |own| own.worker().broadcast.clone(),
+        );
+        Self {
+            cancel,
+            broadcast,
+            _own: own,
+        }
+    }
 }
 
 /// Tell a person's run's owner that it waits for them, when it paused.
@@ -800,6 +863,55 @@ mod tests {
             panic!("expected a failed outcome, got {outcome:?}");
         };
         assert!(message.contains("500"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_claimed_turn_in_the_registry_stops_its_agent_run() {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(Scripted {
+                deltas: vec![text("Still working.")],
+                served: AtomicUsize::new(0),
+                tokens_per_round: None,
+            })
+            .mount(&upstream)
+            .await;
+        let state = state_for(&upstream.uri()).await;
+        let (session_id, turn_id) = open(&state, "standard").await;
+        let run = triage(&state, &session_id, contract()).await;
+        let agent = run.chain().agent().principal_id.clone();
+        let claim =
+            crate::agents::embed::claim(&state.chats, &agent, &session_id, &turn_id).expect("free");
+        assert!(state.chats.cancel_turn(&agent, &session_id, &turn_id));
+
+        drive(
+            &state,
+            params(&session_id, &turn_id, Actor::Agent(Arc::new(run))),
+        )
+        .await;
+        let turn = chat::get_turn(&state.db, &session_id, &turn_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, chat::TurnStatus::Cancelled);
+        assert!(
+            state.chats.holds(&agent, &session_id, &turn_id),
+            "the run used the claim's worker and left it to its holder"
+        );
+        drop(claim);
+        assert_eq!(state.chats.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_sub_agent_run_leaves_no_worker_behind() {
+        let r = agent_run(vec![text("Invoice 17 is paid.")]).await;
+        assert_eq!(r.turn.turn.status, chat::TurnStatus::Completed);
+        assert_eq!(
+            r.state.chats.active_count(),
+            0,
+            "the child's worker left the registry when its run ended"
+        );
     }
 
     async fn run_budgeted(

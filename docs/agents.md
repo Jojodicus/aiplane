@@ -983,9 +983,10 @@ grants.
   `AgentTurn.lang` for `run_turn` (English when unset), the request's
   `Accept-Language` for a visitor message.
 - **No early peek.** The turn row is terminal before the filter has ruled, so
-  the embed endpoint treats a session as unfinished while `AgentTurns` still
-  holds its claim (`is_running`): the snapshot shows the turn in progress and
-  the event stream waits.
+  the embed endpoint treats a session as unfinished while its claim (a
+  worker in the session worker registry) is still held: the snapshot shows
+  the turn in progress and the event stream waits for the worker's
+  `Released`.
 - **Limits.** The filter matches text, not meaning: an identifier the model
   rewrites (`RE 123456`) escapes a pattern that does not allow for it, and a
   tool the agent calls that returns another customer's data makes that data
@@ -1149,7 +1150,7 @@ agent runs pause and resume durably, sub-agent runs included.
   where the manager plays the visitor (`403 decision_for_visitor` otherwise).
   Synchronous like the test chat: `200 {session_id, turn_id, status, answer,
   error, suspension}` once the resumed turn ended or paused again. It holds
-  the conversation's `AgentTurns` claim meanwhile, so the visitor's stream
+  the conversation's claim meanwhile, so the visitor's stream
   shows the turn running. This is the backend #96's inbox calls.
 - **What a visitor sees.** A suspended turn keeps `suspension` in the
   snapshot and `GET /api/v0/embed/session`, as
@@ -1572,8 +1573,13 @@ untrusted audiences.
   session id (`messages` refuses unknown fields).
 - **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
   turn runs. Without one, `idle` and the stream ends. With one, the stream
-  re-reads that one turn (never the conversation) whenever a turn claim is
-  released (`AgentTurns::releases`; a 30 s safety re-read covers a release that never comes; `pages::turn_wait`), and — the A2A
+  subscribes to the conversation's worker in the session worker registry and
+  reads that one turn (never the conversation) once no worker holds it
+  (`agents::embed::released`, paced by `pages::turn_wait`). It listens for
+  `TurnUpdate::Released` only: ticks and `Finalized` come while the answer
+  may still be unfiltered, so a visitor never sees partial text, tool
+  internals or an answer the output filter has not ruled on. No polling: the
+  claim is an RAII guard, so its release always comes. And — the A2A
   task streams alike — once it is terminal, sends its whole
   answer as one `turn_delta` with `full: true` and then `turn_finalized`.
   *Deviation:* the "`status` events" above are SSE comment lines (`:
@@ -1602,8 +1608,9 @@ untrusted audiences.
   no healthy model) errors the turn with that reason. Without a runner (only
   in tests) `messages` answers `503 agent_runtime_unavailable` and stores
   nothing. A runner that leaves the turn unfinished, or panics, has its turn
-  errored by the endpoint, and `RamaState::agent_turns` holds one claim per
-  conversation so two messages cannot run at once.
+  errored by the endpoint (`spawn_guarded` settles it before the claim drops),
+  and one claim per conversation (`agents::embed::claim`, a worker in
+  `RamaState::chats`) keeps two messages from running at once.
 - **A conversation is pinned to its version.** It runs the version that was
   live when it started, recorded in `chat_sessions.agent_version`; publishing
   or rolling back changes only conversations started afterwards. Versions are
@@ -2129,7 +2136,7 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   | task (`id`) | one assistant turn of that conversation, and the user turn before it |
   | `SendMessage` without `taskId` | a new turn: in a new context, or in the caller's `contextId` |
   | `SendMessage` with `taskId` of an `INPUT_REQUIRED` task | the answer to a `secure_input` pause, through the same `agents::resume::claim` / runner `resume` as `POST /api/v0/embed/resume` (`ResumedBy::Participant`), so a verifier's code goes to the tool and nowhere else (not the transcript, the task, the model) |
-  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled). Per task: the claim names the turn holding the context (`AgentTurns::holds`), so a finished task reads as finished — and `CancelTask` on it is `-32002` — while a later task of the same context runs |
+  | `TASK_STATE_WORKING` | turn `in_progress`, or terminal while the runner still holds it (the output filter has not ruled). Per task: the claim names the turn holding the context (`SessionWorkers::holds`), so a finished task reads as finished — and `CancelTask` on it is `-32002` — while a later task of the same context runs |
   | `TASK_STATE_COMPLETED` | `completed`; the answer is the artifact `answer` and the last `history` message |
   | `TASK_STATE_FAILED` | `errored`; `status.message` is the generic `embed-error-generic` text, never the upstream's |
   | `TASK_STATE_CANCELED` | `cancelled` |
@@ -2172,13 +2179,18 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   started, answered or cancelled task is also an `agent_audit` row
   `a2a_task` on the agent: `{action: message | input | cancel, context_id,
   task_id, caller_id, caller_name, token_id}`, never the text.
-- **Stopping a running agent turn.** `AgentTurns` keeps, per claimed
-  conversation, the turn holding it and a stop flag (`claim(session, turn)`,
-  `cancel(session, turn)` — only the holding turn can be stopped,
-  `cancel_flag`). A message queued behind a decision runs under the resumed
-  turn's claim, which `hand_over` passes on to the new turn. And `headless::drive` hands
-  an agent run its root conversation's flag, so a cancel reaches sub-agent
-  runs too. Only `CancelTask` sets it today.
+- **Stopping a running agent turn.** An agent turn runs on a worker of the
+  session worker registry, like a person's chat turn: `agents::embed::claim(
+  workers, principal, session, turn)` registers it, keyed by the principal
+  that owns the conversation, and `SessionWorkers::cancel_turn` stops only
+  the turn holding it. A message queued behind a decision runs under the
+  resumed turn's claim, which `SessionWorkers::hand_over` passes on to the new
+  turn. `headless::drive` runs a root turn on the worker that claimed it (its
+  cancel flag and channel); any other agent turn — a sub-agent's child run,
+  or a root turn nobody claimed (the test chat, an evaluation) — registers a
+  worker of its own while it runs, and still stops by its root
+  conversation's flag, so a cancel reaches sub-agent runs too. `CancelTask`
+  and shutdown (`cancel_all`) set it.
 - **Errors.** JSON-RPC 2.0 envelopes (§9.5): `error.data` is one
   `google.rpc.ErrorInfo` whose `reason` names the error. A2A's codes where
   they apply (`-32001` task not found, `-32002` not cancelable, `-32003` push

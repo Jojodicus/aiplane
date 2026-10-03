@@ -39,6 +39,12 @@ use tokio::sync::broadcast;
 pub enum TurnUpdate {
     Tick,
     Finalized,
+    /// The worker has left the registry: nothing more comes on this channel.
+    /// Distinct from [`TurnUpdate::Finalized`], which says the turn's *row* is
+    /// final: a caller can keep its worker registered past that point (an
+    /// agent turn holds it until the output filter has ruled on the answer),
+    /// and a subscriber that may only see the settled result waits for this.
+    Released,
     SidebarChanged,
     /// Transient info banner shown alongside the reply (e.g. "vision fallback
     /// activated — image described by {model}").
@@ -637,6 +643,68 @@ impl SessionWorkers {
             .collect()
     }
 
+    /// Subscribe to this conversation's worker, if it has one, and name the
+    /// turn it is filling in. Taken under the registry lock, so the
+    /// subscription cannot fall between a look-up and a [`Self::clear`]: a
+    /// subscriber either gets `None` or is sure to see
+    /// [`TurnUpdate::Released`].
+    pub fn subscribe(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Option<(String, broadcast::Receiver<TurnUpdate>)> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&(user_id.to_string(), session_id.to_string()))
+            .map(|w| (w.turn_id.clone(), w.broadcast.subscribe()))
+    }
+
+    /// Whether `turn_id` is the turn this conversation's worker is filling in
+    /// — not merely some turn of the same conversation.
+    pub fn holds(&self, user_id: &str, session_id: &str, turn_id: &str) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&(user_id.to_string(), session_id.to_string()))
+            .is_some_and(|w| w.turn_id == turn_id)
+    }
+
+    /// Point this conversation's worker from turn `from` to `to`: one worker
+    /// producing the next turn of the same conversation without letting go
+    /// of it in between. False when the worker is not on `from`.
+    pub fn hand_over(&self, user_id: &str, session_id: &str, from: &str, to: &str) -> bool {
+        match self
+            .inner
+            .lock()
+            .unwrap()
+            .get_mut(&(user_id.to_string(), session_id.to_string()))
+        {
+            Some(w) if w.turn_id == from => {
+                w.turn_id = to.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Self::cancel`], but only when the worker is on `turn_id`: a stop
+    /// aimed at one turn must not end the next one. Reports whether it did.
+    pub fn cancel_turn(&self, user_id: &str, session_id: &str, turn_id: &str) -> bool {
+        match self
+            .inner
+            .lock()
+            .unwrap()
+            .get(&(user_id.to_string(), session_id.to_string()))
+        {
+            Some(w) if w.turn_id == turn_id => {
+                w.cancel.store(true, Ordering::SeqCst);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Flip the cancel flag on this conversation's worker (if any).
     /// Used by `POST /chat/{id}/cancel`. No-op when no worker is
     /// active.
@@ -651,7 +719,8 @@ impl SessionWorkers {
         }
     }
 
-    /// Remove the worker entry iff it's the same one we registered.
+    /// Remove the worker entry iff it's the same one we registered, and tell
+    /// its subscribers with [`TurnUpdate::Released`].
     /// Matching by `Arc::ptr_eq` on the cancel flag keeps a slow
     /// finalising worker from yanking a newer worker's entry —
     /// belt-and-braces, since `register` now refuses to insert when a
@@ -663,6 +732,8 @@ impl SessionWorkers {
             && Arc::ptr_eq(&current.cancel, &worker.cancel)
         {
             g.remove(&key);
+            drop(g);
+            let _ = worker.broadcast.send(TurnUpdate::Released);
         }
     }
 }
@@ -901,6 +972,49 @@ mod tests {
         assert!(r.get("u1", "s").is_some());
         r.clear("u1", &second);
         assert!(r.get("u1", "s").is_none());
+    }
+
+    /// A subscriber taken before the clear always hears it go; one taken
+    /// after finds nothing to subscribe to — never a channel that stays
+    /// silent forever.
+    #[test]
+    fn clearing_a_worker_releases_its_subscribers() {
+        let r = SessionWorkers::default();
+        assert!(r.subscribe("u1", "s").is_none());
+        let worker = registered(&r, "u1", "t1", "s");
+        let (turn, mut rx) = r.subscribe("u1", "s").expect("running");
+        assert_eq!(turn, "t1");
+        r.clear("u1", &worker);
+        assert_eq!(rx.try_recv().unwrap(), TurnUpdate::Released);
+        assert!(r.subscribe("u1", "s").is_none());
+    }
+
+    #[test]
+    fn a_worker_handed_over_holds_the_next_turn_only() {
+        let r = SessionWorkers::default();
+        let worker = registered(&r, "u1", "t1", "s");
+        assert!(r.holds("u1", "s", "t1"));
+        assert!(
+            !r.holds("u1", "s", "t0"),
+            "another turn of the conversation"
+        );
+        assert!(!r.holds("u2", "s", "t1"), "another user's key");
+        assert!(!r.hand_over("u1", "s", "t0", "t2"), "t0 holds nothing");
+        assert!(r.hand_over("u1", "s", "t1", "t2"));
+        assert!(r.holds("u1", "s", "t2") && !r.holds("u1", "s", "t1"));
+        r.clear("u1", &worker);
+        assert!(r.get("u1", "s").is_none(), "cleared despite the hand-over");
+    }
+
+    #[test]
+    fn only_the_turn_a_worker_is_on_can_be_cancelled_by_turn() {
+        let r = SessionWorkers::default();
+        assert!(!r.cancel_turn("u1", "s", "t1"), "nothing runs");
+        let worker = registered(&r, "u1", "t1", "s");
+        assert!(!r.cancel_turn("u1", "s", "t0"));
+        assert!(!worker.cancel.load(Ordering::SeqCst));
+        assert!(r.cancel_turn("u1", "s", "t1"));
+        assert!(worker.cancel.load(Ordering::SeqCst));
     }
 
     #[test]

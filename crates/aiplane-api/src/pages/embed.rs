@@ -38,9 +38,7 @@ use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{
-    self as embed_rt, Admission, OpenedTurn, Refusal, ReleaseWatch, TurnWork,
-};
+use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
 };
@@ -48,6 +46,7 @@ use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::agents::spec_cache::CompiledSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
+use tokio::time::Instant;
 
 macro_rules! or_return {
     ($e:expr) => {
@@ -393,13 +392,16 @@ fn visitor_turn(mut t: TurnWithTools, lang: Lang) -> TurnWithTools {
 
 async fn visitor_turns(
     state: &RamaState,
-    session_id: &str,
+    session: &VisitorSession,
     lang: Lang,
 ) -> Result<Vec<TurnWithTools>, Response> {
-    let mut turns = chat::list_turns(&state.db, session_id)
+    let mut turns = chat::list_turns(&state.db, &session.session_id)
         .await
         .map_err(internal)?;
-    if state.agent_turns.is_running(session_id)
+    if state
+        .chats
+        .get(&session.principal_id, &session.session_id)
+        .is_some()
         && let Some(last) = turns.last_mut()
         && last.turn.role == TurnRole::Assistant
     {
@@ -415,7 +417,7 @@ async fn visitor_turns(
 pub async fn current_session(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
     let lang = Lang::from_request(req.headers());
-    let turns = or_return!(visitor_turns(&state, &v.session.session_id, lang).await);
+    let turns = or_return!(visitor_turns(&state, &v.session, lang).await);
     let live_turn_id = live_turn_id(&turns);
     json_ok(
         StatusCode::OK,
@@ -464,7 +466,7 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         )
         .await
     );
-    let Some(runner) = state.agent_turns.runner() else {
+    let Some(runner) = state.agent_runner.clone() else {
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_runtime_unavailable",
@@ -483,7 +485,12 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
     };
     let user_turn_id = uuid::Uuid::new_v4().to_string();
     let assistant_turn_id = uuid::Uuid::new_v4().to_string();
-    let Some(claim) = state.agent_turns.claim(&session_id, &assistant_turn_id) else {
+    let Some(claim) = embed_rt::claim(
+        &state.chats,
+        &v.session.principal_id,
+        &session_id,
+        &assistant_turn_id,
+    ) else {
         return turn_in_progress();
     };
     match chat::in_flight_turn(&state.db, &session_id).await {
@@ -631,7 +638,7 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         )
         .await
     );
-    let Some(runner) = state.agent_turns.runner() else {
+    let Some(runner) = state.agent_runner.clone() else {
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_runtime_unavailable",
@@ -650,11 +657,19 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     };
     let turn_id = match chat::suspended_turn_in_session(&state.db, &session_id).await {
         Ok(Some(turn)) => turn,
-        Ok(None) if state.agent_turns.is_running(&session_id) => return busy(),
+        Ok(None)
+            if state
+                .chats
+                .get(&v.session.principal_id, &session_id)
+                .is_some() =>
+        {
+            return busy();
+        }
         Ok(None) => return not_waiting(lang),
         Err(err) => return internal(err),
     };
-    let Some(hold) = state.agent_turns.claim(&session_id, &turn_id) else {
+    let Some(hold) = embed_rt::claim(&state.chats, &v.session.principal_id, &session_id, &turn_id)
+    else {
         return busy();
     };
     let claimed = match claim_resume(
@@ -738,10 +753,9 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 /// when the conversation waits for a decision, otherwise `idle`.
 pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let v = or_return!(visitor(&state, &req).await);
-    let session_id = v.session.session_id;
     let lang = Lang::from_request(req.headers());
-    let releases = state.agent_turns.releases(&session_id);
-    let turns = or_return!(visitor_turns(&state, &session_id, lang).await);
+    let turns = or_return!(visitor_turns(&state, &v.session, lang).await);
+    let (principal_id, session_id) = (v.session.principal_id, v.session.session_id);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
     let queued = queued_message(&turns);
@@ -762,7 +776,7 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         (Some(turn_id), _) => {
             let state = state.clone();
             tokio::spawn(async move {
-                tail_buffered(state, session_id, turn_id, lang, releases, tx).await
+                tail_buffered(state, principal_id, session_id, turn_id, lang, tx).await
             });
         }
     }
@@ -790,54 +804,51 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
 
 async fn tail_buffered(
     state: Arc<RamaState>,
+    principal_id: String,
     session_id: String,
     turn_id: String,
     lang: Lang,
-    releases: ReleaseWatch,
     tx: SseTx,
 ) {
-    let mut wait = TurnWait::new(releases);
+    let started = Instant::now();
+    let wait = TurnWait {
+        workers: &state.chats,
+        principal_id: &principal_id,
+        session_id: &session_id,
+        turn_id: &turn_id,
+    };
     loop {
-        match wait.next(&tx).await {
-            Waited::Reread => {}
+        match wait.next(&tx, started).await {
+            Waited::Released => {}
             Waited::Expired => {
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;
             }
             Waited::Gone => return,
         }
-        match chat::get_turn(&state.db, &session_id, &turn_id).await {
-            Ok(Some(t)) if t.status.is_terminal() && !state.agent_turns.is_running(&session_id) => {
-                for event in final_events(&t, lang) {
-                    let _ = tx.unbounded_send(Ok(sse_json(&event)));
-                }
-                return;
-            }
-            Ok(Some(t))
-                if t.status == TurnStatus::Suspended
-                    && !state.agent_turns.is_running(&session_id) =>
-            {
-                let frame = match chat::get_suspension(&state.db, &turn_id).await {
+        let frames = match chat::get_turn(&state.db, &session_id, &turn_id).await {
+            // Claimed again since: a decision resumed it.
+            Ok(Some(_)) if wait.held() => continue,
+            Ok(Some(t)) if t.status.is_terminal() => final_events(&t, lang),
+            Ok(Some(t)) if t.status == TurnStatus::Suspended => {
+                vec![match chat::get_suspension(&state.db, &turn_id).await {
                     Ok(Some(s)) => ChatEvent::Suspended {
                         turn_id: turn_id.clone(),
                         suspension: s.view().for_participant(),
                     },
                     _ => ChatEvent::Idle,
-                };
-                let _ = tx.unbounded_send(Ok(sse_json(&frame)));
-                return;
+                }]
             }
-            Ok(Some(_)) => {}
-            Ok(_) => {
-                let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
-                return;
-            }
+            Ok(_) => vec![ChatEvent::Idle],
             Err(err) => {
                 tracing::warn!(error = %err, turn = %turn_id, "embed events: reading the turn");
-                let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
-                return;
+                vec![ChatEvent::Idle]
             }
+        };
+        for event in frames {
+            let _ = tx.unbounded_send(Ok(sse_json(&event)));
         }
+        return;
     }
 }
 

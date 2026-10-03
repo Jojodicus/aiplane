@@ -6,8 +6,8 @@
 //! Wraps the existing `AppState` (which has the DB, upstream registry,
 //! RBAC resolver, OIDC client, etc.) and adds rama-specific extras: a
 //! hand-rolled `SessionStore` plus a `SessionWorkers` registry that
-//! tracks each user's in-flight chat worker for the live-stream tail
-//! and cancel paths. `Deref`s to `AppState` so call sites like
+//! tracks every in-flight turn — each user's chat worker and each agent
+//! conversation's turn — for the live-stream tail and cancel paths. `Deref`s to `AppState` so call sites like
 //! `state.upstreams` keep working without churn.
 
 use std::ops::Deref;
@@ -75,10 +75,12 @@ pub struct RamaState {
     /// sticky "N unapplied changes" bar. Not persisted: after a restart the
     /// registry is rebuilt from the DB, so a fresh 0 is correct.
     topology_dirty: Arc<AtomicU32>,
-    /// The public agent endpoint's runner and its per-conversation claims.
-    /// No runner until one is installed with [`Self::with_agent_runner`]; the
-    /// endpoint then refuses messages instead of accepting turns nothing runs.
-    pub agent_turns: crate::agents::embed::AgentTurns,
+    /// What runs an agent conversation's turn in the background. No runner
+    /// until one is installed with [`Self::with_agent_runner`]; the endpoints
+    /// then refuse messages instead of accepting turns nothing runs. The
+    /// turns themselves are claimed in [`Self::chats`]
+    /// (`agents::embed::claim`), like every other running turn.
+    pub agent_runner: Option<Arc<dyn crate::agents::embed::AgentTurnRunner>>,
     pub refusals: crate::agents::embed::RefusalAudit,
     /// Every agent version a run or a visitor admission compiled, shared.
     pub agent_specs: crate::agents::spec_cache::SpecCache,
@@ -108,7 +110,7 @@ impl RamaState {
             ocr,
             enforcer,
             topology_dirty: Arc::new(AtomicU32::new(0)),
-            agent_turns: Default::default(),
+            agent_runner: None,
             refusals: Default::default(),
             agent_specs: Default::default(),
             trusted_proxies: Default::default(),
@@ -137,7 +139,7 @@ impl RamaState {
         mut self,
         runner: Arc<dyn crate::agents::embed::AgentTurnRunner>,
     ) -> Self {
-        self.agent_turns = crate::agents::embed::AgentTurns::new(runner);
+        self.agent_runner = Some(runner);
         self
     }
 
