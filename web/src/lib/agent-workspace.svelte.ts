@@ -31,6 +31,7 @@ import {
 import { setupErrorMessage } from './agent-setup.ts';
 import { t } from './i18n.svelte';
 import { emptyPlan, isEmpty, plannedGrants, stageGrant, stageRevoke, type GrantPlan } from './agent-grant-plan.ts';
+import { readProposal, writeProposal } from './proposal-memory.ts';
 
 const NOTICE_MS = 4000;
 
@@ -53,6 +54,8 @@ export class AgentWorkspace {
 	notice = $state<{ key: string; args?: Record<string, string | number> } | null>(null);
 	busy = $state(false);
 	lastDebug = $state<TestDebug | null>(null);
+	/** What the person told the prompt assistant; kept with the proposal across a reload. */
+	scenario = $state('');
 	/** The prompt assistant's latest proposal (#117), offered step by step until applied or dismissed. */
 	suggestion = $state<AssistSuggestion | null>(null);
 	/** Proposal parts already applied or dismissed (`task`, `tone`, `scope`, …). */
@@ -98,6 +101,18 @@ export class AgentWorkspace {
 
 	constructor(id: string) {
 		this.id = id;
+		const kept = typeof sessionStorage === 'undefined' ? null : readProposal(sessionStorage, id);
+		if (kept) {
+			this.scenario = kept.scenario;
+			this.suggestion = kept.suggestion;
+			this.handled = kept.handled;
+		}
+	}
+
+	/** Keeps the proposal for this tab, so a reload or a step opened by its URL still offers it. */
+	remember() {
+		if (typeof sessionStorage === 'undefined') return;
+		writeProposal(sessionStorage, this.id, { scenario: this.scenario, suggestion: this.suggestion, handled: this.handled });
 	}
 
 	private adopt(next: AgentDetail) {

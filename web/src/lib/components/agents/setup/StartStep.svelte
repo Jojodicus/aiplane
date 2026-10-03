@@ -15,7 +15,6 @@
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
 
-	let scenario = $state('');
 	let chosen = $state<TemplateKey | null>(null);
 	let applied = $state(false);
 	let proposing = $state(false);
@@ -43,7 +42,7 @@
 		try {
 			ws.propose(
 				await agentsApi.suggest(ws.id, {
-					scenario: scenario.trim(),
+					scenario: ws.scenario.trim(),
 					...(chosen && chosen !== 'blank' ? { template: chosen } : {}),
 					current_draft: cleanSpec(spec)
 				})
@@ -68,10 +67,10 @@
 
 	<label class="flex flex-col gap-1">
 		<span class="font-semibold">{t('agents-setup-scenario')}</span>
-		<textarea class="textarea min-h-24 w-full" bind:value={scenario} placeholder={t('agents-setup-scenario-placeholder')}></textarea>
+		<textarea class="textarea min-h-24 w-full" bind:value={ws.scenario} placeholder={t('agents-setup-scenario-placeholder')}></textarea>
 	</label>
 	<div class="flex flex-wrap items-center gap-3">
-		<button class="btn btn-primary" type="button" disabled={proposing || !scenario.trim() || !ws.writable} onclick={() => void propose()}>
+		<button class="btn btn-primary" type="button" disabled={proposing || !ws.scenario.trim() || !ws.writable} onclick={() => void propose()}>
 			{#if proposing}<span class="loading loading-spinner loading-sm"></span>{:else}<span aria-hidden="true">✦</span>{/if}
 			{t('agents-setup-propose')}
 		</button>

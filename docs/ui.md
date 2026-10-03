@@ -686,7 +686,9 @@ that every step round-trips through the advanced editor's
 - **The prompt assistant** (#117, [`agents.md`](agents.md#what-117-built)).
   *Suggest a setup* sends the scenario, the chosen template and the current
   buffer to `POST …/assist/suggest`; the proposal is kept on the workspace
-  (`ws.suggestion`) and every step shows its part in an `AiSuggestion`
+  (`ws.suggestion`), and with the scenario and the parts already handled in
+  the tab's `sessionStorage` per agent (`proposal-memory.ts`), so a reload or
+  a step opened by its URL still offers it; every step shows its part in an `AiSuggestion`
   (`SuggestionBox`) with *Apply* / *Dismiss*: the task, the tone (chips by
   their ids and translated labels, the answer language, and only the rest as
   free text — `suggestedTone`), the topics, the tools by their card titles

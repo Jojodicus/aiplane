@@ -19,6 +19,7 @@
 	const ws = provideWorkspace(new AgentWorkspace(id));
 
 	onMount(() => void ws.load());
+	$effect(() => ws.remember());
 
 	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
 	const open = $derived(todos.filter((x) => x.blocking).length);
