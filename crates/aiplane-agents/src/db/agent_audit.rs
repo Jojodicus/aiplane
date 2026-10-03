@@ -35,7 +35,7 @@
 //! retention sweep removes whole conversation chains ([`sweep_conversation_chains`]).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -351,18 +351,28 @@ async fn root_conversation(
 /// a ring is installed, [`verify`] refuses such an event.
 pub const UNKEYED: &str = "unkeyed";
 
-static KEY_RING: RwLock<Vec<ActivityKey>> = RwLock::new(Vec::new());
+static KEY_RING: RwLock<Option<Arc<[ActivityKey]>>> = RwLock::new(None);
 
 /// The keys the log signs with (the first) and verifies with (any, by
 /// `key_id`). Installed by the gateway's state from its at-rest key
-/// (`Crypto::activity_keys`): process-wide, because every writer — the
-/// management changes in this crate included — writes into the same chains.
+/// (`Crypto::activity_keys`).
+///
+/// Process-wide rather than passed in, because the management writers —
+/// a grant, a share, a publish, each recording on its own transaction in
+/// this crate's DB modules — take a connection, not the gateway's state, and
+/// they extend the same chains a run does. Threading the ring through every
+/// one of them and their handlers would add a parameter to some twenty
+/// functions that only ever forward it.
 pub fn install_key_ring(keys: Vec<ActivityKey>) {
-    *KEY_RING.write().unwrap_or_else(|p| p.into_inner()) = keys;
+    *KEY_RING.write().unwrap_or_else(|p| p.into_inner()) = Some(keys.into());
 }
 
-fn key_ring() -> Vec<ActivityKey> {
-    KEY_RING.read().unwrap_or_else(|p| p.into_inner()).clone()
+fn key_ring() -> Arc<[ActivityKey]> {
+    KEY_RING
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .unwrap_or_else(|| Arc::new([]))
 }
 
 /// The chain key of a conversation.

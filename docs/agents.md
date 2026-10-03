@@ -2578,7 +2578,11 @@ outright keeps no old key — sealed secrets stop opening too — and `verify`
 then reports the older events as signed with a key the gateway does not
 hold. The ring is installed process-wide when the gateway's state is built
 (`AppState::new`, `with_crypto`), because every writer, the management
-changes in `aiplane-agents` included, extends the same chains. An event
+changes in `aiplane-agents` included, extends the same chains — and those
+record on a caller's transaction with a connection, not the gateway's state,
+so passing the ring explicitly would thread it through every management
+accessor and its handler. The ring is shared (`Arc<[ActivityKey]>`) and each
+key holds its keyed HMAC state, so a signature costs no key schedule. An event
 written by a process without a ring (a unit test, a CLI) carries `key_id =
 unkeyed` and a plain SHA-256; where a ring is installed, `verify` refuses
 it, so rewriting a chain "unkeyed" does not pass either.
