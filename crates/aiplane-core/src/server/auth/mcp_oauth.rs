@@ -30,6 +30,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
 
+use crate::server::net_guard::{IpClass, classify_host, is_loopback_host};
+
 #[derive(Debug, Error)]
 pub enum OauthError {
     #[error("OAuth discovery failed: {0}")]
@@ -348,31 +350,25 @@ async fn get_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &st
 /// multicast addresses — notably the cloud metadata endpoint
 /// `169.254.169.254`. The catalog is admin-curated and private ranges
 /// (10/8, 192.168/16, …) are intentionally allowed for internal deployments.
-/// Residual: a hostname that *resolves* to a blocked IP (DNS-rebind) isn't
+/// What an address is comes from `net_guard::classify`; this policy is the
+/// permissive one. Residual: a hostname that *resolves* to a blocked IP (DNS-rebind) isn't
 /// caught here — full protection would resolve-and-pin; this covers the
 /// realistic literal-IP pivot.
 pub fn validate_outbound_url(raw: &str) -> Result<(), OauthError> {
     let url = Url::parse(raw).map_err(|_| OauthError::Url(raw.to_string()))?;
     let host = url
-        .host_str()
+        .host()
         .ok_or_else(|| OauthError::Url(format!("{raw}: no host")))?;
-    let parsed_ip = host.parse::<std::net::IpAddr>().ok();
-    let is_loopback = host == "localhost" || parsed_ip.map(|ip| ip.is_loopback()).unwrap_or(false);
-    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback_host(&host)) {
         return Err(OauthError::Url(format!(
             "{raw}: only https is allowed (http permitted only for localhost)"
         )));
     }
-    if let Some(ip) = parsed_ip {
-        let blocked = ip.is_unspecified()
-            || ip.is_multicast()
-            || match ip {
-                std::net::IpAddr::V4(v4) => v4.is_link_local(), // 169.254/16, incl. metadata
-                std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80, // fe80::/10
-            };
-        if blocked {
-            return Err(OauthError::Url(format!("{raw}: blocked address range")));
-        }
+    if matches!(
+        classify_host(&host),
+        Some(IpClass::Unspecified | IpClass::Multicast | IpClass::LinkLocal)
+    ) {
+        return Err(OauthError::Url(format!("{raw}: blocked address range")));
     }
     Ok(())
 }
@@ -753,6 +749,10 @@ mod tests {
         assert!(validate_outbound_url("https://169.254.169.254/latest/meta-data").is_err());
         // unspecified + multicast: rejected.
         assert!(validate_outbound_url("https://0.0.0.0/x").is_err());
+        // IPv6 literals and IPv4-mapped spellings are classified too.
+        assert!(validate_outbound_url("https://[fe80::1]/x").is_err());
+        assert!(validate_outbound_url("https://[::ffff:169.254.169.254]/x").is_err());
+        assert!(validate_outbound_url("http://[::1]:9000/token").is_ok());
         // private range stays allowed (internal deployments).
         assert!(validate_outbound_url("https://10.1.2.3/token").is_ok());
         // garbage.

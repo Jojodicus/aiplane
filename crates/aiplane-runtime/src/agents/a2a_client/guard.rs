@@ -18,14 +18,16 @@
 //! unless `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS` is on: loopback, private
 //! (RFC 1918, IPv6 unique local), carrier-grade NAT and plain `http`.
 //!
-//! Not reused from `mcp_oauth::validate_outbound_url`: that guard allows
-//! private ranges on purpose (an admin curates the MCP catalog) and checks
-//! literal addresses only, while a route's target is chosen by an agent's
-//! owner and must not reach the gateway's own network.
+//! What an address is comes from `net_guard::classify`, shared with the
+//! other outbound guards; the policy is this module's own. It is stricter
+//! than `mcp_oauth::validate_outbound_url`, which allows private ranges on
+//! purpose (an admin curates the MCP catalog), while a route's target is
+//! chosen by an agent's owner and must not reach the gateway's own network.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
+use aiplane_core::server::net_guard::{IpClass, classify, is_loopback_host};
 use reqwest::Url;
 
 /// A host that passed the guard, and the client pinned to its addresses.
@@ -34,81 +36,21 @@ pub struct Pinned {
     pub client: reqwest::Client,
 }
 
-/// Why an address may never be connected to, whatever the configuration.
-fn always_refused(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(v4) => {
-            if v4.is_unspecified() {
-                Some("an unspecified address")
-            } else if v4.is_link_local() {
-                Some("a link-local address (where cloud metadata lives)")
-            } else if v4.is_broadcast() {
-                Some("a broadcast address")
-            } else if v4.is_multicast() {
-                Some("a multicast address")
-            } else {
-                None
-            }
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return always_refused(IpAddr::V4(v4));
-            }
-            if v6.is_unspecified() {
-                Some("an unspecified address")
-            } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
-                Some("a link-local address")
-            } else if v6.is_multicast() {
-                Some("a multicast address")
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Why an address is inside a network the gateway itself sits in, if it is.
-fn private(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            if v4.is_loopback() {
-                Some("a loopback address")
-            } else if v4.is_private() {
-                Some("a private address")
-            } else if a == 100 && (64..128).contains(&b) {
-                Some("a carrier-grade NAT address")
-            } else {
-                None
-            }
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return private(IpAddr::V4(v4));
-            }
-            if v6.is_loopback() {
-                Some("a loopback address")
-            } else if (v6.segments()[0] & 0xfe00) == 0xfc00 {
-                Some("a unique local (private) address")
-            } else {
-                None
-            }
-        }
-    }
-}
-
 /// Whether `ip` may be connected to, and why not.
 pub fn check_ip(ip: IpAddr, allow_private: bool) -> Result<(), String> {
-    if let Some(why) = always_refused(ip) {
-        return Err(format!("{ip} is {why}, which is never reached"));
+    let class = classify(ip);
+    match class {
+        IpClass::Public => Ok(()),
+        IpClass::Unspecified | IpClass::LinkLocal | IpClass::Broadcast | IpClass::Multicast => Err(
+            format!("{ip} is {}, which is never reached", class.describe()),
+        ),
+        IpClass::Loopback | IpClass::Private | IpClass::Cgnat if allow_private => Ok(()),
+        IpClass::Loopback | IpClass::Private | IpClass::Cgnat => Err(format!(
+            "{ip} is {}; an agent reaches public hosts only unless the operator sets \
+             `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`",
+            class.describe()
+        )),
     }
-    if !allow_private && let Some(why) = private(ip) {
-        return Err(format!(
-            "{ip} is {why}; an agent reaches public hosts only unless the operator sets \
-             `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`"
-        ));
-    }
-    Ok(())
 }
 
 /// The scheme rule: `https`, or `http` where private networks are allowed.
@@ -193,15 +135,7 @@ pub async fn read_capped(
 /// host and no credentials in it.
 pub fn check_card_url(raw: &str) -> Result<Url, String> {
     let url = Url::parse(raw).map_err(|e| format!("it is not a URL ({e})"))?;
-    let host = url.host_str().ok_or("it names no host")?;
-    let loopback = host == "localhost"
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| {
-                ip == IpAddr::V4(Ipv4Addr::LOCALHOST) || ip == IpAddr::V6(Ipv6Addr::LOCALHOST)
-            });
+    let loopback = is_loopback_host(&url.host().ok_or("it names no host")?);
     match url.scheme() {
         "https" => {}
         "http" if loopback => {}

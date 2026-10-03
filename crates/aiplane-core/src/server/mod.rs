@@ -18,6 +18,7 @@ pub mod env;
 pub mod feature_defaults;
 pub mod limits;
 pub mod model_defaults;
+pub mod net_guard;
 pub mod oidc_settings;
 pub mod principal;
 pub mod rbac;
