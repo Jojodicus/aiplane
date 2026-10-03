@@ -14,10 +14,6 @@ use session_core::SessionWorkers;
 use session_core::chat_json::SseTx;
 use tokio::time::Instant;
 
-/// A comment at this interval keeps proxies and clients from treating a
-/// long-running turn as a dead connection.
-const KEEPALIVE: Duration = Duration::from_secs(15);
-
 /// A stream ends after this long even if the turn still runs; the client
 /// attaches again and gets a fresh snapshot.
 const STREAM_LIMIT: Duration = Duration::from_secs(600);
@@ -60,14 +56,14 @@ impl TurnWait<'_> {
             if left.is_zero() {
                 return Waited::Expired;
             }
-            let woke = tokio::time::timeout(KEEPALIVE.min(left), &mut done).await;
+            let woke = tokio::time::timeout(super::SSE_KEEPALIVE.min(left), &mut done).await;
             if tx.is_closed() {
                 return Waited::Gone;
             }
             if woke.is_ok() {
                 return Waited::Released;
             }
-            let _ = tx.unbounded_send(Ok(rama::bytes::Bytes::from_static(b": working\n\n")));
+            let _ = tx.unbounded_send(Ok(super::sse_keepalive()));
         }
     }
 }

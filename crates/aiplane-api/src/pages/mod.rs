@@ -280,6 +280,16 @@ pub(crate) fn json_error(status: rama::http::StatusCode, code: &str, message: &s
 // ---------------------------------------------------------------------------
 // Shared shapes for the `/api/v0` handlers.
 
+/// The longest an SSE stream stays silent: past it, it sends
+/// [`sse_keepalive`], so a proxy with an idle timeout in front of it does not
+/// cut a quiet stream.
+pub(crate) const SSE_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The comment frame a quiet SSE stream sends every [`SSE_KEEPALIVE`].
+pub(crate) fn sse_keepalive() -> rama::bytes::Bytes {
+    rama::bytes::Bytes::from_static(b": keepalive\n\n")
+}
+
 /// The request's query string as a map; a malformed one reads as empty.
 pub(crate) fn query_map(req: &Request) -> std::collections::HashMap<String, String> {
     serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default()

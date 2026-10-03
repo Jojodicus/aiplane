@@ -41,8 +41,6 @@ use aiplane_runtime::rama_server::state::RamaState;
 
 /// How often the event stream looks for a change.
 const EVENT_POLL: Duration = Duration::from_secs(3);
-/// A comment at this interval keeps proxies from closing a quiet stream.
-const KEEPALIVE: Duration = Duration::from_secs(25);
 /// A stream ends after this long; `EventSource` reconnects on its own.
 const STREAM_LIMIT: Duration = Duration::from_secs(600);
 
@@ -197,8 +195,8 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
                 }
                 Err(err) => tracing::warn!(error = %err, "inbox events: listing items"),
             }
-            if last_sent.elapsed() >= KEEPALIVE {
-                let _ = tx.unbounded_send(Ok(rama::bytes::Bytes::from_static(b": waiting\n\n")));
+            if last_sent.elapsed() >= super::SSE_KEEPALIVE {
+                let _ = tx.unbounded_send(Ok(super::sse_keepalive()));
                 last_sent = tokio::time::Instant::now();
             }
         }
