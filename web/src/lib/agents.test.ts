@@ -10,6 +10,7 @@ import {
 	embedSnippet,
 	ensureShape,
 	issuesAt,
+	liveIssues,
 	issuesUnder,
 	parseBindSource,
 	parseSpecError,
@@ -221,6 +222,30 @@ test('the embed snippet loads the widget from the gateway with the new key', () 
 	assert.equal(
 		embedSnippet('https://gw.example.com/embed.js', 'gwe_abc'),
 		'<script src="https://gw.example.com/embed.js" data-agent-key="gwe_abc" async></script>'
+	);
+});
+
+test('issues about an entry the draft no longer has are dropped, others kept', () => {
+	const spec = {
+		main: { tools: ['a'] },
+		state: { issue: { type: 'enum' } },
+		routes: { billing: { when: { slot: 'issue' } } },
+		publish: { output_filter: { patterns: {} } }
+	};
+	const issues: SpecIssue[] = [
+		{ path: 'routes.route_1.when.slot', message: 'gone route, deep' },
+		{ path: 'routes.route_1', message: 'gone route' },
+		{ path: 'state.topic', message: 'gone slot' },
+		{ path: 'publish.output_filter.patterns.p1', message: 'gone pattern' },
+		{ path: 'main.tools[3]', message: 'gone tool' },
+		{ path: 'routes.billing.when.slot', message: 'still there' },
+		{ path: 'state.issue.values', message: 'missing key of a live slot' },
+		{ path: 'main.tools[0]', message: 'live tool' },
+		{ path: '', message: 'root' }
+	];
+	assert.deepEqual(
+		liveIssues(issues, spec).map((i) => i.message),
+		['still there', 'missing key of a live slot', 'live tool', 'root']
 	);
 });
 

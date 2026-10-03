@@ -330,6 +330,29 @@ export function issuesUnder(issues: SpecIssue[], path: string): SpecIssue[] {
 	);
 }
 
+/**
+ * The issues of the last refused save that still point into `spec`. One
+ * under an entry of a named map (a route, slot, verifier, pattern, …) or a
+ * list item the manager has since removed is dropped; one naming a key
+ * missing from an entry that still exists (`state.issue.values`) is kept,
+ * since that is what it asks to add.
+ */
+export function liveIssues(issues: SpecIssue[], spec: Spec): SpecIssue[] {
+	return issues.filter((issue) => {
+		const parts = issue.path.match(/[^.[\]]+/g) ?? [];
+		let node: unknown = spec;
+		for (const [i, part] of parts.entries()) {
+			const container = node as Record<string, unknown> | null;
+			if (container !== null && typeof container === 'object' && part in container) {
+				node = container[part];
+				continue;
+			}
+			return i === parts.length - 1 && !/^\d+$/.test(part) && !NAMED_MAPS.has(parts[i - 1]);
+		}
+		return true;
+	});
+}
+
 /* ---- the spec as an editing buffer ---------------------------------- */
 
 /** A deep copy that also accepts a Svelte `$state` proxy, which `structuredClone` refuses. */
