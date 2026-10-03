@@ -804,9 +804,22 @@ async fn conversation(world: &World) -> (String, String) {
     (agent, session.id)
 }
 
+/// [`host_jwt::accept`] on `spec` as a published version holds it.
+async fn accept(
+    state: &RamaState,
+    agent: &str,
+    session: &str,
+    spec: &Value,
+    token: &str,
+    now: jiff::Timestamp,
+) -> Result<Vec<String>, IdentityError> {
+    let compiled = crate::agents::spec_cache::CompiledSpec::compile(1, spec.clone());
+    host_jwt::accept(state, agent, session, &compiled, token, now).await
+}
+
 async fn present(world: &World, spec: &Value, token: &str) -> Result<Vec<String>, IdentityError> {
     let (agent, session) = conversation(world).await;
-    host_jwt::accept(
+    accept(
         &world.state,
         &agent,
         &session,
@@ -829,7 +842,7 @@ async fn a_valid_host_token_writes_its_claims_as_host() {
     let world = World::new(&[], None).await;
     let spec = host_spec(&world, hs256());
     let (agent, session) = conversation(&world).await;
-    let written = host_jwt::accept(
+    let written = accept(
         &world.state,
         &agent,
         &session,
@@ -941,12 +954,12 @@ async fn a_token_with_a_jti_is_accepted_once() {
     let (agent, first) = conversation(&world).await;
     let now = jiff::Timestamp::now();
     assert!(
-        host_jwt::accept(&world.state, &agent, &first, &spec, &token, now)
+        accept(&world.state, &agent, &first, &spec, &token, now)
             .await
             .is_ok()
     );
     let (_, elsewhere) = conversation(&world).await;
-    let replayed = host_jwt::accept(&world.state, &agent, &elsewhere, &spec, &token, now).await;
+    let replayed = accept(&world.state, &agent, &elsewhere, &spec, &token, now).await;
     assert!(
         matches!(replayed, Err(IdentityError::Replayed)),
         "{replayed:?}"
@@ -1138,7 +1151,7 @@ async fn a_failed_slot_write_stores_nothing_and_leaves_the_jti_unspent() {
     .unwrap();
     let now = jiff::Timestamp::now();
 
-    let failed = host_jwt::accept(&world.state, &agent, &session, &spec, &token, now).await;
+    let failed = accept(&world.state, &agent, &session, &spec, &token, now).await;
     assert!(
         matches!(failed, Err(IdentityError::Storage(_))),
         "{failed:?}"
@@ -1152,7 +1165,7 @@ async fn a_failed_slot_write_stores_nothing_and_leaves_the_jti_unspent() {
         .execute(world.db())
         .await
         .unwrap();
-    let retried = host_jwt::accept(&world.state, &agent, &session, &spec, &token, now).await;
+    let retried = accept(&world.state, &agent, &session, &spec, &token, now).await;
     assert_eq!(retried.unwrap(), ["a_verified", "b_plan"]);
     assert_eq!(slot_rows(&world, &session).await.len(), 2);
 }
@@ -1165,7 +1178,7 @@ async fn a_slot_the_host_may_not_write_stores_nothing_and_leaves_the_jti_unspent
     let (agent, session) = conversation(&world).await;
     let now = jiff::Timestamp::now();
 
-    let refused = host_jwt::accept(
+    let refused = accept(
         &world.state,
         &agent,
         &session,
@@ -1180,7 +1193,7 @@ async fn a_slot_the_host_may_not_write_stores_nothing_and_leaves_the_jti_unspent
         "a partial write"
     );
 
-    let retried = host_jwt::accept(
+    let retried = accept(
         &world.state,
         &agent,
         &session,

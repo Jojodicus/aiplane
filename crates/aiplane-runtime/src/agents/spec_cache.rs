@@ -3,10 +3,11 @@
 
 //! Published agent versions, parsed and compiled once.
 //!
-//! A version is immutable once published, so its spec, state schema, route
-//! gates and output filter — the parts that cost a JSON parse and a regex
-//! compile per slot `pattern` and filter — are built the first time a run or
-//! a visitor admission needs them and shared after that. Which version is
+//! A version is immutable once published, so its typed spec
+//! ([`AgentSpec`]), state schema, route gates and output filter — the parts
+//! that cost a JSON parse and a regex compile per slot `pattern` and filter —
+//! are built the first time a run or a visitor admission needs them and
+//! shared after that. Runtime code reads the spec only through these parts. Which version is
 //! live is not immutable: [`SpecCache::live`] reads the pointer every time,
 //! [`SpecCache::live_recent`] holds it for [`LIVE_TTL`].
 
@@ -19,6 +20,7 @@ use serde_json::Value;
 
 use super::gate::RouteGates;
 use super::output_filter::OutputFilter;
+use super::spec::AgentSpec;
 use super::state::StateSchema;
 
 /// How long [`SpecCache::live_recent`] trusts the live pointer it read.
@@ -33,13 +35,12 @@ const MAX_VERSIONS: usize = 256;
 #[derive(Debug)]
 pub struct CompiledSpec {
     pub version: i64,
-    /// `Null` when the stored text is not JSON.
-    pub spec: Value,
     parts: Result<SpecParts, String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecParts {
+    pub agent: Arc<AgentSpec>,
     pub schema: Arc<StateSchema>,
     pub gates: Arc<RouteGates>,
     /// Kept apart from the rest so a run reports the failures it checks
@@ -53,24 +54,26 @@ impl CompiledSpec {
             Ok(spec) => Self::compile(version, spec),
             Err(e) => Self {
                 version,
-                spec: Value::Null,
                 parts: Err(format!("it is not JSON ({e})")),
             },
         }
     }
 
     pub fn compile(version: i64, spec: Value) -> Self {
-        let parts = build(&spec);
         Self {
             version,
-            spec,
-            parts,
+            parts: build(&spec),
         }
+    }
+
+    /// The typed spec, or why the stored one does not read as one.
+    pub fn agent(&self) -> Result<&AgentSpec, &str> {
+        self.parts().map(|p| &*p.agent)
     }
 
     /// The pool the main run's model comes from (`main.pool`).
     pub fn main_pool(&self) -> Option<&str> {
-        self.spec.pointer("/main/pool").and_then(Value::as_str)
+        self.agent().ok()?.main_pool()
     }
 
     /// The built parts, or why the spec cannot run (phrased to follow "cannot
@@ -81,13 +84,16 @@ impl CompiledSpec {
 }
 
 fn build(spec: &Value) -> Result<SpecParts, String> {
+    let agent = AgentSpec::from_value(spec)
+        .map_err(|e| format!("it does not read as an agent spec ({e})"))?;
     let schema =
         StateSchema::from_spec(spec).map_err(|i| format!("at `{}`, {}", i.path, i.message))?;
     let gates =
-        RouteGates::from_spec(spec).map_err(|i| format!("at `{}`, {}", i.path, i.message))?;
+        RouteGates::from_spec(&agent).map_err(|i| format!("at `{}`, {}", i.path, i.message))?;
     let output_filter =
-        OutputFilter::from_spec(spec).map_err(|e| format!("`publish.output_filter`: {e}"));
+        OutputFilter::from_spec(&agent).map_err(|e| format!("`publish.output_filter`: {e}"));
     Ok(SpecParts {
+        agent: Arc::new(agent),
         schema: Arc::new(schema),
         gates: Arc::new(gates),
         output_filter,
@@ -268,7 +274,7 @@ mod tests {
         let pinned = cache.version(&db, &id, 1).await.unwrap().unwrap();
         let recent = cache.live_recent(&db, &id).await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&first, &pinned) && Arc::ptr_eq(&first, &recent));
-        assert_eq!(first.spec["main"]["pool"], "chat");
+        assert_eq!(first.main_pool(), Some("chat"));
         assert!(first.parts().is_ok());
         assert!(cache.version(&db, &id, 9).await.unwrap().is_none());
     }
@@ -299,8 +305,15 @@ mod tests {
     #[test]
     fn a_spec_that_does_not_compile_keeps_the_reason() {
         let text = CompiledSpec::parse(3, "{not json");
-        assert!(text.spec.is_null());
         assert!(text.parts().unwrap_err().starts_with("it is not JSON"));
+        let renamed = CompiledSpec::compile(3, json!({ "main": { "pol": "chat" } }));
+        assert!(
+            renamed
+                .agent()
+                .unwrap_err()
+                .starts_with("it does not read as an agent spec"),
+            "a renamed field fails loudly instead of falling back to a default"
+        );
         let filter = CompiledSpec::compile(
             3,
             json!({ "publish": { "output_filter": { "patterns": { "id": "(" } } } }),

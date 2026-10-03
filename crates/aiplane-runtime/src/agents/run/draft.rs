@@ -22,9 +22,10 @@ use serde_json::{Value, json};
 use session_core::db as chat;
 
 use super::{AgentReply, AgentTurn, OpenedTurn, drive_opened};
-use crate::agents::gate::{GateInput, GateStatus, RouteGates, Unmet};
+use crate::agents::gate::{GateInput, GateStatus, Unmet};
 use crate::agents::profile::{AgentRunError, Role, RunOptions, RunProfile, SpecSource};
-use crate::agents::state::{AgentState, Provenance, SlotState, StateSchema};
+use crate::agents::spec_cache::CompiledSpec;
+use crate::agents::state::{AgentState, Provenance, SlotState};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, open_session};
 
@@ -145,18 +146,19 @@ pub async fn collect_debug(
     since: Timestamp,
     options: &RunOptions,
 ) -> Result<DraftDebug, DbError> {
-    let (Ok(schema), Ok(gates)) = (StateSchema::from_spec(draft), RouteGates::from_spec(draft))
-    else {
+    let compiled = CompiledSpec::compile(DRAFT_VERSION, draft.clone());
+    let Ok(parts) = compiled.parts() else {
         return Ok(DraftDebug::default());
     };
-    let stored = AgentState::load(&state.db, &schema, session_id).await?;
+    let (schema, gates) = (&*parts.schema, &*parts.gates);
+    let stored = AgentState::load(&state.db, schema, session_id).await?;
     let slots = schema
         .slots()
         .map(|def| slot_debug(def.name.clone(), stored.get(&def.name), &def.set_by))
         .collect();
     let routes = gates
         .statuses(GateInput {
-            schema: &schema,
+            schema,
             state: &stored,
             now: (options.now)(),
         })
@@ -167,10 +169,11 @@ pub async fn collect_debug(
                 GateStatus::Closed { missing } => (false, missing),
             };
             RouteDebug {
-                description: draft
-                    .pointer(&format!("/routes/{route}/description"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                description: parts
+                    .agent
+                    .routes
+                    .get(&route)
+                    .and_then(|r| r.description.clone()),
                 route,
                 open,
                 missing,

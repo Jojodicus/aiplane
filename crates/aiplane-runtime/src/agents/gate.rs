@@ -31,7 +31,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::slot_tools::set_tool_name;
-use super::spec::{LEAF_KEYS, SpecIssue, format_duration, index, join, parse_duration};
+use super::spec::{AgentSpec, LEAF_KEYS, SpecIssue, format_duration, index, join, parse_duration};
 use super::state::{self, AgentState, Provenance, SlotState, SlotView, StateSchema, writers};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -488,24 +488,13 @@ pub struct RouteGates {
 }
 
 impl RouteGates {
-    pub fn from_spec(spec: &Value) -> Result<Self, SpecIssue> {
-        let Some(routes) = spec.get("routes") else {
-            return Ok(Self::default());
-        };
-        let Value::Object(map) = routes else {
-            return Err(SpecIssue {
-                path: "routes".into(),
-                message: "must be an object keyed by route name".into(),
-            });
-        };
+    pub fn from_spec(spec: &AgentSpec) -> Result<Self, SpecIssue> {
         let mut gates = BTreeMap::new();
-        for (name, route) in map {
-            let path = format!("routes.{name}.when");
-            let cond = route
-                .get("when")
-                .ok_or_else(|| "a route needs a `when` gate".to_string())
-                .and_then(Cond::parse)
-                .map_err(|message| SpecIssue { path, message })?;
+        for (name, route) in &spec.routes {
+            let cond = Cond::parse(&route.when).map_err(|message| SpecIssue {
+                path: format!("routes.{name}.when"),
+                message,
+            })?;
             gates.insert(name.clone(), cond);
         }
         Ok(Self { routes: gates })
@@ -971,7 +960,7 @@ mod tests {
             },
             "technical": { "when": { "slot": "issue", "eq": "technical" }, "agent": "t-id", "task": "t" }
         });
-        RouteGates::from_spec(&spec).unwrap()
+        RouteGates::from_spec(&AgentSpec::from_value(&spec).unwrap()).unwrap()
     }
 
     #[test]
@@ -1009,9 +998,16 @@ mod tests {
 
     #[test]
     fn a_spec_without_routes_has_no_gates_and_a_malformed_one_says_where() {
-        assert!(RouteGates::from_spec(&json!({})).unwrap().routes.is_empty());
-        let err = RouteGates::from_spec(&json!({ "routes": { "r": { "when": { "all": 1 } } } }))
-            .unwrap_err();
+        assert!(
+            RouteGates::from_spec(AgentSpec::empty())
+                .unwrap()
+                .routes
+                .is_empty()
+        );
+        let malformed = json!({ "routes": { "r": {
+            "when": { "all": 1 }, "agent": "a", "task": "t"
+        } } });
+        let err = RouteGates::from_spec(&AgentSpec::from_value(&malformed).unwrap()).unwrap_err();
         assert_eq!(err.path, "routes.r.when");
     }
 

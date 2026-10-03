@@ -20,6 +20,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use shared::api::ToolDef;
 
+use super::spec::AgentSpec;
 use super::state::{AgentState, StateSchema, StateSnapshot};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
@@ -54,16 +55,6 @@ impl BindSource {
     /// state or passed down a route, as opposed to a fixed setting.
     fn carries_subject(&self) -> bool {
         !matches!(self, Self::Const(_))
-    }
-
-    /// `{arg: source}` of one `bind` object; entries that are not a source
-    /// are skipped, since the validator has already refused them.
-    pub fn parse_map(v: Option<&Value>) -> BTreeMap<String, BindSource> {
-        v.and_then(Value::as_object)
-            .into_iter()
-            .flatten()
-            .filter_map(|(arg, src)| Self::parse(src).map(|s| (arg.clone(), s)))
-            .collect()
     }
 
     /// The value from `state`, or what is missing.
@@ -141,14 +132,13 @@ pub struct ToolBinds {
 
 impl ToolBinds {
     /// The binds a spec's `main.tool_resources` declares.
-    pub fn from_spec(spec: &Value) -> Self {
+    pub fn from_spec(spec: &AgentSpec) -> Self {
         let per_tool = spec
-            .pointer("/main/tool_resources")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flatten()
-            .map(|(tool, r)| (tool.clone(), BindSource::parse_map(r.get("bind"))))
-            .filter(|(_, binds)| !binds.is_empty())
+            .main
+            .tool_resources
+            .iter()
+            .filter(|(_, r)| !r.bind.is_empty())
+            .map(|(tool, r)| (tool.clone(), r.bind.clone()))
             .collect();
         Self {
             per_tool,
@@ -431,7 +421,7 @@ mod tests {
                 "year": {"const": 2026}
             }}
         }}});
-        let binds = ToolBinds::from_spec(&spec)
+        let binds = ToolBinds::from_spec(&AgentSpec::from_value(&spec).unwrap())
             .with_route(BTreeMap::from([("customer".into(), json!("K-1"))]));
         assert_eq!(
             binds.for_tool(
@@ -456,7 +446,7 @@ mod tests {
             "invoices": {"bind": {"customer_id": "route.customer"}},
             "pinned": {"bind": {"tenant": {"const": "t1"}}}
         }}});
-        let binds = ToolBinds::from_spec(&spec)
+        let binds = ToolBinds::from_spec(&AgentSpec::from_value(&spec).unwrap())
             .with_route(BTreeMap::from([("customer".into(), json!("K-1"))]));
         assert_eq!(
             binds.for_tool("tickets", &def("tickets", &["customer_id", "text"])),

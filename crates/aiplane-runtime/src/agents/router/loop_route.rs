@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 use super::{Caller, ChildRun, ForwardRequest, record_finished};
 use crate::agents::profile::RunOptions;
+use crate::agents::spec::model::LoopSpec;
 use crate::budget::SpendMeter;
 use crate::finish::{IncompleteReason, RunOutcome};
 use crate::server::tools::{ToolContext, ToolError};
@@ -42,39 +43,6 @@ pub const ACCEPTED: &str = "accepted";
 pub const FEEDBACK: &str = "feedback";
 pub const DEFAULT_ITERATIONS: u64 = 3;
 pub const MAX_ITERATIONS: u64 = 10;
-
-/// A route's `loop` target.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoopTarget {
-    pub worker: String,
-    pub critic: String,
-    pub max_iterations: u64,
-    pub seconds: Option<u64>,
-    pub tokens: Option<u64>,
-}
-
-impl LoopTarget {
-    pub fn parse(target: &Value) -> Result<Self, String> {
-        let id = |key: &str| {
-            target
-                .get(key)
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(|| format!("`loop.{key}` is missing"))
-        };
-        Ok(Self {
-            worker: id("worker")?,
-            critic: id("critic")?,
-            max_iterations: target
-                .get("max_iterations")
-                .and_then(Value::as_u64)
-                .unwrap_or(DEFAULT_ITERATIONS)
-                .clamp(1, MAX_ITERATIONS),
-            seconds: target.pointer("/budget/seconds").and_then(Value::as_u64),
-            tokens: target.pointer("/budget/tokens").and_then(Value::as_u64),
-        })
-    }
-}
 
 /// Why a loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,17 +178,14 @@ impl ForwardRequest {
         &self,
         ctx: &ToolContext,
         route: &str,
-        target: &Value,
+        target: &LoopSpec,
         task: &str,
         route_binds: BTreeMap<String, Value>,
     ) -> Result<Value, ToolError> {
-        let target = LoopTarget::parse(target).map_err(|why| {
-            ToolError::Failed(format!("route `{route}` cannot run: {why}. Do not retry."))
-        })?;
         let allowance = Allowance {
             started: Instant::now(),
-            seconds: target.seconds,
-            tokens: target.tokens,
+            seconds: target.budget.seconds,
+            tokens: target.budget.tokens,
             meter: Arc::new(SpendMeter::default()),
         };
         let options = RunOptions {
@@ -236,7 +201,7 @@ impl ForwardRequest {
         let step = |role: &str, iteration: u64| {
             Some(json!({ "loop": { "route": route, "iteration": iteration, "role": role } }))
         };
-        for iteration in 1..=target.max_iterations {
+        for iteration in 1..=target.max_iterations() {
             let Some(cap) = allowance.left() else {
                 stopped = Stopped::Budget;
                 break;

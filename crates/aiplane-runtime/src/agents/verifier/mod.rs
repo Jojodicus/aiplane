@@ -22,14 +22,16 @@
 //! - **`host_jwt`** ([`host_jwt`]): the embedding website signs who the
 //!   visitor is. Its slots are written as `host`, not as a verifier.
 //!
-//! [`Verifiers::from_spec`] reads the spec the validator
-//! (`spec/verifiers.rs`) accepted. A verifier missing what it needs to run
-//! is left out: a draft may be incomplete, and a published version is not.
+//! [`Verifiers::from_spec`] reads the typed spec ([`AgentSpec::verifiers`]),
+//! which applies each setting's default. A verifier missing what it needs to
+//! run is left out: a draft may be incomplete, and a published version is
+//! not.
 
 pub mod host_jwt;
 pub mod lookup;
 pub mod otp;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aiplane_core::server::crypto::sha256_hex;
@@ -40,7 +42,8 @@ use jiff::SignedDuration;
 use serde_json::{Map, Value, json};
 
 use super::profile::RunOptions;
-use super::spec::parse_duration;
+use super::spec::AgentSpec;
+use super::spec::model::{LookupSpec, McpCodeSpec, Verifier};
 use super::state::{StateSchema, StateWriteError, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{Tool, ToolContext, ToolError, extract_content_parts};
@@ -117,46 +120,6 @@ impl JwtAlgorithm {
 /// `{slot: source}` of a verifier, in slot order.
 pub type Writes = Vec<(String, WriteSource)>;
 
-fn writes(v: Option<&Value>) -> Option<Writes> {
-    let map = v?.as_object()?;
-    let writes: Option<Writes> = map
-        .iter()
-        .map(|(slot, src)| Some((slot.clone(), WriteSource::parse(src.as_str()?)?)))
-        .collect();
-    writes.filter(|w| !w.is_empty())
-}
-
-fn rate(v: Option<&Value>, default: Rate) -> Rate {
-    let parsed = v.and_then(|r| {
-        let max = u32::try_from(r.get("max")?.as_u64()?)
-            .ok()
-            .filter(|m| *m > 0)?;
-        let per = parse_duration(r.get("per")?.as_str()?)?;
-        Some(Rate { max, per })
-    });
-    parsed.unwrap_or(default)
-}
-
-fn duration(v: Option<&Value>, default: SignedDuration, cap: SignedDuration) -> SignedDuration {
-    v.and_then(Value::as_str)
-        .and_then(parse_duration)
-        .unwrap_or(default)
-        .min(cap)
-}
-
-fn attempts(v: Option<&Value>) -> u32 {
-    v.and_then(Value::as_u64)
-        .and_then(|n| u32::try_from(n).ok())
-        .unwrap_or(MAX_ATTEMPTS_DEFAULT)
-        .clamp(1, MAX_ATTEMPTS_CAP)
-}
-
-fn assurance(v: &Map<String, Value>) -> Option<String> {
-    v.get("assurance")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
 /// The rate windows on sending codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SendLimits {
@@ -206,17 +169,13 @@ pub struct Verifiers {
 }
 
 impl Verifiers {
-    pub fn from_spec(spec: &Value) -> Self {
+    pub fn from_spec(spec: &AgentSpec) -> Self {
         let mut out = Self::default();
-        let Some(map) = spec.get("verifiers").and_then(Value::as_object) else {
-            return out;
-        };
-        for (id, v) in map {
-            let Some(cfg) = v.as_object() else { continue };
-            match cfg.get("kind").and_then(Value::as_str) {
-                Some("mcp_code") => out.codes.extend(mcp_code(id, cfg)),
-                Some("lookup") => out.lookups.extend(lookup(id, cfg)),
-                _ => {}
+        for (id, v) in &spec.verifiers {
+            match v {
+                Verifier::McpCode(cfg) => out.codes.extend(mcp_code(id, cfg)),
+                Verifier::Lookup(cfg) => out.lookups.extend(lookup(id, cfg)),
+                Verifier::HostJwt(_) => {}
             }
         }
         out
@@ -227,56 +186,40 @@ impl Verifiers {
     }
 }
 
-fn mcp_code(id: &str, cfg: &Map<String, Value>) -> Option<McpCode> {
-    let text = |key: &str, default: &str| {
-        cfg.get(key)
-            .and_then(Value::as_str)
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(default)
-            .to_string()
-    };
-    let limits = cfg.get("send_limits");
+/// `writes` in slot order; `None` when it writes nothing.
+fn writes(map: &BTreeMap<String, WriteSource>) -> Option<Writes> {
+    let writes: Writes = map.iter().map(|(s, w)| (s.clone(), w.clone())).collect();
+    (!writes.is_empty()).then_some(writes)
+}
+
+fn mcp_code(id: &str, cfg: &McpCodeSpec) -> Option<McpCode> {
     Some(McpCode {
         id: id.to_string(),
-        connector: cfg.get("connector")?.as_str()?.to_string(),
-        send_tool: text("send_tool", SEND_TOOL_DEFAULT),
-        check_tool: text("check_tool", CHECK_TOOL_DEFAULT),
-        email_slot: cfg.get("email_slot")?.as_str()?.to_string(),
-        writes: writes(cfg.get("writes"))?,
-        max_attempts: attempts(cfg.get("max_attempts")),
-        code_ttl: duration(cfg.get("code_ttl"), CODE_TTL_DEFAULT, MAX_CODE_TTL),
-        limits: SendLimits {
-            email: rate(limits.and_then(|l| l.get("email")), EMAIL_SENDS_DEFAULT),
-            ip: rate(limits.and_then(|l| l.get("ip")), IP_SENDS_DEFAULT),
-            session: rate(limits.and_then(|l| l.get("session")), SESSION_SENDS_DEFAULT),
-        },
-        assurance: assurance(cfg),
+        connector: cfg.connector.clone()?,
+        send_tool: cfg.send_tool(),
+        check_tool: cfg.check_tool(),
+        email_slot: cfg.email_slot.clone()?,
+        writes: writes(&cfg.writes)?,
+        max_attempts: cfg.max_attempts(),
+        code_ttl: cfg.code_ttl(),
+        limits: cfg.send_limits(),
+        assurance: cfg.assurance.clone(),
     })
 }
 
-fn lookup(id: &str, cfg: &Map<String, Value>) -> Option<Lookup> {
-    let inputs: Option<Vec<(String, InputSource)>> = cfg
-        .get("inputs")?
-        .as_object()?
+fn lookup(id: &str, cfg: &LookupSpec) -> Option<Lookup> {
+    let inputs: Vec<(String, InputSource)> = cfg
+        .inputs
         .iter()
-        .map(|(arg, src)| {
-            let source = match src {
-                Value::String(s) => InputSource::Slot(s.strip_prefix("state.")?.to_string()),
-                Value::Object(lit) if lit.len() == 1 => {
-                    InputSource::Const(lit.get("const")?.clone())
-                }
-                _ => return None,
-            };
-            Some((arg.clone(), source))
-        })
+        .map(|(arg, src)| (arg.clone(), src.clone()))
         .collect();
     Some(Lookup {
         id: id.to_string(),
-        tool: cfg.get("tool")?.as_str()?.to_string(),
-        inputs: inputs.filter(|i| !i.is_empty())?,
-        writes: writes(cfg.get("writes"))?,
-        max_attempts: attempts(cfg.get("max_attempts")),
-        assurance: assurance(cfg)?,
+        tool: cfg.tool.clone()?,
+        inputs: (!inputs.is_empty()).then_some(inputs)?,
+        writes: writes(&cfg.writes)?,
+        max_attempts: cfg.max_attempts(),
+        assurance: cfg.assurance.clone()?,
     })
 }
 

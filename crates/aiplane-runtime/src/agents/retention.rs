@@ -14,7 +14,9 @@ use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::db::agent_retention::{self, Swept};
 use aiplane_core::server::db::{DbError, Pool, agents as agents_db};
 use jiff::{SignedDuration, Timestamp};
-use serde_json::{Value, json};
+use serde_json::json;
+
+use super::spec::AgentSpec;
 
 /// How long an agent keeps a conversation after its last message when its
 /// live version sets no `publish.retention_days`, or it has none.
@@ -23,14 +25,6 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 /// Retention is counted in days, so sweeping every hour deletes a
 /// conversation at most an hour late.
 const SWEEP_EVERY: Duration = Duration::from_secs(3_600);
-
-/// `publish.retention_days` of a spec, or [`DEFAULT_RETENTION_DAYS`].
-pub fn retention_days(spec: &Value) -> i64 {
-    spec.pointer("/publish/retention_days")
-        .and_then(Value::as_i64)
-        .filter(|d| *d > 0)
-        .unwrap_or(DEFAULT_RETENTION_DAYS)
-}
 
 /// One sweep at `now` over every agent. Returns what was deleted per agent
 /// id, only for agents where something was; each of those is also audited
@@ -43,8 +37,8 @@ pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>
         let id = agent.principal.id;
         let days = live
             .get(&id)
-            .and_then(|s| serde_json::from_str::<Value>(s).ok())
-            .map_or(DEFAULT_RETENTION_DAYS, |s| retention_days(&s));
+            .and_then(|s| serde_json::from_str::<AgentSpec>(s).ok())
+            .map_or(DEFAULT_RETENTION_DAYS, |s| s.publish.retention_days());
         let idle_before = now
             .checked_sub(SignedDuration::from_hours(days.saturating_mul(24)))
             .unwrap_or(Timestamp::MIN);
@@ -96,17 +90,19 @@ pub fn spawn_retention_sweeper(pool: Pool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn retention_comes_from_the_publish_settings_with_a_30_day_default() {
+        let days = |spec: Value| AgentSpec::from_value(&spec).map(|s| s.publish.retention_days());
         assert_eq!(
-            retention_days(&json!({ "publish": { "retention_days": 7 } })),
+            days(json!({ "publish": { "retention_days": 7 } })).unwrap(),
             7
         );
-        assert_eq!(retention_days(&json!({})), 30);
-        assert_eq!(
-            retention_days(&json!({ "publish": { "retention_days": 0 } })),
-            30
+        assert_eq!(days(json!({})).unwrap(), 30);
+        assert!(
+            days(json!({ "publish": { "retention_days": 0 } })).is_err(),
+            "zero days would delete every conversation at once; it does not read"
         );
     }
 }

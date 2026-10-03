@@ -37,6 +37,14 @@
 //!
 //! - **The sub-agent graph**, over the live specs of the agents it routes to:
 //!   acyclic and at most [`MAX_DEPTH`] agents deep, this one included.
+//!
+//! **Validation and typing.** [`check`] runs the walk and, only when it found
+//! nothing, deserializes the same JSON into the typed [`AgentSpec`]
+//! (`spec/model.rs`), which is what runtime code reads. The walk owns the
+//! `{path, message}` errors; the types own the defaults. Their key sets are
+//! the same, so a spec the walk accepts always deserializes — every accepting
+//! test of the walk also proves that, since [`validate`] reports a spec that
+//! does not as an issue.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -50,12 +58,14 @@ use super::gate::Cond;
 use verifiers::HOST_JWT;
 
 mod a2a;
+pub mod model;
 mod route_kinds;
 mod verifiers;
 use super::state::StateSchema;
 use crate::finish::FinishContract;
 use crate::server::tools::mcp::MCP_ID_PREFIX;
 pub(crate) use a2a::{MAX_SKILLS as MAX_A2A_SKILLS, is_skill_id};
+pub use model::AgentSpec;
 
 /// One problem with a spec: where, and what to do about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -279,6 +289,15 @@ fn depth_below(
 
 /// Every problem with `spec`, in document order. Empty means valid.
 pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIssue> {
+    check(spec, ctx, stage).err().unwrap_or_default()
+}
+
+/// `spec` as the typed [`AgentSpec`], or every problem with it.
+pub fn check(
+    spec: &Value,
+    ctx: &SpecContext<'_>,
+    stage: Stage,
+) -> Result<AgentSpec, Vec<SpecIssue>> {
     let mut check = Check {
         ctx,
         stage,
@@ -288,7 +307,18 @@ pub fn validate(spec: &Value, ctx: &SpecContext<'_>, stage: Stage) -> Vec<SpecIs
         schema: None,
     };
     check.spec(spec);
-    check.issues
+    if !check.issues.is_empty() {
+        return Err(check.issues);
+    }
+    AgentSpec::from_value(spec).map_err(|err| {
+        vec![SpecIssue {
+            path: String::new(),
+            message: format!(
+                "passed every check but does not read as an agent spec ({err}) — the validator \
+                 and the spec types disagree, which is a bug to report"
+            ),
+        }]
+    })
 }
 
 struct Check<'a> {
@@ -1631,6 +1661,35 @@ mod tests {
     #[test]
     fn the_documented_layout_is_valid_for_publishing() {
         assert_eq!(check(full(), Stage::Publish), []);
+    }
+
+    #[test]
+    fn a_spec_that_passes_comes_back_typed_with_its_defaults_applied() {
+        let (grants, agents, live) = (grants(), agents(), HashMap::new());
+        let ctx = SpecContext {
+            agent_id: SELF,
+            grants: &grants,
+            agents: &agents,
+            live_specs: &live,
+        };
+        let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
+        assert_eq!(typed.main_pool(), Some("chat"));
+        assert_eq!(typed.main.budget.budget().rounds(), 12);
+        assert!(matches!(
+            &typed.routes["billing"].target,
+            model::RouteTarget::Agent(id) if id == BILLING
+        ));
+        assert_eq!(
+            typed.publish.idle_ttl(),
+            jiff::SignedDuration::from_mins(30)
+        );
+        assert_eq!(
+            typed.publish.visitor_rates().visitor,
+            crate::agents::embed::DEFAULT_VISITOR_RATE,
+            "an unset rate takes its default from the type"
+        );
+        let issues = super::check(&json!({ "mian": {} }), &ctx, Stage::Draft).unwrap_err();
+        assert_eq!(issues, check(json!({ "mian": {} }), Stage::Draft));
     }
 
     #[test]

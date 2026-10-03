@@ -36,6 +36,8 @@ use super::human::{RequestHuman, human_routes};
 use super::output_filter::OutputFilter;
 use super::router::{ForwardRequest, RouteClassifier, RouterSpec};
 use super::slot_tools::SlotTools;
+use super::spec::AgentSpec;
+use super::spec::model::Route;
 use super::spec_cache::CompiledSpec;
 use super::state::{self, StateSchema, StateSnapshot, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
@@ -211,10 +213,10 @@ impl RunProfile {
             version,
             message,
         };
-        let spec = &compiled.spec;
         let parts = compiled.parts().map_err(|m| bad(m.to_string()))?;
+        let spec = &parts.agent;
         let (schema, gates) = (parts.schema.clone(), parts.gates.clone());
-        let pool = compiled
+        let pool = spec
             .main_pool()
             .ok_or_else(|| bad("it names no `main.pool`".into()))?
             .to_string();
@@ -226,7 +228,7 @@ impl RunProfile {
         let finish = match &role {
             Role::Main => None,
             Role::SubAgent { .. } => {
-                let schema = spec.pointer("/finish/schema").cloned().ok_or_else(|| {
+                let schema = spec.finish_schema().cloned().ok_or_else(|| {
                     bad("it declares no `finish.schema`, which a routed sub-agent needs".into())
                 })?;
                 Some(FinishContract::new(schema).map_err(|e| bad(e.to_string()))?)
@@ -256,20 +258,18 @@ impl RunProfile {
             }
         }
         let snapshot = Arc::new(StateSnapshot::default());
-        let routes = spec.get("routes").cloned().unwrap_or_else(|| json!({}));
         let conversation = (!schema.is_empty() || !gates.is_empty()).then(|| Conversation {
             schema: schema.clone(),
             gates: gates.clone(),
-            routes: routes.clone(),
+            agent: spec.clone(),
             now: options.now.clone(),
         });
         if !gates.is_empty() {
             let router = Arc::new(RouterSpec {
                 principal: principal.clone(),
+                agent: spec.clone(),
                 schema: schema.clone(),
                 gates,
-                routes,
-                router: spec.get("router").cloned(),
                 main_pool: pool,
                 snapshot: snapshot.clone(),
             });
@@ -287,16 +287,9 @@ impl RunProfile {
         };
         let run = AgentRun {
             name: principal.name.clone(),
-            instructions: instructions(spec),
+            instructions: spec.main.instructions.text(),
             conversation,
-            tools: spec
-                .pointer("/main/tools")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect(),
+            tools: spec.main.tools.clone(),
             synthetic,
             binds,
             permissions: Permissions::from_spec(spec),
@@ -306,7 +299,7 @@ impl RunProfile {
             spend: options.spend.clone(),
         };
         Ok(Self {
-            budget: budget(spec),
+            budget: spec.main.budget.budget(),
             principal,
             version,
             model,
@@ -340,31 +333,6 @@ impl RunProfile {
     }
 }
 
-fn budget(spec: &Value) -> Budget {
-    let get = |key: &str| {
-        spec.pointer(&format!("/main/budget/{key}"))
-            .and_then(Value::as_u64)
-    };
-    Budget::new(
-        get("rounds")
-            .and_then(|r| u32::try_from(r).ok())
-            .unwrap_or_else(|| aiplane_core::server::reasoning::Effort::Standard.max_rounds()),
-        get("seconds"),
-        get("tokens"),
-    )
-}
-
-fn instructions(spec: &Value) -> String {
-    ["orchestration", "response"]
-        .iter()
-        .filter_map(|k| spec.pointer(&format!("/main/instructions/{k}")))
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 /// A model id a healthy backend of chat pool `pool` serves, if `access` may
 /// use that pool. The spec names a pool; a request names a model.
 pub fn pool_model(state: &RamaState, pool: &str, access: &PoolAccess) -> Option<String> {
@@ -385,7 +353,7 @@ pub fn pool_model(state: &RamaState, pool: &str, access: &PoolAccess) -> Option<
 struct Conversation {
     schema: Arc<StateSchema>,
     gates: Arc<RouteGates>,
-    routes: Value,
+    agent: Arc<AgentSpec>,
     now: state::Clock,
 }
 
@@ -484,7 +452,7 @@ impl AgentRun {
                 state: &state,
                 now: (c.now)(),
             };
-            let routes = route_summary(&c.gates, &c.routes, input);
+            let routes = route_summary(&c.gates, &c.agent.routes, input);
             if !routes.is_empty() {
                 parts.push(routes);
             }
@@ -507,7 +475,11 @@ impl AgentRun {
     }
 }
 
-fn route_summary(gates: &RouteGates, routes: &Value, input: GateInput<'_>) -> String {
+fn route_summary(
+    gates: &RouteGates,
+    routes: &BTreeMap<String, Route>,
+    input: GateInput<'_>,
+) -> String {
     let statuses = gates.statuses(input);
     if statuses.is_empty() {
         return String::new();
@@ -524,8 +496,8 @@ fn route_summary(gates: &RouteGates, routes: &Value, input: GateInput<'_>) -> St
     }
     for (name, status) in statuses {
         let about = routes
-            .pointer(&format!("/{name}/description"))
-            .and_then(Value::as_str)
+            .get(&name)
+            .and_then(|r| r.description.as_deref())
             .map(|d| format!(" ({d})"))
             .unwrap_or_default();
         let line = match status {
@@ -647,7 +619,7 @@ mod tests {
             conversation: None,
             tools: vec!["company_echo".into()],
             synthetic: BTreeMap::new(),
-            binds: ToolBinds::from_spec(&spec)
+            binds: ToolBinds::from_spec(&AgentSpec::from_value(&spec).unwrap())
                 .with_route(BTreeMap::from([("customer".into(), json!("K-1"))])),
             permissions: Permissions::default(),
             schema: None,

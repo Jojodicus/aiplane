@@ -344,6 +344,51 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
 - Every gate must type-check against the slots (§4).
 - The sub-agent graph must be acyclic and at most 3 levels deep.
 
+### The typed spec (#107)
+
+Runtime code never reads the spec's JSON. It reads `AgentSpec`
+(`aiplane-runtime::agents::spec::model`): serde structs and enums for every
+part above — `profile`, `main` (with `tool_resources`, their `bind`,
+`permission` and `approval_timeout`, and `budget`), `state` slots,
+`verifiers` (tagged by `kind`), `router`, `routes` (each with exactly one
+`RouteTarget`: `agent`, `human`, `a2a` or `loop`), `finish`,
+`on_tool_unavailable` and `publish` (origins, `idle_ttl`, `retention_days`,
+`rate_limits`, `budget`, `output_filter`, `require_passing_tests`, `a2a`).
+
+- **Validation and typing are two steps over one JSON.** `spec::check` runs
+  the path-reporting walk; only when it found nothing does it deserialize the
+  same value into `AgentSpec`. The walk keeps the `{path, message}` errors
+  (serde would stop at the first and point at a line and column nobody
+  typed); the types keep the shape. `spec::validate` is `check` without the
+  typed value, so every accepting validator test also proves the two agree:
+  a spec the walk passes but the types refuse comes back as an issue at the
+  root, which is a bug.
+- **Unknown keys are refused twice.** Every type is `deny_unknown_fields`,
+  like the walk, so a misspelt or renamed key can never deserialize into a
+  silent default.
+- **Defaults live in the types.** A field the spec may leave out is an
+  `Option` (or an empty collection), and the one accessor that reads it
+  applies the default: `Publish::{idle_ttl, visitor_rates, retention_days,
+  allows_origin, a2a_enabled}`, `RunBudget::budget`,
+  `ToolResource::approval_timeout`, `HumanSpec::{timeout, transcript}`,
+  `LoopSpec::max_iterations`, `A2aRouteSpec::seconds`, the `McpCodeSpec`
+  and `LookupSpec` accessors and `HostJwtSpec::max_lifetime`. The constants
+  they apply stay with the subsystem that documents them.
+- **What stays JSON**: a route's `when` (compiled by `gate::Cond` into
+  `RouteGates`), `finish.schema` and a `subject` slot's `schema` (JSON
+  schemas `FinishContract` enforces), and `state`, which `StateSchema`
+  compiles from the same JSON because the walk needs it too.
+- **Built once.** `CompiledSpec` (the spec cache) holds the `AgentSpec` of
+  each published version beside its `StateSchema`, `RouteGates` and
+  `OutputFilter`; `CompiledSpec::agent()` hands it out. A draft run, the
+  test-chat debug view and a test case compile the draft the same way.
+- **A stored spec that does not read** (only a hand-edited row; every save and
+  publish ran `check`) fails loudly instead of falling back field by field:
+  it cannot run (`BadSpec`, "it does not read as an agent spec …"), the embed
+  endpoint allows it no origin, a visitor admission applies the default
+  rates, the retention sweep the default 30 days, and it is not served over
+  A2A.
+
 ### What #84 built
 
 - **Migration `0080_agents.sql`** creates the three tables above as written
@@ -728,8 +773,9 @@ grants.
   and `drive_params` turns that into `DriveParams`. `DriveParams.agent` and
   `OpenAiDriver.agent` carry the `AgentRun` into the ordinary headless loop.
   There is no second driver.
-  - *Compiled once*: a published version is immutable, so its parsed spec,
-    `StateSchema`, `RouteGates` and `OutputFilter` are built once per
+  - *Compiled once*: a published version is immutable, so its typed spec
+    ([`AgentSpec`](#the-typed-spec-107)), `StateSchema`, `RouteGates` and
+    `OutputFilter` are built once per
     `(agent, version)` and shared (`agents::spec_cache`, at most 256, least
     recently used first). Which version is live is read fresh for a run and
     held for 5 s on a visitor admission.

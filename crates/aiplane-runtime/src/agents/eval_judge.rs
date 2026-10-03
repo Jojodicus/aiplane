@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use super::eval::{Exchange, RubricJudge, RubricVerdict};
 use super::profile::pool_model;
+use super::spec::AgentSpec;
 use crate::rama_server::state::RamaState;
 
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -31,9 +32,13 @@ pub struct PoolJudge {
 impl PoolJudge {
     /// `None` when the agent is unknown or disabled, or its spec names no
     /// `main.pool`.
-    pub async fn for_agent(state: Arc<RamaState>, agent_id: &str, spec: &Value) -> Option<Self> {
+    pub async fn for_agent(
+        state: Arc<RamaState>,
+        agent_id: &str,
+        spec: &AgentSpec,
+    ) -> Option<Self> {
         let principal = sp::load_active(&state.db, agent_id).await.ok()??;
-        let pool = spec.pointer("/main/pool")?.as_str()?.to_string();
+        let pool = spec.main_pool()?.to_string();
         let access = PoolAccess::for_system_pools(&principal, [pool.as_str()]);
         Some(Self {
             state,

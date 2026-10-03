@@ -35,7 +35,7 @@ use shared::api::ToolDef;
 use super::gate::{GateInput, GateStatus};
 use super::profile::RunOptions;
 use super::router::RouterSpec;
-use super::spec::parse_duration;
+use super::spec::model::{Route, RouteTarget};
 use super::state::SlotStatus;
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
@@ -63,43 +63,23 @@ pub struct HumanRoute {
     pub inbox: Option<String>,
 }
 
-/// Every route of `routes` (the spec's `routes` object) that goes to a
-/// person.
-pub fn human_routes(routes: &Value) -> BTreeMap<String, HumanRoute> {
+/// Every route of `routes` (the spec's `routes`) that goes to a person.
+pub fn human_routes(routes: &BTreeMap<String, Route>) -> BTreeMap<String, HumanRoute> {
     routes
-        .as_object()
-        .into_iter()
-        .flatten()
+        .iter()
         .filter_map(|(name, route)| {
-            let human = route.get("human")?;
+            let RouteTarget::Human(human) = &route.target else {
+                return None;
+            };
             Some((
                 name.clone(),
                 HumanRoute {
                     name: name.clone(),
-                    description: route
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    timeout: human
-                        .get("timeout")
-                        .and_then(Value::as_str)
-                        .and_then(parse_duration)
-                        .and_then(|d| u64::try_from(d.as_secs()).ok())
-                        .map_or(DEFAULT_HUMAN_TIMEOUT, Duration::from_secs),
-                    transcript: human
-                        .get("transcript")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    notify: human.get("notify").and_then(Value::as_array).map(|a| {
-                        a.iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    }),
-                    inbox: human
-                        .get("inbox")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    description: route.description.clone(),
+                    timeout: human.timeout(),
+                    transcript: human.transcript(),
+                    notify: human.notify.clone(),
+                    inbox: human.inbox.clone(),
                 },
             ))
         })
@@ -238,7 +218,7 @@ pub struct RequestHuman {
 impl RequestHuman {
     /// `None` when the spec has no `human` route to request.
     pub fn new(spec: Arc<RouterSpec>, options: RunOptions) -> Option<Self> {
-        let humans = human_routes(&spec.routes);
+        let humans = human_routes(&spec.agent.routes);
         (!humans.is_empty()).then_some(Self {
             spec,
             humans,
@@ -264,17 +244,12 @@ impl RequestHuman {
             now: (self.options.now)(),
         };
         let statuses = self.spec.gates.statuses(input);
-        let order: Vec<String> = self
+        let order: &[String] = self
             .spec
+            .agent
             .router
             .as_ref()
-            .and_then(|r| r.get("order"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
+            .map_or(&[], |r| r.order.as_slice());
         let open = |name: &String| {
             statuses
                 .iter()
@@ -400,13 +375,14 @@ mod tests {
 
     #[test]
     fn a_human_route_reads_its_settings_with_defaults() {
-        let routes = json!({
+        let spec = json!({ "routes": {
             "people": { "description": "talk to support", "when": {}, "human": {
                 "timeout": "2h", "transcript": true, "notify": ["slack"], "inbox": "support" } },
             "plain": { "when": {}, "human": {} },
             "billing": { "when": {}, "agent": "x", "task": "t" }
-        });
-        let humans = human_routes(&routes);
+        } });
+        let spec = crate::agents::spec::AgentSpec::from_value(&spec).unwrap();
+        let humans = human_routes(&spec.routes);
         assert_eq!(humans.len(), 2);
         let people = &humans["people"];
         assert_eq!(people.timeout, Duration::from_secs(7200));

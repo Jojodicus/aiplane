@@ -12,7 +12,7 @@
 use serde_json::{Value, json};
 use session_core::db::{SuspensionKind, TurnStatus};
 
-use super::spec::{MAX_A2A_SKILLS, is_skill_id};
+use super::spec::{AgentSpec, MAX_A2A_SKILLS, is_skill_id};
 
 /// The A2A protocol version this endpoint speaks (`Major.Minor`, compared
 /// against the `A2A-Version` header).
@@ -21,39 +21,27 @@ pub const PROTOCOL_VERSION: &str = "1.0";
 /// The `securitySchemes` key the card names the system-token bearer under.
 pub const SECURITY_SCHEME: &str = "aiplaneSystemToken";
 
-/// Whether the spec opts the agent into A2A (`publish.a2a.enabled`). Off
-/// unless it says `true`: an agent is never served over A2A by default.
-pub fn enabled(spec: &Value) -> bool {
-    spec.pointer("/publish/a2a/enabled") == Some(&Value::Bool(true))
-}
-
 /// What the agent is called on its card: the spec's `profile.display`, else
 /// the principal's display name.
-pub fn display_name<'a>(spec: &'a Value, principal_display: &'a str) -> &'a str {
-    spec.pointer("/profile/display")
-        .and_then(Value::as_str)
-        .filter(|d| !d.trim().is_empty())
-        .unwrap_or(principal_display)
+pub fn display_name<'a>(spec: &'a AgentSpec, principal_display: &'a str) -> &'a str {
+    spec.profile.display().unwrap_or(principal_display)
 }
 
 /// The card's skills: `publish.a2a.skills` as written, else one for the
 /// agent as a whole (from its description) plus one per route that has a
 /// `description` — a route without one is internal plumbing, not something
 /// to advertise.
-pub fn skills(spec: &Value, agent_name: &str, display: &str, description: &str) -> Vec<Value> {
-    if let Some(listed) = spec
-        .pointer("/publish/a2a/skills")
-        .and_then(Value::as_array)
-    {
+pub fn skills(spec: &AgentSpec, agent_name: &str, display: &str, description: &str) -> Vec<Value> {
+    if let Some(listed) = spec.publish.a2a.as_ref().and_then(|a| a.skills.as_ref()) {
         return listed
             .iter()
             .map(|s| {
                 json!({
-                    "id": s["id"],
-                    "name": s["name"],
-                    "description": s["description"],
-                    "tags": s.get("tags").cloned().unwrap_or_else(|| json!([])),
-                    "examples": s.get("examples").cloned().unwrap_or_else(|| json!([])),
+                    "id": s.id,
+                    "name": s.name,
+                    "description": s.description,
+                    "tags": s.tags,
+                    "examples": s.examples,
                 })
             })
             .collect();
@@ -68,20 +56,15 @@ pub fn skills(spec: &Value, agent_name: &str, display: &str, description: &str) 
     } else {
         description.to_string()
     };
-    let routes = spec.get("routes").and_then(Value::as_object);
     let mut out = vec![json!({
         "id": id,
         "name": display,
         "description": about,
-        "tags": routes.map(|r| r.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+        "tags": spec.routes.keys().collect::<Vec<_>>(),
         "examples": [],
     })];
-    for (route, def) in routes.into_iter().flatten() {
-        let Some(text) = def
-            .get("description")
-            .and_then(Value::as_str)
-            .filter(|d| !d.trim().is_empty())
-        else {
+    for (route, def) in &spec.routes {
+        let Some(text) = def.description.as_deref().filter(|d| !d.trim().is_empty()) else {
             continue;
         };
         if out.len() >= MAX_A2A_SKILLS || route == id {
@@ -105,7 +88,7 @@ pub struct CardFacts<'a> {
     pub description: &'a str,
     pub live_version: i64,
     /// The live spec.
-    pub spec: &'a Value,
+    pub spec: &'a AgentSpec,
     /// Absolute URL of the agent's JSON-RPC endpoint.
     pub endpoint: &'a str,
 }
@@ -204,30 +187,39 @@ pub fn answered_by_caller(kind: SuspensionKind) -> bool {
 mod tests {
     use super::*;
 
+    fn typed(spec: Value) -> AgentSpec {
+        AgentSpec::from_value(&spec).unwrap()
+    }
+
     fn card(spec: Value, description: &str) -> Value {
         agent_card(&CardFacts {
             agent_name: "support",
             principal_display: "Support",
             description,
             live_version: 3,
-            spec: &spec,
+            spec: &typed(spec),
             endpoint: "https://gw.example/a2a/agents/a1",
         })
     }
 
     #[test]
     fn only_an_explicit_true_opts_an_agent_in() {
+        let enabled = |spec: Value| typed(spec).publish.a2a_enabled();
         assert!(enabled(
-            &json!({ "publish": { "a2a": { "enabled": true } } })
+            json!({ "publish": { "a2a": { "enabled": true } } })
         ));
         for off in [
             json!({}),
             json!({ "publish": {} }),
             json!({ "publish": { "a2a": { "enabled": false } } }),
-            json!({ "publish": { "a2a": { "enabled": "true" } } }),
         ] {
-            assert!(!enabled(&off), "{off}");
+            assert!(!enabled(off.clone()), "{off}");
         }
+        let quoted = json!({ "publish": { "a2a": { "enabled": "true" } } });
+        assert!(
+            AgentSpec::from_value(&quoted).is_err(),
+            "only a boolean reads"
+        );
     }
 
     #[test]
@@ -261,8 +253,8 @@ mod tests {
     fn without_listed_skills_the_card_derives_them_from_the_description_and_described_routes() {
         let c = card(
             json!({ "routes": {
-                "billing": { "description": "Invoices and payments" },
-                "internal": {}
+                "billing": { "description": "Invoices and payments", "when": {}, "human": {} },
+                "internal": { "when": {}, "human": {} }
             } }),
             "",
         );

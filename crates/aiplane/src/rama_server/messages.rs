@@ -622,7 +622,7 @@ fn json_response(status: StatusCode, body: &Value) -> Response {
 }
 
 /// An Anthropic error envelope with the type implied by `status`.
-fn error_response(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, message: &str) -> Response {
     json_response(
         status,
         &anthropic::error::for_status(status.as_u16(), message),
