@@ -220,7 +220,7 @@ async fn admit(
         ip,
     };
     match embed_rt::admit(state, agent_id, who, Timestamp::now()).await {
-        Ok(()) => Ok(()),
+        Ok(_) => Ok(()),
         Err(refusal) => Err(refused(&refusal, lang)),
     }
 }

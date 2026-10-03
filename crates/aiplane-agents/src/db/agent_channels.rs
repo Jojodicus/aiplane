@@ -17,7 +17,7 @@ use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 use super::agent_audit::{self, AuditKind};
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 use aiplane_core::server::crypto::Crypto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,7 @@ pub async fn create(
         source: anyhow::anyhow!("sealing the webhook URL: {e}"),
     })?;
     let id = Uuid::new_v4().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let inserted = sqlx::query(
         "INSERT INTO agent_notify_channels
             (id, principal_id, kind, name, url_nonce, url_ct, url_host, details, lang,
@@ -198,7 +198,7 @@ pub async fn delete(
     channel_id: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let removed =
         sqlx::query("DELETE FROM agent_notify_channels WHERE id = ? AND principal_id = ?")
             .bind(channel_id)

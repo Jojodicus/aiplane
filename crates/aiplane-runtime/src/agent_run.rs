@@ -21,6 +21,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use aiplane_agents::db::agent_audit::Redaction;
 use aiplane_core::server::principal::{Principal, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
 
@@ -56,6 +57,11 @@ pub struct AgentRun {
     /// Set once an event of this run could not be written to the activity
     /// log; the driver then stops the run (`agents::audit`).
     log_failed: AtomicBool,
+    /// What every event of this run leaves out: the secure input the turn
+    /// resumed with, and the tools seen so far that declare their arguments
+    /// sensitive. Attached to each event (`ToolContext::redaction`) and
+    /// applied by the log itself.
+    redaction: Mutex<Redaction>,
 }
 
 impl std::fmt::Debug for AgentRun {
@@ -91,6 +97,7 @@ impl AgentRun {
             outcome: Mutex::new(None),
             round: AtomicU32::new(0),
             log_failed: AtomicBool::new(false),
+            redaction: Mutex::new(Redaction::default()),
         })
     }
 
@@ -114,6 +121,31 @@ impl AgentRun {
     pub fn with_surface(mut self, surface: Arc<AgentSurface>) -> Self {
         self.surface = Some(surface);
         self
+    }
+
+    /// What this run's events leave out so far.
+    pub fn redaction(&self) -> Redaction {
+        self.redaction
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Leave `redaction` out of this run's events from now on, on top of
+    /// what is left out already.
+    pub fn redact(&self, redaction: &Redaction) {
+        let mut held = self.redaction.lock().unwrap_or_else(|p| p.into_inner());
+        *held = std::mem::take(&mut *held).and(redaction);
+    }
+
+    /// Leave the arguments of every call to tool `name` out of this run's
+    /// events.
+    pub fn note_sensitive(&self, name: &str) {
+        self.redaction
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .sensitive_tools
+            .insert(name.to_string());
     }
 
     pub fn system_principal(&self) -> &SystemPrincipal {

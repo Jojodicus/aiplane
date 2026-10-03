@@ -279,7 +279,6 @@ pub async fn rag_oauth_callback(
     let client_secret = secrets.get(client_secret_key).cloned();
 
     let tokens = match mcp_oauth::exchange_code(
-        &state.http,
         &pending.token_url,
         &code,
         &pending.pkce_verifier,

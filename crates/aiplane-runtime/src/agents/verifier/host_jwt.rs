@@ -39,6 +39,7 @@ use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
+use aiplane_agents::db::WriteTx;
 
 const LEEWAY_SECS: u64 = 30;
 const JWKS_TTL: Duration = Duration::from_secs(300);
@@ -475,7 +476,6 @@ pub async fn accept(
         Ok(_) => {
             let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
                 session_id: Some(session_id.to_string()),
-                conversation_id: Some(session_id.to_string()),
                 ..Correlation::default()
             });
             let _ = crate::agents::audit::record_event(&state.db, event).await;
@@ -517,7 +517,7 @@ async fn accept_inner(
     // One transaction: the `jti` is spent only together with every slot, so
     // a failed write neither leaves half an identity behind nor burns the
     // token the website will retry with.
-    let mut tx = state.db.begin().await.map_err(|e| storage(&e))?;
+    let mut tx = WriteTx::begin(&state.db).await.map_err(|e| storage(&e))?;
     if let Some(jti) = claims.get("jti").and_then(Value::as_str) {
         let exp = claims
             .get("exp")
@@ -539,7 +539,6 @@ async fn accept_inner(
         &values,
         TrustedWriter::Host,
         now,
-        None,
     )
     .await
     .map_err(|e| storage(&e))?;

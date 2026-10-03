@@ -176,8 +176,8 @@ pub async fn hand_off(
     via: &str,
 ) -> Result<Value, ToolError> {
     match &ctx.suspend {
-        Suspend::Decided(Decision::Value { value }) => Ok(answered(value)),
-        Suspend::Decided(other) => Err(ToolError::Failed(format!(
+        Suspend::Decided(_, Decision::Value { value }) => Ok(answered(value)),
+        Suspend::Decided(_, other) => Err(ToolError::Failed(format!(
             "the request for a person was not answered (decision: {:?}).",
             other.kind()
         ))),
@@ -309,7 +309,7 @@ impl Tool for RequestHuman {
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
-            if let Suspend::Decided(Decision::Value { value }) = &ctx.suspend {
+            if let Suspend::Decided(_, Decision::Value { value }) = &ctx.suspend {
                 return Ok(answered(value));
             }
             let Some(map) = args.as_object() else {

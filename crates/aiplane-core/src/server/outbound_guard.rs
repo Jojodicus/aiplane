@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The one way to connect to a destination a user, a model or an agent's
-//! owner chose: `fetch_url`, `load_image_url` and `tls_cert` for the model,
-//! an A2A route's card, endpoint and OAuth token URL and a `host_jwt`
-//! verifier's JWKS URL for an agent's owner.
+//! The one way to connect to a destination the operator does not configure
+//! himself: `fetch_url`, `load_image_url`, `tls_cert`, `dns_lookup` and
+//! `whois_lookup` for the model, an A2A route's card, endpoint and OAuth
+//! token URL and a `host_jwt` verifier's JWKS URL for an agent's owner, a
+//! Web Push endpoint a browser registered, and the MCP OAuth flow's
+//! discovery, registration and token endpoints. Each caller names its
+//! [`Policy`].
 //!
 //! Before every connection the host is resolved here, every address it
 //! resolves to is checked, and the HTTP client is pinned to exactly those
@@ -21,10 +24,11 @@
 //! local) and carrier-grade NAT addresses.
 //!
 //! What an address is comes from `net_guard::classify`, shared with the
-//! other outbound guards; the policy is this module's own. It is stricter
-//! than `mcp_oauth::validate_outbound_url`, which allows private ranges on
-//! purpose (an admin curates the MCP catalog). What comes back is read
-//! through `capped_read`, so the peer does not decide how much is buffered.
+//! other outbound guards; the policies are this module's own. The MCP OAuth
+//! one ([`Policy::mcp_oauth`]) allows private ranges on purpose — an admin
+//! curates the MCP catalog — while still refusing link-local and the other
+//! never-reached ranges. What comes back is read through `capped_read`, so
+//! the peer does not decide how much is buffered.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -32,7 +36,7 @@ use std::time::Duration;
 use reqwest::Url;
 
 use crate::server::config::PRIVATE_NETWORKS_VAR;
-use crate::server::net_guard::{IpClass, classify};
+use crate::server::net_guard::{IpClass, classify, is_loopback_host};
 
 /// How many redirects [`get`] follows before giving up.
 pub const MAX_REDIRECTS: usize = 5;
@@ -45,6 +49,9 @@ pub enum Schemes {
     HttpsUnlessPrivate,
     /// `http` or `https`. For reading public web content.
     HttpOrHttps,
+    /// `https`; plain `http` only to a loopback host (`localhost` or a
+    /// loopback address), for a self-hosted server in development.
+    HttpsUnlessLoopback,
 }
 
 /// What a destination may be.
@@ -68,6 +75,26 @@ impl Policy {
         Self {
             allow_private,
             schemes: Schemes::HttpOrHttps,
+        }
+    }
+
+    /// A public host over https and nothing else, whatever the operator
+    /// allows elsewhere: a Web Push endpoint a browser registered, a
+    /// registry an RDAP lookup is sent on to.
+    pub fn public_https() -> Self {
+        Self {
+            allow_private: false,
+            schemes: Schemes::HttpsUnlessPrivate,
+        }
+    }
+
+    /// The MCP OAuth flow's discovery, registration and token endpoints:
+    /// the admin-curated catalog may sit in a private network, so private
+    /// and loopback addresses are allowed, plain http to loopback only.
+    pub fn mcp_oauth() -> Self {
+        Self {
+            allow_private: true,
+            schemes: Schemes::HttpsUnlessLoopback,
         }
     }
 }
@@ -103,6 +130,15 @@ fn check_scheme(url: &Url, policy: Policy) -> Result<(), String> {
         ("http", Schemes::HttpsUnlessPrivate) => Err(format!(
             "{url} is plain http; this destination is reached over https only (plain http \
              only where the operator sets `${PRIVATE_NETWORKS_VAR}=true`)"
+        )),
+        ("http", Schemes::HttpsUnlessLoopback)
+            if url.host().is_some_and(|h| is_loopback_host(&h)) =>
+        {
+            Ok(())
+        }
+        ("http", Schemes::HttpsUnlessLoopback) => Err(format!(
+            "{url} is plain http; this destination is reached over https only (plain http only \
+             to localhost)"
         )),
         (other, _) => Err(format!("{url} uses `{other}`; only http(s) is allowed")),
     }
@@ -173,13 +209,30 @@ pub async fn get(
     timeout: Duration,
     user_agent: &str,
 ) -> Result<reqwest::Response, String> {
+    get_with(
+        raw,
+        policy,
+        timeout,
+        &[(reqwest::header::USER_AGENT.as_str(), user_agent)],
+    )
+    .await
+}
+
+/// [`get`] with these request headers on every hop.
+pub async fn get_with(
+    raw: &str,
+    policy: Policy,
+    timeout: Duration,
+    headers: &[(&str, &str)],
+) -> Result<reqwest::Response, String> {
     let mut url = Url::parse(raw).map_err(|e| format!("`{raw}` is not a URL ({e})"))?;
     for _ in 0..=MAX_REDIRECTS {
         let pinned = pin_url(url.clone(), policy, timeout).await?;
-        let resp = pinned
-            .client
-            .get(pinned.url)
-            .header(reqwest::header::USER_AGENT, user_agent)
+        let mut request = pinned.client.get(pinned.url);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let resp = request
             .send()
             .await
             .map_err(|e| format!("fetching {url} failed: {e}"))?;
@@ -281,6 +334,51 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn the_public_https_policy_takes_neither_http_nor_a_private_host() {
+        let http = pin("http://93.184.216.34/", Policy::public_https(), T)
+            .await
+            .err()
+            .unwrap();
+        assert!(http.contains("https"), "{http}");
+        for url in [
+            "https://127.0.0.1:9/",
+            "https://localhost:9/",
+            "https://10.0.0.1/",
+        ] {
+            let why = pin(url, Policy::public_https(), T).await.err().unwrap();
+            assert!(why.contains(PRIVATE_NETWORKS_VAR), "{url}: {why}");
+        }
+        assert!(
+            pin("https://93.184.216.34/", Policy::public_https(), T)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_mcp_oauth_policy_allows_private_hosts_but_plain_http_only_to_loopback() {
+        for ok in [
+            "https://10.1.2.3/token",
+            "http://127.0.0.1:9000/token",
+            "http://localhost:9000/token",
+            "http://[::1]:9000/token",
+        ] {
+            assert!(pin(ok, Policy::mcp_oauth(), T).await.is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://93.184.216.34/token",
+            "http://10.1.2.3/token",
+            "https://169.254.169.254/latest/meta-data",
+            "https://0.0.0.0/x",
+            "https://[fe80::1]/x",
+            "https://[::ffff:169.254.169.254]/x",
+            "not a url",
+        ] {
+            assert!(pin(bad, Policy::mcp_oauth(), T).await.is_err(), "{bad}");
+        }
     }
 
     #[tokio::test]

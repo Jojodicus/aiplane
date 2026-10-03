@@ -1692,18 +1692,25 @@ pool rule, and retention.
   Limits, budget and retention are read from the agent's **live** version, not
   the version a conversation is pinned to: lowering a budget or a retention
   period applies to every open conversation at once.
-- **Visitor rates** (`aiplane_agents::rates::check_visitor`, `rates::Rate`;
-  the counted events are one query shape over every inbound channel,
-  `db::inbound`, since #109). An
-  exact sliding window, not the hour-snapped `Window` of spend limits: a
-  visitor told to wait 40 s may send after 40 s. What is counted is what a
-  request leaves behind — the per-visitor bucket counts the visitor's user
-  turns; the per-IP bucket counts conversations started from that IP *and*
-  their messages, per agent, so opening a fresh conversation per message does
-  not dodge the per-visitor limit. A refused request writes nothing, so it
-  never counts. Only `POST /api/v0/embed/sessions` and `POST
-  /api/v0/embed/messages` are gated; reads (`GET …/session`, `…/events`) cost
-  the agent nothing and the widget re-attaches freely.
+- **Visitor rates** (`aiplane_agents::rates::admit_visitor`, `rates::Rate`).
+  An exact sliding window, not the hour-snapped `Window` of spend limits: a
+  visitor told to wait 40 s may send after 40 s. What is counted is the
+  **admission**: every request the gate lets through is one event, recorded
+  by the one rate primitive, `rates::record_within` — the windows are read
+  and the event written in one `WriteTx` (`BEGIN IMMEDIATE`), so parallel
+  requests queue on the write lock instead of all passing the check before
+  any is counted (they did, when the count was the rows a request left
+  behind). The per-visitor bucket counts the admissions into one
+  conversation (`rates::Counter::conversation`, the embed visitor or the
+  A2A context); the per-IP bucket counts every admission from that IP to the
+  agent on every channel (`Counter::ip`), so opening a fresh conversation per
+  message does not dodge the per-visitor limit. The events are rows of
+  `rate_events` (`migrations/0098_rate_events.sql`), one per window, each
+  expiring a window after it was written. A refused request writes nothing,
+  so it never counts; the owner budget is checked first for the same
+  reason. Gated: `POST /api/v0/embed/sessions`, `…/messages` and `…/resume`;
+  reads (`GET …/session`, `…/events`) cost the agent nothing and the widget
+  re-attaches freely.
 - **Owner budget** (`limits::Enforcer::check_agent`). The spec's
   `publish.budget` becomes month-window limits labelled `AgentSpec`; an
   operator may add a `limits` rule with the new subject **`system`** (subject
@@ -1820,10 +1827,12 @@ verifiers:
   `host`".
 - **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
   checks the three send windows (`rates::sliding_window`, the #92 rate
-  type, with new scopes `email` and `session`) and records the send in one
-  write transaction (`agent_verifiers::record_event_within`, `BEGIN
-  IMMEDIATE`, so parallel requests cannot all pass the check before one is
-  counted; a lookup's attempts go through the same call), calls
+  type, with new scopes `email` and `session`) and records the send with
+  the same primitive as a visitor admission (`rates::record_within` on
+  `agent_verifiers::window` counters, one `WriteTx`, so parallel requests
+  cannot all pass the check before one is counted; a lookup's attempts go
+  through the same call, and its `attempts_left` is the count the attempt
+  was admitted against, `Admitted::seen`), calls
   `send_code`, stores the outstanding code's address hash, send time and
   expiry, and pauses the turn with `SuspendRequest::secure_input` (message
   `agent-verifier-code-sent`, timeout `code_ttl`). The widget's secure field
@@ -1840,9 +1849,11 @@ verifiers:
   recorded as `delivery: accepted|refused` in the owner's audit only.
 - **Where the code is not.** It reaches the connector's `check_code` and
   nothing else. The verifier's tools declare `sensitive_args`; the layer's
-  `get_with_sensitive_args` makes an audited connector record `[redacted]`
+  `get_with_sensitive_args` makes an audited connector record the activity
+  log's redaction marker (`{"redacted":true}`,
+  `agent_audit::redaction::redacted_arguments`)
   for both the arguments and a failed call's error in `mcp_tool_audit`; the
-  answer is passed through `withhold_secret` before a slot is written. rmcp
+  answer is passed through `Redaction::withhold` before a slot is written. rmcp
   dumps outgoing MCP requests at `trace`, so the binary's log filter
   (`aiplane::logging`) pins `rmcp::service=debug` whatever `RUST_LOG` asks.
   `tests/it/embed/verifiers.rs` greps every table and every log line (at
@@ -2175,10 +2186,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
     suspend/resume, the output filter (#89) and the inbox (#96) apply as they
     do there;
   - **admission** is `agents::embed::admit` with `Admission { a2a_context, ip
-    }`: the live spec's `publish.rate_limits.visitor` counts the messages of
-    one context (`inbound::message_times`), `…ip` counts the contexts a
-    client IP opened plus their messages, added to the embed IP's events, and
-    the owner budget and operator `system` limits apply. A refusal is a
+    }`: the live spec's `publish.rate_limits.visitor` counts the admitted
+    messages of one context — the one that opened it too, counted once the
+    context has an id (`embed::Admitted::opened`) — and `…ip` counts every
+    admission from a client IP, embed ones included, and the owner budget
+    and operator `system` limits apply. A refusal is a
     JSON-RPC error `-32000` with `RATE_LIMITED` or `AGENT_UNAVAILABLE`, a
     `Retry-After` header and the Fluent message, audited as `limit_refused`;
     nothing is stored and nothing runs;
@@ -2335,9 +2347,9 @@ routes:
   multicast, and their IPv4-mapped forms. Refused unless
   `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true` (`Config.network`, environment
   only like `$AIPLANE_TRUSTED_PROXIES`): loopback, RFC 1918, 100.64.0.0/10,
-  fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
-  reused: it allows private ranges on purpose (an admin curates the MCP
-  catalog) and checks literal addresses only.
+  fc00::/7 and plain `http`. The MCP OAuth flow goes through the same
+  guard under a policy of its own (`Policy::mcp_oauth`), which allows
+  private ranges on purpose: an admin curates the MCP catalog.
 - **One origin.** The endpoint and the OAuth token URL the card names must
   share the granted card URL's origin (scheme, host, port), or the route ends
   `incomplete` before anything is sent. The grant names the card URL, so a
@@ -2535,7 +2547,14 @@ serialized `RunChain`), `created_at`, `kind` and `detail`.
 **Hash chains.** *Chosen:* one chain per conversation, sub-agent runs
 included (`chain_key = conversation:<root session>`), and one per agent for
 everything outside a conversation (`agent:<principal id>`: management
-changes, refused visitors, sweeps). Per conversation rather than per agent
+changes, refused visitors, sweeps). **No writer picks the chain:**
+`agent_audit::append` resolves it from the event's own `session_id`,
+following a child session's `parent_turn_id` up to the root conversation
+(whose owner is also the event's `agent_id` when no run chain says so), so
+a state write, a host identity or an A2A task names only the session it
+happened in and lands where the rest of the conversation is; an event with
+no session belongs to its run chain's root, or else to the agent's own
+chain. Per conversation rather than per agent
 because retention removes conversations, and a chain must go whole or not
 at all; and because parallel conversations then never contend for one
 chain head. Within a chain events count up from 1 (`seq`); each stores the
@@ -2605,7 +2624,12 @@ queue:* every event is written before the run moves on, in a write
 transaction of its own (`BEGIN IMMEDIATE`, so concurrent writers to one
 chain queue on SQLite's lock instead of racing for its head) or — for a
 management change and a state write — on the change's own transaction, so
-the change and its event commit together or not at all. WAL with
+the change and its event commit together or not at all. Either way the
+transaction is a `db::WriteTx`, which only `WriteTx::begin` (`BEGIN
+IMMEDIATE`) makes and which `agent_audit::append` and `record` require: a
+chain head, a slot's old value or a rate window is read under the write
+lock it is then written under, never in a deferred transaction that takes
+the lock only at its first write. WAL with
 `synchronous = NORMAL` makes a commit a page write, not an fsync, so this
 costs a turn about a millisecond per event; nothing waits in memory, so
 nothing is lost on a crash or a shutdown and there is no queue to flush.
@@ -2628,7 +2652,7 @@ logged and the request goes on as it would have.
 | `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
-| `state_written` | `agent_state::put`, on the write's transaction, in the chain of the writing run's root conversation (a sub-agent's slot in its child session included) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
+| `state_written` | `agent_state::put`, on the write's transaction, in the chain of the written session's root conversation (a sub-agent's slot in its child session included, whichever door wrote it) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance` (who wrote it: `llm`, `verifier:<id>` or `host`), `set_at` |
 | `turn_started` / `turn_finished` | `headless::drive`, for every agent turn (main and sub-agent, resumed too) | the message the turn answers (a visitor's, or a sub-agent's task), or `resumed: true`; `status`, `answer`, `error`, `outcome` (a contracted run's `RunOutcome`: budget, rounds, repeated call …) |
 | `route_decision`, `sub_agent_dispatched`/`_finished`, `loop_iteration`/`_finished` | the router (#87/#88/#103) | as before (every route's gate, the route picked), plus the `method` that picked it (`rules`, `only_open`, `classifier`); an A2A dispatch also records the `message` it sent (`{secure_input_sent: true}` for an answer to the peer's `input-required`) |
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
@@ -2644,19 +2668,30 @@ view and the evaluation read — leaves out the content kinds
 (`AuditKind::is_content`: `llm_exchange`, `tool_result`, `turn_started`,
 `turn_finished`); they are read through the activity API.
 
-**Secrets never enter it.** A one-time code reaches the verifier through
-`Decided(Value)` only; the runner withholds that value from the
-`tool_result` it records whatever the tool did with it, the run's resume
-records `secure_input_received` instead of it, the verifier's MCP check is
-redacted as before (#95), and the model never saw it, so no
-`llm_exchange` carries it. Both writers redact through one
-`agents::audit::Redaction`, so a call looks the same in its `tool_result`
-and in every `llm_exchange` that carries it: the arguments of a tool that
-declares `sensitive_args` are `{redacted: true}` — in the answer's
-`tool_calls` and in the assistant `tool_calls` of every later request — and
-a turn resumed with a secure input has that value withheld
-(`[secure input withheld]`) from each of its exchanges too. A stored
-request therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
+**Secrets never enter it.** The log redacts at its one choke point:
+`agent_audit::append` applies `agent_audit::Redaction` to every event's
+detail before it is hashed, by event kind — the arguments of a call to a
+tool that declares `sensitive_args` become `{redacted: true}` in a
+`tool_result` or `tool_call`, and in every tool call an `llm_exchange`
+carries (the answer's `tool_calls`, and the assistant `tool_calls` of
+every later request or request delta); a turn's secure input becomes
+`[secure input withheld]` in an event of any kind. No writer redacts for
+itself, so none can forget to: each event of a run carries the run's
+`Redaction` (`ToolContext::redaction`, attached by `ToolContext::audit` /
+`audit_event` and `RunLog`), which the run collects as it goes — the
+driver adds the secure input a turn resumes with, and the runner, the
+exchange log and the resume path note every tool they meet that declares
+its arguments sensitive (`AgentRun::note_sensitive`). A one-time code
+reaches the verifier through `Suspend::Decided(SecureInput, Value)` only —
+the decision carries the kind of pause it settles, and one rule,
+`Redaction::decided`, says what is withheld: a secure input's value, never
+an approval or a human's answer (which `run_resumed` records). The same
+rule withholds it from what goes elsewhere than the log
+(`Redaction::withhold`: the resumed call's result the model reads, the
+verifier's connector answer). The run's resume records
+`secure_input_received` instead of it, the verifier's MCP check is
+redacted as before (#95), and the model never saw it. A stored request
+therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
 sent only as a header, which no event records. Tokens, embed keys and
 client secrets are hashed or sealed where they are stored and never part
 of an event. `activity::a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret`
@@ -2784,7 +2819,7 @@ upward.
 | Piece | Crate | Why there |
 |---|---|---|
 | Migrations (one embedded set, agent tables included); the `can_manage_agents` resolver check; `Principal`, `GrantSet`, `RunChain`; the `agent_id` column of usage and the per-agent spend limits | `aiplane-core` | the migration history is never split; identity types are read by RBAC, the upstream registry and usage metering, all below the features |
-| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate (`rates`, over `db::inbound`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
+| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate and the one rate primitive (`rates`, over `rate_events`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol; it reads a conversation by `user_id` and treats any other owner as opaque |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |

@@ -204,14 +204,13 @@ mod tests {
         let child = sub_agent_run(&pool, &billing, &old).await;
         let grandchild = sub_agent_run(&pool, &support, &child).await;
         let billings_own = visitor_conversation_without_key(&pool, &billing).await;
-        agent_state::put(
-            &mut pool.acquire().await.unwrap(),
+        agent_state::tests::put_committed(
+            &pool,
             &old,
             "issue",
             &serde_json::json!("billing"),
             "llm",
             t0(),
-            None,
         )
         .await
         .unwrap();

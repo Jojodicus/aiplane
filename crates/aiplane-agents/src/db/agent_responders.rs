@@ -16,7 +16,7 @@ use sqlx::Row;
 
 use super::agent_audit::{self, AuditKind};
 use super::agents::SubjectKind;
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Responder {
@@ -58,7 +58,7 @@ pub async fn add(
     subject_id: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let added = sqlx::query(
         "INSERT INTO agent_responders (principal_id, subject_kind, subject_id, added_by, added_at)
          VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -94,7 +94,7 @@ pub async fn remove(
     subject_id: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let removed = sqlx::query(
         "DELETE FROM agent_responders
           WHERE principal_id = ? AND subject_kind = ? AND subject_id = ?",

@@ -12,10 +12,8 @@
 
 use std::sync::Arc;
 
-use aiplane_agents::db::agent_verifiers::{
-    self as rows, Counted, EventKind, MAX_WINDOW, NewEvent, Window,
-};
-use aiplane_agents::rates::{Rate, RateScope};
+use aiplane_agents::db::agent_verifiers::{self as rows, Counted, EventKind, MAX_WINDOW};
+use aiplane_agents::rates::{self, Rate, RateScope};
 use aiplane_core::server::principal::GrantKind;
 use serde_json::{Map, Value, json};
 use shared::api::ToolDef;
@@ -146,38 +144,20 @@ impl Tool for LookupTool {
                 .map_err(|e| ToolError::Failed(e.to_string()))?;
             let inputs = self.inputs(&state)?;
             let now = (self.run.options.now)();
-            let since = now.checked_sub(MAX_WINDOW).unwrap_or(now);
-            let tried = rows::event_times(
-                db,
-                &self.run.principal.id,
+            let attempt = rows::window(
                 &self.cfg.id,
                 EventKind::Lookup,
-                Counted::Session(session),
-                since,
-            )
-            .await
-            .map_err(|e| ToolError::Failed(e.to_string()))?;
-            let attempt = Window {
-                scope: RateScope::Session,
-                rate: Rate {
+                RateScope::Session,
+                Rate {
                     max: self.cfg.max_attempts,
                     per: MAX_WINDOW,
                 },
-                who: Counted::Session(session),
-            };
-            let event = NewEvent {
-                principal_id: &self.run.principal.id,
-                verifier: &self.cfg.id,
-                kind: EventKind::Lookup,
-                session_id: session,
-                email_hash: None,
-                ip_hash: None,
-                at: now,
-            };
-            let admitted = rows::record_event_within(db, &event, &[attempt])
+                Counted::Session(session),
+            );
+            let admitted = rates::record_now(db, &self.run.principal.id, &[attempt], now)
                 .await
                 .map_err(|e| ToolError::Failed(e.to_string()))?;
-            if admitted.is_err() {
+            let Ok(admitted) = admitted else {
                 audit(&self.run, &ctx, self.outcome("too_many_attempts")).await;
                 return Ok(json!({
                     "verified": false,
@@ -186,7 +166,7 @@ impl Tool for LookupTool {
                              allowed in this conversation. Offer the visitor another way to \
                              reach support.",
                 }));
-            }
+            };
             let answer = self
                 .call(&ctx, Value::Object(inputs.clone()))
                 .await
@@ -198,7 +178,7 @@ impl Tool for LookupTool {
                 return Ok(json!({
                     "verified": false,
                     "reason": "not_confirmed",
-                    "attempts_left": (self.cfg.max_attempts as usize).saturating_sub(tried.len() + 1),
+                    "attempts_left": self.cfg.max_attempts.saturating_sub(admitted.seen[0] + 1),
                     "next": "The details were not confirmed. Ask the visitor to check them; \
                              correct the slots and call this again.",
                 }));

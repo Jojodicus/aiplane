@@ -52,8 +52,8 @@ impl Tool for AskFirst {
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         match &ctx.suspend {
-            Suspend::Decided(Decision::AllowOnce) => self.inner.run(ctx, args),
-            Suspend::Decided(other) => {
+            Suspend::Decided(_, Decision::AllowOnce) => self.inner.run(ctx, args),
+            Suspend::Decided(_, other) => {
                 let refusal = format!(
                     "`{}` was not approved (decision: {:?}), so it did not run.",
                     self.id(),
@@ -133,7 +133,11 @@ mod tests {
     async fn an_approved_call_runs_the_wrapped_tool() {
         let body = gated()
             .run(
-                ctx(Suspend::Decided(Decision::AllowOnce)).await,
+                ctx(Suspend::Decided(
+                    SuspensionKind::Approval,
+                    Decision::AllowOnce,
+                ))
+                .await,
                 json!({"message": "hi"}),
             )
             .await
@@ -145,9 +149,12 @@ mod tests {
     async fn without_an_approval_it_never_runs() {
         for suspend in [
             Suspend::Unavailable,
-            Suspend::Decided(Decision::Deny {
-                reason: DenyReason::User,
-            }),
+            Suspend::Decided(
+                SuspensionKind::Approval,
+                Decision::Deny {
+                    reason: DenyReason::User,
+                },
+            ),
         ] {
             let result = gated()
                 .run(ctx(suspend).await, json!({"message": "hi"}))

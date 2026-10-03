@@ -347,7 +347,11 @@ async fn a_code_the_visitor_types_writes_the_verifier_slots_and_opens_the_gate()
         .iter()
         .find(|e| e.tool_id.ends_with("check_code"))
         .unwrap();
-    assert_eq!(check.arguments.as_deref(), Some("[redacted]"));
+    assert_eq!(
+        check.arguments,
+        Some(aiplane_agents::db::agent_audit::redaction::redacted_arguments().to_string()),
+        "the activity log's marker"
+    );
     let send = audited
         .iter()
         .find(|e| e.tool_id.ends_with("send_code"))
@@ -605,6 +609,10 @@ async fn a_lookup_vouches_with_its_own_provenance_and_caps_its_attempts() {
     let sent = requests(&main).await;
     let miss = tool_answer(&sent, "k3");
     assert!(miss.contains("not_confirmed"), "{miss}");
+    assert!(
+        miss.contains("\"attempts_left\": 1"),
+        "the count the attempt was admitted against: {miss}"
+    );
     let hit = tool_answer(&sent, "k5");
     assert!(
         hit.contains("\"verified\": true") && hit.contains("\"low\""),

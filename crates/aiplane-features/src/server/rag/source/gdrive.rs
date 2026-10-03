@@ -193,7 +193,6 @@ impl GoogleDriveProvider {
             return Ok(cached.token.clone());
         }
         let tokens = aiplane_core::server::auth::mcp_oauth::refresh(
-            &self.http,
             TOKEN_URL,
             &self.refresh_token,
             &self.client_id,

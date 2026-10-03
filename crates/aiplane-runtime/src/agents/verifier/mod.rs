@@ -47,6 +47,7 @@ use super::spec::model::{LookupSpec, McpCodeSpec, Verifier};
 use super::state::{StateSchema, StateWriteError, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{Tool, ToolContext, ToolError, extract_content_parts};
+use aiplane_agents::db::WriteTx;
 
 pub const SEND_TOOL_DEFAULT: &str = "send_code";
 pub const CHECK_TOOL_DEFAULT: &str = "check_code";
@@ -372,23 +373,12 @@ pub(crate) async fn apply_writes(
         | StateWriteError::NotWritable { ref slot, .. }
         | StateWriteError::Invalid { ref slot, .. } => write_failed(id, slot, &err.to_string()),
     };
-    let mut tx = run
-        .state
-        .db
-        .begin()
+    let mut tx = WriteTx::begin(&run.state.db)
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
-    write_trusted_all(
-        &mut tx,
-        &run.schema,
-        session_id,
-        &resolved,
-        writer,
-        now,
-        ctx.chain(),
-    )
-    .await
-    .map_err(refused)?;
+    write_trusted_all(&mut tx, &run.schema, session_id, &resolved, writer, now)
+        .await
+        .map_err(refused)?;
     tx.commit()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;

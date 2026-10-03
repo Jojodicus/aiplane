@@ -49,7 +49,6 @@ async fn run_event(pool: &Pool, chain: &RunChain, kind: AuditKind, detail: Value
                 turn_id: Some("t-main".into()),
                 round: Some(1),
                 call_id: Some("call-1".into()),
-                conversation_id: None,
             }),
     )
     .await
@@ -111,7 +110,7 @@ async fn a_sub_agents_event_lands_in_the_conversations_chain_with_every_correlat
 async fn a_management_event_extends_its_agents_own_chain_on_the_callers_transaction() {
     let pool = memory().await;
     for n in 0..3 {
-        let mut tx = pool.begin().await.unwrap();
+        let mut tx = WriteTx::begin(&pool).await.unwrap();
         record(
             &mut tx,
             AuditKind::GrantAdded,
@@ -123,11 +122,11 @@ async fn a_management_event_extends_its_agents_own_chain_on_the_callers_transact
         .unwrap();
         tx.commit().await.unwrap();
     }
-    let mut tx = pool.begin().await.unwrap();
+    let mut tx = WriteTx::begin(&pool).await.unwrap();
     record(&mut tx, AuditKind::GrantAdded, "p1", "alice", json!({}))
         .await
         .unwrap();
-    tx.rollback().await.unwrap();
+    drop(tx);
 
     let rows = chain_rows(&pool, "agent:p1").await;
     assert_eq!(

@@ -83,7 +83,6 @@ impl Tool for SetSlotTool {
                 &self.slot,
                 value,
                 (self.clock)(),
-                ctx.chain(),
             )
             .await
             .map_err(|err| match err {

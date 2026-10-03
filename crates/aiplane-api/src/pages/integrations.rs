@@ -110,13 +110,12 @@ pub async fn integrations_connect(
     }
 
     let redirect_uri = format!("{}/integrations/callback", state.public_url());
-    let http = state.mcp.http();
     let ov = Overrides {
         authorize_url: connector.authorize_url.clone(),
         token_url: connector.token_url.clone(),
         registration_url: connector.registration_url.clone(),
     };
-    let endpoints = match mcp_oauth::discover(http, &connector.url, &ov).await {
+    let endpoints = match mcp_oauth::discover(&connector.url, &ov).await {
         Ok(e) => e,
         Err(err) => {
             return flow_error_page(
@@ -144,14 +143,8 @@ pub async fn integrations_connect(
                 &t(lang, "integrations-error-needs-setup-no-client"),
             );
         };
-        match mcp_oauth::register_client(
-            http,
-            reg,
-            &redirect_uri,
-            "croit AIplane",
-            &connector.scopes,
-        )
-        .await
+        match mcp_oauth::register_client(reg, &redirect_uri, "croit AIplane", &connector.scopes)
+            .await
         {
             Ok((id, secret)) => {
                 let sealed = match secret.as_deref() {
@@ -376,7 +369,6 @@ pub async fn integrations_callback(
         .clone()
         .unwrap_or_else(|| connector.url.clone());
     let tokens = match mcp_oauth::exchange_code(
-        state.mcp.http(),
         &pending.token_url,
         &code,
         &pending.pkce_verifier,

@@ -25,15 +25,13 @@
 //!   `send_code` is recorded for the owner, never relayed.
 //!
 //! The code reaches only the connector's `check_code`, whose arguments are
-//! declared sensitive: `mcp_tool_audit` records `[redacted]`.
+//! declared sensitive: `mcp_tool_audit` records the redaction marker.
 
 use std::sync::Arc;
 
-use aiplane_agents::db::agent_verifiers::{
-    self as rows, Counted, EventKind, NewEvent, PendingCode, Window,
-};
+use aiplane_agents::db::agent_verifiers::{self as rows, Counted, EventKind, PendingCode};
 use aiplane_agents::db::visitor_sessions;
-use aiplane_agents::rates::{RateExceeded, RateScope};
+use aiplane_agents::rates::{self, RateExceeded, RateScope};
 use aiplane_core::server::crypto::sha256_hex;
 use jiff::Timestamp;
 use serde_json::{Map, Value, json};
@@ -47,7 +45,7 @@ use super::{
 };
 use crate::agents::state::{AgentState, TrustedWriter};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
-use crate::suspend::{Suspend, SuspendRequest, tool_suspend, withhold_secret};
+use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
 const NO_ARGS: &str = "The address comes from the email slot, and the visitor types the code \
                        into a field only they see.";
@@ -132,7 +130,7 @@ impl Tool for RequestCode {
             };
             match &ctx.suspend {
                 Suspend::Available => flow.send().await,
-                Suspend::Decided(decision) => flow.check(decision).await,
+                Suspend::Decided(_, decision) => flow.check(decision).await,
                 Suspend::Unavailable => Err(unavailable(&self.name)),
             }
         })
@@ -171,7 +169,7 @@ impl Tool for SubmitCode {
             };
             match &ctx.suspend {
                 Suspend::Available => flow.ask_again().await,
-                Suspend::Decided(decision) => flow.check(decision).await,
+                Suspend::Decided(_, decision) => flow.check(decision).await,
                 Suspend::Unavailable => Err(unavailable(&self.name)),
             }
         })
@@ -248,35 +246,33 @@ impl Flow<'_> {
         now: Timestamp,
     ) -> Result<Option<RateExceeded>, ToolError> {
         let limits = self.cfg.limits;
+        let id = &self.cfg.id;
         let mut windows = vec![
-            Window {
-                scope: RateScope::Email,
-                rate: limits.email,
-                who: Counted::Email(email),
-            },
-            Window {
-                scope: RateScope::Session,
-                rate: limits.session,
-                who: Counted::Session(session),
-            },
+            rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Email,
+                limits.email,
+                Counted::Email(email),
+            ),
+            rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Session,
+                limits.session,
+                Counted::Session(session),
+            ),
         ];
         if let Some(ip) = ip {
-            windows.push(Window {
-                scope: RateScope::Ip,
-                rate: limits.ip,
-                who: Counted::Ip(ip),
-            });
+            windows.push(rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Ip,
+                limits.ip,
+                Counted::Ip(ip),
+            ));
         }
-        let event = NewEvent {
-            principal_id: &self.run.principal.id,
-            verifier: &self.cfg.id,
-            kind: EventKind::Send,
-            session_id: session,
-            email_hash: Some(email),
-            ip_hash: ip,
-            at: now,
-        };
-        rows::record_event_within(&self.run.state.db, &event, &windows)
+        rates::record_now(&self.run.state.db, &self.run.principal.id, &windows, now)
             .await
             .map(Result::err)
             .map_err(db_failed)
@@ -463,10 +459,9 @@ impl Flow<'_> {
             true,
         )
         .await;
-        let secret = Value::String(code);
         let answer = answer
             .ok()
-            .map(|body| withhold_secret(body, &secret))
+            .map(|body| self.ctx.redaction().withhold(body))
             .as_ref()
             .and_then(answer_object);
         if !confirms(answer.as_ref()) {

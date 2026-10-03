@@ -31,6 +31,7 @@ use aiplane_core::server::crypto::Crypto;
 use aiplane_core::server::db::push_subscriptions::PushSubscription;
 use aiplane_core::server::db::{self, Pool};
 use aiplane_core::server::net_guard::{IpClass, classify_host};
+use aiplane_core::server::outbound_guard::{self, Pinned, Policy};
 
 /// `app_settings` key holding the sealed VAPID private scalar.
 const VAPID_PRIVATE_KEY_SETTING: &str = "push.vapid.private";
@@ -132,7 +133,19 @@ pub struct PushSender {
     /// The VAPID `sub` claim — a `mailto:` or `https:` contact for the push
     /// service to reach the operator. From `[push].contact`.
     contact: String,
-    http: reqwest::Client,
+}
+
+/// How long one push may take, so one stalled push service can't wedge a
+/// user's fan-out or leak the detached notify task.
+const PUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A client for one push to `endpoint`, through `outbound_guard`: the host
+/// resolved and every address checked public at send time, the client pinned
+/// to those addresses (a DNS answer that changed since the browser
+/// subscribed cannot point the VAPID-signed POST into the gateway's own
+/// network), no proxy and no redirect.
+async fn pinned_endpoint(endpoint: &str) -> Result<Pinned, String> {
+    outbound_guard::pin(endpoint, Policy::public_https(), PUSH_TIMEOUT).await
 }
 
 impl PushSender {
@@ -140,26 +153,11 @@ impl PushSender {
     /// sender. The keypair's public half is stable across restarts so browsers
     /// keep working without re-subscribing.
     ///
-    /// The push HTTP client is dedicated (not the shared upstream one): a
-    /// **10s timeout** so one stalled push service can't wedge a user's
-    /// fan-out or leak the detached notify task, and **redirects disabled** so
-    /// a push endpoint can't bounce the VAPID-signed POST to an internal host
-    /// (defense-in-depth alongside the subscribe-time endpoint validation).
+    /// Each push connects through its own pinned client
+    /// ([`pinned_endpoint`]), not the shared upstream one.
     pub async fn new(pool: &Pool, crypto: &Crypto, contact: String) -> anyhow::Result<Self> {
         let vapid = load_or_create_vapid(pool, crypto).await?;
-        // Vetted outbound client: an endpoint is accepted only when net_guard
-        // classifies it public.
-        #[allow(clippy::disallowed_methods)]
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Ok(Self {
-            vapid,
-            contact,
-            http,
-        })
+        Ok(Self { vapid, contact })
     }
 
     /// The base64url VAPID public key — served to the client as its
@@ -210,9 +208,16 @@ impl PushSender {
         let now = jiff::Timestamp::now().as_second();
         let auth_header = self.vapid.auth_header(&audience, &self.contact, now);
 
-        let resp = self
-            .http
-            .post(&sub.endpoint)
+        let pinned = match pinned_endpoint(&sub.endpoint).await {
+            Ok(pinned) => pinned,
+            Err(why) => {
+                tracing::warn!(endpoint = %sub.endpoint, reason = %why, "push endpoint refused");
+                return SendOutcome::Failed;
+            }
+        };
+        let resp = pinned
+            .client
+            .post(pinned.url)
             .header(reqwest::header::AUTHORIZATION, auth_header)
             .header(reqwest::header::CONTENT_ENCODING, "aes128gcm")
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
@@ -297,9 +302,9 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 ///   16-byte secret (so we never persist junk that can only ever fail to
 ///   encrypt).
 ///
-/// This can't stop a public hostname that resolves to an internal IP (DNS
-/// rebinding), but combined with redirects-disabled on the push client it
-/// closes the practical vectors.
+/// A public hostname that resolves to an internal IP (DNS rebinding) is
+/// caught at send time instead: every push resolves, checks and pins the
+/// endpoint again ([`pinned_endpoint`]).
 pub fn validate_subscription(endpoint: &str, p256dh: &str, auth: &str) -> Result<(), String> {
     let url = url::Url::parse(endpoint).map_err(|_| "endpoint is not a valid URL".to_string())?;
     if url.scheme() != "https" {
@@ -433,6 +438,32 @@ mod tests {
                 "should reject endpoint: {bad}"
             );
         }
+    }
+
+    /// The send-time guard, which also covers a name the subscribe-time
+    /// check let through: one that resolves into the gateway's own network
+    /// (`localhost.` with its trailing dot passes `validate_subscription`,
+    /// as any public-looking name whose DNS answer later changes would).
+    #[tokio::test]
+    async fn a_push_to_an_endpoint_resolving_to_a_private_address_is_refused() {
+        assert!(validate_subscription("https://localhost./x", P256DH, AUTH).is_ok());
+        for endpoint in [
+            "https://localhost./x",
+            "https://localhost/x",
+            "https://127.0.0.1/x",
+            "https://10.0.0.5/x",
+            "https://169.254.169.254/latest/meta-data/",
+            "http://93.184.216.34/x",
+        ] {
+            assert!(
+                pinned_endpoint(endpoint).await.is_err(),
+                "should refuse {endpoint}"
+            );
+        }
+        let pinned = pinned_endpoint("https://93.184.216.34/push/abc")
+            .await
+            .unwrap();
+        assert_eq!(pinned.url.as_str(), "https://93.184.216.34/push/abc");
     }
 
     #[test]

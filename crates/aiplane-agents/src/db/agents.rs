@@ -20,7 +20,7 @@ use sqlx::sqlite::SqliteRow;
 
 use super::agent_audit::{self, AuditKind};
 use super::system_principals::{self as sp, NewPrincipal, PrincipalRow};
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 
 /// What a share lets its holder do. `Write` includes `Read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -161,7 +161,7 @@ pub async fn create(
     actor_id: &str,
 ) -> Result<Option<AgentRow>, DbError> {
     let now = Timestamp::now().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let Some(id) = sp::insert(&mut tx, new, actor_id).await? else {
         return Ok(None);
     };
@@ -308,7 +308,7 @@ pub async fn update_draft(
     draft_spec: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let changed =
         sqlx::query("UPDATE agents SET draft_spec = ?, updated_at = ? WHERE principal_id = ?")
             .bind(draft_spec)
@@ -344,7 +344,7 @@ pub async fn publish(
     actor_id: &str,
 ) -> Result<Option<i64>, DbError> {
     let now = Timestamp::now().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let exists = sqlx::query("SELECT 1 FROM agents WHERE principal_id = ?")
         .bind(id)
         .fetch_optional(&mut *tx)
@@ -469,7 +469,7 @@ pub async fn set_live(
     version: i64,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let changed = sqlx::query(
         "UPDATE agents SET live_version = ?1, updated_at = ?2
           WHERE principal_id = ?3
@@ -557,7 +557,7 @@ pub async fn set_share(
     access: Access,
     actor_id: &str,
 ) -> Result<ShareChange, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let current = current_share(&mut tx, id, kind, subject_id).await?;
     if current == Some(access) {
         return Ok(ShareChange::Unchanged);
@@ -595,7 +595,7 @@ pub async fn remove_share(
     subject_id: &str,
     actor_id: &str,
 ) -> Result<ShareChange, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let Some(current) = current_share(&mut tx, id, kind, subject_id).await? else {
         return Ok(ShareChange::NotFound);
     };
@@ -626,7 +626,7 @@ pub async fn remove_share(
 /// shares. The audit trail survives: it has no foreign keys. `Ok(false)` when
 /// there is no such agent.
 pub async fn delete(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let name: Option<String> = sqlx::query(
         "SELECT p.name FROM agents a JOIN system_principals p ON p.id = a.principal_id
           WHERE a.principal_id = ?",

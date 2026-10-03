@@ -25,9 +25,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use aiplane_agents::db::WriteTx;
 use aiplane_agents::db::agent_state::{self, StoredSlot};
 use aiplane_core::server::db::{DbError, Pool};
-use aiplane_core::server::run_chain::RunChain;
 use jiff::Timestamp;
 use regex::Regex;
 use serde::Serialize;
@@ -704,21 +704,10 @@ pub async fn write_trusted(
     writer: TrustedWriter,
     now: Timestamp,
 ) -> Result<SlotEntry, StateWriteError> {
-    write(
-        pool,
-        schema,
-        session_id,
-        slot,
-        value,
-        writer.into(),
-        now,
-        None,
-    )
-    .await
+    write(pool, schema, session_id, slot, value, writer.into(), now).await
 }
 
-/// The model's door; only the `set_<slot>` tool calls it, with the run it
-/// belongs to.
+/// The model's door; only the `set_<slot>` tool calls it.
 pub(crate) async fn write_from_model(
     pool: &Pool,
     schema: &StateSchema,
@@ -726,19 +715,8 @@ pub(crate) async fn write_from_model(
     slot: &str,
     value: Value,
     now: Timestamp,
-    run: Option<&RunChain>,
 ) -> Result<SlotEntry, StateWriteError> {
-    write(
-        pool,
-        schema,
-        session_id,
-        slot,
-        value,
-        Provenance::Llm,
-        now,
-        run,
-    )
-    .await
+    write(pool, schema, session_id, slot, value, Provenance::Llm, now).await
 }
 
 /// [`write_trusted`] for several slots at once, all or none, on `conn` —
@@ -746,13 +724,12 @@ pub(crate) async fn write_from_model(
 /// commits or rolls back with the slots. Every value is checked before the
 /// first is stored.
 pub async fn write_trusted_all(
-    conn: &mut sqlx::SqliteConnection,
+    conn: &mut WriteTx,
     schema: &StateSchema,
     session_id: &str,
     values: &[(String, Value)],
     writer: TrustedWriter,
     now: Timestamp,
-    run: Option<&RunChain>,
 ) -> Result<(), StateWriteError> {
     let provenance: Provenance = writer.into();
     for (slot, value) in values {
@@ -760,7 +737,7 @@ pub async fn write_trusted_all(
     }
     let stamp = provenance.to_string();
     for (slot, value) in values {
-        agent_state::put(&mut *conn, session_id, slot, value, &stamp, now, run)
+        agent_state::put(conn, session_id, slot, value, &stamp, now)
             .await
             .map_err(|source| StateWriteError::Db {
                 slot: slot.clone(),
@@ -800,7 +777,6 @@ fn check_write(
         })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn write(
     pool: &Pool,
     schema: &StateSchema,
@@ -809,14 +785,13 @@ async fn write(
     value: Value,
     provenance: Provenance,
     now: Timestamp,
-    run: Option<&RunChain>,
 ) -> Result<SlotEntry, StateWriteError> {
     check_write(schema, slot, &value, &provenance)?;
     let db_error = |source: DbError| StateWriteError::Db {
         slot: slot.to_string(),
         source,
     };
-    let mut tx = pool.begin().await.map_err(|e| db_error(e.into()))?;
+    let mut tx = WriteTx::begin(pool).await.map_err(db_error)?;
     agent_state::put(
         &mut tx,
         session_id,
@@ -824,11 +799,10 @@ async fn write(
         &value,
         &provenance.to_string(),
         now,
-        run,
     )
     .await
     .map_err(db_error)?;
-    tx.commit().await.map_err(|e| db_error(e.into()))?;
+    tx.commit().await.map_err(db_error)?;
     Ok(SlotEntry {
         value,
         provenance,
@@ -1216,7 +1190,7 @@ pub(crate) mod tests {
             "{err}"
         );
 
-        let err = write_from_model(&pool, &s, "s1", "plan", json!("gold"), now, None)
+        let err = write_from_model(&pool, &s, "s1", "plan", json!("gold"), now)
             .await
             .unwrap_err();
         assert!(matches!(err, StateWriteError::NotWritable { .. }), "{err}");
@@ -1247,7 +1221,7 @@ pub(crate) mod tests {
         let pool = pool_with_session("s1").await;
         let s = schema();
         let now = at("2026-10-02T12:00:00Z");
-        let err = write_from_model(&pool, &s, "s1", "issue", json!("sales"), now, None)
+        let err = write_from_model(&pool, &s, "s1", "issue", json!("sales"), now)
             .await
             .unwrap_err();
         assert!(
@@ -1285,7 +1259,6 @@ pub(crate) mod tests {
             "score",
             json!(0.9),
             at("2026-10-02T12:05:00Z"),
-            None,
         )
         .await
         .unwrap();
@@ -1293,5 +1266,79 @@ pub(crate) mod tests {
         let entry = state.valid("score").unwrap();
         assert_eq!(entry.provenance, Provenance::Llm);
         assert_eq!(entry.set_at, at("2026-10-02T12:05:00Z"));
+    }
+
+    /// A trusted write names nothing but the session it writes: the log
+    /// finds the conversation from the session itself, so a slot of a
+    /// sub-agent's child session lands in the chain of the conversation the
+    /// child runs under, and in that agent's activity.
+    #[tokio::test]
+    async fn a_trusted_write_in_a_child_session_lands_in_the_root_conversations_chain() {
+        let pool = pool_with_session("unused").await;
+        for sql in [
+            "INSERT INTO system_principals (id, name, display, created_by, created_at)
+             VALUES ('main', 'support', 'Support', 'u1', '2026-01-01T00:00:00Z')",
+            "INSERT INTO system_principals (id, name, display, created_by, created_at)
+             VALUES ('sub', 'billing', 'Billing', 'u1', '2026-01-01T00:00:00Z')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        for (session, owner, parent, turn) in [
+            ("root", "main", None, "t1"),
+            ("child", "sub", Some("t1"), "t2"),
+            ("grandchild", "main", Some("t2"), "t3"),
+        ] {
+            sqlx::query(
+                "INSERT INTO chat_sessions (id, principal_id, parent_turn_id, created_at, updated_at)
+                 VALUES (?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            )
+            .bind(session)
+            .bind(owner)
+            .bind(parent)
+            .execute(&pool)
+            .await
+            .unwrap();
+            session_core::db::create_assistant_turn_in_progress(&pool, session, turn, "m")
+                .await
+                .unwrap();
+        }
+        let s = schema();
+        for session in ["child", "grandchild"] {
+            write_trusted(
+                &pool,
+                &s,
+                session,
+                "plan",
+                json!("pro"),
+                TrustedWriter::Host,
+                at("2026-10-02T12:00:00Z"),
+            )
+            .await
+            .unwrap();
+        }
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT chain_key, conversation_id, session_id, agent_id FROM agent_audit
+              WHERE kind = 'state_written' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "conversation:root".into(),
+                    "root".into(),
+                    "child".into(),
+                    "main".into()
+                ),
+                (
+                    "conversation:root".into(),
+                    "root".into(),
+                    "grandchild".into(),
+                    "main".into()
+                ),
+            ]
+        );
     }
 }

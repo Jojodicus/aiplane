@@ -19,8 +19,11 @@ use super::params::{SendParams, history_length, parse_send, task_id_param};
 use super::stream::stream;
 use aiplane_agents::db::a2a_contexts::{self, A2aContext, NewContext};
 use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
+use aiplane_agents::rates::Inbound;
 use aiplane_runtime::agents::a2a::{self as a2a_rt, TaskState};
-use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
+use aiplane_runtime::agents::embed::{
+    self as embed_rt, Admission, Admitted, OpenedTurn, Refusal, TurnWork,
+};
 use aiplane_runtime::agents::resume::{AgentResume, AgentResumeError, ResumedBy, claim};
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
@@ -28,7 +31,7 @@ use aiplane_runtime::suspend::ResumeRefused;
 /// How long `CancelTask` waits for a running turn to notice.
 const CANCEL_WAIT: Duration = Duration::from_secs(15);
 
-async fn admit(call: &Call, context: Option<&str>) -> Result<(), RpcError> {
+async fn admit(call: &Call, context: Option<&str>) -> Result<Admitted, RpcError> {
     let who = Admission {
         visitor_id: None,
         a2a_context: context,
@@ -36,7 +39,7 @@ async fn admit(call: &Call, context: Option<&str>) -> Result<(), RpcError> {
     };
     let agent = &call.served.agent.principal.id;
     match embed_rt::admit(&call.state, agent, who, Timestamp::now()).await {
-        Ok(()) => Ok(()),
+        Ok(admitted) => Ok(admitted),
         Err(refusal) => {
             let retry = refusal.retry_after_secs();
             let mut e = match refusal {
@@ -73,7 +76,7 @@ async fn audit(call: &Call, action: &str, context: &A2aContext, task: &str) {
         NewEvent::new(AuditKind::A2aTask, &call.served.agent.principal.id, detail).at(
             Correlation {
                 turn_id: Some(task.to_string()),
-                conversation_id: Some(context.session_id.clone()),
+                session_id: Some(context.session_id.clone()),
                 ..Correlation::default()
             },
         ),
@@ -382,13 +385,19 @@ async fn turn_model(call: &Call, session_id: &str) -> Result<(i64, String), RpcE
 async fn start_task(call: &Call, p: &SendParams, streaming: bool) -> Result<Response, RpcError> {
     let state = &call.state;
     let existing = resolve_context(call, p.context_id.as_deref()).await?;
-    admit(call, existing.as_ref().map(|c| c.session_id.as_str())).await?;
+    let admitted = admit(call, existing.as_ref().map(|c| c.session_id.as_str())).await?;
     let Some(runner) = state.agent_runner.clone() else {
         return Err(RpcError::runtime_unavailable());
     };
     let context = match existing {
         Some(c) => c,
-        None => open_context(call).await?,
+        None => {
+            let opened = open_context(call).await?;
+            admitted
+                .opened(state, Inbound::A2a(&opened.session_id))
+                .await;
+            opened
+        }
     };
     let session_id = context.session_id.clone();
     let user_turn = uuid::Uuid::new_v4().to_string();
