@@ -70,7 +70,9 @@ company-wide rights. That contradicts the decided default-deny.
   principals.
 - A manager can only grant **what they hold themselves at grant time**. After
   that a grant persists until the principal is reconfigured, independent of the
-  manager's later rights.
+  manager's later rights. A token a non-admin manager minted, though, carries
+  only what that manager holds at each request
+  ([`auth.md`](auth.md#system-principals-and-gws_-tokens)).
 - **Sub-agents are agents.** Each one is its own principal with its own grants.
 - A **visitor is not a principal**. A visitor is a session under the agent.
 

@@ -6,6 +6,7 @@
 
 pub mod comfyui_tool;
 pub mod compaction;
+pub mod grant_holding;
 pub mod headless;
 pub mod scheduled;
 pub mod state;

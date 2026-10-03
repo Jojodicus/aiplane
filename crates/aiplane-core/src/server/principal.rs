@@ -107,6 +107,11 @@ impl GrantSet {
     pub fn is_empty(&self) -> bool {
         self.grants.is_empty()
     }
+
+    /// Every grant, sorted by kind and ref.
+    pub fn iter(&self) -> impl Iterator<Item = (GrantKind, &str)> {
+        self.grants.iter().map(|(k, r)| (*k, r.as_str()))
+    }
 }
 
 /// A named system principal, resolved for one request or run.

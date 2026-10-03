@@ -666,6 +666,9 @@ async fn every_route_needs_a_session() {
     }
 }
 
+/// The principal keeps its grants when the manager who made them loses their
+/// rights or leaves; a token that manager minted does not, because it is
+/// capped at what its minter holds now. An admin's token is not.
 #[tokio::test]
 async fn grants_survive_the_granting_manager_losing_rights_and_leaving() {
     let fx = fixture().await;
@@ -678,7 +681,8 @@ async fn grants_survive_the_granting_manager_losing_rights_and_leaving() {
         fx.grant(&fx.manager, &id, "tool", TIME).await.0,
         StatusCode::CREATED
     );
-    let (bearer, _) = fx.token(&fx.manager, &id).await;
+    let (managers, _) = fx.token(&fx.manager, &id).await;
+    let (bearer, _) = fx.token(&fx.admin, &id).await;
 
     gateway_groups::set_can_manage_agents(&fx.state.db, "managers", false)
         .await
@@ -693,6 +697,42 @@ async fn grants_survive_the_granting_manager_losing_rights_and_leaving() {
     fx.state.reload_rbac().await;
 
     assert_eq!(fx.chat(&bearer).await, StatusCode::OK);
+    assert_eq!(fx.offered_tools().await, [TIME]);
+    assert_ne!(
+        fx.chat(&managers).await,
+        StatusCode::OK,
+        "a token of a manager who left reaches nothing"
+    );
+}
+
+/// A token a manager minted is capped at authentication time at what the
+/// manager holds then: a grant an admin adds later that the manager lacks
+/// is not usable through it, but is through a token an admin minted.
+#[tokio::test]
+async fn a_managers_token_is_capped_at_the_managers_current_rights() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    assert_eq!(
+        fx.grant(&fx.manager, &id, "pool", "pool").await.0,
+        StatusCode::CREATED
+    );
+    let (managers, _) = fx.token(&fx.manager, &id).await;
+    let (admins, _) = fx.token(&fx.admin, &id).await;
+    assert_eq!(
+        fx.grant(&fx.admin, &id, "tool", TIME).await.0,
+        StatusCode::CREATED
+    );
+    gateway_groups::set_tools_for_group(&fx.state.db, "everyone", &["read_skill".into()])
+        .await
+        .unwrap();
+    fx.state.reload_rbac().await;
+
+    assert_eq!(fx.chat(&managers).await, StatusCode::OK);
+    assert!(
+        !fx.offered_tools().await.contains(&TIME.to_string()),
+        "the manager does not hold the tool, so their token does not carry it"
+    );
+    assert_eq!(fx.chat(&admins).await, StatusCode::OK);
     assert_eq!(fx.offered_tools().await, [TIME]);
 }
 

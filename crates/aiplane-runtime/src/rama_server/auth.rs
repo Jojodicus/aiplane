@@ -113,7 +113,9 @@ pub async fn require_bearer(
 
 /// A `gws_` bearer: looked up in `system_tokens` only, so it can never
 /// resolve to a person. The principal's grants are loaded here, once per
-/// request — what it may use is exactly what they list.
+/// request, and capped at what the token's minter holds now unless the
+/// minter is an admin ([`capped_to_minter`](crate::server::grant_holding::capped_to_minter)):
+/// what it may use is exactly what is left.
 async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCtx, AuthRefusal> {
     let hash = token::hash_system_bearer(bearer).ok_or_else(unauthorized)?;
     let token_row =
@@ -132,6 +134,16 @@ async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCt
                 internal_error("system principal lookup failed")
             })?
             .ok_or_else(unauthorized)?;
+    let principal = crate::server::grant_holding::capped_to_minter(
+        state,
+        principal,
+        &token_row.created_by,
+    )
+    .await
+    .map_err(|err| {
+        tracing::warn!(error = %err, "capping a system token at its minter's rights failed");
+        internal_error("system token minter lookup failed")
+    })?;
 
     let pool = state.db.clone();
     let token_id = token_row.id.clone();

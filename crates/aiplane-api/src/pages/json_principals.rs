@@ -17,7 +17,9 @@
 //! other principal is reachable only by its creator and by admins.
 //!
 //! A token carries every grant of its principal, so issuing one is held to
-//! the grant-time cap for all of them at once.
+//! the grant-time cap for all of them at once; a non-admin's token is capped
+//! again at every request, at what its minter holds then
+//! (`grant_holding::capped_to_minter`).
 
 use std::sync::Arc;
 
@@ -32,11 +34,10 @@ use super::{bad_request, internal, json_error, json_ok, no_content, not_found, r
 use aiplane_agents::db::agents::{self as agents_db, Access};
 use aiplane_agents::db::{agent_audit, system_principals as sp_db};
 use aiplane_core::server::auth::token;
-use aiplane_core::server::db::{mcp_catalog, rag as rag_db, users};
+use aiplane_core::server::db::users;
 use aiplane_core::server::principal::GrantKind;
 use aiplane_runtime::rama_server::state::RamaState;
-
-const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
+use aiplane_runtime::server::grant_holding::{self, HoldRefusal};
 
 /// Session + agent-management permission, or the 401/403 to return.
 pub(crate) async fn require_agent_manager(
@@ -276,132 +277,32 @@ fn parse_grant(body: &GrantBody) -> Result<(GrantKind, &str), Response> {
     Ok((kind, reference))
 }
 
-/// Whether `manager` holds `(kind, reference)` right now, or the response
-/// for a grant that cannot be made at all (unknown resource, wrong kind). The
-/// check is the one that decides the manager's own access to that resource.
+/// Whether `manager` holds `kind` `reference` today
+/// ([`grant_holding::holds`]), or the response that says why it cannot be
+/// granted at all.
 async fn manager_holds(
     state: &RamaState,
     manager: &users::User,
     kind: GrantKind,
     reference: &str,
 ) -> Result<bool, Response> {
-    let role_ids = state.rbac.role_ids_for(&manager.roles);
-    let missing = |what: String| not_found(format!("there is no {what} on this gateway"));
-    let held = match kind {
-        GrantKind::Tool => {
-            if reference.starts_with(MCP_TOOL_PREFIX) {
-                return Err(bad_request(format!(
-                    "`{reference}` is an MCP tool — grant its connector (kind `connector`) instead"
-                )));
+    if kind == GrantKind::A2aCaller
+        && let Some(agent) = agents_db::get(&state.db, reference)
+            .await
+            .map_err(internal)?
+    {
+        guard_principal(state, manager, &agent.principal, Access::Write).await?;
+    }
+    grant_holding::holds(state, manager, kind, reference)
+        .await
+        .map_err(|refusal| match refusal {
+            HoldRefusal::Missing(_) => not_found(refusal.to_string()),
+            HoldRefusal::Invalid(why) => bad_request(why),
+            HoldRefusal::AdminOnly(why) => {
+                json_error(StatusCode::FORBIDDEN, "grant_exceeds_manager", &why)
             }
-            if !state.grantable_tool_ids().iter().any(|id| id == reference) {
-                return Err(missing(format!("tool `{reference}`")));
-            }
-            let mut held = state.rbac.allowed_tools(&role_ids, &state.tools());
-            state.expand_comfyui_tools(&mut held, &role_ids);
-            held.iter().any(|id| id == reference)
-        }
-        GrantKind::Connector => {
-            let connector = match mcp_catalog::get(&state.db, reference).await {
-                Ok(Some(c)) if c.enabled => c,
-                Ok(_) => return Err(missing(format!("enabled connector `{reference}`"))),
-                Err(err) => return Err(internal(err)),
-            };
-            if !connector.has_shared_identity() {
-                return Err(bad_request(format!(
-                    "connector `{reference}` signs in as each person, so a system principal \
-                     cannot use it — only connectors with the `global` or `agent` scope can be \
-                     granted"
-                )));
-            }
-            let is_admin = state.rbac.is_admin(&role_ids);
-            if connector.is_agent() {
-                // No person uses an agent connector, so there is no personal
-                // access to cap by; its groups say who may hand it out.
-                connector.grantable_by(&role_ids, is_admin)
-            } else {
-                let key = format!("{MCP_TOOL_PREFIX}{reference}");
-                connector.allows(&role_ids, is_admin)
-                    && state.mcp_grant_for(&manager.roles).allows(&key, &key)
-            }
-        }
-        GrantKind::Skill => {
-            let Some(store) = state.skills() else {
-                return Err(missing(format!(
-                    "skill `{reference}` (skills are not configured)"
-                )));
-            };
-            let registry = store.current();
-            if !registry.names().any(|n| n == reference) {
-                return Err(missing(format!("skill `{reference}`")));
-            }
-            state
-                .rbac
-                .allowed_skills(&role_ids, &registry)
-                .iter()
-                .any(|n| n == reference)
-        }
-        GrantKind::RagCollection => {
-            let Ok(id) = reference.parse::<i64>() else {
-                return Err(bad_request(format!(
-                    "a RAG collection is granted by its numeric id, not `{reference}`"
-                )));
-            };
-            let collection = match rag_db::find_collection_by_id(&state.db, id).await {
-                Ok(Some(c)) => c,
-                Ok(None) => return Err(missing(format!("RAG collection with id {id}"))),
-                Err(err) => return Err(internal(err)),
-            };
-            state
-                .rbac
-                .resource_allowed(&role_ids, &collection.allowed_groups)
-        }
-        GrantKind::Pool => {
-            let Some(pool) = state
-                .upstreams
-                .pools()
-                .into_iter()
-                .find(|p| p.name == reference)
-            else {
-                return Err(missing(format!("pool `{reference}`")));
-            };
-            state.pool_access_for(&manager.roles).allows(&pool)
-        }
-        GrantKind::A2aCaller => {
-            // Letting another platform call an agent is a change to that
-            // agent, so it takes what changing it takes: a `write` share.
-            let agent = match agents_db::get(&state.db, reference).await {
-                Ok(Some(agent)) => agent,
-                Ok(None) => return Err(missing(format!("agent `{reference}`"))),
-                Err(err) => return Err(internal(err)),
-            };
-            guard_principal(state, manager, &agent.principal, Access::Write).await?;
-            true
-        }
-        GrantKind::A2aAgent => {
-            if let Err(why) = aiplane_runtime::agents::a2a_client::check_card_url(reference) {
-                return Err(bad_request(format!(
-                    "`{reference}` cannot be granted as an A2A agent: {why}"
-                )));
-            }
-            // An external agent is nothing a person holds, and a grant on one
-            // lets an agent send visitor data off the gateway: the
-            // operator's call.
-            if !state.rbac.is_admin(&role_ids) {
-                return Err(json_error(
-                    StatusCode::FORBIDDEN,
-                    "grant_exceeds_manager",
-                    &format!(
-                        "cannot grant A2A agent `{reference}`: an external agent receives what \
-                         its route sends it, so only an admin may grant one. Ask an admin to \
-                         make this grant."
-                    ),
-                ));
-            }
-            true
-        }
-    };
-    Ok(held)
+            HoldRefusal::Db(err) => internal(err),
+        })
 }
 
 /// `Ok` when `manager` may hand out a token for `principal`: an admin always,
