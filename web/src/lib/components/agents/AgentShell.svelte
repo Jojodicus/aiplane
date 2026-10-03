@@ -97,7 +97,7 @@
 			</div>
 		{/if}
 		{#if ws.notice}
-			<div class="toast toast-end z-50"><div class="alert alert-success text-sm" role="status"><span>{t(ws.notice.key, ws.notice.args)}</span></div></div>
+			<div class="toast toast-top toast-center z-50"><div class="alert alert-success text-sm" role="status"><span>{t(ws.notice.key, ws.notice.args)}</span></div></div>
 		{/if}
 
 		{@render children()}
