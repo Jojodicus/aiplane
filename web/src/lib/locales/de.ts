@@ -642,6 +642,7 @@ export const de: Catalog = {
  "agents-tests-rubric-summary": "Rubrik: {passed} bestanden, {failed} fehlgeschlagen",
  "agents-tests-run": "Alle ausführen",
  "agents-tests-running": "Läuft…",
+ "agents-tests-save": "Testfall speichern",
  "agents-tests-script": "Gesprächsskript",
  "agents-tests-script-hint": "Die Nachrichten des Besuchers in Reihenfolge. Dazwischen können Sie einen Slot so schreiben, wie es ein Verifier oder der Host täte, etwa um einen verifizierten Kunden zu simulieren. Der erste Schritt muss eine Nachricht sein.",
  "agents-tests-section-action": "Aktion",

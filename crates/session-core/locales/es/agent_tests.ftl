@@ -53,6 +53,7 @@ agents-tests-add-bound = Valor vinculado
 agents-tests-bound-name = Nombre
 agents-tests-rubric-field = Rúbrica (opcional)
 agents-tests-rubric-hint = Un modelo califica las respuestas según este texto en el pool principal del agente. Se informa por separado y nunca cambia si la prueba pasa.
+agents-tests-save = Guardar caso de prueba
 agents-tests-cancel = Cancelar
 agents-tests-results = Resultados
 agents-tests-source = Ejecutar contra

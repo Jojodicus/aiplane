@@ -285,7 +285,7 @@
 				</label>
 
 				<div class="flex gap-2">
-					<button class="btn btn-primary btn-sm" type="button" disabled={busy} onclick={saveCase}>{t('agents-save')}</button>
+					<button class="btn btn-primary btn-sm" type="button" disabled={busy} onclick={saveCase}>{t('agents-tests-save')}</button>
 					<button class="btn btn-ghost btn-sm" type="button" onclick={() => (editing = null)}>{t('agents-tests-cancel')}</button>
 				</div>
 			</div>

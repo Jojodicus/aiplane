@@ -642,6 +642,7 @@ export const en: Catalog = {
  "agents-tests-rubric-summary": "Rubric: {passed} passed, {failed} failed",
  "agents-tests-run": "Run all",
  "agents-tests-running": "Running…",
+ "agents-tests-save": "Save test case",
  "agents-tests-script": "Conversation script",
  "agents-tests-script-hint": "The visitor's messages, in order. Between them you can write a slot as a verifier or the host would, for example to simulate a verified customer. The first step must be a message.",
  "agents-tests-section-action": "Action",

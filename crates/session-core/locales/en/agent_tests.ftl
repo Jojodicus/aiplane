@@ -53,6 +53,7 @@ agents-tests-add-bound = Bound value
 agents-tests-bound-name = Name
 agents-tests-rubric-field = Rubric (optional)
 agents-tests-rubric-hint = A model grades the answers against this text on the agent's main pool. It is reported separately and never changes pass or fail.
+agents-tests-save = Save test case
 agents-tests-cancel = Cancel
 agents-tests-results = Results
 agents-tests-source = Run against

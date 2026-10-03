@@ -642,6 +642,7 @@ export const zh: Catalog = {
  "agents-tests-rubric-summary": "评分标准：通过 {passed} 个，失败 {failed} 个",
  "agents-tests-run": "全部运行",
  "agents-tests-running": "运行中…",
+ "agents-tests-save": "保存测试用例",
  "agents-tests-script": "对话脚本",
  "agents-tests-script-hint": "按顺序排列的访客消息。在它们之间可以像验证器或宿主那样写入某个槽位，例如模拟已验证的客户。第一步必须是一条消息。",
  "agents-tests-section-action": "行动",

@@ -642,6 +642,7 @@ export const fr: Catalog = {
  "agents-tests-rubric-summary": "Grille : {passed} réussis, {failed} échoués",
  "agents-tests-run": "Tout exécuter",
  "agents-tests-running": "Exécution…",
+ "agents-tests-save": "Enregistrer le cas de test",
  "agents-tests-script": "Script de conversation",
  "agents-tests-script-hint": "Les messages du visiteur, dans l'ordre. Entre eux, vous pouvez écrire un slot comme le ferait un vérificateur ou l'hôte, par exemple pour simuler un client vérifié. La première étape doit être un message.",
  "agents-tests-section-action": "Action",

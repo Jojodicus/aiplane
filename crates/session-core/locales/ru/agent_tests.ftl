@@ -53,6 +53,7 @@ agents-tests-add-bound = Привязанное значение
 agents-tests-bound-name = Имя
 agents-tests-rubric-field = Рубрика (необязательно)
 agents-tests-rubric-hint = Модель оценивает ответы по этому тексту в основном пуле агента. Результат показывается отдельно и никогда не меняет итог теста.
+agents-tests-save = Сохранить тестовый случай
 agents-tests-cancel = Отмена
 agents-tests-results = Результаты
 agents-tests-source = Запустить на

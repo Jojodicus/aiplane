@@ -642,6 +642,7 @@ export const ru: Catalog = {
  "agents-tests-rubric-summary": "Рубрика: пройдено {passed}, не пройдено {failed}",
  "agents-tests-run": "Запустить все",
  "agents-tests-running": "Выполняется…",
+ "agents-tests-save": "Сохранить тестовый случай",
  "agents-tests-script": "Сценарий разговора",
  "agents-tests-script-hint": "Сообщения посетителя по порядку. Между ними можно записать слот так, как это сделал бы верификатор или хост, например чтобы имитировать проверенного клиента. Первым шагом должно быть сообщение.",
  "agents-tests-section-action": "Действие",
