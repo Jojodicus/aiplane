@@ -96,6 +96,11 @@ Something only belongs in `aiplane-core` if code below the feature layer genuine
 needs it. Pushing a module downward for convenience is what makes builds slow
 again.
 
+The direction is checked, not just written down:
+`workspace_crates_depend_only_down_the_stack` (`crates/aiplane/tests/it/architecture.rs`)
+encodes the levels above and fails on any upward or sideways Cargo edge, naming
+it. See [`testing.md`](testing.md#architecture-tests).
+
 ### `crates/shared`
 Pure data types, no I/O:
 - OpenAI request/response schema (`ChatCompletionRequest`, `ChatCompletionResponse`, streaming chunk type, tool-call types, audio transcription types).

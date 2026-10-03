@@ -792,3 +792,153 @@ fn the_mask_blanks_comments_strings_and_test_items_but_keeps_lines() {
         ["reqwest::Client", "reqwest::ClientBuilder", "Http"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Crate direction.
+
+/// The crate stack of AGENTS.md, bottom (0) up. A crate may depend only on
+/// crates on a lower level; siblings share one, so neither depends on the
+/// other.
+const STACK: &[(&str, u8)] = &[
+    ("shared", 0),
+    ("session-core", 1),
+    ("aiplane-core", 2),
+    ("aiplane-features", 3),
+    ("aiplane-agents", 3),
+    ("aiplane-runtime", 4),
+    ("aiplane-tools", 5),
+    ("aiplane-api", 5),
+    ("aiplane", 6),
+];
+
+/// Members outside the stack, with the workspace crates each may use.
+/// Nothing may depend on them.
+const OUTSIDE_THE_STACK: &[(&str, &[&str])] = &[
+    // A separate service binary; it shares only the wire types.
+    ("sandbox-runner", &["shared"]),
+];
+
+/// The workspace members, and `(crate, dependency, kind)` for every
+/// dependency between them, from `cargo metadata`, so renamed,
+/// target-specific and workspace-inherited dependencies all count.
+fn workspace_edges() -> (Vec<String>, Vec<(String, String, String)>) {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| env!("CARGO").to_string());
+    let workspace = crates_dir()
+        .parent()
+        .expect("crates/ lives in the workspace root")
+        .to_path_buf();
+    let out = std::process::Command::new(cargo)
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .current_dir(&workspace)
+        .output()
+        .expect("cargo metadata runs");
+    assert!(
+        out.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("cargo metadata prints JSON");
+    let packages = meta["packages"].as_array().expect("packages");
+    let members: Vec<String> = packages
+        .iter()
+        .filter_map(|p| p["name"].as_str().map(str::to_string))
+        .collect();
+    let mut edges = Vec::new();
+    for p in packages {
+        let from = p["name"].as_str().expect("a package has a name");
+        for d in p["dependencies"].as_array().into_iter().flatten() {
+            let to = d["name"].as_str().expect("a dependency has a name");
+            if !members.iter().any(|m| m == to) {
+                continue;
+            }
+            let kind = d["kind"].as_str().unwrap_or("normal").to_string();
+            edges.push((from.to_string(), to.to_string(), kind));
+        }
+    }
+    (members, edges)
+}
+
+/// Why `from` may not depend on `to`, or `None` when it may.
+fn edge_violation(from: &str, to: &str) -> Option<String> {
+    let level = |name: &str| STACK.iter().find(|(n, _)| *n == name).map(|(_, l)| *l);
+    if let Some((_, allowed)) = OUTSIDE_THE_STACK.iter().find(|(n, _)| *n == from) {
+        return (!allowed.contains(&to))
+            .then(|| format!("{from} stands outside the stack and may use only {allowed:?}"));
+    }
+    if OUTSIDE_THE_STACK.iter().any(|(n, _)| *n == to) {
+        return Some(format!(
+            "{to} stands outside the stack; nothing depends on it"
+        ));
+    }
+    match (level(from), level(to)) {
+        (Some(f), Some(t)) if t < f => None,
+        (Some(f), Some(t)) if t == f => Some(format!(
+            "{from} and {to} are siblings on level {f}; neither may depend on the other"
+        )),
+        (Some(f), Some(t)) => Some(format!(
+            "{to} (level {t}) sits above {from} (level {f}); a crate may depend only on \
+             crates beneath it"
+        )),
+        _ => Some(format!(
+            "{from} -> {to} involves a crate this test does not place in the stack"
+        )),
+    }
+}
+
+#[test]
+fn workspace_crates_depend_only_down_the_stack() {
+    let (members, edges) = workspace_edges();
+    assert!(
+        edges
+            .iter()
+            .any(|(from, to, _)| from == "aiplane-runtime" && to == "aiplane-core"),
+        "cargo metadata reported no aiplane-runtime -> aiplane-core edge; the test is not \
+         reading the dependency graph it means to check: {edges:?}"
+    );
+    let unplaced: Vec<&String> = members
+        .iter()
+        .filter(|m| {
+            !STACK.iter().any(|(n, _)| n == m) && !OUTSIDE_THE_STACK.iter().any(|(n, _)| n == m)
+        })
+        .collect();
+    assert!(
+        unplaced.is_empty(),
+        "these workspace members have no place in the crate stack: {unplaced:?}. Decide \
+         where they sit, document it in AGENTS.md → \"The gateway crate stack\" and \
+         docs/architecture.md#crate-boundaries, and add them to STACK (or \
+         OUTSIDE_THE_STACK) in crates/aiplane/tests/it/architecture.rs"
+    );
+    let wrong: Vec<String> = edges
+        .iter()
+        .filter_map(|(from, to, kind)| {
+            edge_violation(from, to).map(|why| format!("{from} -> {to} ({kind}): {why}"))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "dependencies against the crate stack:\n  {}\n\nAn upward or sideways edge collapses \
+         a layer, and every build of the lower crate pays for the upper one. Move the code \
+         the lower crate needs down, or the caller up; see AGENTS.md → \"The gateway crate \
+         stack\" and docs/architecture.md#crate-boundaries.",
+        wrong.join("\n  ")
+    );
+}
+
+#[test]
+fn the_stack_rule_refuses_upward_and_sideways_edges() {
+    assert_eq!(edge_violation("aiplane-runtime", "aiplane-core"), None);
+    assert!(edge_violation("aiplane-core", "aiplane-agents").is_some());
+    assert!(edge_violation("aiplane-features", "aiplane-agents").is_some());
+    assert!(edge_violation("aiplane-api", "aiplane-tools").is_some());
+    assert!(edge_violation("session-core", "aiplane-core").is_some());
+    assert!(edge_violation("aiplane", "sandbox-runner").is_some());
+    assert_eq!(edge_violation("sandbox-runner", "shared"), None);
+    assert!(edge_violation("sandbox-runner", "session-core").is_some());
+}

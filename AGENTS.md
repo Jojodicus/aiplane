@@ -81,6 +81,13 @@ Two rules keep it that way, and both are easy to break by accident:
    or an agent table's accessors; `session-core` must not name an agent, a
    visitor or a principal. One such reference collapses a layer.
 
+The dependency half of rule 2 is checked: `workspace_crates_depend_only_down_the_stack`
+(`crates/aiplane/tests/it/architecture.rs`) reads `cargo metadata` and fails on
+any edge — normal, build or dev — from a crate to one above it or beside it,
+naming the edge. A new crate fails it until it has a level there. Naming a type
+across layers without a Cargo edge is impossible, so the edge check covers
+rule 2 for types; it cannot see code that merely *belongs* higher (rule 1).
+
 **When adding code, put it as high in the stack as it will go.** Something only
 belongs in `aiplane-core` if code below the page layer actually needs it. Adding a
 reference from `aiplane-core` to a page — or pushing a module downward for
