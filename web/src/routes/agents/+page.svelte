@@ -113,17 +113,17 @@
 			<input class="input w-full" bind:value={display} required maxlength="80" placeholder={t('agents-create-name-placeholder')} autofocus />
 			<span class="text-xs text-base-content/60">{t('agents-create-name-help')}</span>
 		</label>
-		{#if customId === null}
-			<p class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
-				<span>{t('agents-create-id')}</span><code class="font-mono">{id || '…'}</code>
-				<button class="btn btn-ghost btn-xs" type="button" onclick={() => (customId = id)}>{t('agents-create-id-change')}</button>
-			</p>
-		{:else}
+		{#if customId !== null}
 			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-create-id')}</span>
 				<input class="input input-sm w-full font-mono" bind:value={customId} required maxlength="48" pattern="[a-z0-9]+(-[a-z0-9]+)*" />
 				<span class="text-xs text-base-content/60">{t('agents-create-name-hint')}</span>
 			</label>
+		{:else if display.trim()}
+			<p class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
+				<span>{t('agents-create-id')}</span><code class="font-mono">{id || '…'}</code>
+				<button class="btn btn-ghost btn-xs" type="button" onclick={() => (customId = id)}>{t('agents-create-id-change')}</button>
+			</p>
 		{/if}
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-description')}</span>
