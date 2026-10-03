@@ -21,6 +21,7 @@ import {
 	type AgentResources,
 	type AgentSummary,
 	type AgentVersion,
+	type AssistSuggestion,
 	type Granted,
 	type GrantKind,
 	type Spec,
@@ -48,6 +49,10 @@ export class AgentWorkspace {
 	notice = $state<{ key: string; args?: Record<string, string | number> } | null>(null);
 	busy = $state(false);
 	lastDebug = $state<TestDebug | null>(null);
+	/** The prompt assistant's latest proposal (#117), offered step by step until applied or dismissed. */
+	suggestion = $state<AssistSuggestion | null>(null);
+	/** Proposal parts already applied or dismissed (`task`, `tone`, `scope`, …). */
+	handled = $state<string[]>([]);
 
 	readonly writable = $derived(this.detail?.access === 'write');
 	readonly dirty = $derived(JSON.stringify(cleanSpec(this.spec)) !== this.savedJson);
@@ -66,6 +71,22 @@ export class AgentWorkspace {
 			skills: grants.filter((g) => g.kind === 'skill').map((g) => g.ref)
 		};
 	});
+
+	/** Whether the proposal still offers `part`. */
+	offers(part: keyof AssistSuggestion['steps']): boolean {
+		const value = this.suggestion?.steps[part];
+		const present = Array.isArray(value) ? value.length > 0 : !!value;
+		return present && !this.handled.includes(part);
+	}
+
+	propose(suggestion: AssistSuggestion) {
+		this.suggestion = suggestion;
+		this.handled = [];
+	}
+
+	settle(part: string) {
+		if (!this.handled.includes(part)) this.handled = [...this.handled, part];
+	}
 
 	constructor(id: string) {
 		this.id = id;

@@ -2,8 +2,10 @@
 	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import type { Spec } from '$lib/agents';
-	import { SLOT_KINDS, readSlots, slotsForIdentity, writeSlots, type SlotKind, type SlotRow } from '$lib/agent-setup';
+	import { SLOT_KINDS, readSlots, slotsForIdentity, suggestedSlotRows, writeSlots, type SlotKind, type SlotRow } from '$lib/agent-setup';
+	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/**
@@ -18,6 +20,8 @@
 	writeOnChange(() => $state.snapshot(rows), (m) => writeSlots(spec, m));
 
 	const needed = $derived(slotsForIdentity(spec));
+	const ws = useWorkspace();
+	const suggested = $derived(ws.suggestion?.steps.slots ?? []);
 	const SUGGESTIONS: SlotKind[] = ['phone', 'customer_number', 'order_number', 'long_text'];
 	let nextId = 0;
 	const ids = new WeakMap<SlotRow, number>();
@@ -33,6 +37,9 @@
 
 <div class="flex flex-col gap-4">
 	<p class="m-0 text-base-content/70">{t('agents-setup-slots-lead')}</p>
+	<SuggestionBox part="slots" onapply={() => { rows = [...rows, ...suggestedSlotRows(suggested, rows)]; }}>
+		<p class="m-0">{suggested.map((s) => s.label).join(', ')}</p>
+	</SuggestionBox>
 
 	{#if !rows.length}
 		<p class="m-0 text-sm text-base-content/60">{t('agents-setup-slots-empty')}</p>

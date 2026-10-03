@@ -209,6 +209,26 @@ export interface TestTurn {
 	debug?: TestDebug;
 }
 
+/** A proposal of the prompt assistant (#117, `POST …/assist/suggest`): every piece already checked against the draft. */
+export interface AssistSuggestion {
+	steps: {
+		task?: { orchestration: string } | null;
+		tone?: { response: string; chips: string[] } | null;
+		scope?: { topics: string[]; refusal: string; strict: boolean } | null;
+		abilities?: { id: string; name: string; why: string }[];
+		slots?: { name: string; label: string; type: string; def: Spec }[];
+		identity?: { method: string; why: string } | null;
+		handoffs?: { name: string; topic: string; target: string; target_name: string; condition: unknown; route: Spec }[];
+		tests?: { name: string; kind: string; script: CaseBody['script']; expect: CaseBody['expect'] }[];
+	};
+	/** What the assistant left out, and why, in words. */
+	dropped: { step: string; item?: string; reason: string }[];
+	pool: string;
+	model: string;
+}
+
+export type ImproveField = 'task' | 'tone' | 'refusal';
+
 /** The answer to a suspension: the decision, and the value only `value` carries. */
 export type ResumeDecision = { decision: 'allow_once' } | { decision: 'deny' } | { decision: 'value'; value: string };
 
@@ -316,6 +336,10 @@ export const agentsApi = {
 	revokeGrant: (id: string, kind: GrantKind, ref: string) =>
 		call<void>(`/api/v0/system-principals/${id}/grants/revoke`, json('POST', { kind, ref })),
 	resources: () => call<AgentResources>('/api/v0/agent-resources'),
+	suggest: (id: string, body: { scenario: string; template?: string; current_draft?: Spec }) =>
+		call<AssistSuggestion>(`/api/v0/agents/${id}/assist/suggest`, json('POST', body)),
+	improve: (id: string, field: ImproveField, text: string) =>
+		call<{ suggestion: string; why: string }>(`/api/v0/agents/${id}/assist/improve`, json('POST', { field, text })),
 	testTurn: (id: string, message: string, sessionId: string | null) =>
 		call<TestTurn>(
 			`/api/v0/agents/${id}/test-turn`,

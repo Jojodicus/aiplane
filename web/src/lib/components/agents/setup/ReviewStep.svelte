@@ -1,6 +1,7 @@
 <script lang="ts">
+	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
 	import { base } from '$app/paths';
-	import type { Spec } from '$lib/agents';
+	import { agentsApi, type AgentError, type Spec } from '$lib/agents';
 	import { SECTIONS, checklist, summary, type StepKey } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -13,6 +14,21 @@
 	const ctx = $derived({ tr: t, grants: ws.detail?.grants ?? [], resources: ws.resources, agents: ws.agents });
 	const todos = $derived(checklist(spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
 	const name = $derived(spec.profile?.display || ws.detail?.display || ws.detail?.name || '');
+
+	const tests = $derived(ws.suggestion?.steps.tests ?? []);
+	let saved = $state<string[]>([]);
+	let testError = $state<string | null>(null);
+	async function saveTest(test: (typeof tests)[number]) {
+		testError = null;
+		try {
+			await agentsApi.createTest(ws.id, { name: test.name, script: test.script, expect: test.expect, rubric: null });
+			saved = [...saved, test.name];
+		} catch (err) {
+			testError = (err as AgentError).message;
+		}
+	}
+	const sayings = (test: (typeof tests)[number]) =>
+		test.script.flatMap((s) => ('say' in s ? [s.say] : [])).join(' · ');
 </script>
 
 <div class="flex flex-col gap-5">
@@ -27,5 +43,24 @@
 		<h3 class="m-0 text-base font-semibold">{t('agents-setup-checklist')}</h3>
 		<SetupChecklist {todos} {spec} {onfix} />
 	</section>
+	{#if tests.length}
+		<AiSuggestion label={t('agents-setup-suggest-tests')}>
+			<ul class="m-0 flex list-none flex-col gap-2 p-0">
+				{#each tests as test (test.name)}
+					<li class="flex flex-wrap items-center gap-2">
+						<span class="badge badge-outline">{t(test.kind === 'out_of_scope' ? 'agents-setup-test-kind-out' : 'agents-setup-test-kind-in')}</span>
+						<span class="font-semibold">{test.name}</span>
+						<span class="min-w-0 flex-1 break-words text-base-content/70">{sayings(test)}</span>
+						{#if saved.includes(test.name)}
+							<span class="text-success">✓ {t('agents-setup-test-saved')}</span>
+						{:else}
+							<button class="btn btn-sm" type="button" disabled={!ws.writable} onclick={() => void saveTest(test)}>{t('agents-setup-test-save')}</button>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+			{#if testError}<p class="m-0 mt-2 text-error" role="alert">{testError}</p>{/if}
+		</AiSuggestion>
+	{/if}
 	<a class="link link-primary text-sm" href="{base}/agents/{ws.id}?tab=try">{t('agents-setup-review-try')}</a>
 </div>

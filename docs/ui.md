@@ -626,15 +626,15 @@ that every step round-trips through the advanced editor's
 
   | Step | What the person sees | What it writes |
   |---|---|---|
-  | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field; *Suggest a setup* is disabled with a "coming" tooltip until #117 | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
+  | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field with *Suggest a setup* (below) | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
   | Task & tone | name, what the agent does, tone chips, answer language, free text, *How thorough?* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.pool` |
   | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_pool` kept |
   | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
-  | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`; a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
+  | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`; a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
   | Hand-offs | sentences: "When it is about [topic] and [always / the identity is confirmed], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]" | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: verified, provenance})]}`, `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |
   | Website | the websites (one per line), a widget sketch, *Create embed code* | `publish.origins` (each reduced to its origin); the key itself is created through the embed-keys API and shown once |
-  | Check & test | every section's summary, the checklist, a link to *Try it* | nothing |
+  | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` (#99) |
 
 - **Grants follow the cards.** Switching a card on grants what it needs to the
   agent's principal at once (`AgentWorkspace.ensureGrant`; the server's
@@ -657,9 +657,23 @@ that every step round-trips through the advanced editor's
   language to prove each is a valid draft). What the model reads — tone and
   language lines, the hand-off task, the descriptions of `topic` and
   `request` — is English, like the structured system prompt (#115).
-- **Not built here.** The scenario's *Suggest a setup* (#117), the agent
-  architect (#118), voice in the widget (#119), and a widget colour (the embed
-  widget has no per-agent colour yet, so the step does not offer one).
+- **The prompt assistant** (#117, [`agents.md`](agents.md#what-117-built)).
+  *Suggest a setup* sends the scenario, the chosen template and the current
+  buffer to `POST …/assist/suggest`; the proposal is kept on the workspace
+  (`ws.suggestion`) and every step shows its part in an `AiSuggestion`
+  (`SuggestionBox`) with *Apply* / *Dismiss*: the task, the tone (read back
+  into chips, language and free text), the topics, the tools (granted when
+  applied), the details (`suggestedSlotRows`), the identity card
+  (`suggestedMethod`), the hand-offs as sentences (`suggestedRules`) and, on
+  the last step, test conversations. Applying edits the step's model like a
+  manual edit, so it reaches the spec only through the normal save; the
+  endpoint writes nothing. What the assistant left out is listed on the start
+  step with its reason. The task, the tone and the answer for other topics
+  each have *Improve* (`ImproveText`, `…/assist/improve`): the proposed text
+  before / after with the reason, applied only on *Apply*.
+- **Not built here.** The agent architect (#118), voice in the widget (#119),
+  and a widget colour (the embed widget has no per-agent colour yet, so the
+  step does not offer one).
 
 ## Inbox
 

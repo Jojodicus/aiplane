@@ -31,6 +31,9 @@ import {
 	slotsForIdentity,
 	stepForPath,
 	summary,
+	suggestedMethod,
+	suggestedRules,
+	suggestedSlotRows,
 	templateSpec,
 	tierOf,
 	topicsNeedingIdentity,
@@ -404,4 +407,30 @@ test('each section sums itself up in one line', () => {
 	assert.equal(summary('identity', spec, ctx), 'agents-setup-identity-email_code');
 	assert.equal(summary('routes', spec, ctx), 'Invoices → Billing · agents-setup-sum-routes-other(agents-setup-rule-person)');
 	assert.equal(summary('site', spec, ctx), 'agents-setup-sum-site-none');
+});
+
+test('a proposal maps onto the steps: identity cards, friendly details, hand-off sentences', () => {
+	assert.equal(suggestedMethod('website_login'), 'signed_in');
+	assert.equal(suggestedMethod('lookup'), 'customer_lookup');
+	assert.equal(suggestedMethod('carrier_pigeon'), null);
+
+	const existing: SlotRow[] = [{ key: 'email', label: 'E-mail', kind: 'email', values: [] }];
+	const rows = suggestedSlotRows(
+		[
+			{ name: 'email', label: 'E-mail', def: { type: 'email', set_by: ['llm'] } },
+			{ name: 'order_number', label: 'Order number', def: { type: 'string', max_length: 500, set_by: ['llm'] } },
+			{ name: 'quantity', label: 'Quantity', def: { type: 'integer', set_by: ['llm'] } },
+			{ name: 'plan', label: 'Plan', def: { type: 'enum', values: ['basic', 'pro'], set_by: ['llm'] } },
+			{ name: 'topic', label: 'Topic', def: { type: 'string', set_by: ['llm'] } }
+		],
+		existing
+	);
+	assert.deepEqual(rows.map((r) => [r.key, r.kind, r.values]), [['order_number', 'text', []], ['quantity', 'whole_number', []], ['plan', 'choice', ['basic', 'pro']]]);
+	const spec: Spec = {};
+	writeSlots(spec, [...existing, ...rows]);
+	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.kind), ['email', 'text', 'choice', 'whole_number']);
+
+	const rules = suggestedRules([{ topic: 'Invoices', target: 'b1' }, { topic: 'invoices', target: 'human' }, { topic: 'Returns', target: 'human' }], []);
+	assert.deepEqual(rules.map((r) => [r.topic, r.target]), [['Invoices', { kind: 'agent', id: 'b1' }], ['Returns', { kind: 'human' }]]);
+	assert.deepEqual(suggestedRules([{ topic: 'Returns', target: 'human' }], rules), []);
 });

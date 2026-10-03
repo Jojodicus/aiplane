@@ -5,12 +5,14 @@
 		IDENTITY_METHODS,
 		newSecret,
 		readIdentity,
+		suggestedMethod,
 		topicsNeedingIdentity,
 		writeIdentity,
 		type IdentityMethod
 	} from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/**
@@ -54,6 +56,9 @@
 		}
 	}
 
+	const suggested = $derived(ws.suggestion?.steps.identity ?? null);
+	const suggestedCard = $derived(suggested ? suggestedMethod(suggested.method) : null);
+
 	function choose(method: IdentityMethod) {
 		model.method = method;
 	}
@@ -61,6 +66,12 @@
 
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-identity-lead')}</p>
+	{#if suggested && suggestedCard}
+		<SuggestionBox part="identity" onapply={() => { if (suggestedCard && !(suggestedCard === 'none' && blockers.length)) choose(suggestedCard); }}>
+			<p class="m-0 font-semibold">{t(`agents-setup-identity-${suggestedCard}`)}</p>
+			<p class="m-0 mt-1 text-base-content/70">{suggested.why}</p>
+		</SuggestionBox>
+	{/if}
 
 	<div class="grid gap-2.5 sm:grid-cols-2" role="radiogroup" aria-label={t('agents-setup-step-identity')}>
 		{#each IDENTITY_METHODS as method (method)}

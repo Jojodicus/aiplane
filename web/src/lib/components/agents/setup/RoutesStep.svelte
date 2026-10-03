@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { agentsApi, type Spec } from '$lib/agents';
-	import { deriveBind, identityWriter, readHandoffs, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { deriveBind, identityWriter, readHandoffs, suggestedRules, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/**
@@ -47,6 +48,13 @@
 		void derive(i);
 	}
 
+	const suggested = $derived(ws.suggestion?.steps.handoffs ?? []);
+	function applySuggested() {
+		const start = model.rules.length;
+		model.rules = [...model.rules, ...suggestedRules(suggested, model.rules)];
+		model.rules.slice(start).forEach((_, i) => void derive(start + i));
+	}
+
 	function add() {
 		model.rules = [...model.rules, { route: null, topic: '', identity: false, target: { kind: 'human' }, bind: {} }];
 	}
@@ -59,6 +67,11 @@
 
 <div class="flex flex-col gap-4">
 	<p class="m-0 text-base-content/70">{t('agents-setup-routes-lead')}</p>
+	<SuggestionBox part="handoffs" onapply={applySuggested}>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0">
+			{#each suggested as h (h.name)}<li>{h.topic} → {h.target === 'human' ? t('agents-setup-rule-person') : h.target_name}</li>{/each}
+		</ul>
+	</SuggestionBox>
 
 	<ul class="m-0 flex list-none flex-col gap-2 p-0">
 		{#each model.rules as rule, i (i)}

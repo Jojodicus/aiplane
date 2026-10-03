@@ -3,6 +3,9 @@
 	import type { Spec } from '$lib/agents';
 	import { readScope, strictIncomplete, writeScope } from '$lib/agent-setup';
 	import { t } from '$lib/i18n.svelte';
+	import { useWorkspace } from '$lib/agent-workspace.svelte';
+	import ImproveText from './ImproveText.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/**
@@ -14,6 +17,9 @@
 	let model = $state(readScope(spec));
 	writeOnChange(() => $state.snapshot(model), (m) => writeScope(spec, m));
 
+	const ws = useWorkspace();
+	const suggested = $derived(ws.suggestion?.steps.scope ?? null);
+
 	let draft = $state('');
 	function addTopic() {
 		const topic = draft.trim();
@@ -24,6 +30,13 @@
 
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-scope-lead')}</p>
+	{#if suggested}
+		<SuggestionBox part="scope" onapply={() => { if (suggested) model = { topics: [...suggested.topics], refusal: suggested.refusal, strict: suggested.strict }; }}>
+			<div class="flex flex-wrap gap-1.5">{#each suggested.topics as topic (topic)}<span class="badge badge-outline">{topic}</span>{/each}</div>
+			<p class="m-0 mt-2">{suggested.refusal}</p>
+			{#if suggested.strict}<p class="m-0 mt-1 text-base-content/70">✓ {t('agents-setup-strict')}</p>{/if}
+		</SuggestionBox>
+	{/if}
 
 	<div class="flex flex-col gap-2">
 		<span class="font-semibold">{t('agents-setup-topics')}</span>
@@ -44,6 +57,7 @@
 		<span class="font-semibold">{t('agents-setup-refusal')}</span>
 		<textarea class="textarea w-full" rows="2" bind:value={model.refusal}></textarea>
 	</label>
+	<ImproveText field="refusal" text={model.refusal} onapply={(s) => (model.refusal = s)} />
 
 	<label class="flex items-start gap-3">
 		<input type="checkbox" class="toggle toggle-primary mt-0.5" bind:checked={model.strict} />

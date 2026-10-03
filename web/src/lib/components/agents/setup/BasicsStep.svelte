@@ -9,6 +9,7 @@
 		hasTiers,
 		humanize,
 		readBasics,
+		responseText,
 		tierOf,
 		writeBasics,
 		type AnswerLanguage,
@@ -16,6 +17,8 @@
 	} from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { LOCALE_NAMES, t } from '$lib/i18n.svelte';
+	import ImproveText from './ImproveText.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
 	/** Task & tone: name, what the agent does, how it sounds, which language, how thorough (its pool). */
@@ -62,6 +65,16 @@
 		}
 	}
 	const tierLabel = (tier: Tier) => t(`agents-setup-model-${tier}`);
+
+	/** A proposed or improved tone is a response text; read it back into chips, language and the rest. */
+	function adoptResponse(response: string) {
+		const read = readBasics({ main: { instructions: { response } } });
+		model.tones = read.tones;
+		model.language = read.language;
+		model.extra = read.extra;
+		if (read.language && read.language !== 'visitor') fixedLanguage = read.language;
+	}
+	const suggested = $derived(ws.suggestion?.steps);
 </script>
 
 <div class="flex flex-col gap-5">
@@ -75,6 +88,12 @@
 		<span class="text-sm text-base-content/60">{t('agents-setup-task-hint')}</span>
 		<textarea class="textarea min-h-28 w-full" bind:value={model.task}></textarea>
 	</label>
+	{#if suggested?.task}
+		<SuggestionBox part="task" label={t('agents-setup-suggest-task')} onapply={() => { model.task = suggested?.task?.orchestration ?? model.task; }}>
+			<p class="m-0 whitespace-pre-line">{suggested.task.orchestration}</p>
+		</SuggestionBox>
+	{/if}
+	<ImproveText field="task" text={model.task} onapply={(s) => (model.task = s)} />
 
 	<div class="flex flex-col gap-2">
 		<span class="font-semibold">{t('agents-setup-tone')}</span>
@@ -117,6 +136,17 @@
 		<span class="text-sm text-base-content/60">{t('agents-setup-tone-more-hint')}</span>
 		<textarea class="textarea w-full" rows="2" bind:value={model.extra}></textarea>
 	</label>
+	{#if suggested?.tone}
+		<SuggestionBox part="tone" label={t('agents-setup-suggest-tone')} onapply={() => adoptResponse(suggested?.tone?.response ?? '')}>
+			{#if suggested.tone.chips.length}
+				<div class="mb-1.5 flex flex-wrap gap-1.5">
+					{#each suggested.tone.chips as chip (chip)}<span class="badge badge-outline">{chip}</span>{/each}
+				</div>
+			{/if}
+			<p class="m-0 whitespace-pre-line">{suggested.tone.response}</p>
+		</SuggestionBox>
+	{/if}
+	<ImproveText field="tone" text={responseText(model)} onapply={adoptResponse} />
 
 	<div class="flex flex-col gap-2">
 		<span class="font-semibold">{t('agents-setup-model')}</span>

@@ -352,7 +352,7 @@ export function liveUses(live: Spec | null, kind: string, ref: string): boolean 
 
 /* ---- information to collect ------------------------------------------ */
 
-export const SLOT_KINDS = ['text', 'long_text', 'email', 'phone', 'customer_number', 'order_number', 'date', 'number', 'yes_no', 'choice'] as const;
+export const SLOT_KINDS = ['text', 'long_text', 'email', 'phone', 'customer_number', 'order_number', 'date', 'number', 'whole_number', 'yes_no', 'choice'] as const;
 export type SlotKind = (typeof SLOT_KINDS)[number];
 
 /** Each friendly kind's slot type and validator (`docs/agents.md` §3 State). */
@@ -365,6 +365,7 @@ export const SLOT_SHAPES: Record<SlotKind, Spec> = {
 	order_number: { type: 'string', pattern: '^[A-Za-z0-9#][A-Za-z0-9#/-]{2,39}$' },
 	date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
 	number: { type: 'number' },
+	whole_number: { type: 'integer' },
 	yes_no: { type: 'boolean' },
 	choice: { type: 'enum' }
 };
@@ -956,4 +957,44 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 		default:
 			return '';
 	}
+}
+
+/* ---- the prompt assistant's proposal (#117) ----------------------- */
+
+const SUGGESTED_METHOD: Record<string, IdentityMethod> = {
+	none: 'none',
+	email_code: 'email_code',
+	website_login: 'signed_in',
+	lookup: 'customer_lookup'
+};
+
+/** The identity card a proposed method stands for; `null` for one this step does not know. */
+export function suggestedMethod(method: string): IdentityMethod | null {
+	return SUGGESTED_METHOD[method] ?? null;
+}
+
+/** Proposed details as rows of the details step: their own key, a friendly kind where one fits, and none twice. */
+export function suggestedSlotRows(slots: { name: string; label: string; def: Spec }[], existing: SlotRow[]): SlotRow[] {
+	const taken = new Set(existing.map((r) => r.key));
+	return slots
+		.filter((s) => !taken.has(s.name) && !MANAGED_SLOTS.has(s.name))
+		.map((s): SlotRow => {
+			const kind = slotKind(s.def);
+			const values = Array.isArray(s.def?.values) ? s.def.values.map(String) : [];
+			return { key: s.name, label: s.label, kind: kind === 'custom' ? (s.def?.type === 'string' ? 'text' : 'custom') : kind, values, fresh: false };
+		})
+		.filter((r) => r.kind !== 'custom');
+}
+
+/** Proposed hand-offs as the sentences of the hand-off step; the gate, task and slots follow from them. */
+export function suggestedRules(handoffs: { topic: string; target: string }[], existing: Rule[]): Rule[] {
+	const topics = new Set(existing.map((r) => r.topic.trim().toLowerCase()));
+	return handoffs
+		.filter((h) => {
+			const topic = h.topic.trim().toLowerCase();
+			if (!topic || topics.has(topic)) return false;
+			topics.add(topic);
+			return true;
+		})
+		.map((h) => ({ route: null, topic: h.topic.trim(), identity: false, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
 }

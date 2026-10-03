@@ -5,6 +5,7 @@
 	import { RAG_LIST, RAG_SEARCH, abilities, humanize, liveUses, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import SuggestionBox from './SuggestionBox.svelte';
 
 	/**
 	 * Knowledge and abilities as cards. Switching one on grants what it needs
@@ -45,6 +46,16 @@
 		return (ws.detail?.grants ?? [])
 			.filter((g) => g.kind === 'rag_collection')
 			.map((g) => ws.resources?.rag_collections.find((c) => String(c.id) === g.ref)?.name ?? g.ref);
+	}
+
+	const suggested = $derived(ws.suggestion?.steps.abilities ?? []);
+
+	/** Every proposed tool, granted and put into the spec like a switched-on card. */
+	async function applySuggested() {
+		for (const s of suggested) {
+			await ws.ensureGrant('tool', s.id);
+			setAbility(spec, { kind: 'tool', ref: s.id, tools: [s.id] }, true);
+		}
 	}
 
 	async function toggle(c: Ability) {
@@ -103,6 +114,11 @@
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-abilities-lead')}</p>
 	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
+	<SuggestionBox part="abilities" onapply={applySuggested}>
+		<ul class="m-0 flex list-none flex-col gap-1 p-0">
+			{#each suggested as s (s.id)}<li><span class="font-semibold">{s.name}</span> — {s.why}</li>{/each}
+		</ul>
+	</SuggestionBox>
 
 	{#if !cards.length}
 		<div class="alert alert-info text-sm"><span>{t('agents-setup-nothing-available')}</span></div>
