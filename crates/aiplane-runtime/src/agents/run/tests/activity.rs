@@ -33,6 +33,7 @@ fn billing_spec() -> Value {
             "instructions": { "orchestration": "Explain the customer's invoice." },
             "budget": { "rounds": 3 }
         },
+        "state": { "finding": { "type": "string", "set_by": ["llm"] } },
         "finish": { "schema": finish_schema() }
     })
 }
@@ -102,10 +103,10 @@ async fn the_story() -> Run {
         text(FINAL),
     ])
     .await;
-    let sub = llm(vec![finish(
-        "b1",
-        json!({ "answer": "RE-1 was billed twice." }),
-    )])
+    let sub = llm(vec![
+        call("n1", "set_finding", json!({ "value": "double charge" })),
+        finish("b1", json!({ "answer": "RE-1 was billed twice." })),
+    ])
     .await;
     let peer = Peer::bearer(vec![completed(json!({ "answer": "Covered until 2027." }))]).await;
     let (erp, _) = erp().await;
@@ -304,7 +305,9 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
         .filter(|e| e.kind == "tool_result")
         .map(|e| (e.call_id.clone().unwrap(), detail(e)))
         .collect();
-    for id in ["k1", "k2", "fwd1", "v1", "fwd2", "k3", "fwd3", "h1", "b1"] {
+    for id in [
+        "k1", "k2", "fwd1", "v1", "fwd2", "k3", "fwd3", "h1", "n1", "b1",
+    ] {
         assert!(results.contains_key(id), "no tool_result for {id}");
     }
     assert_eq!(results["k1"]["arguments"], json!({ "value": ALICE }));
@@ -386,6 +389,16 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
     assert_eq!(issue_writes[1]["old"]["value"], "billing");
     assert_eq!(issue_writes[1]["new"], "warranty");
     assert_eq!(issue_writes[1]["provenance"], "llm");
+
+    let finding = &events[position(&events, |e, d| {
+        e.kind == "state_written" && d["slot"] == "finding"
+    })];
+    assert_eq!(
+        finding.principal_id, run.billing,
+        "the sub-agent's slot write is in the root conversation's chain"
+    );
+    assert_eq!(finding.agent_id.as_deref(), Some(run.support.as_str()));
+    assert_ne!(finding.session_id.as_deref(), Some(run.session.as_str()));
 
     let sub_event = events
         .iter()

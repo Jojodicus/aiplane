@@ -710,7 +710,7 @@ async fn every_routing_step_is_audited_with_the_call_chain() {
         .iter()
         .filter(|e| e.chain.is_some())
         .map(|e| e.kind.as_str())
-        .filter(|k| *k != "tool_call")
+        .filter(|k| !matches!(*k, "tool_call" | "state_written"))
         .collect();
     assert_eq!(
         kinds,

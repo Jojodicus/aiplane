@@ -38,6 +38,7 @@ use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_agents::rates::Rate;
 use aiplane_core::server::crypto::sha256_hex;
 use aiplane_core::server::principal::SystemPrincipal;
+use aiplane_core::server::run_chain::RunChain;
 use jiff::SignedDuration;
 use serde_json::{Map, Value, json};
 
@@ -341,6 +342,7 @@ fn write_failed(id: &str, slot: &str, why: &str) -> ToolError {
 pub(crate) async fn apply_writes(
     run: &VerifierRun,
     session_id: &str,
+    chain: Option<&RunChain>,
     id: &str,
     writes: &Writes,
     answer: &Map<String, Value>,
@@ -376,9 +378,17 @@ pub(crate) async fn apply_writes(
         .begin()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
-    write_trusted_all(&mut tx, &run.schema, session_id, &resolved, writer, now)
-        .await
-        .map_err(refused)?;
+    write_trusted_all(
+        &mut tx,
+        &run.schema,
+        session_id,
+        &resolved,
+        writer,
+        now,
+        chain,
+    )
+    .await
+    .map_err(refused)?;
     tx.commit()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;

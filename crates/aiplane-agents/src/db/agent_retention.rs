@@ -211,6 +211,7 @@ mod tests {
             &serde_json::json!("billing"),
             "llm",
             t0(),
+            None,
         )
         .await
         .unwrap();

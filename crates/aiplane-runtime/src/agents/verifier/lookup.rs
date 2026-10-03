@@ -206,6 +206,7 @@ impl Tool for LookupTool {
             let written = apply_writes(
                 &self.run,
                 session,
+                ctx.chain(),
                 &self.cfg.id,
                 &self.cfg.writes,
                 answer.as_ref().expect("a confirming answer is an object"),

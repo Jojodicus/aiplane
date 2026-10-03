@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use aiplane_agents::db::agent_state::{self, StoredSlot};
 use aiplane_core::server::db::{DbError, Pool};
+use aiplane_core::server::run_chain::RunChain;
 use jiff::Timestamp;
 use regex::Regex;
 use serde::Serialize;
@@ -703,10 +704,21 @@ pub async fn write_trusted(
     writer: TrustedWriter,
     now: Timestamp,
 ) -> Result<SlotEntry, StateWriteError> {
-    write(pool, schema, session_id, slot, value, writer.into(), now).await
+    write(
+        pool,
+        schema,
+        session_id,
+        slot,
+        value,
+        writer.into(),
+        now,
+        None,
+    )
+    .await
 }
 
-/// The model's door; only the `set_<slot>` tool calls it.
+/// The model's door; only the `set_<slot>` tool calls it, with the run it
+/// belongs to.
 pub(crate) async fn write_from_model(
     pool: &Pool,
     schema: &StateSchema,
@@ -714,8 +726,19 @@ pub(crate) async fn write_from_model(
     slot: &str,
     value: Value,
     now: Timestamp,
+    run: Option<&RunChain>,
 ) -> Result<SlotEntry, StateWriteError> {
-    write(pool, schema, session_id, slot, value, Provenance::Llm, now).await
+    write(
+        pool,
+        schema,
+        session_id,
+        slot,
+        value,
+        Provenance::Llm,
+        now,
+        run,
+    )
+    .await
 }
 
 /// [`write_trusted`] for several slots at once, all or none, on `conn` —
@@ -729,6 +752,7 @@ pub async fn write_trusted_all(
     values: &[(String, Value)],
     writer: TrustedWriter,
     now: Timestamp,
+    run: Option<&RunChain>,
 ) -> Result<(), StateWriteError> {
     let provenance: Provenance = writer.into();
     for (slot, value) in values {
@@ -736,7 +760,7 @@ pub async fn write_trusted_all(
     }
     let stamp = provenance.to_string();
     for (slot, value) in values {
-        agent_state::put(&mut *conn, session_id, slot, value, &stamp, now)
+        agent_state::put(&mut *conn, session_id, slot, value, &stamp, now, run)
             .await
             .map_err(|source| StateWriteError::Db {
                 slot: slot.clone(),
@@ -784,6 +808,7 @@ async fn write(
     value: Value,
     provenance: Provenance,
     now: Timestamp,
+    run: Option<&RunChain>,
 ) -> Result<SlotEntry, StateWriteError> {
     check_write(schema, slot, &value, &provenance)?;
     let db_error = |source: DbError| StateWriteError::Db {
@@ -798,6 +823,7 @@ async fn write(
         &value,
         &provenance.to_string(),
         now,
+        run,
     )
     .await
     .map_err(db_error)?;
@@ -1189,7 +1215,7 @@ pub(crate) mod tests {
             "{err}"
         );
 
-        let err = write_from_model(&pool, &s, "s1", "plan", json!("gold"), now)
+        let err = write_from_model(&pool, &s, "s1", "plan", json!("gold"), now, None)
             .await
             .unwrap_err();
         assert!(matches!(err, StateWriteError::NotWritable { .. }), "{err}");
@@ -1220,7 +1246,7 @@ pub(crate) mod tests {
         let pool = pool_with_session("s1").await;
         let s = schema();
         let now = at("2026-10-02T12:00:00Z");
-        let err = write_from_model(&pool, &s, "s1", "issue", json!("sales"), now)
+        let err = write_from_model(&pool, &s, "s1", "issue", json!("sales"), now, None)
             .await
             .unwrap_err();
         assert!(
@@ -1258,6 +1284,7 @@ pub(crate) mod tests {
             "score",
             json!(0.9),
             at("2026-10-02T12:05:00Z"),
+            None,
         )
         .await
         .unwrap();
