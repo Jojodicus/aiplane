@@ -41,7 +41,7 @@ use crate::rama_server::state::RamaState;
 mod proposal;
 pub mod review;
 
-pub use review::{ReviewContext, Suggestion};
+pub use review::{Applied, ReviewContext, Suggestion, apply_changes};
 
 /// The longest scenario the assistant reads.
 pub const MAX_SCENARIO_CHARS: usize = 8_000;
@@ -92,6 +92,9 @@ pub struct Target {
 pub struct Candidates {
     pub abilities: Vec<Ability>,
     pub agents: Vec<Target>,
+    /// The chat pools this manager may use and grant, for an architect's
+    /// model choice. The suggestion's schema does not offer a pool.
+    pub pools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]

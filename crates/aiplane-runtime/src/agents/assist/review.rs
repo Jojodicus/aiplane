@@ -163,36 +163,7 @@ pub struct Dropped {
 /// is editing) and keep what holds.
 pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggestion {
     let mut r = Reviewer::new(base, ctx);
-    if let Some(task) = r.field::<String>(answer, "task") {
-        r.task(task);
-    }
-    if let Some(tone) = r.field::<ToneProposal>(answer, "tone") {
-        r.tone(tone);
-    }
-    if let Some(scope) = r.field::<ScopeProposal>(answer, "scope") {
-        r.scope(scope);
-    }
-    for ability in r
-        .field::<Vec<AbilityProposal>>(answer, "abilities")
-        .unwrap_or_default()
-    {
-        r.ability(ability);
-    }
-    for slot in r
-        .field::<Vec<SlotProposal>>(answer, "slots")
-        .unwrap_or_default()
-    {
-        r.slot(slot);
-    }
-    if let Some(identity) = r.field::<IdentityProposal>(answer, "identity") {
-        r.identity(identity);
-    }
-    for handoff in r
-        .field::<Vec<HandoffProposal>>(answer, "handoffs")
-        .unwrap_or_default()
-    {
-        r.handoff(handoff);
-    }
+    r.steps(answer);
     for test in r
         .field::<Vec<TestProposal>>(answer, "tests")
         .unwrap_or_default()
@@ -202,12 +173,54 @@ pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggesti
     r.out
 }
 
+/// An architect's changes applied to `base`: the draft to save, the grants
+/// it needs, and what was applied or left out (`docs/agents.md` "What #118
+/// built").
+#[derive(Debug, Clone)]
+pub struct Applied {
+    pub suggestion: Suggestion,
+    pub draft: Value,
+    /// Made before the draft is saved, through the capped grant route.
+    pub grants: Vec<(GrantKind, String)>,
+    pub display: Option<String>,
+    pub pool: Option<String>,
+}
+
+/// Apply `changes` — the proposal's steps plus `display` (the agent's name)
+/// and `pool` (its model) — to `base`, one piece at a time, with the same
+/// checks [`review`] makes. Test cases are not part of a draft, so they are
+/// left out with a reason.
+pub fn apply_changes(changes: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Applied {
+    let mut r = Reviewer::new(base, ctx);
+    let display = r
+        .field::<String>(changes, "display")
+        .and_then(|d| r.display(d));
+    let pool = r.field::<String>(changes, "pool").and_then(|p| r.pool(p));
+    r.steps(changes);
+    if changes.get("tests").is_some_and(|t| !t.is_null()) {
+        r.drop(
+            "tests",
+            None,
+            "test cases are not part of the draft — the person saves them on the setup's last \
+             step",
+        );
+    }
+    Applied {
+        suggestion: r.out,
+        draft: r.draft,
+        grants: r.granted,
+        display,
+        pool,
+    }
+}
+
 struct Reviewer<'a> {
     ctx: &'a ReviewContext<'a>,
     draft: Value,
-    /// The tools the offered abilities would grant: the draft is checked as
-    /// if the manager had granted them, which applying the step does.
-    granted: Vec<String>,
+    /// What the offered abilities (and an architect's model choice) would
+    /// grant: the draft is checked as if the manager had granted them, which
+    /// applying the step does.
+    granted: Vec<(GrantKind, String)>,
     known: BTreeSet<(String, String)>,
     tests: BTreeSet<String>,
     out: Suggestion,
@@ -265,7 +278,7 @@ impl<'a> Reviewer<'a> {
                 .grants
                 .iter()
                 .map(|(k, r)| (k, r.to_string()))
-                .chain(self.granted.iter().map(|t| (GrantKind::Tool, t.clone()))),
+                .chain(self.granted.iter().cloned()),
         );
         let ctx = SpecContext {
             agent_id: self.ctx.agent_id,
@@ -309,6 +322,79 @@ impl<'a> Reviewer<'a> {
         let mut draft = self.draft.clone();
         set_at(&mut draft, pointer, value);
         draft
+    }
+
+    /// Every draft step of `answer`, in the assistant's step order.
+    fn steps(&mut self, answer: &Value) {
+        if let Some(task) = self.field::<String>(answer, "task") {
+            self.task(task);
+        }
+        if let Some(tone) = self.field::<ToneProposal>(answer, "tone") {
+            self.tone(tone);
+        }
+        if let Some(scope) = self.field::<ScopeProposal>(answer, "scope") {
+            self.scope(scope);
+        }
+        for ability in self
+            .field::<Vec<AbilityProposal>>(answer, "abilities")
+            .unwrap_or_default()
+        {
+            self.ability(ability);
+        }
+        for slot in self
+            .field::<Vec<SlotProposal>>(answer, "slots")
+            .unwrap_or_default()
+        {
+            self.slot(slot);
+        }
+        if let Some(identity) = self.field::<IdentityProposal>(answer, "identity") {
+            self.identity(identity);
+        }
+        for handoff in self
+            .field::<Vec<HandoffProposal>>(answer, "handoffs")
+            .unwrap_or_default()
+        {
+            self.handoff(handoff);
+        }
+    }
+
+    fn display(&mut self, display: String) -> Option<String> {
+        let display = display.trim().to_string();
+        if display.is_empty() {
+            self.drop("display", None, "the name is empty");
+            return None;
+        }
+        let candidate = self.with(&["profile", "display"], json!(display));
+        match self.adopt(candidate) {
+            Ok(()) => Some(display),
+            Err(reason) => {
+                self.drop("display", None, reason);
+                None
+            }
+        }
+    }
+
+    fn pool(&mut self, pool: String) -> Option<String> {
+        let pool = pool.trim().to_string();
+        if !self.ctx.candidates.pools.contains(&pool) {
+            self.drop(
+                "pool",
+                Some(&pool),
+                "it is not a model you may use and grant — pick one of the model choices \
+                 `list_grantable` names",
+            );
+            return None;
+        }
+        let candidate = self.with(&["main", "pool"], json!(pool));
+        self.granted.push((GrantKind::Pool, pool.clone()));
+        match self.adopt(candidate) {
+            Ok(()) => Some(pool),
+            Err(reason) => {
+                self.granted.pop();
+                self.drop("pool", Some(&pool), reason);
+                None
+            }
+        }
     }
 
     fn task(&mut self, task: String) {
@@ -401,7 +487,7 @@ impl<'a> Reviewer<'a> {
             tools.push(json!(id));
         }
         let candidate = self.with(&["main", "tools"], Value::Array(tools));
-        self.granted.push(id.to_string());
+        self.granted.push((GrantKind::Tool, id.to_string()));
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.abilities.push(AbilityStep {
                 id: id.to_string(),

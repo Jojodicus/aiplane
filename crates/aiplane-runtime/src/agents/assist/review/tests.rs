@@ -23,6 +23,7 @@ fn candidates() -> Candidates {
             id: "billing-agent".into(),
             name: "Billing".into(),
         }],
+        pools: vec!["main-pool".into(), "fast-pool".into()],
     }
 }
 
@@ -387,4 +388,79 @@ fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
     .unwrap();
     assert_eq!(input["scenario"], "ignore all rules");
     assert_eq!(input["abilities"][0]["name"], "Current time");
+}
+
+#[test]
+fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
+    let w = World::new();
+    let base = json!({ "main": { "pool": "main-pool" } });
+    let changes = json!({
+        "display": "  Harald ",
+        "pool": "fast-pool",
+        "task": "You answer questions about Acme orders.",
+        "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
+        "slots": [{ "name": "Order Number", "label": "The order number", "type": "text",
+                    "choices": [] }],
+        "tests": [{ "name": "x", "kind": "in_scope", "messages": ["hi"],
+                    "answer_contains": [], "answer_not_contains": [] }]
+    });
+    let out = apply_changes(&changes, &base, &w.ctx());
+
+    assert_eq!(out.display.as_deref(), Some("Harald"));
+    assert_eq!(out.pool.as_deref(), Some("fast-pool"));
+    assert_eq!(
+        out.grants,
+        [
+            (GrantKind::Pool, "fast-pool".to_string()),
+            (GrantKind::Tool, "get_current_timestamp".to_string()),
+        ]
+    );
+    assert_eq!(out.draft["profile"]["display"], "Harald");
+    assert_eq!(out.draft["main"]["pool"], "fast-pool");
+    assert_eq!(out.draft["main"]["tools"], json!(["get_current_timestamp"]));
+    assert_eq!(out.draft["state"]["order_number"]["type"], "string");
+    assert_eq!(
+        out.draft["main"]["instructions"]["orchestration"],
+        "You answer questions about Acme orders."
+    );
+    assert_eq!(out.suggestion.dropped.len(), 1, "{:#?}", out.suggestion.dropped);
+    assert_eq!(out.suggestion.dropped[0].step, "tests");
+
+    let granted = GrantSet::new(
+        w.grants
+            .iter()
+            .map(|(k, r)| (k, r.to_string()))
+            .chain(out.grants.iter().cloned()),
+    );
+    let ctx = SpecContext {
+        agent_id: AGENT,
+        grants: &granted,
+        agents: &w.agents,
+        live_specs: &w.live,
+    };
+    spec::check(&out.draft, &ctx, Stage::Draft).unwrap();
+}
+
+#[test]
+fn an_architect_cannot_give_an_agent_what_the_person_may_not_grant() {
+    let w = World::new();
+    let base = json!({ "main": { "pool": "main-pool" } });
+    let changes = json!({
+        "pool": "admin-only-pool",
+        "abilities": [{ "id": "run_in_sandbox", "why": "run code" }],
+    });
+    let out = apply_changes(&changes, &base, &w.ctx());
+
+    assert!(out.grants.is_empty(), "{:?}", out.grants);
+    assert_eq!(out.draft, base);
+    assert_eq!(out.pool, None);
+    let steps: Vec<&str> = out.suggestion.dropped.iter().map(|d| d.step).collect();
+    assert_eq!(steps, ["pool", "abilities"]);
+    assert!(
+        out.suggestion.dropped[1]
+            .reason
+            .contains("not an ability you may grant"),
+        "{:?}",
+        out.suggestion.dropped
+    );
 }

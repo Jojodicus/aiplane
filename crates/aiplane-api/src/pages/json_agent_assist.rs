@@ -91,6 +91,7 @@ async fn candidates(
     Ok(Candidates {
         abilities: grantable_tools(state, &role_ids),
         agents,
+        pools: Vec::new(),
     })
 }
 
