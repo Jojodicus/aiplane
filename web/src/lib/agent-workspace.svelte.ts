@@ -32,6 +32,8 @@ import { setupErrorMessage } from './agent-setup.ts';
 import { t } from './i18n.svelte';
 import { emptyPlan, isEmpty, plannedGrants, stageGrant, stageRevoke, type GrantPlan } from './agent-grant-plan.ts';
 
+const NOTICE_MS = 4000;
+
 export class AgentWorkspace {
 	readonly id: string;
 	detail = $state<AgentDetail | null>(null);
@@ -156,7 +158,7 @@ export class AgentWorkspace {
 			}
 			this.issues = [];
 			await this.refresh(true);
-			this.notice = { key: 'agents-saved' };
+			this.flash({ key: 'agents-saved' });
 			return true;
 		} catch (err) {
 			this.fail(err);
@@ -165,6 +167,15 @@ export class AgentWorkspace {
 		} finally {
 			this.busy = false;
 		}
+	}
+
+	private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	/** A success notice that clears itself, so it does not stay above every later step. */
+	private flash(notice: NonNullable<AgentWorkspace['notice']>) {
+		clearTimeout(this.noticeTimer);
+		this.notice = notice;
+		this.noticeTimer = setTimeout(() => (this.notice = null), NOTICE_MS);
 	}
 
 	/** Drops the staged grant changes (a cancelled edit). */
@@ -187,7 +198,7 @@ export class AgentWorkspace {
 			const result = await agentsApi.publish(this.id);
 			this.issues = [];
 			await this.refresh(true);
-			this.notice = { key: 'agents-published', args: { version: result.version } };
+			this.flash({ key: 'agents-published', args: { version: result.version } });
 			return result.version;
 		} catch (err) {
 			this.fail(err);
@@ -199,7 +210,7 @@ export class AgentWorkspace {
 
 	async madeLive(version: number) {
 		this.error = null;
-		this.notice = { key: 'agents-live-is', args: { version } };
+		this.flash({ key: 'agents-live-is', args: { version } });
 		await this.refresh(true);
 	}
 

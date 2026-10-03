@@ -1019,6 +1019,14 @@ export function checklist(spec: Spec, publishIssues: SpecIssue[] = []): Todo[] {
 	return todos;
 }
 
+export type PublishState = 'blocked' | 'recommended' | 'ready';
+
+/** Blocking items hold publishing back; recommended ones (not blocking) only advise. */
+export function publishState(todos: Todo[]): PublishState {
+	if (todos.some((x) => x.blocking)) return 'blocked';
+	return todos.length ? 'recommended' : 'ready';
+}
+
 export type SectionStatus = 'open' | 'done' | 'optional';
 
 export function sectionStatus(step: StepKey, spec: Spec, todos: Todo[]): SectionStatus {
