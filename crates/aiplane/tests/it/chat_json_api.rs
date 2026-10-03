@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aiplane::rama_server::{RamaState, SessionStore, router::router};
+use aiplane_agents::db::run_sessions;
 use aiplane_core::server::config::Config;
 use aiplane_core::server::db;
 use aiplane_core::server::db::automatic_routes::{AutomaticRoute, AutomaticRouteCandidate};
@@ -3034,8 +3035,10 @@ async fn an_agent_run_is_in_no_persons_chats() {
     let landing: serde_json::Value = serde_json::from_str(&body_string(landing).await).unwrap();
     assert_ne!(landing["session"]["id"], run_id.as_str());
     assert_eq!(
-        chat::session_owner(&state.db, &run_id).await.unwrap(),
-        Some(chat::SessionOwner::Principal(agent.id)),
+        run_sessions::session_owner(&state.db, &run_id)
+            .await
+            .unwrap(),
+        Some(run_sessions::SessionOwner::Principal(agent.id)),
         "the run survived every attempt above"
     );
 }

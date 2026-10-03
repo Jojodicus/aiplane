@@ -11,8 +11,8 @@
 //! rate limits: its messages per context, and per client IP the contexts
 //! opened and their messages.
 
+use crate::db::run_sessions;
 use jiff::Timestamp;
-use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
@@ -75,9 +75,9 @@ fn map_context(row: &SqliteRow) -> Result<A2aContext, DbError> {
 /// in one transaction.
 pub async fn open(pool: &Pool, new: &NewContext<'_>) -> Result<A2aContext, DbError> {
     let mut tx = pool.begin().await?;
-    let conversation = chat::create_principal_session(
+    let conversation = run_sessions::create_principal_session(
         &mut *tx,
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: new.agent_id,
             title: None,
             parent_turn_id: None,
@@ -138,6 +138,7 @@ mod tests {
     use super::*;
     use crate::db::inbound::{Inbound, ip_event_times, message_times};
     use crate::db::{agents, system_principals as sp};
+    use session_core::db as chat;
 
     const MIN: SignedDuration = SignedDuration::from_secs(60);
 
@@ -230,7 +231,7 @@ mod tests {
     async fn a_context_is_an_agent_conversation_that_remembers_its_caller() {
         let fx = fixture().await;
         let c = fx.open_from(Some("192.0.2.1"), t0()).await;
-        let run = chat::get_principal_session(&fx.pool, &fx.agent, &c.session_id)
+        let run = run_sessions::get_principal_session(&fx.pool, &fx.agent, &c.session_id)
             .await
             .unwrap()
             .expect("owned by the agent's principal");

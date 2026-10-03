@@ -16,6 +16,7 @@ use super::{Embed, Reply, SITE, ScriptedRunner, code, embed_with};
 use crate::common;
 
 use aiplane_agents::db::agent_audit;
+use aiplane_agents::db::run_sessions;
 use aiplane_core::server::db::usage::{self, UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::principal::PrincipalKind;
 use aiplane_runtime::agents::retention;
@@ -366,9 +367,9 @@ async fn retention_deletes_only_the_agents_idle_conversations() {
     let old_session = e.conversation_of(&old).await;
     let fresh_session = e.conversation_of(&fresh).await;
     let persons = chat::create_session(&e.fx.state.db, "alice").await.unwrap();
-    let test_chat = chat::create_principal_session(
+    let test_chat = run_sessions::create_principal_session(
         &e.fx.state.db,
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: &e.agent,
             title: None,
             parent_turn_id: None,

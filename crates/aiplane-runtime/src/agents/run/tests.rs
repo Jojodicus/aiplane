@@ -737,7 +737,7 @@ async fn every_routing_step_is_audited_with_the_call_chain() {
     assert_eq!(main_chain["visitor_id"], "v-1");
 
     let child = finished.detail["session_id"].as_str().unwrap();
-    let run = chat::get_principal_session(s.world.db(), &s.billing, child)
+    let run = run_sessions::get_principal_session(s.world.db(), &s.billing, child)
         .await
         .unwrap()
         .expect("the sub-agent run is a session of the billing principal");

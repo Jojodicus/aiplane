@@ -20,6 +20,7 @@ use tokio::sync::Notify;
 use crate::agents::{self, Fx, spec};
 use crate::common;
 
+use aiplane_agents::db::run_sessions;
 use aiplane_core::server::crypto::sha256_hex;
 use aiplane_runtime::agents::embed::{AgentTurnRunner, LiveAgentRunner, OpenedTurn};
 use aiplane_runtime::rama_server::state::RamaState;
@@ -560,11 +561,14 @@ async fn a_message_runs_as_the_agent_on_its_live_version() {
     assert_eq!(run.session_id, session);
     assert_eq!(run.turn_id, turn_id);
     assert!(run.visitor_id.is_some());
-    let owner = chat::session_owner(&e.fx.state.db, &session)
+    let owner = run_sessions::session_owner(&e.fx.state.db, &session)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(owner, chat::SessionOwner::Principal(e.agent.clone()));
+    assert_eq!(
+        owner,
+        run_sessions::SessionOwner::Principal(e.agent.clone())
+    );
 }
 
 #[tokio::test]

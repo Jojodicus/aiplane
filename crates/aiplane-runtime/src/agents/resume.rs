@@ -25,12 +25,14 @@
 use std::sync::Arc;
 
 use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::run_sessions;
+use aiplane_agents::db::run_sessions::RunSession;
 use aiplane_agents::db::{a2a_contexts, agents as agents_db};
 use aiplane_core::server::db::DbError;
 use aiplane_core::server::run_chain::{CallSite, Frame, MAX_DEPTH, RunChain};
 use serde_json::{Value, json};
 use session_core::db::{
-    self as chat, Answerer, Decision, DenyReason, RunSession, SuspensionKind, TurnRole, TurnStatus,
+    self as chat, Answerer, Decision, DenyReason, SuspensionKind, TurnRole, TurnStatus,
     TurnSuspension,
 };
 use session_core::i18n::Lang;
@@ -140,11 +142,11 @@ pub async fn claim(
     resume: AgentResume<'_>,
 ) -> Result<ClaimedResume, AgentResumeError> {
     let db = &state.db;
-    let root = chat::get_principal_session(db, resume.agent_id, resume.session_id)
+    let root = run_sessions::get_principal_session(db, resume.agent_id, resume.session_id)
         .await?
         .filter(|s| s.parent_turn_id.is_none())
         .ok_or_else(not_suspended)?;
-    if chat::run_session_of_turn(db, resume.turn_id)
+    if run_sessions::run_session_of_turn(db, resume.turn_id)
         .await?
         .is_none_or(|s| s.id != root.id)
     {
@@ -168,7 +170,7 @@ pub async fn claim(
     }];
     while let Some(child) = levels.last().and_then(|l| l.suspension.child_turn.clone()) {
         let parent_turn = levels.last().map(|l| l.suspension.turn_id.clone());
-        let session = chat::run_session_of_turn(db, &child)
+        let session = run_sessions::run_session_of_turn(db, &child)
             .await?
             .filter(|s| s.parent_turn_id == parent_turn)
             .ok_or_else(not_suspended)?;
@@ -505,13 +507,14 @@ async fn run_queued(
 /// fallback (deny, for every kind today). A conversation whose turn is held
 /// right now is left for the next sweep.
 pub async fn resume_expired(state: &Arc<RamaState>) {
-    let expired = match chat::expired_run_suspensions(&state.db, jiff::Timestamp::now()).await {
-        Ok(expired) => expired,
-        Err(err) => {
-            tracing::warn!(error = %err, "reading expired agent suspensions");
-            return;
-        }
-    };
+    let expired =
+        match run_sessions::expired_run_suspensions(&state.db, jiff::Timestamp::now()).await {
+            Ok(expired) => expired,
+            Err(err) => {
+                tracing::warn!(error = %err, "reading expired agent suspensions");
+                return;
+            }
+        };
     for e in expired {
         let Some(hold) =
             super::embed::claim(&state.chats, &e.principal_id, &e.session_id, &e.turn_id)

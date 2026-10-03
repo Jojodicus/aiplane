@@ -18,6 +18,7 @@ use crate::server::tools::ask_first::AskFirst;
 use crate::server::tools::check_code::{CHECK_CODE, CheckCode};
 use crate::server::tools::echo::Echo;
 use crate::server::tools::time::CurrentTimestamp;
+use aiplane_agents::db::run_sessions;
 use session_core::db::{Decision, DecisionKind, SuspensionKind};
 
 const CODE: &str = "481516";
@@ -305,7 +306,7 @@ async fn a_paused_sub_agent_pauses_its_caller_and_one_staff_decision_resumes_bot
         child.run_context,
         Some(json!({"route": "refunds", "route_binds": {}}))
     );
-    let child_session = chat::run_session_of_turn(world.db(), &child_turn)
+    let child_session = run_sessions::run_session_of_turn(world.db(), &child_turn)
         .await
         .unwrap()
         .unwrap();

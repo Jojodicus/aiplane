@@ -11,6 +11,7 @@
 use std::time::Instant;
 
 use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::run_sessions;
 use serde_json::{Value, json};
 use session_core::db::{
     self as chat, BudgetUsed, Decision, DenyReason, PendingCall, SuspensionKind, ToolCallStatus,
@@ -164,7 +165,7 @@ async fn check_child(
     ctx: &SessionContext,
     child: &ChildPause,
 ) -> Result<(), TurnError> {
-    let session = chat::run_session_of_turn(&d.state.db, &child.turn_id)
+    let session = run_sessions::run_session_of_turn(&d.state.db, &child.turn_id)
         .await
         .map_err(persist_err("run_session_of_turn", &ctx.assistant_turn_id))?;
     let ours = session

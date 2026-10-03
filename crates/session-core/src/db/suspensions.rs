@@ -33,7 +33,7 @@ impl SuspensionKind {
         }
     }
 
-    fn parse(s: &str) -> Result<Self, DbError> {
+    pub fn parse(s: &str) -> Result<Self, DbError> {
         match s {
             "approval" => Ok(Self::Approval),
             "secure_input" => Ok(Self::SecureInput),
@@ -54,9 +54,9 @@ impl SuspensionKind {
         }
     }
 
-    /// Who may answer this kind in a conversation that is not the
-    /// participant's own run: an agent's, where the participant is an
-    /// anonymous visitor. In a person's own chat the owner is both.
+    /// Who may answer this kind in a conversation the participant does not
+    /// own, where someone acting for the owner answers what is not the
+    /// participant's to decide. In a person's own chat the owner is both.
     pub fn answered_by(self) -> Answerer {
         match self {
             Self::SecureInput => Answerer::Participant,
@@ -78,15 +78,15 @@ impl SuspensionKind {
     }
 }
 
-/// Who answers a suspension in an agent conversation.
+/// Who answers a suspension in a conversation the participant does not own.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answerer {
-    /// The one chatting: the visitor of an agent conversation. A secure
-    /// input is theirs, and goes nowhere but the tool that asked for it.
+    /// The one chatting. A secure input is theirs, and goes nowhere but the
+    /// tool that asked for it.
     Participant,
-    /// Someone acting for the agent's owner: a manager with a share, or an
-    /// admin. Approvals and human answers are theirs, never a visitor's.
+    /// Someone acting for the conversation's owner. Approvals and human
+    /// answers are theirs, never the participant's.
     Staff,
 }
 
@@ -158,7 +158,7 @@ impl TimeoutFallback {
         }
     }
 
-    fn parse(s: &str) -> Result<Self, DbError> {
+    pub fn parse(s: &str) -> Result<Self, DbError> {
         match s {
             "deny" => Ok(Self::Deny),
             "allow_once" => Ok(Self::AllowOnce),
@@ -213,14 +213,14 @@ pub struct TurnSuspension {
     /// The history and system message before them are rebuilt on resume.
     pub tail: Vec<serde_json::Value>,
     pub budget_used: BudgetUsed,
-    /// Set when the pause is inside a sub-agent run: the child turn that
+    /// Set when the pause is inside a nested run: the child turn that
     /// actually waits. Resuming continues there first, then here.
     pub child_turn: Option<String>,
     pub on_timeout: TimeoutFallback,
     pub expires_at: Timestamp,
     pub created_at: Timestamp,
     /// What the run needs to be rebuilt on resume beyond its session and call
-    /// chain, opaque here: a sub-agent's route-bound values.
+    /// chain, opaque here (the driver's own, e.g. values a route bound).
     pub run_context: Option<serde_json::Value>,
 }
 
@@ -248,7 +248,7 @@ pub struct SuspensionView {
     pub kind: SuspensionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// The waiting call. Absent from a visitor's view.
+    /// The waiting call. Absent from a participant's view.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,8 +259,8 @@ pub struct SuspensionView {
 }
 
 impl SuspensionView {
-    /// What the participant of an agent conversation, a visitor, may see:
-    /// no tool, and only the decisions they may make. A request staff answer
+    /// What the participant of a conversation they do not own may see: no
+    /// tool, and only the decisions they may make. A request staff answer
     /// offers them none; they can only wait for it.
     pub fn for_participant(&self) -> SuspensionView {
         let theirs = self.kind.answered_by() == Answerer::Participant;
@@ -286,16 +286,6 @@ pub struct ExpiredSuspension {
     pub on_timeout: TimeoutFallback,
 }
 
-/// The top-level suspension of an agent conversation past its deadline.
-/// A pause inside a sub-agent run is settled through it, never on its own.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExpiredRunSuspension {
-    pub turn_id: String,
-    pub session_id: String,
-    pub principal_id: String,
-    pub on_timeout: TimeoutFallback,
-}
-
 const SUSPENSION_COLUMNS: &str = "turn_id, request_id, kind, message, tool_call, tail, \
                                   budget_used, child_turn, on_timeout, expires_at, created_at, \
                                   run_context";
@@ -311,7 +301,10 @@ fn json_column<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn map_suspension(row: &SqliteRow) -> Result<TurnSuspension, DbError> {
+/// Read a suspension out of `row`, which must carry its columns under their
+/// own names. Public so a caller that joins a suspension onto its own tables
+/// can map the row without a second read.
+pub fn map_suspension(row: &SqliteRow) -> Result<TurnSuspension, DbError> {
     let kind: String = row.try_get("kind")?;
     let on_timeout: String = row.try_get("on_timeout")?;
     Ok(TurnSuspension {
@@ -395,8 +388,8 @@ pub async fn get_suspension(pool: &Pool, turn_id: &str) -> Result<Option<TurnSus
 }
 
 /// Attach `context` to a turn's current suspension. Returns whether the turn
-/// was suspended. The sub-agent dispatcher records here what only it knows
-/// and the resume needs: the values its route bound.
+/// was suspended. A driver records here what only it knows and the resume
+/// needs (a nested run's route-bound values, say).
 pub async fn set_suspension_run_context(
     pool: &Pool,
     turn_id: &str,
@@ -502,18 +495,15 @@ pub async fn suspended_turn_in_session(
 /// fractional seconds do not sort as the instants they name, but they do sort
 /// by whole second, so every deadline at or before `now` is below this bound;
 /// the exact comparison is done after parsing.
-fn deadline_bound(now: Timestamp) -> String {
+pub fn deadline_bound(now: Timestamp) -> String {
     let next_second = Timestamp::from_second(now.as_second() + 1).unwrap_or(now);
     next_second.to_string()
 }
 
 /// Every suspension whose deadline has passed at `now`, oldest deadline first.
 ///
-/// Only person-owned conversations: the chat path resumes as the owner, and a
-/// principal-owned run has no person to resume as.
-///
-/// Only person-owned conversations: the chat path resumes as the owner, and a
-/// principal-owned run has no person to resume as.
+/// Only a person's conversations: the chat path resumes as the owner. A
+/// conversation with another owner (`user_id` NULL) is that owner's to sweep.
 pub async fn expired_suspensions(
     pool: &Pool,
     now: Timestamp,
@@ -547,114 +537,6 @@ pub async fn expired_suspensions(
     }
     expired.sort_by_key(|(at, _)| *at);
     Ok(expired.into_iter().map(|(_, s)| s).collect())
-}
-
-/// Every top-level suspension of an agent conversation whose deadline has
-/// passed at `now`, oldest deadline first. A sub-agent run's own pause is
-/// left out: its parent mirrors it, and is settled through the parent.
-pub async fn expired_run_suspensions(
-    pool: &Pool,
-    now: Timestamp,
-) -> Result<Vec<ExpiredRunSuspension>, DbError> {
-    let rows = sqlx::query(
-        r#"SELECT s.turn_id, s.on_timeout, s.expires_at, t.session_id, cs.principal_id
-           FROM chat_turn_suspensions s
-           JOIN chat_turns t ON t.id = s.turn_id
-           JOIN chat_sessions cs ON cs.id = t.session_id
-           WHERE cs.principal_id IS NOT NULL AND cs.parent_turn_id IS NULL
-             AND s.expires_at < ?"#,
-    )
-    .bind(deadline_bound(now))
-    .fetch_all(pool)
-    .await?;
-    let mut expired = Vec::new();
-    for row in &rows {
-        let expires_at = parse_ts(row.try_get("expires_at")?, "expires_at")?;
-        if expires_at > now {
-            continue;
-        }
-        let on_timeout: String = row.try_get("on_timeout")?;
-        expired.push((
-            expires_at,
-            ExpiredRunSuspension {
-                turn_id: row.try_get("turn_id")?,
-                session_id: row.try_get("session_id")?,
-                principal_id: row.try_get("principal_id")?,
-                on_timeout: TimeoutFallback::parse(&on_timeout)?,
-            },
-        ));
-    }
-    expired.sort_by_key(|(at, _)| *at);
-    Ok(expired.into_iter().map(|(_, s)| s).collect())
-}
-
-/// A conversation's own pause, with what the inbox needs to know about the
-/// conversation: who owns it and, for an agent's, which version runs. A
-/// pause inside a sub-agent run is never one of these: its conversation's
-/// turn mirrors it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PendingSuspension {
-    pub suspension: TurnSuspension,
-    pub session_id: String,
-    pub owner: SessionOwner,
-    pub agent_version: Option<i64>,
-    pub title: Option<String>,
-    pub notified_at: Option<Timestamp>,
-}
-
-const PENDING_SELECT: &str = "SELECT s.turn_id, s.request_id, s.kind, s.message, s.tool_call, \
-     s.tail, s.budget_used, s.child_turn, s.on_timeout, s.expires_at, s.created_at, \
-     s.run_context, s.notified_at, t.session_id, cs.user_id, cs.principal_id, \
-     cs.agent_version, cs.title \
-     FROM chat_turn_suspensions s \
-     JOIN chat_turns t ON t.id = s.turn_id \
-     JOIN chat_sessions cs ON cs.id = t.session_id \
-     WHERE cs.parent_turn_id IS NULL";
-
-fn map_pending(row: &SqliteRow) -> Result<PendingSuspension, DbError> {
-    let user: Option<String> = row.try_get("user_id")?;
-    let principal: Option<String> = row.try_get("principal_id")?;
-    let owner = match (user, principal) {
-        (Some(user), _) => SessionOwner::User(user),
-        (None, Some(principal)) => SessionOwner::Principal(principal),
-        (None, None) => {
-            return Err(DbError::Decode {
-                column: "user_id",
-                source: anyhow::anyhow!("a conversation without an owner"),
-            });
-        }
-    };
-    Ok(PendingSuspension {
-        suspension: map_suspension(row)?,
-        session_id: row.try_get("session_id")?,
-        owner,
-        agent_version: row.try_get("agent_version")?,
-        title: row.try_get("title")?,
-        notified_at: parse_optional_ts(row.try_get("notified_at")?, "notified_at")?,
-    })
-}
-
-/// Every conversation's own pause, oldest first: a person's chat (a
-/// scheduled or webhook run included) and an agent conversation alike.
-pub async fn pending_suspensions(pool: &Pool) -> Result<Vec<PendingSuspension>, DbError> {
-    let rows = sqlx::query(&format!(
-        "{PENDING_SELECT} ORDER BY s.created_at, s.turn_id"
-    ))
-    .fetch_all(pool)
-    .await?;
-    rows.iter().map(map_pending).collect()
-}
-
-/// The conversation's own pause that `request_id` names, if it still waits.
-pub async fn pending_by_request(
-    pool: &Pool,
-    request_id: &str,
-) -> Result<Option<PendingSuspension>, DbError> {
-    let row = sqlx::query(&format!("{PENDING_SELECT} AND s.request_id = ?"))
-        .bind(request_id)
-        .fetch_optional(pool)
-        .await?;
-    row.as_ref().map(map_pending).transpose()
 }
 
 /// Record that the pause `request_id` was announced. `true` only for the
@@ -725,32 +607,8 @@ mod tests {
         }
     }
 
-    async fn running_run_turn(pool: &Pool, turn_id: &str, parent_turn_id: Option<&str>) -> String {
-        let run = create_principal_session(
-            pool,
-            &NewRunSession {
-                principal_id: "p1",
-                title: None,
-                parent_turn_id,
-                agent_version: Some(1),
-            },
-        )
-        .await
-        .unwrap();
-        create_user_turn(pool, &run.id, &format!("{turn_id}-u"), "hi")
-            .await
-            .unwrap();
-        create_assistant_turn_in_progress(pool, &run.id, turn_id, "m")
-            .await
-            .unwrap();
-        insert_running_tool_call(pool, turn_id, "call-1", "company_echo", "{}")
-            .await
-            .unwrap();
-        run.id
-    }
-
     #[test]
-    fn a_visitor_answers_only_a_secure_input_and_an_approval_only_ever_times_out_to_deny() {
+    fn a_participant_answers_only_a_secure_input_and_an_approval_only_ever_times_out_to_deny() {
         assert_eq!(
             SuspensionKind::SecureInput.answered_by(),
             Answerer::Participant
@@ -775,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn a_visitor_sees_no_tool_and_no_decision_that_is_not_theirs() {
+    fn a_participant_sees_no_tool_and_no_decision_that_is_not_theirs() {
         let mut row = suspension("a1", in_an_hour());
         row.message = Some("Enter the code".into());
         let approval = row.view().for_participant();
@@ -838,37 +696,6 @@ mod tests {
                 .unwrap()
                 .run_context,
             Some(context)
-        );
-    }
-
-    #[tokio::test]
-    async fn the_agent_sweep_sees_only_the_top_of_an_agent_conversation() {
-        let pool = pool().await;
-        let past = Timestamp::now() - jiff::SignedDuration::from_secs(5);
-        running_turn(&pool, "chat").await;
-        let root_session = running_run_turn(&pool, "root", None).await;
-        running_run_turn(&pool, "child", Some("root")).await;
-        running_run_turn(&pool, "later", None).await;
-        for (turn, at) in [
-            ("chat", past),
-            ("root", past),
-            ("child", past),
-            ("later", in_an_hour()),
-        ] {
-            suspend_turn(&pool, &suspension(turn, at)).await.unwrap();
-        }
-
-        let expired = expired_run_suspensions(&pool, Timestamp::now())
-            .await
-            .unwrap();
-        assert_eq!(
-            expired,
-            [ExpiredRunSuspension {
-                turn_id: "root".into(),
-                session_id: root_session,
-                principal_id: "p1".into(),
-                on_timeout: TimeoutFallback::Deny,
-            }]
         );
     }
 
@@ -1018,35 +845,25 @@ mod tests {
         assert_eq!(ids, ["whole", "fraction"]);
     }
 
-    /// A run owned by a system principal has no person to resume as; it is
-    /// settled by the agent path, never by the chat sweeper.
+    /// A conversation a person does not own has no person to resume as; its
+    /// owner, above this crate, settles it, never the chat sweeper.
     #[tokio::test]
-    async fn the_chat_sweeper_never_sees_a_principal_owned_run() {
+    async fn the_chat_sweeper_never_sees_a_conversation_without_a_person() {
         let pool = pool().await;
-        let run = create_principal_session(
-            &pool,
-            &NewRunSession {
-                principal_id: "p1",
-                title: None,
-                parent_turn_id: None,
-                agent_version: None,
-            },
-        )
-        .await
-        .unwrap();
-        create_user_turn(&pool, &run.id, "agent-u", "hi")
+        let session_id = crate::db::tests::unowned_session(&pool).await;
+        create_user_turn(&pool, &session_id, "other-u", "hi")
             .await
             .unwrap();
-        create_assistant_turn_in_progress(&pool, &run.id, "agent-turn", "m")
+        create_assistant_turn_in_progress(&pool, &session_id, "other-turn", "m")
             .await
             .unwrap();
-        insert_running_tool_call(&pool, "agent-turn", "call-1", "company_echo", "{}")
+        insert_running_tool_call(&pool, "other-turn", "call-1", "company_echo", "{}")
             .await
             .unwrap();
         let now = Timestamp::now();
         suspend_turn(
             &pool,
-            &suspension("agent-turn", now - jiff::SignedDuration::from_secs(5)),
+            &suspension("other-turn", now - jiff::SignedDuration::from_secs(5)),
         )
         .await
         .unwrap();
@@ -1121,52 +938,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_inbox_lists_each_conversations_own_pause_and_never_a_sub_agents() {
-        let pool = pool().await;
-        let chat = running_turn(&pool, "own").await;
-        assert!(
-            suspend_turn(&pool, &suspension("own", in_an_hour()))
-                .await
-                .unwrap()
-        );
-        let root = running_run_turn(&pool, "main", None).await;
-        let mut parent = suspension("main", in_an_hour());
-        parent.child_turn = Some("child".into());
-        assert!(suspend_turn(&pool, &parent).await.unwrap());
-        running_run_turn(&pool, "child", Some("main")).await;
-        assert!(
-            suspend_turn(&pool, &suspension("child", in_an_hour()))
-                .await
-                .unwrap()
-        );
-
-        let pending = pending_suspensions(&pool).await.unwrap();
-        let turns: Vec<&str> = pending
-            .iter()
-            .map(|p| p.suspension.turn_id.as_str())
-            .collect();
-        assert_eq!(turns.len(), 2, "{turns:?}");
-        assert!(turns.contains(&"own") && turns.contains(&"main"));
-        let main = pending
-            .iter()
-            .find(|p| p.suspension.turn_id == "main")
-            .unwrap();
-        assert_eq!(main.owner, SessionOwner::Principal("p1".into()));
-        assert_eq!(main.session_id, root);
-        assert_eq!(main.agent_version, Some(1));
-        let own = pending_by_request(&pool, "req-own").await.unwrap().unwrap();
-        assert_eq!(own.owner, SessionOwner::User("u1".into()));
-        assert_eq!(own.session_id, chat);
-        assert!(
-            pending_by_request(&pool, "req-child")
-                .await
-                .unwrap()
-                .is_none(),
-            "a sub-agent's pause is answered through its conversation's"
-        );
-    }
-
-    #[tokio::test]
     async fn a_pause_is_announced_once() {
         let pool = pool().await;
         running_turn(&pool, "a1").await;
@@ -1191,8 +962,13 @@ mod tests {
                 .await
                 .unwrap()
         );
-        let pending = pending_by_request(&pool, "req-a1").await.unwrap().unwrap();
-        assert!(pending.notified_at.is_some());
+        let notified: Option<String> = sqlx::query_scalar(
+            "SELECT notified_at FROM chat_turn_suspensions WHERE request_id = 'req-a1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(notified.is_some());
     }
 
     #[test]

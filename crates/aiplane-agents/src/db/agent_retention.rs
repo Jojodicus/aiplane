@@ -96,6 +96,7 @@ pub async fn delete_idle_conversations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::run_sessions;
     use crate::db::visitor_sessions::{self, NewVisitorSession};
     use crate::db::{agent_state, agents, embed_keys, system_principals as sp};
     use aiplane_core::server::db::users;
@@ -164,9 +165,9 @@ mod tests {
         chat::create_assistant_turn_in_progress(pool, parent_session, &parent_turn, "m")
             .await
             .unwrap();
-        chat::create_principal_session(
+        run_sessions::create_principal_session(
             pool,
-            &chat::NewRunSession {
+            &run_sessions::NewRunSession {
                 principal_id: sub,
                 title: None,
                 parent_turn_id: Some(&parent_turn),
@@ -291,9 +292,9 @@ mod tests {
     }
 
     async fn visitor_conversation_without_key(pool: &Pool, agent: &str) -> String {
-        chat::create_principal_session(
+        run_sessions::create_principal_session(
             pool,
-            &chat::NewRunSession {
+            &run_sessions::NewRunSession {
                 principal_id: agent,
                 title: None,
                 parent_turn_id: None,

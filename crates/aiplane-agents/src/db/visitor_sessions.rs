@@ -13,8 +13,8 @@
 //!
 //! Every function takes `now` so expiry is testable without waiting.
 
+use crate::db::run_sessions;
 use jiff::{SignedDuration, Timestamp};
-use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
@@ -91,9 +91,9 @@ pub async fn start(pool: &Pool, new: &NewVisitorSession<'_>) -> Result<VisitorSe
     let max_expires_at = add(new.now, new.max_age)?;
     let expires_at = add(new.now, new.idle_ttl)?.min(max_expires_at);
     let mut tx = pool.begin().await?;
-    let conversation = chat::create_principal_session(
+    let conversation = run_sessions::create_principal_session(
         &mut *tx,
-        &chat::NewRunSession {
+        &run_sessions::NewRunSession {
             principal_id: new.principal_id,
             title: None,
             parent_turn_id: None,
@@ -183,6 +183,7 @@ mod tests {
     use super::*;
     use crate::db::inbound::{Inbound, ip_event_times, message_times};
     use crate::db::{agents, embed_keys, system_principals as sp};
+    use session_core::db as chat;
 
     async fn message_at(pool: &Pool, session_id: &str, at: Timestamp) {
         let id = Uuid::new_v4().to_string();
@@ -410,7 +411,7 @@ mod tests {
         assert_eq!(v.max_expires_at, add(t0(), 24 * 60 * MIN).unwrap());
         assert_eq!(v.client_ip.as_deref(), Some("192.0.2.1"));
 
-        let run = chat::get_principal_session(&fx.pool, &fx.agent, &v.session_id)
+        let run = run_sessions::get_principal_session(&fx.pool, &fx.agent, &v.session_id)
             .await
             .unwrap()
             .expect("the conversation belongs to the agent's principal");

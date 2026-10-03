@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use aiplane_agents::db::run_sessions;
 use aiplane_agents::db::system_principals as sp;
 use aiplane_core::server::db::DbError;
 use aiplane_core::server::run_chain::{Frame, RemoteCaller, RunChain};
@@ -86,7 +87,7 @@ pub async fn run_turn_with(
     let pinned = match turn.session_id {
         None => None,
         Some(session) => {
-            let Some(run) = chat::get_principal_session(&state.db, turn.agent_id, session)
+            let Some(run) = run_sessions::get_principal_session(&state.db, turn.agent_id, session)
                 .await
                 .map_err(DbError::from)?
             else {
@@ -162,7 +163,7 @@ pub(crate) async fn conversation_lang(
     principal_id: &str,
     session_id: &str,
 ) -> Lang {
-    match chat::get_principal_session(db, principal_id, session_id).await {
+    match run_sessions::get_principal_session(db, principal_id, session_id).await {
         Ok(session) => session.and_then(|s| s.lang).unwrap_or(Lang::En),
         Err(err) => {
             tracing::warn!(error = %err, session_id, "reading the conversation's language; using English");
@@ -222,7 +223,7 @@ pub async fn drive_opened_from(
         Some(resume) => drive_resumed(state, params, resume).await,
         None => {
             if let Some(lang) = turn.lang {
-                chat::set_run_lang(&state.db, &turn.session_id, lang)
+                run_sessions::set_run_lang(&state.db, &turn.session_id, lang)
                     .await
                     .map_err(DbError::from)?;
             }
