@@ -513,6 +513,19 @@ are in `web/src/lib/components/agents/`.
     is a plain inline SVG (`fill-primary`, daisyUI tokens): no chart library.
     Its pure half, `web/src/lib/agent-analytics.ts`, is unit-tested. Route,
     slot and reason names are shown as the identifiers they are.
+  - *Activity*: the agent's activity log (`GET /api/v0/agents/{id}/activity`,
+    see [`agents.md`](agents.md#what-111-built)). `ActivityPanel` lists every
+    conversation's events newest first, or one conversation oldest first,
+    grouped by turn (a sub-agent's run is its own group, badged
+    *sub-agent*); each event is a daisyUI `collapse` whose title is the kind
+    (an identifier, shown as `code`), time, round, duration and a one-line
+    summary, and whose body is the full detail as JSON — a model exchange's
+    whole request and answer, a tool call's arguments and result. Filters:
+    conversation, a kind group, a day range; "Load more" follows
+    `next_cursor`. *Export JSONL* links the export with the same filters;
+    *Verify chain* shows the verify result as an alert. The pure half,
+    `web/src/lib/agent-activity.ts` (query, kind groups, turn grouping,
+    summaries), is unit-tested.
   - *Sharing*: shares with access change and revoke; `share_needs_agent_manager`
     and `last_writer` are shown verbatim. A `read` share sees everything
     read-only (the editor is a disabled `fieldset`).

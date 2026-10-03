@@ -1061,9 +1061,10 @@ struct CallResult<'a> {
 
 /// The `tool_result` event of a call in an agent run: the full arguments
 /// (or a marker, for a tool that declares them sensitive), the full result,
-/// how it ended, how long it took and what the injection scan found. A
-/// value the participant typed into a secure field is withheld from the
-/// result even when the tool repeats it. A person's turn records nothing.
+/// how it ended, how long it took and what the injection scan found. The
+/// value a resume decided is withheld from the result even when the tool
+/// repeats it: the runner cannot tell a secure input from a staff answer,
+/// and `run_resumed` records the latter. A person's turn records nothing.
 async fn record_call(
     ctx: &ToolContext,
     call: &ToolCallRef,

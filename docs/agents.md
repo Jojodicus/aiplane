@@ -974,10 +974,11 @@ grants.
   `agent-output-redacted`. The stored turn is overwritten the same way, so a
   replayed conversation never shows the blocked text.
 - **Audit.** `output_blocked` on the agent's principal with the run chain and
-  `{action, session_id, turn_id, patterns}`. `patterns` holds the pattern name
-  of each offending occurrence; the matched value is never logged. If the
-  trusted text cannot be read the answer is withheld (fail closed) and the
-  row carries `error`.
+  `{action, session_id, turn_id, patterns, original, delivered}`. `patterns`
+  holds the pattern name of each offending occurrence; since #111 the
+  activity log also keeps the withheld `original` answer, for the agent's
+  managers only ([below](#what-111-built)). If the trusted text cannot be
+  read the answer is withheld (fail closed) and the row carries `error`.
 - **One call site, both entry points.** `drive_opened` runs the filter, so
   `run_turn` and the public endpoint's runner are both covered.
 - **Language.** The fallback text is in the conversation's recorded language
@@ -1722,8 +1723,10 @@ pool rule, and retention.
     `{limit: visitor_rate|ip_rate, visitor_id, max, per_secs,
     retry_after_secs}` or `{limit: budget, set_by: agent|operator, dimension,
     window, max, used, retry_after_secs}`. The client IP is not stored in it.
-    A flood is folded: one row per (agent, subject, limit) per minute, whose
-    `count` is set to the refusals it stands for when the minute closes. At
+    A flood is folded: one event per (agent, subject, limit) per minute with
+    `count: 1` and a `window_id`, and — when more were refused in that
+    minute — one more as it closes, whose `count` is the rest and whose
+    `folds` names the window (the log is append-only since #111). At
     most 10 000 such windows are open at once; past that, a new subject's
     refusals go to the agent's overflow row for the limit (`visitor_id`
     null), so a storm from rotating IPs is still counted without growing
@@ -2482,6 +2485,185 @@ routes:
 - **Not built.** A configurable acceptance field name, a separate critic
   rubric outside its spec, parallel workers, and resuming a paused child.
 
+### What #111 built
+
+A complete, tamper-evident activity log: everything an agent does, enough to
+reconstruct any conversation, decision and model exchange afterwards, with
+no secret in it. Migration `0096_agent_activity_log.sql`; the log is
+`aiplane-agents::db::agent_audit`, the runtime's door to it
+`aiplane-runtime::agents::audit`.
+
+**Shared mechanisms.**
+- *Used:* the typed `AgentSpec` (`publish.audit_retention_days`), the
+  session worker registry and `RunChain` for correlation, `withhold_secret`
+  and `sensitive_args` for secrets, the retention sweeper of #92.
+- *Introduced:* the activity log itself — one event writer
+  (`agent_audit::append`), one runtime door (`agents::audit::record_event`
+  and the wrappers `record` and `ToolContext::audit`), one hash-chain
+  verifier. `activity_events_are_written_only_through_the_activity_log`
+  (`docs/testing.md` → "Architecture tests") fails on any other `INSERT`,
+  `UPDATE` or `DELETE` of `agent_audit` and on any other call of its
+  writers.
+
+**One log, not two.** `agent_audit` (#77) became the log rather than gaining
+a sibling: the decision events it already held (`tool_call`,
+`route_decision`, `run_suspended`, …) and the management events (grants,
+shares, publishes) are events of the same log, with the same columns and
+the same chains. The table keeps its name because #100's analytics, the
+test-chat debug view and the evaluation read it.
+
+**Columns.** Every event carries its correlation ids as columns, not only
+in `detail`: `agent_id` (the main agent at the root of the run — a
+sub-agent's events belong to the agent whose conversation they happened
+in), `principal_id` (who acted: the running frame), `version`,
+`conversation_id` (the root conversation), `session_id` (the run's own
+session: a sub-agent's child session), `turn_id`, `round`, `call_id`,
+`visitor_id`, `caller_id` (the A2A caller), `actor_id` (the person behind a
+management change or a staff decision), `duration_ms`, `chain` (the
+serialized `RunChain`), `created_at`, `kind` and `detail`.
+
+**Hash chains.** *Chosen:* one chain per conversation, sub-agent runs
+included (`chain_key = conversation:<root session>`), and one per agent for
+everything outside a conversation (`agent:<principal id>`: management
+changes, refused visitors, sweeps). Per conversation rather than per agent
+because retention removes conversations, and a chain must go whole or not
+at all; and because parallel conversations then never contend for one
+chain head. Within a chain events count up from 1 (`seq`); each stores the
+hash of the one before (`prev_hash`) and its own `hash` = SHA-256 over its
+canonical JSON — every column except `hash` and the rowid, keys sorted, no
+whitespace, `chain` and `detail` as the exact stored text. A unique index
+on `(chain_key, seq)` refuses a fork. Rows from before #111 have no chain;
+`verify` counts them as `unchained`.
+
+`agent_audit::verify(agent)` walks every chain of the agent in batches of
+256 and reports the first link that does not hold: a `seq` gap (an event
+removed from the middle), a `prev_hash` that is not the previous hash (an
+event inserted or relinked), or a `hash` that does not match the content
+(an event changed). *Limits:* a chain cannot show that its newest events,
+or a whole chain, were deleted, and the hash is unkeyed, so someone who can
+write the database can rebuild a consistent chain. The log is tamper-*evident*
+against edits in place; for more, export it regularly and keep the newest
+`hash` of each chain outside the gateway.
+
+**Writing: synchronous, bounded, fail closed.** *Chosen over a bounded
+queue:* every event is written before the run moves on, in a write
+transaction of its own (`BEGIN IMMEDIATE`, so concurrent writers to one
+chain queue on SQLite's lock instead of racing for its head) or — for a
+management change and a state write — on the change's own transaction, so
+the change and its event commit together or not at all. WAL with
+`synchronous = NORMAL` makes a commit a page write, not an fsync, so this
+costs a turn about a millisecond per event; nothing waits in memory, so
+nothing is lost on a crash or a shutdown and there is no queue to flush.
+**Bound:** a run event may take at most `agents::audit::WRITE_BOUND` = 5 s
+(lock wait included). **Fail closed:** an event of an agent run that could
+not be written marks the run (`AgentRun::mark_log_failed`); the driver
+stops it before the next model round and before a batch of tool calls
+runs, errors its turn with `agents::audit::LOG_UNAVAILABLE`, and a turn
+that had already answered when its `turn_finished` could not be written is
+errored after the fact, so the visitor never gets an answer the log does
+not show. The failure is logged at `error` with the event's correlation
+ids. Outside a run (a refused visitor, a sweep marker) the failure is
+logged and the request goes on as it would have.
+
+**Hook points.** As low as the code allows, so nothing reaches around them:
+
+| Event | Written by | Detail |
+|---|---|---|
+| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` (the body exactly as sent: system message, messages, tool offer, parameters), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
+| `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
+| `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
+| `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
+| `state_written` | `agent_state::put`, on the write's transaction | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
+| `turn_started` / `turn_finished` | `headless::drive`, for every agent turn (main and sub-agent, resumed too) | the message the turn answers (a visitor's, or a sub-agent's task), or `resumed: true`; `status`, `answer`, `error`, `outcome` (a contracted run's `RunOutcome`: budget, rounds, repeated call …) |
+| `route_decision`, `sub_agent_dispatched`/`_finished`, `loop_iteration`/`_finished` | the router (#87/#88/#103) | as before; an A2A dispatch also records the `message` it sent (`{secure_input_sent: true}` for an answer to the peer's `input-required`) |
+| `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
+| `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
+| management kinds | the agent DB modules, on the change's transaction | as before |
+| `activity_swept` | the retention sweep | `audit_retention_days`, `before`, `chains`, `events` |
+
+`for_principal` — the decision trail the agent's GET, the test-chat debug
+view and the evaluation read — leaves out the content kinds
+(`AuditKind::is_content`: `llm_exchange`, `tool_result`, `turn_started`,
+`turn_finished`); they are read through the activity API.
+
+**Secrets never enter it.** A one-time code reaches the verifier through
+`Decided(Value)` only; the runner withholds that value from the
+`tool_result` it records whatever the tool did with it, the run's resume
+records `secure_input_received` instead of it, the verifier's MCP check is
+redacted as before (#95), and the model never saw it, so no
+`llm_exchange` carries it. The A2A credential is sealed in the spec and
+sent only as a header, which no event records. Tokens, embed keys and
+client secrets are hashed or sealed where they are stored and never part
+of an event. `activity::a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret`
+(`agents/run/tests/activity.rs`) runs a conversation through a closed
+gate, an OTP verifier fed a known code, a sub-agent, an external A2A agent
+with a sealed bearer token and a handoff to a person, then greps every text
+column of every table for the code and the token.
+
+**What is not recorded.** The compaction summary call and the evaluation
+judge (neither is part of a conversation's run; the judge's verdict is in
+the test result), and the vision fallback that describes an image a tool
+returned for a model that cannot see. A person's chat records nothing here;
+its logging is unchanged.
+
+**Retention.** `publish.audit_retention_days` (typed, default **365**,
+read from the live version like `retention_days`): the hourly sweep deletes
+the *whole* chain of a conversation that no longer exists and whose newest
+event is older than that, never part of a chain, and appends an
+`activity_swept` marker to the agent's own chain. The validator refuses a
+value below `publish.retention_days` (default 30), so a conversation's log
+always outlives the conversation. The agent's own chain is never swept;
+events from before #111 go by their age.
+
+**Access and API** (`aiplane-api::pages::json_agent_activity`): the
+agent-management permission plus a `read` share (admins hold one on every
+agent) — the log holds whole conversations, so a responder, who answers
+handoffs without a share, cannot read it (`403`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=` | A page of events (`limit` 1–500, default 100, and at most ~4 MiB of detail), newest first or `order=asc`; `kind` is a comma list; `from`/`to` RFC 3339 or `YYYY-MM-DD`; `{events, next_cursor, order}`. A conversation's events include its sub-agent runs |
+| GET | `/api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=` | Every matching event, oldest first, one JSON object per line (`application/x-ndjson`), streamed a ~1 MiB batch at a time with backpressure |
+| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unchained, broken: {chain_key, seq, event_id, reason} \| null}` |
+
+An event reads `{cursor, id, kind, ts, principal_id, actor_id, agent_id,
+version, conversation_id, session_id, turn_id, round, call_id, visitor_id,
+caller_id, duration_ms, run_chain, detail, chain_key, seq, prev_hash,
+hash}`. A sub-agent's activity shows in the log of the agent whose
+conversation it ran in, not in its own.
+
+**Server logs.** Every agent turn runs in a `tracing` span `agent_turn`
+with `agent`, `principal`, `version`, `conversation`, `session`, `turn`,
+`visitor`, `caller` and `depth`, and every tool call in a `tool_call` span
+with `tool` and `call_id`, so a log line joins the events it belongs to.
+
+**Storage.** The log keeps payloads whole, and a model round's request
+carries the whole conversation so far: a conversation of *r* rounds over a
+prompt growing to *p* bytes stores roughly *r × p / 2* bytes of requests,
+plus every tool result once. A 20-round conversation with a 40 KB prompt is
+about 0.5 MB; image parts sent to a vision model count at their base64
+size. SQLite stores rows that large on overflow pages, which the hourly
+sweep frees whole chain by chain; the file does not shrink without a
+`VACUUM`, but freed pages are reused. Indexes: `(chain_key, seq)` unique —
+chain order and verification; `(agent_id)` and `(conversation_id)` — the
+API pages by rowid within either, which those single-column indexes are
+ordered by; `(principal_id, kind, created_at)` from #100 — the decision
+trail and analytics.
+
+**UI.** An *Activity* tab on `/agents/{id}` ([`ui.md`](ui.md#agent-builder)).
+
+**Tests.** `aiplane-agents`' `db/agent_audit/tests.rs` (correlation
+columns, management events on the caller's transaction, every way a chain
+breaks, 40 parallel writers to one conversation, paging and the byte cap,
+the sweep taking whole chains only); `agents/run/tests/activity.rs` (the
+whole story above, a changed event found by `verify`, six parallel
+conversations each with its complete sequence, a run whose log cannot be
+written stopped before the model is asked, a lost `tool_result` stopping
+the next round); `agents/retention.rs` (the sweep and its marker);
+`spec.rs` (audit retention at least conversation retention);
+`tests/it/agent_activity.rs` (the API: timeline, filters, cursor, export,
+verify, who may read it); `web/src/lib/agent-activity.test.ts`.
+
 ## 6. Crate placement
 
 The rule from `AGENTS.md`: put code as high as it will go, and never reference
@@ -2534,6 +2716,7 @@ use `regex`, and hashing uses the token helpers.
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |
 | #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
+| #111 activity log | §5 | `agent_audit` becomes a hash-chained activity log (per conversation, per agent); every model exchange, tool call, state write, turn and decision of an agent run recorded in full, synchronously, failing the run closed; `publish.audit_retention_days`; `/api/v0/agents/{id}/activity` (+ `export`, `verify`); Activity tab ([built](#what-111-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #97 later | — | unchanged |
 
