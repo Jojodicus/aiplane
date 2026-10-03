@@ -142,7 +142,7 @@ impl Embed {
         for _ in 0..500 {
             let t = self.last_turn(token).await;
             let running = t.status == chat::TurnStatus::InProgress
-                || self.fx.state.agent_turns.is_running(&session);
+                || self.fx.state.chats.get(&self.agent, &session).is_some();
             if !running && t.role == chat::TurnRole::Assistant {
                 return t;
             }

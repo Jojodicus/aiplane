@@ -366,6 +366,23 @@ Past the ceiling nothing is refused any more: the message is persisted and
 waits. Retry and edit still refuse with `409` — regeneration rewrites history a
 running turn is reading, so there is nothing sensible to queue.
 
+It is also where **agent conversations' turns** run (`agents::embed::claim`,
+see [agents.md](agents.md#what-91-built)), keyed by the principal
+that owns the conversation and uncapped per principal — one agent answers many
+visitors at once. So "is a turn running", cancel and shutdown's
+`cancel_all`/drain cover every turn from one place. Two registry operations
+exist for them, generic in themselves: `hand_over(user, session, from, to)`
+points a worker at the next turn it produces without letting go of the
+conversation, and `holds` / `cancel_turn` act on one turn only, never the
+conversation's next. When a worker leaves the registry (`clear`) its channel
+carries a last `TurnUpdate::Released`, after `Finalized`. `Finalized` says the
+turn's *row* is final; `Released` says the worker is gone. A chat stream
+treats the two alike, but an agent's caller may hold its worker past
+`Finalized` (until the output filter has ruled), and a subscriber that must
+see only the settled answer waits for `Released`. `subscribe(user, session)`
+takes the subscription under the registry lock, so it either sees the worker
+or is sure to hear it go.
+
 `GET …/sessions/{id}/capabilities` is the conversation's complete capability
 read model. Each built-in tool, connected integration tool, and skill carries
 its group, description, ordering metadata, and explicit `off` / `auto` / `on`

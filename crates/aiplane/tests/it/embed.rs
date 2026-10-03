@@ -728,6 +728,10 @@ async fn an_answer_reaches_the_visitor_whole_once_its_turn_is_done() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
+    assert!(
+        e.fx.state.chats.holds(&e.agent, &session, &turn_id),
+        "the turn runs on a worker of the session worker registry"
+    );
     let busy = e.say(&token, "are you there?").await;
     assert_eq!(busy.status, StatusCode::CONFLICT);
     assert_eq!(code(&busy), "turn_in_progress");
@@ -777,6 +781,10 @@ async fn an_answer_reaches_the_visitor_whole_once_its_turn_is_done() {
     assert_eq!(frames[1].1["text_delta"], ANSWER);
     assert_eq!(frames[1].1["full"], true);
     assert_eq!(frames[2].1["status"], "completed");
+    assert!(
+        e.fx.state.chats.get(&e.agent, &session).is_none(),
+        "the answer is delivered only once the worker has left the registry"
+    );
     for _ in 0..200 {
         if e.say(&token, "thanks").await.status == StatusCode::ACCEPTED {
             return;

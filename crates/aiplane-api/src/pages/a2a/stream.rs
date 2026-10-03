@@ -15,8 +15,8 @@ use super::envelope::{RpcError, rpc_body};
 use super::tasks::{TaskView, task_view};
 use crate::pages::turn_wait::{TurnWait, Waited};
 use aiplane_runtime::agents::a2a::TaskState;
-use aiplane_runtime::agents::embed::ReleaseWatch;
 use aiplane_runtime::rama_server::state::RamaState;
+use tokio::time::Instant;
 
 fn sse_frame(id: &Value, result: Value) -> rama::bytes::Bytes {
     rama::bytes::Bytes::from(format!("data: {}\n\n", rpc_body(id, ("result", result))))
@@ -31,19 +31,27 @@ pub(super) async fn stream(
     session_id: &str,
     task_id: &str,
 ) -> Result<Response, RpcError> {
-    let releases = call.state.agent_turns.releases(session_id);
-    let first = task_view(&call.state, call.lang, session_id, task_id, None).await?;
+    let first = task_view(
+        &call.state,
+        &call.served.agent.principal.id,
+        call.lang,
+        session_id,
+        task_id,
+        None,
+    )
+    .await?;
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let _ = tx.unbounded_send(Ok(sse_frame(&call.id, json!({ "task": first.task }))));
     let tail = Tail {
         state: call.state.clone(),
         lang: call.lang,
         id: call.id.clone(),
+        principal_id: call.served.agent.principal.id.clone(),
         session_id: session_id.to_string(),
         task_id: task_id.to_string(),
     };
     if first.state == TaskState::Working {
-        tokio::spawn(async move { tail.run(releases, tx).await });
+        tokio::spawn(async move { tail.run(tx).await });
     } else {
         tail.finish(&first, &tx);
     }
@@ -54,6 +62,7 @@ struct Tail {
     state: Arc<RamaState>,
     lang: Lang,
     id: Value,
+    principal_id: String,
     session_id: String,
     task_id: String,
 }
@@ -62,6 +71,7 @@ impl Tail {
     async fn view(&self) -> Result<TaskView, RpcError> {
         task_view(
             &self.state,
+            &self.principal_id,
             self.lang,
             &self.session_id,
             &self.task_id,
@@ -70,11 +80,17 @@ impl Tail {
         .await
     }
 
-    async fn run(self, releases: ReleaseWatch, tx: SseTx) {
-        let mut wait = TurnWait::new(releases);
+    async fn run(self, tx: SseTx) {
+        let started = Instant::now();
+        let wait = TurnWait {
+            workers: &self.state.chats,
+            principal_id: &self.principal_id,
+            session_id: &self.session_id,
+            turn_id: &self.task_id,
+        };
         loop {
-            match wait.next(&tx).await {
-                Waited::Reread => {}
+            match wait.next(&tx, started).await {
+                Waited::Released => {}
                 Waited::Expired | Waited::Gone => return,
             }
             match self.view().await {
@@ -82,7 +98,11 @@ impl Tail {
                     self.finish(&v, &tx);
                     return;
                 }
-                Ok(_) => {}
+                // Claimed again since: its pause was answered.
+                Ok(_) if wait.held() => {}
+                // Working with nothing producing it: a turn orphaned by a
+                // crash, which the next boot settles. Nothing will come.
+                Ok(_) => return,
                 Err(err) => {
                     tracing::warn!(error = ?err, task = %self.task_id, "a2a stream: reading the task");
                     return;

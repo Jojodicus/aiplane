@@ -643,7 +643,7 @@ async fn a_timeout_for_a_german_visitor_answers_in_german() {
     resume_expired(&world.state).await;
     wait_settled(&world, &paused.session_id, &paused.turn_id).await;
     for _ in 0..400 {
-        if !world.state.agent_turns.is_running(&paused.session_id) {
+        if world.state.chats.get(&agent, &paused.session_id).is_none() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;

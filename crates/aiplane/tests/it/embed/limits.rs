@@ -103,7 +103,7 @@ impl Embed {
             let session = self.conversation_of(token).await;
             self.wait_terminal(&session, r.body["turn_id"].as_str().unwrap())
                 .await;
-            while self.fx.state.agent_turns.is_running(&session) {
+            while self.fx.state.chats.get(&self.agent, &session).is_some() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }

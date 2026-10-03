@@ -139,7 +139,7 @@ impl Embed {
             let turns = chat::list_turns(&self.fx.state.db, &session).await.unwrap();
             let last = turns.last().unwrap().turn.clone();
             let running = last.status == chat::TurnStatus::InProgress
-                || self.fx.state.agent_turns.is_running(&session);
+                || self.fx.state.chats.get(&self.agent, &session).is_some();
             if !running && last.role == chat::TurnRole::Assistant {
                 return last;
             }

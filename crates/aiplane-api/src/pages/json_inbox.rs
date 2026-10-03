@@ -127,14 +127,15 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let Some(agent) = item.agent.clone() else {
         return item_not_found(&id);
     };
-    let Some(runner) = state.agent_turns.runner() else {
+    let Some(runner) = state.agent_runner.clone() else {
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "agent_runtime_unavailable",
             "this gateway cannot run agent conversations — answer again after it was updated",
         );
     };
-    let Some(hold) = state.agent_turns.claim(&item.session_id, &item.turn_id) else {
+    let Some(hold) = embed_rt::claim(&state.chats, &agent.id, &item.session_id, &item.turn_id)
+    else {
         return json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",
