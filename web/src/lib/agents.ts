@@ -155,6 +155,14 @@ export interface RouteDebug {
 	missing: Unmet[];
 }
 
+/** The topic guard's decision on a turn's message, under a strict scope. */
+export interface ScopeDebug {
+	verdict: 'in_scope' | 'out_of_scope' | 'failed';
+	topics: string[];
+	/** Why the guard could not decide; the message was refused all the same. */
+	error?: string;
+}
+
 export interface TestDebug {
 	slots: SlotDebug[];
 	routes: RouteDebug[];
@@ -173,6 +181,8 @@ export interface TestDebug {
 	}[];
 	tool_calls: { tool: string; decision: string; policy: string }[];
 	loops?: { event: 'loop_iteration' | 'loop_finished'; route: string; iteration?: number; iterations?: number; accepted: boolean; feedback?: string; stopped?: string }[];
+	/** `null` unless the draft's scope is strict. */
+	scope?: ScopeDebug | null;
 }
 
 /** What a suspended turn waits for, as a manager sees it. */

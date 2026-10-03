@@ -88,6 +88,22 @@ struct Fx {
     bob: String,
     plain: String,
     main_llm: MockServer,
+    /// Kept alive for the fixture's `guard-pool`.
+    _guard_llm: MockServer,
+}
+
+/// A topic guard upstream that judges every message out of scope.
+async fn off_topic_guard() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{ "message": { "role": "assistant",
+                                       "content": json!({ "verdict": "out_of_scope" }).to_string() } }]
+        })))
+        .mount(&server)
+        .await;
+    server
 }
 
 async fn person(state: &RamaState, id: &str, roles: &[&str]) -> String {
@@ -130,12 +146,15 @@ async fn fixture(main_script: Vec<Value>, tech_script: Vec<Value>) -> (Fx, MockS
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let main_llm = llm(main_script).await;
     let tech_llm = llm(tech_script).await;
+    let guard_llm = off_topic_guard().await;
     let mut pools = HashMap::new();
     pools.insert("main-pool".to_string(), chat_pool(&main_llm));
     pools.insert("tech-pool".to_string(), chat_pool(&tech_llm));
+    pools.insert("guard-pool".to_string(), chat_pool(&guard_llm));
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "main-pool", 0, &["main-model"]);
     common::seed_pool_models(&registry, "tech-pool", 0, &["tech-model"]);
+    common::seed_pool_models(&registry, "guard-pool", 0, &["guard-model"]);
     let app = AppState::new(
         common::test_config(),
         pool.clone(),
@@ -174,6 +193,7 @@ async fn fixture(main_script: Vec<Value>, tech_script: Vec<Value>) -> (Fx, MockS
             bob,
             plain,
             main_llm,
+            _guard_llm: guard_llm,
         },
         tech_llm,
     )
@@ -376,6 +396,47 @@ async fn a_draft_that_was_never_published_answers_with_the_manager_debug_view() 
 }
 
 #[tokio::test]
+async fn the_debug_view_shows_the_topic_guards_verdict() {
+    let (fx, _tech_llm) = fixture(vec![text("Diesel engines …")], tech_script()).await;
+    let website = fx.create("website", None).await;
+    fx.grant_pool(&website, "main-pool").await;
+    fx.grant_pool(&website, "guard-pool").await;
+    let mut spec = json!({
+        "main": { "pool": "main-pool",
+                  "instructions": { "orchestration": "Answer questions about Ceph." } },
+        "scope": { "topics": ["Ceph storage"], "strict": true, "classifier_pool": "guard-pool" }
+    });
+    let (status, body) = fx
+        .send(
+            &fx.alice,
+            Method::PUT,
+            &format!("/api/v0/agents/{website}/draft"),
+            Some(json!({ "spec": spec })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["issues"][0]["path"], "scope.refusal");
+    spec["scope"]["refusal"] = json!("I only talk about Ceph.");
+    fx.save_draft(&website, spec).await;
+
+    let (status, body) = fx
+        .turn(
+            &fx.alice,
+            &website,
+            json!({ "message": "How does a diesel engine work?" }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["answer"], "I only talk about Ceph.");
+    assert_eq!(
+        body["debug"]["scope"],
+        json!({ "verdict": "out_of_scope", "topics": ["Ceph storage"] })
+    );
+    assert!(requests(&fx.main_llm).await.is_empty());
+}
+
+#[tokio::test]
 async fn the_test_chat_runs_the_draft_not_the_published_version() {
     let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
     let (support, tech) = fx.support("LIVE-INSTRUCTIONS").await;
@@ -541,7 +602,7 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    assert_eq!(pools, ["main-pool", "tech-pool"]);
+    assert_eq!(pools, ["guard-pool", "main-pool", "tech-pool"]);
     let tools: Vec<&str> = body["tools"]
         .as_array()
         .unwrap()

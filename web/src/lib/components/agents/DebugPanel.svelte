@@ -5,14 +5,19 @@
 	/**
 	 * What a manager sees of a test turn that a visitor never does: every slot
 	 * with its value and who wrote it, each route's gate and what keeps it
-	 * closed, the router's decision, sub-agent calls and the grant decision on
-	 * each tool call. All of it is read back from the stored state and the
+	 * closed, the topic guard's verdict, the router's decision, sub-agent calls
+	 * and the grant decision on each tool call. All of it is read back from the stored state and the
 	 * audit trail, not from the model's own account.
 	 */
 	let { debug }: { debug: TestDebug } = $props();
 
 	const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
 	const badge = (status: string) => (status === 'set' ? 'badge-success' : status === 'invalid' ? 'badge-error' : 'badge-ghost');
+	const verdict = {
+		in_scope: { key: 'agents-debug-scope-in-scope', badge: 'badge-success' },
+		out_of_scope: { key: 'agents-debug-scope-out-of-scope', badge: 'badge-warning' },
+		failed: { key: 'agents-debug-scope-failed', badge: 'badge-error' }
+	} as const;
 </script>
 
 <div class="space-y-4 text-sm">
@@ -59,6 +64,15 @@
 			<p class="text-base-content/60">{t('agents-debug-no-routes')}</p>
 		{/each}
 	</section>
+
+	{#if debug.scope}
+		<section>
+			<h4 class="mb-1 font-semibold">{t('agents-debug-scope')}</h4>
+			<span class="badge badge-sm {verdict[debug.scope.verdict].badge}">{t(verdict[debug.scope.verdict].key)}</span>
+			<p class="mt-1 text-xs text-base-content/60">{t('agents-debug-scope-topics', { topics: debug.scope.topics.join(', ') })}</p>
+			{#if debug.scope.error}<p class="text-xs text-error">{debug.scope.error}</p>{/if}
+		</section>
+	{/if}
 
 	<section>
 		<h4 class="mb-1 font-semibold">{t('agents-debug-routing')}</h4>

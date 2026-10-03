@@ -135,6 +135,9 @@ pub struct DraftDebug {
     /// (`loop_finished`: iterations, why it stopped), in order, each with its
     /// `event`. The child runs themselves are in `sub_agents`.
     pub loops: Vec<Value>,
+    /// The topic guard's decision on this turn's message, under a strict
+    /// scope: `{verdict, topics}`, and `error` when it could not decide.
+    pub scope: Option<Value>,
 }
 
 /// The state after the turn, and the audit rows the turn wrote (`since`
@@ -199,6 +202,16 @@ pub async fn collect_debug(
     }) {
         match event.kind.as_str() {
             "route_decision" => debug.routing.push(event.detail),
+            "scope_decision" => {
+                let mut scope = json!({
+                    "verdict": event.detail["verdict"],
+                    "topics": event.detail["topics"],
+                });
+                if let Some(error) = event.detail.get("error") {
+                    scope["error"] = error.clone();
+                }
+                debug.scope = Some(scope);
+            }
             "sub_agent_dispatched" => debug.sub_agents.push(event.detail),
             "sub_agent_finished" => {
                 // A sub-agent run is its child turn; an external agent's has
