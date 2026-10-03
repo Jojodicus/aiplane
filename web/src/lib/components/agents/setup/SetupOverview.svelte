@@ -4,6 +4,7 @@
 	import { base } from '$app/paths';
 	import { ensureShape, type Spec } from '$lib/agents';
 	import { SECTIONS, checklist, sectionStatus, summary, type SectionStatus, type StepKey } from '$lib/agent-setup';
+	import { emptyPlan, type GrantPlan } from '$lib/agent-grant-plan';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SetupChecklist from './SetupChecklist.svelte';
@@ -14,7 +15,8 @@
 	 * The agent in plain language: one line per section with its status and an
 	 * Edit that opens that section's step in a centred modal, the pre-publish
 	 * checklist, and a sketch of the widget. The modal edits a copy of the
-	 * buffer; Apply puts it back and saves the draft.
+	 * buffer and stages its grants; Apply puts it back and saves both, Cancel
+	 * drops them.
 	 */
 	let { onadvanced }: { onadvanced: () => void } = $props();
 	const ws = useWorkspace();
@@ -36,18 +38,22 @@
 	const SIZE: Partial<Record<StepKey, 'md' | 'lg'>> = { scope: 'md', slots: 'lg' };
 
 	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
-	const ctx = $derived({ tr: t, grants: ws.detail?.grants ?? [], resources: ws.resources, agents: ws.agents });
+	const ctx = $derived({ tr: t, grants: ws.grants, resources: ws.resources, agents: ws.agents });
 
 	let editing = $state<StepKey | null>(null);
 	let open = $state(false);
 	let draft = $state<Spec>({});
 	let before = '';
+	let planBefore: GrantPlan = emptyPlan();
+	let applied = false;
 	let applying = $state(false);
 	let failed = $state(false);
 
 	function edit(step: StepKey | null) {
 		if (!step) return onadvanced();
 		before = JSON.stringify(ws.spec);
+		planBefore = $state.snapshot(ws.plan);
+		applied = false;
 		draft = ensureShape(JSON.parse(before));
 		editing = step;
 		failed = false;
@@ -59,11 +65,14 @@
 		ws.replace(draft);
 		const saved = await ws.save();
 		applying = false;
+		applied = saved;
 		if (saved) open = false;
 		else failed = true;
 	}
 
+	/** Cancel (or a refused Apply) leaves the buffer and the staged grants as they were before the edit. */
 	function closed() {
+		if (!applied) ws.plan = planBefore;
 		if (failed) ws.replace(JSON.parse(before));
 		failed = false;
 		editing = null;

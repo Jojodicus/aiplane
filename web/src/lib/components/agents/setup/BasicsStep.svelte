@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
 	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
-	import type { AgentError, Spec } from '$lib/agents';
+	import type { Spec } from '$lib/agents';
 	import {
 		ANSWER_LANGUAGES,
 		TIERS,
@@ -38,31 +38,23 @@
 	const tiers = $derived(ws.resources?.tiers);
 	const mapped = $derived(hasTiers(tiers));
 	const tierOptions = $derived(TIERS.filter((tier) => !!tiers?.[tier]).map((tier) => ({ value: tier, label: t(`agents-setup-model-${tier}`) })));
-	const grantedPools = $derived(ws.granted.pools);
+	const grantedPools = $derived(ws.grants.filter((g) => g.kind === 'pool').map((g) => g.ref));
 	const poolOptions = $derived([...new Set([...(ws.resources?.pools ?? []), ...grantedPools, ...(model.pool ? [model.pool] : [])])]);
 	const holdable = (pool: string) => (ws.resources?.pools ?? []).includes(pool) || grantedPools.includes(pool);
 
 	let modelError = $state<string | null>(null);
-	let choosing = $state(false);
 
-	async function choosePool(pool: string, label: string) {
+	function choosePool(pool: string, label: string) {
 		modelError = null;
 		if (!pool || pool === model.pool) return;
 		if (!holdable(pool)) {
 			modelError = t('agents-setup-model-unavailable', { choice: label });
 			return;
 		}
-		choosing = true;
 		const previous = model.pool;
-		try {
-			await ws.ensureGrant('pool', pool);
-			model.pool = pool;
-			if (previous) await ws.releaseGrant('pool', previous);
-		} catch (err) {
-			modelError = t('agents-setup-grant-failed', { reason: (err as AgentError).message });
-		} finally {
-			choosing = false;
-		}
+		ws.stageGrant('pool', pool);
+		model.pool = pool;
+		if (previous) ws.stageRevoke('pool', previous);
 	}
 	const tierLabel = (tier: Tier) => t(`agents-setup-model-${tier}`);
 
@@ -155,8 +147,7 @@
 			<SegmentedControl
 				label={t('agents-setup-model')}
 				options={tierOptions}
-				disabled={choosing}
-				bind:value={() => tierOf(model.pool, tiers) ?? ('' as Tier), (tier) => void choosePool(tiers?.[tier] ?? '', tierLabel(tier))}
+								bind:value={() => tierOf(model.pool, tiers) ?? ('' as Tier), (tier) => choosePool(tiers?.[tier] ?? '', tierLabel(tier))}
 			/>
 			{#if model.pool && !tierOf(model.pool, tiers)}
 				<span class="text-sm text-base-content/60">{t('agents-setup-model-custom', { pool: humanize(model.pool.replace(/-/g, '_')) })}</span>
@@ -166,9 +157,8 @@
 			<select
 				class="select w-full max-w-sm"
 				aria-label={t('agents-setup-model-pool')}
-				disabled={choosing}
-				value={model.pool}
-				onchange={(e) => void choosePool(e.currentTarget.value, e.currentTarget.value)}
+								value={model.pool}
+				onchange={(e) => choosePool(e.currentTarget.value, e.currentTarget.value)}
 			>
 				<option value="" disabled>{t('agents-pick')}</option>
 				{#each poolOptions as pool (pool)}<option value={pool}>{humanize(pool.replace(/-/g, '_'))}</option>{/each}

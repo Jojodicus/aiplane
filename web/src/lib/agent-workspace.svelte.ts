@@ -28,7 +28,7 @@ import {
 	type SpecIssue,
 	type TestDebug
 } from './agents.ts';
-import { liveUses } from './agent-setup.ts';
+import { emptyPlan, isEmpty, plannedGrants, stageGrant, stageRevoke, type GrantPlan } from './agent-grant-plan.ts';
 
 export class AgentWorkspace {
 	readonly id: string;
@@ -53,9 +53,13 @@ export class AgentWorkspace {
 	suggestion = $state<AssistSuggestion | null>(null);
 	/** Proposal parts already applied or dismissed (`task`, `tone`, `scope`, …). */
 	handled = $state<string[]>([]);
+	/** Grant changes the steps staged; carried out by `save`, dropped by `discardGrants`. */
+	plan = $state<GrantPlan>(emptyPlan());
 
 	readonly writable = $derived(this.detail?.access === 'write');
-	readonly dirty = $derived(JSON.stringify(cleanSpec(this.spec)) !== this.savedJson);
+	readonly dirty = $derived(JSON.stringify(cleanSpec(this.spec)) !== this.savedJson || !isEmpty(this.plan));
+	/** The agent's grants as they will be once the staged plan is saved: what the steps show. */
+	readonly grants = $derived(plannedGrants(this.detail?.grants ?? [], this.plan));
 	/** Only what still points into the draft: removing the route a refusal was about clears it. */
 	readonly shownIssues = $derived(liveIssues(this.issues, this.spec));
 	readonly staleRefusal = $derived(this.issues.length > 0 && this.shownIssues.length === 0);
@@ -126,24 +130,44 @@ export class AgentWorkspace {
 		this.issues = e.issues ?? [];
 	}
 
+	/**
+	 * Saves the draft with the staged grants: grants first (the validator
+	 * checks the draft against them), revocations after (the saved draft no
+	 * longer uses them). A refused grant stops before the draft is sent, with
+	 * the server's reason; what was already granted stays and leaves the plan.
+	 */
 	async save(): Promise<boolean> {
 		this.busy = true;
 		this.error = null;
 		this.notice = null;
 		try {
+			for (const r of [...this.plan.grant]) {
+				await agentsApi.grant(this.id, r.kind, r.ref);
+				this.plan = { ...this.plan, grant: this.plan.grant.filter((x) => x !== r) };
+			}
 			const clean = cleanSpec(this.spec);
 			await agentsApi.saveDraft(this.id, clean);
 			this.savedJson = JSON.stringify(clean);
+			for (const r of [...this.plan.revoke]) {
+				await agentsApi.revokeGrant(this.id, r.kind, r.ref);
+				this.plan = { ...this.plan, revoke: this.plan.revoke.filter((x) => x !== r) };
+			}
 			this.issues = [];
 			await this.refresh(true);
 			this.notice = { key: 'agents-saved' };
 			return true;
 		} catch (err) {
 			this.fail(err);
+			await this.refresh(true).catch(() => {});
 			return false;
 		} finally {
 			this.busy = false;
 		}
+	}
+
+	/** Drops the staged grant changes (a cancelled edit). */
+	discardGrants() {
+		this.plan = emptyPlan();
 	}
 
 	/** Replaces the buffer (an applied template, the JSON tab, a modal's Apply) and re-reads the forms. */
@@ -177,23 +201,20 @@ export class AgentWorkspace {
 		await this.refresh(true);
 	}
 
-	/** Grants `ref` to the agent unless it already holds it. Rejects with the server's reason. */
-	async ensureGrant(kind: GrantKind, ref: string) {
-		if (this.detail?.grants.some((g) => g.kind === kind && g.ref === ref)) return;
-		await agentsApi.grant(this.id, kind, ref);
-		await this.refresh(true);
+	/** Stages granting `ref` to the agent; nothing happens until `save`. */
+	stageGrant(kind: GrantKind, ref: string) {
+		this.plan = stageGrant(this.plan, this.detail?.grants ?? [], { kind, ref });
 	}
 
 	/**
-	 * Revokes `ref` unless the published version still uses it (revoking would
-	 * break the live agent). Returns whether it was revoked.
+	 * Stages giving `ref` up: withdraws a staged grant, or revokes a held one
+	 * on `save` unless the published version uses it. Returns whether the
+	 * grant is kept for the live version.
 	 */
-	async releaseGrant(kind: GrantKind, ref: string): Promise<boolean> {
-		if (!this.detail?.grants.some((g) => g.kind === kind && g.ref === ref)) return false;
-		if (liveUses(this.detail.live_spec, kind, ref)) return false;
-		await agentsApi.revokeGrant(this.id, kind, ref);
-		await this.refresh(true);
-		return true;
+	stageRevoke(kind: GrantKind, ref: string): boolean {
+		const { plan, kept } = stageRevoke(this.plan, this.detail?.grants ?? [], this.detail?.live_spec ?? null, { kind, ref });
+		this.plan = plan;
+		return kept;
 	}
 }
 

@@ -630,20 +630,25 @@ that every step round-trips through the advanced editor's
   | Task & tone | name, what the agent does, tone chips, answer language, free text, *How thorough?* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.pool` |
   | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_pool` kept |
   | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
-  | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`; a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
+  | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`, the row's position as `order` (the server hands object keys back sorted, so the list order lives there); a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
   | Hand-offs | sentences: "When it is about [topic] and [always / the identity is confirmed], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]" | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: verified, provenance})]}`, `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |
   | Website | the websites (one per line), a widget sketch, *Create embed code* | `publish.origins` (each reduced to its origin); the key itself is created through the embed-keys API and shown once |
   | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` (#99) |
 
-- **Grants follow the cards.** Switching a card on grants what it needs to the
-  agent's principal at once (`AgentWorkspace.ensureGrant`; the server's
-  `grant_exceeds_manager` is shown as the reason) and then edits the spec;
-  switching it off edits the spec and revokes the grant unless the published
-  version still uses it (`liveUses`; the card says so). A card for something
+- **Grants follow the cards, on save.** Switching a card on, choosing a model
+  or picking the identity check's system *stages* the grant it needs
+  (`lib/agent-grant-plan.ts`, unit-tested; `AgentWorkspace.stageGrant`);
+  switching it off edits the spec and stages revoking the grant unless the
+  published version still uses it (`liveUses`; the card says so). The steps
+  show the grants as they will be (`ws.grants`), and a staged plan counts as
+  unsaved. `AgentWorkspace.save` carries the plan out — grants before the draft
+  (the validator checks them; a refusal such as `grant_exceeds_manager` stops
+  the save with the server's reason), revocations after — so the assistant's
+  Next / Back / Done, the modal's Apply and the header's Save draft all apply
+  it, and the modal's Cancel drops what the edit staged. A card for something
   the agent holds but the manager does not is shown disabled ("Granted by
-  someone else"). In the modal the grant is immediate even if the edit is then
-  cancelled.
+  someone else").
 - **Model choice.** *Fast / Balanced / Thorough* is a `SegmentedControl` over
   the pools an admin mapped in `/admin/settings` → Chat → *Agent model choices*
   (`agents.pool_fast`, `…_balanced`, `…_thorough`), which
