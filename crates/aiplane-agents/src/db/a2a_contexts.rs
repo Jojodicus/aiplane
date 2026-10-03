@@ -132,22 +132,11 @@ pub async fn get_for_caller(
 mod tests {
     use std::path::Path;
 
-    use jiff::SignedDuration;
-    use uuid::Uuid;
-
     use super::*;
-    use crate::db::inbound::{Inbound, ip_event_times, message_times};
     use crate::db::{agents, system_principals as sp};
-    use session_core::db as chat;
-
-    const MIN: SignedDuration = SignedDuration::from_secs(60);
 
     fn t0() -> Timestamp {
         "2026-10-01T12:00:00Z".parse().unwrap()
-    }
-
-    fn at(minutes: i64) -> Timestamp {
-        t0().checked_add(MIN * minutes as i32).unwrap()
     }
 
     struct Fx {
@@ -214,19 +203,6 @@ mod tests {
         }
     }
 
-    async fn message_at(pool: &Pool, session_id: &str, when: Timestamp) {
-        let id = Uuid::new_v4().to_string();
-        chat::create_user_turn(pool, session_id, &id, "hi")
-            .await
-            .unwrap();
-        sqlx::query("UPDATE chat_turns SET created_at = ? WHERE id = ?")
-            .bind(when.to_string())
-            .bind(&id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn a_context_is_an_agent_conversation_that_remembers_its_caller() {
         let fx = fixture().await;
@@ -265,44 +241,6 @@ mod tests {
                 None
             );
         }
-    }
-
-    #[tokio::test]
-    async fn a_context_counts_its_messages_and_an_ip_its_contexts_and_their_messages() {
-        let fx = fixture().await;
-        let c = fx.open_from(Some("192.0.2.1"), t0()).await;
-        let d = fx.open_from(Some("198.51.100.7"), t0()).await;
-        message_at(&fx.pool, &c.session_id, at(1)).await;
-        message_at(&fx.pool, &c.session_id, at(5)).await;
-        message_at(&fx.pool, &d.session_id, at(5)).await;
-        chat::create_assistant_turn_in_progress(&fx.pool, &c.session_id, "a1", "m")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            message_times(&fx.pool, Inbound::A2a(&c.session_id), at(2), 10)
-                .await
-                .unwrap(),
-            [at(5)]
-        );
-        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0(), 10)
-            .await
-            .unwrap();
-        times.sort();
-        assert_eq!(times, [t0(), at(1), at(5)]);
-        assert_eq!(
-            ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0(), 2)
-                .await
-                .unwrap(),
-            [at(5), at(1)],
-            "only the newest are read"
-        );
-        assert!(
-            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0(), 10)
-                .await
-                .unwrap()
-                .is_empty()
-        );
     }
 
     #[tokio::test]

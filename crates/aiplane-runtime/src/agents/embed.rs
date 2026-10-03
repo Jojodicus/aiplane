@@ -18,8 +18,7 @@ use session_core::SessionWorkers;
 use session_core::workers::{ActiveWorker, RegisterOutcome, TurnUpdate};
 
 use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
-use aiplane_agents::db::inbound::Inbound;
-use aiplane_agents::rates::{self, Rate, RateExceeded, VisitorKey};
+use aiplane_agents::rates::{self, Inbound, Rate, RateExceeded, VisitorKey};
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
 use aiplane_core::server::limits::LimitExceeded;
 use jiff::{SignedDuration, Timestamp};
@@ -148,20 +147,27 @@ pub fn budget_detail(b: &LimitExceeded) -> Value {
 
 /// Gate one visitor request to `agent_id` on the agent's live
 /// `publish.rate_limits` and budget, at `now` (a parameter so tests can
-/// stand inside a window). Every refusal is audited on the agent. An agent
-/// with no live version is not gated here; the endpoint refuses it anyway.
+/// stand inside a window). An admitted request counts against the rates
+/// (`rates::admit_visitor`), a refused one does not. Every refusal is
+/// audited on the agent. An agent with no live version is not gated here;
+/// the endpoint refuses it anyway.
 pub async fn admit(
     state: &RamaState,
     agent_id: &str,
     who: Admission<'_>,
     now: Timestamp,
-) -> Result<(), Refusal> {
+) -> Result<Admitted, Refusal> {
+    let unrated = Admitted {
+        agent_id: agent_id.to_string(),
+        visitor_rate: None,
+        at: now,
+    };
     let compiled = match state.agent_specs.live_recent(&state.db, agent_id).await {
         Ok(Some(compiled)) => compiled,
-        Ok(None) => return Ok(()),
+        Ok(None) => return Ok(unrated),
         Err(err) => {
             tracing::warn!(error = %err, agent = agent_id, "reading the agent's limits; admitting");
-            return Ok(());
+            return Ok(unrated);
         }
     };
     let key = VisitorKey {
@@ -172,24 +178,52 @@ pub async fn admit(
     // A version whose spec does not read cannot run; its visitors are held
     // to the default rates until the turn refuses them.
     let spec = compiled.agent().unwrap_or(AgentSpec::empty());
-    let refused =
-        match rates::check_visitor(&state.db, &spec.publish.visitor_rates(), &key, now).await {
+    let rates = spec.publish.visitor_rates();
+    // The budget first: the rate counts what it admits, and a request the
+    // budget refuses must not use up the visitor's rate.
+    let refused = match state
+        .enforcer
+        .check_agent(agent_id, &owner_budget(spec), now)
+        .await
+    {
+        Err(budget) => Refusal::Budget(budget),
+        Ok(()) => match rates::admit_visitor(&state.db, &rates, &key, now).await {
             Err(rate) => Refusal::Rate(rate),
-            Ok(()) => match state
-                .enforcer
-                .check_agent(agent_id, &owner_budget(spec), now)
-                .await
-            {
-                Err(budget) => Refusal::Budget(budget),
-                Ok(()) => return Ok(()),
-            },
-        };
+            Ok(()) => {
+                return Ok(Admitted {
+                    visitor_rate: Some(rates.visitor),
+                    ..unrated
+                });
+            }
+        },
+    };
     let subject = who.visitor_id.or(who.a2a_context).or(who.ip).unwrap_or("");
     state
         .refusals
         .record(&state.db, agent_id, subject, refused.detail(who.visitor_id))
         .await;
     Err(refused)
+}
+
+/// A request [`admit`] let through.
+#[derive(Debug)]
+pub struct Admitted {
+    agent_id: String,
+    /// The per-conversation rate it was admitted under; `None` when no rate
+    /// applied.
+    visitor_rate: Option<Rate>,
+    at: Timestamp,
+}
+
+impl Admitted {
+    /// The request opened `conversation`, which had no id when it was
+    /// admitted: count it there too, so the conversation's first message is
+    /// in its window like every later one.
+    pub async fn opened(&self, state: &RamaState, conversation: Inbound<'_>) {
+        if let Some(rate) = self.visitor_rate {
+            rates::count_opening(&state.db, &self.agent_id, rate, conversation, self.at).await;
+        }
+    }
 }
 
 const REFUSAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);

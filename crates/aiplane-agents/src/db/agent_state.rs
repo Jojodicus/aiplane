@@ -292,17 +292,9 @@ pub(crate) mod tests {
         seed_session(&pool, "s1").await;
         for bad in ["model", "verifier:", "LLM", ""] {
             assert!(
-                put_committed(
-                    &pool,
-                    "s1",
-                    "x",
-                    &json!(1),
-                    bad,
-                    Timestamp::now(),
-                    None
-                )
-                .await
-                .is_err(),
+                put_committed(&pool, "s1", "x", &json!(1), bad, Timestamp::now(), None)
+                    .await
+                    .is_err(),
                 "{bad:?} was accepted"
             );
         }

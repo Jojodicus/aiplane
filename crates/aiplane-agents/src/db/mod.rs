@@ -18,7 +18,6 @@ pub mod agent_tests;
 pub mod agent_verifiers;
 pub mod agents;
 pub mod embed_keys;
-pub mod inbound;
 pub mod run_sessions;
 pub mod system_principals;
 pub mod visitor_sessions;

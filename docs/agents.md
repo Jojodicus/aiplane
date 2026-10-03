@@ -1692,18 +1692,25 @@ pool rule, and retention.
   Limits, budget and retention are read from the agent's **live** version, not
   the version a conversation is pinned to: lowering a budget or a retention
   period applies to every open conversation at once.
-- **Visitor rates** (`aiplane_agents::rates::check_visitor`, `rates::Rate`;
-  the counted events are one query shape over every inbound channel,
-  `db::inbound`, since #109). An
-  exact sliding window, not the hour-snapped `Window` of spend limits: a
-  visitor told to wait 40 s may send after 40 s. What is counted is what a
-  request leaves behind — the per-visitor bucket counts the visitor's user
-  turns; the per-IP bucket counts conversations started from that IP *and*
-  their messages, per agent, so opening a fresh conversation per message does
-  not dodge the per-visitor limit. A refused request writes nothing, so it
-  never counts. Only `POST /api/v0/embed/sessions` and `POST
-  /api/v0/embed/messages` are gated; reads (`GET …/session`, `…/events`) cost
-  the agent nothing and the widget re-attaches freely.
+- **Visitor rates** (`aiplane_agents::rates::admit_visitor`, `rates::Rate`).
+  An exact sliding window, not the hour-snapped `Window` of spend limits: a
+  visitor told to wait 40 s may send after 40 s. What is counted is the
+  **admission**: every request the gate lets through is one event, recorded
+  by the one rate primitive, `rates::record_within` — the windows are read
+  and the event written in one `WriteTx` (`BEGIN IMMEDIATE`), so parallel
+  requests queue on the write lock instead of all passing the check before
+  any is counted (they did, when the count was the rows a request left
+  behind). The per-visitor bucket counts the admissions into one
+  conversation (`rates::Counter::conversation`, the embed visitor or the
+  A2A context); the per-IP bucket counts every admission from that IP to the
+  agent on every channel (`Counter::ip`), so opening a fresh conversation per
+  message does not dodge the per-visitor limit. The events are rows of
+  `rate_events` (`migrations/0098_rate_events.sql`), one per window, each
+  expiring a window after it was written. A refused request writes nothing,
+  so it never counts; the owner budget is checked first for the same
+  reason. Gated: `POST /api/v0/embed/sessions`, `…/messages` and `…/resume`;
+  reads (`GET …/session`, `…/events`) cost the agent nothing and the widget
+  re-attaches freely.
 - **Owner budget** (`limits::Enforcer::check_agent`). The spec's
   `publish.budget` becomes month-window limits labelled `AgentSpec`; an
   operator may add a `limits` rule with the new subject **`system`** (subject
@@ -1820,10 +1827,12 @@ verifiers:
   `host`".
 - **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
   checks the three send windows (`rates::sliding_window`, the #92 rate
-  type, with new scopes `email` and `session`) and records the send in one
-  write transaction (`agent_verifiers::record_event_within`, `BEGIN
-  IMMEDIATE`, so parallel requests cannot all pass the check before one is
-  counted; a lookup's attempts go through the same call), calls
+  type, with new scopes `email` and `session`) and records the send with
+  the same primitive as a visitor admission (`rates::record_within` on
+  `agent_verifiers::window` counters, one `WriteTx`, so parallel requests
+  cannot all pass the check before one is counted; a lookup's attempts go
+  through the same call, and its `attempts_left` is the count the attempt
+  was admitted against, `Admitted::seen`), calls
   `send_code`, stores the outstanding code's address hash, send time and
   expiry, and pauses the turn with `SuspendRequest::secure_input` (message
   `agent-verifier-code-sent`, timeout `code_ttl`). The widget's secure field
@@ -2175,10 +2184,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
     suspend/resume, the output filter (#89) and the inbox (#96) apply as they
     do there;
   - **admission** is `agents::embed::admit` with `Admission { a2a_context, ip
-    }`: the live spec's `publish.rate_limits.visitor` counts the messages of
-    one context (`inbound::message_times`), `…ip` counts the contexts a
-    client IP opened plus their messages, added to the embed IP's events, and
-    the owner budget and operator `system` limits apply. A refusal is a
+    }`: the live spec's `publish.rate_limits.visitor` counts the admitted
+    messages of one context — the one that opened it too, counted once the
+    context has an id (`embed::Admitted::opened`) — and `…ip` counts every
+    admission from a client IP, embed ones included, and the owner budget
+    and operator `system` limits apply. A refusal is a
     JSON-RPC error `-32000` with `RATE_LIMITED` or `AGENT_UNAVAILABLE`, a
     `Retry-After` header and the Fluent message, audited as `limit_refused`;
     nothing is stored and nothing runs;
@@ -2789,7 +2799,7 @@ upward.
 | Piece | Crate | Why there |
 |---|---|---|
 | Migrations (one embedded set, agent tables included); the `can_manage_agents` resolver check; `Principal`, `GrantSet`, `RunChain`; the `agent_id` column of usage and the per-agent spend limits | `aiplane-core` | the migration history is never split; identity types are read by RBAC, the upstream registry and usage metering, all below the features |
-| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate (`rates`, over `db::inbound`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
+| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate and the one rate primitive (`rates`, over `rate_events`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol; it reads a conversation by `user_id` and treats any other owner as opaque |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |

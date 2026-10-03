@@ -169,9 +169,14 @@ The agent builder's persistence and the pieces only agents need, on
   conversation's expired pause, and the inbox reads that tell a person's pause
   from an agent's. session-core keeps no knowledge of them (see
   `crates/session-core` above).
-- `db/inbound.rs` + `rates.rs` — the visitor rate gate: per-conversation and
-  per-IP sliding windows over every inbound channel (embed widget, A2A) in one
-  query shape, plus the window arithmetic the verifiers' send limits reuse.
+- `rates.rs` — every sliding-window rate of an agent through one primitive,
+  `record_within`: an event is checked against its windows and recorded in
+  one `WriteTx`, so parallel requests cannot all pass. The visitor gate
+  (per-conversation and per-IP admissions over every inbound channel) and
+  the verifiers' send and lookup limits both use it.
+- `db/write_tx.rs` — `WriteTx`, a transaction that holds the write lock from
+  `BEGIN IMMEDIATE`; the activity log's `append` and the rate primitive take
+  one, so nothing reads what it then writes in a deferred transaction.
 - `notify_channels.rs` — the Slack/Discord webhook payloads of the inbox.
 
 Like `aiplane-features`, it names neither `AppState` nor the tool registry, and

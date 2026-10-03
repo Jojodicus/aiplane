@@ -38,8 +38,8 @@ use crate::agents::embed::Refused;
 use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
-use aiplane_agents::db::WriteTx;
 use crate::rama_server::state::RamaState;
+use aiplane_agents::db::WriteTx;
 
 const LEEWAY_SECS: u64 = 30;
 const JWKS_TTL: Duration = Duration::from_secs(300);

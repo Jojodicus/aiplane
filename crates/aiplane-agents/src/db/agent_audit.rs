@@ -517,10 +517,7 @@ const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at
 /// rest of its transaction ([`WriteTx`]): the chain's head is read and
 /// extended under it, so two writers cannot both take the same place. The
 /// unique index on `(chain_key, seq)` refuses a fork should one try.
-pub async fn append(
-    conn: &mut WriteTx,
-    mut event: NewEvent<'_>,
-) -> Result<Appended, DbError> {
+pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appended, DbError> {
     let conversation_id = event.conversation_id();
     let chain_key = match &conversation_id {
         Some(c) => conversation_chain(c),

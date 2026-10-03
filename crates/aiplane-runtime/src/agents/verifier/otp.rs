@@ -29,11 +29,9 @@
 
 use std::sync::Arc;
 
-use aiplane_agents::db::agent_verifiers::{
-    self as rows, Counted, EventKind, NewEvent, PendingCode, Window,
-};
+use aiplane_agents::db::agent_verifiers::{self as rows, Counted, EventKind, PendingCode};
 use aiplane_agents::db::visitor_sessions;
-use aiplane_agents::rates::{RateExceeded, RateScope};
+use aiplane_agents::rates::{self, RateExceeded, RateScope};
 use aiplane_core::server::crypto::sha256_hex;
 use jiff::Timestamp;
 use serde_json::{Map, Value, json};
@@ -248,35 +246,33 @@ impl Flow<'_> {
         now: Timestamp,
     ) -> Result<Option<RateExceeded>, ToolError> {
         let limits = self.cfg.limits;
+        let id = &self.cfg.id;
         let mut windows = vec![
-            Window {
-                scope: RateScope::Email,
-                rate: limits.email,
-                who: Counted::Email(email),
-            },
-            Window {
-                scope: RateScope::Session,
-                rate: limits.session,
-                who: Counted::Session(session),
-            },
+            rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Email,
+                limits.email,
+                Counted::Email(email),
+            ),
+            rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Session,
+                limits.session,
+                Counted::Session(session),
+            ),
         ];
         if let Some(ip) = ip {
-            windows.push(Window {
-                scope: RateScope::Ip,
-                rate: limits.ip,
-                who: Counted::Ip(ip),
-            });
+            windows.push(rows::window(
+                id,
+                EventKind::Send,
+                RateScope::Ip,
+                limits.ip,
+                Counted::Ip(ip),
+            ));
         }
-        let event = NewEvent {
-            principal_id: &self.run.principal.id,
-            verifier: &self.cfg.id,
-            kind: EventKind::Send,
-            session_id: session,
-            email_hash: Some(email),
-            ip_hash: ip,
-            at: now,
-        };
-        rows::record_event_within(&self.run.state.db, &event, &windows)
+        rates::record_now(&self.run.state.db, &self.run.principal.id, &windows, now)
             .await
             .map(Result::err)
             .map_err(db_failed)

@@ -5,19 +5,18 @@
 //! `docs/agents.md` "What #95 built").
 //!
 //! Storage only: the outstanding code of a verifier in a conversation (never
-//! the code itself, which the customer's connector owns), the send and lookup
-//! events the rate windows count, and the host identity tokens already
+//! the code itself, which the customer's connector owns), the counters its
+//! sends and lookups are rated by (rows of `rate_events`, checked and
+//! recorded by `rates::record_within`), and the host identity tokens already
 //! accepted. What the numbers mean is `aiplane-runtime::agents::verifier`.
 
 use jiff::{SignedDuration, Timestamp};
 use sqlx::Row;
-use uuid::Uuid;
 
 use super::{DbError, Pool};
-use crate::rates::{Rate, RateExceeded, RateScope, sliding_window};
+use crate::rates::{Counter, Rate, RateScope, Window};
 
-/// The longest rate window a spec may configure. Events older than this are
-/// never counted again, so recording one prunes them.
+/// The longest rate window a verifier spec may configure.
 pub const MAX_WINDOW: SignedDuration = SignedDuration::from_hours(24);
 
 /// The one outstanding code of a verifier in a conversation.
@@ -135,81 +134,6 @@ impl EventKind {
     }
 }
 
-pub struct NewEvent<'a> {
-    pub principal_id: &'a str,
-    pub verifier: &'a str,
-    pub kind: EventKind,
-    pub session_id: &'a str,
-    pub email_hash: Option<&'a str>,
-    pub ip_hash: Option<&'a str>,
-    pub at: Timestamp,
-}
-
-/// Record one counted event, and drop this agent's events no window can
-/// count any more.
-pub async fn record_event(pool: &Pool, e: &NewEvent<'_>) -> Result<(), DbError> {
-    let mut tx = pool.begin().await?;
-    insert_event(&mut tx, e).await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// One window a counted event must fit into.
-#[derive(Debug, Clone, Copy)]
-pub struct Window<'a> {
-    pub scope: RateScope,
-    pub rate: Rate,
-    pub who: Counted<'a>,
-}
-
-/// Record `e` only if it fits every one of `windows`: the first window it
-/// does not fit is the answer, and nothing is recorded. The windows are
-/// read and the event written in one write transaction (`BEGIN IMMEDIATE`),
-/// so parallel requests queue on the write lock instead of all passing the
-/// check before any of them is counted.
-pub async fn record_event_within(
-    pool: &Pool,
-    e: &NewEvent<'_>,
-    windows: &[Window<'_>],
-) -> Result<Result<(), RateExceeded>, DbError> {
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    for w in windows {
-        let since = e.at.checked_sub(w.rate.per).unwrap_or(e.at);
-        let times = event_times(&mut *tx, e.principal_id, e.verifier, e.kind, w.who, since).await?;
-        if let Err(exceeded) = sliding_window(w.scope, w.rate, &times, e.at) {
-            return Ok(Err(exceeded));
-        }
-    }
-    insert_event(&mut tx, e).await?;
-    tx.commit().await?;
-    Ok(Ok(()))
-}
-
-async fn insert_event(conn: &mut sqlx::SqliteConnection, e: &NewEvent<'_>) -> Result<(), DbError> {
-    sqlx::query(
-        "INSERT INTO agent_verifier_events
-           (id, principal_id, verifier, kind, session_id, email_hash, ip_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(e.principal_id)
-    .bind(e.verifier)
-    .bind(e.kind.as_str())
-    .bind(e.session_id)
-    .bind(e.email_hash)
-    .bind(e.ip_hash)
-    .bind(e.at.to_string())
-    .execute(&mut *conn)
-    .await?;
-    let horizon = e.at.checked_sub(MAX_WINDOW).unwrap_or(e.at);
-    sqlx::query("DELETE FROM agent_verifier_events WHERE principal_id = ? AND created_at < ?")
-        .bind(e.principal_id)
-        .bind(horizon.to_string())
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
-}
-
 /// Whose events a window counts.
 #[derive(Debug, Clone, Copy)]
 pub enum Counted<'a> {
@@ -221,36 +145,34 @@ pub enum Counted<'a> {
     Session(&'a str),
 }
 
-/// When each `kind` event of `verifier` counted by `who` happened, since
-/// `since`.
-pub async fn event_times<'e>(
-    db: impl sqlx::SqliteExecutor<'e>,
-    principal_id: &str,
+/// The rate counter of verifier `verifier`'s `kind` events counted by
+/// `who`: a row of `rate_events`, checked and recorded with
+/// [`rates::record_within`](crate::rates::record_within).
+pub fn counter(verifier: &str, kind: EventKind, who: Counted<'_>) -> Counter {
+    let (dimension, value) = match who {
+        Counted::Email(v) => ("email", v),
+        Counted::Ip(v) => ("ip", v),
+        Counted::Session(v) => ("session", v),
+    };
+    Counter::new(format!(
+        "verifier:{verifier}:{}:{dimension}:{value}",
+        kind.as_str()
+    ))
+}
+
+/// One window a verifier's event must fit into.
+pub fn window(
     verifier: &str,
     kind: EventKind,
+    scope: RateScope,
+    rate: Rate,
     who: Counted<'_>,
-    since: Timestamp,
-) -> Result<Vec<Timestamp>, DbError> {
-    let (column, value) = match who {
-        Counted::Email(v) => ("email_hash", v),
-        Counted::Ip(v) => ("ip_hash", v),
-        Counted::Session(v) => ("session_id", v),
-    };
-    let rows = sqlx::query(&format!(
-        "SELECT created_at FROM agent_verifier_events
-          WHERE principal_id = ? AND verifier = ? AND kind = ? AND {column} = ?
-            AND created_at >= ?"
-    ))
-    .bind(principal_id)
-    .bind(verifier)
-    .bind(kind.as_str())
-    .bind(value)
-    .bind(since.to_string())
-    .fetch_all(db)
-    .await?;
-    rows.into_iter()
-        .map(|r| super::parse_ts(r.try_get("created_at")?, "created_at"))
-        .collect()
+) -> Window {
+    Window {
+        scope,
+        rate,
+        counter: counter(verifier, kind, who),
+    }
 }
 
 /// Accept host identity token `jti_hash` for this agent once. `false` means
@@ -339,111 +261,27 @@ mod tests {
         assert_eq!(pending_code(&pool, "s1", "otp").await.unwrap(), None);
     }
 
-    #[tokio::test]
-    async fn events_are_counted_per_address_ip_and_conversation() {
-        let pool = fresh().await;
-        let event = |session: &'static str, email: &'static str, at: Timestamp| NewEvent {
-            principal_id: "a1",
-            verifier: "otp",
-            kind: EventKind::Send,
-            session_id: session,
-            email_hash: Some(email),
-            ip_hash: Some("ip1"),
-            at,
-        };
-        record_event(&pool, &event("s1", "e1", at("2026-10-02T10:00:00Z")))
-            .await
-            .unwrap();
-        record_event(&pool, &event("s2", "e1", at("2026-10-02T10:05:00Z")))
-            .await
-            .unwrap();
-        record_event(&pool, &event("s2", "e2", at("2026-10-02T10:06:00Z")))
-            .await
-            .unwrap();
-        let since = at("2026-10-02T09:00:00Z");
-        let count = |who| {
-            let pool = pool.clone();
-            async move {
-                event_times(&pool, "a1", "otp", EventKind::Send, who, since)
-                    .await
-                    .unwrap()
-                    .len()
-            }
-        };
-        assert_eq!(count(Counted::Email("e1")).await, 2);
-        assert_eq!(count(Counted::Ip("ip1")).await, 3);
-        assert_eq!(count(Counted::Session("s2")).await, 2);
+    #[test]
+    fn a_counter_names_its_verifier_kind_and_dimension() {
+        let c = |kind, who| counter("otp", kind, who).as_str().to_string();
         assert_eq!(
-            event_times(
-                &pool,
-                "a1",
-                "otp",
-                EventKind::Lookup,
-                Counted::Ip("ip1"),
-                since
-            )
-            .await
-            .unwrap()
-            .len(),
-            0
+            c(EventKind::Send, Counted::Email("e1")),
+            "verifier:otp:send:email:e1"
         );
-
-        record_event(&pool, &event("s1", "e3", at("2026-10-04T10:00:00Z")))
-            .await
-            .unwrap();
-        assert_eq!(
-            count(Counted::Ip("ip1")).await,
-            1,
-            "events older than any window are pruned"
+        assert_ne!(
+            c(EventKind::Send, Counted::Session("s1")),
+            c(EventKind::Lookup, Counted::Session("s1")),
+            "sends and lookups are counted apart"
         );
-    }
-
-    #[tokio::test]
-    async fn parallel_sends_to_one_address_admit_exactly_the_limit() {
-        let pool = fresh().await;
-        let now = at("2026-10-02T10:00:00Z");
-        let windows = [Window {
-            scope: RateScope::Email,
-            rate: Rate {
-                max: 3,
-                per: SignedDuration::from_mins(15),
-            },
-            who: Counted::Email("e1"),
-        }];
-        let sends: Vec<_> = (0..20)
-            .map(|_| {
-                let pool = pool.clone();
-                tokio::spawn(async move {
-                    let event = NewEvent {
-                        principal_id: "a1",
-                        verifier: "otp",
-                        kind: EventKind::Send,
-                        session_id: "s1",
-                        email_hash: Some("e1"),
-                        ip_hash: None,
-                        at: now,
-                    };
-                    record_event_within(&pool, &event, &windows).await.unwrap()
-                })
-            })
-            .collect();
-        let mut admitted = 0;
-        for send in sends {
-            admitted += usize::from(send.await.unwrap().is_ok());
-        }
-        assert_eq!(admitted, 3);
-        let since = at("2026-10-02T09:00:00Z");
-        let recorded = event_times(
-            &pool,
-            "a1",
-            "otp",
-            EventKind::Send,
-            Counted::Email("e1"),
-            since,
-        )
-        .await
-        .unwrap();
-        assert_eq!(recorded.len(), 3);
+        assert_ne!(
+            c(EventKind::Send, Counted::Ip("x")),
+            c(EventKind::Send, Counted::Email("x")),
+            "an address and an IP never share a window"
+        );
+        assert_ne!(
+            counter("otp", EventKind::Send, Counted::Email("e1")),
+            counter("otp2", EventKind::Send, Counted::Email("e1"))
+        );
     }
 
     #[tokio::test]
