@@ -120,6 +120,15 @@ impl ForwardRequest {
 
     /// The route to dispatch among `open` (name order, never empty), or why
     /// none was chosen.
+    /// How [`Self::choose`] decides among `open`, as the decision records it.
+    fn method(&self, open: &[String]) -> &'static str {
+        match self.router() {
+            Some(r) if r.kind == RouterKind::Rules => "rules",
+            _ if open.len() == 1 => "only_open",
+            _ => "classifier",
+        }
+    }
+
     async fn choose(
         &self,
         ctx: &ToolContext,
@@ -238,7 +247,12 @@ impl ForwardRequest {
             Err(message) => {
                 ctx.audit(
                     AuditKind::RouteDecision,
-                    json!({ "routes": gate_json, "picked": null, "reason": message }),
+                    json!({
+                        "routes": gate_json,
+                        "picked": null,
+                        "reason": message,
+                        "method": self.method(&open),
+                    }),
                 )
                 .await;
                 return Ok(json!({
@@ -255,7 +269,7 @@ impl ForwardRequest {
         })?;
         ctx.audit(
             AuditKind::RouteDecision,
-            json!({ "routes": gate_json, "picked": picked }),
+            json!({ "routes": gate_json, "picked": picked, "method": self.method(&open) }),
         )
         .await;
         self.dispatch(ctx, route, &state).await

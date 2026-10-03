@@ -349,6 +349,14 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
         "the events follow the run: {order:?}"
     );
 
+    let routed: Vec<Value> = events
+        .iter()
+        .filter(|e| e.kind == "route_decision" && detail(e)["picked"].is_string())
+        .map(detail)
+        .collect();
+    assert_eq!(routed.len(), 2);
+    assert!(routed.iter().all(|d| d["method"] == "rules"), "{routed:?}");
+
     let issue_writes: Vec<Value> = events
         .iter()
         .filter(|e| e.kind == "state_written" && detail(e)["slot"] == "issue")
