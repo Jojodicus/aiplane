@@ -54,7 +54,7 @@ export const KIND_GROUPS = {
 	exchanges: ['llm_exchange'],
 	tools: ['tool_call', 'tool_result', 'injection_detected'],
 	state: ['state_written', 'verifier_outcome', 'host_identity'],
-	routing: ['route_decision', 'sub_agent_dispatched', 'sub_agent_finished', 'loop_iteration', 'loop_finished'],
+	routing: ['scope_decision', 'route_decision', 'sub_agent_dispatched', 'sub_agent_finished', 'loop_iteration', 'loop_finished'],
 	people: ['run_suspended', 'run_resumed', 'human_handoff', 'a2a_task', 'limit_refused'],
 	management: [
 		'agent_created',
