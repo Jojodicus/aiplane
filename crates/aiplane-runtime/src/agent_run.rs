@@ -18,6 +18,7 @@
 //!
 //! [`ToolContext`]: crate::server::tools::ToolContext
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aiplane_core::server::principal::{Principal, SystemPrincipal};
@@ -50,6 +51,11 @@ pub struct AgentRun {
     injection: InjectionScan,
     surface: Option<Arc<AgentSurface>>,
     outcome: Mutex<Option<RunOutcome>>,
+    /// The model round the driver is in, so an event a tool writes names it.
+    round: AtomicU32,
+    /// Set once an event of this run could not be written to the activity
+    /// log; the driver then stops the run (`agents::audit`).
+    log_failed: AtomicBool,
 }
 
 impl std::fmt::Debug for AgentRun {
@@ -83,6 +89,8 @@ impl AgentRun {
             injection: InjectionScan::default(),
             surface: None,
             outcome: Mutex::new(None),
+            round: AtomicU32::new(0),
+            log_failed: AtomicBool::new(false),
         })
     }
 
@@ -146,6 +154,26 @@ impl AgentRun {
 
     pub fn surface(&self) -> Option<&AgentSurface> {
         self.surface.as_deref()
+    }
+
+    pub fn round(&self) -> u32 {
+        self.round.load(Ordering::Relaxed)
+    }
+
+    /// Only the driver calls it, at the top of each round.
+    pub fn enter_round(&self, round: u32) {
+        self.round.store(round, Ordering::Relaxed);
+    }
+
+    /// Whether an event of this run failed to reach the activity log. The
+    /// run fails closed on it: nothing more may happen that the log would
+    /// not show.
+    pub fn log_failed(&self) -> bool {
+        self.log_failed.load(Ordering::Acquire)
+    }
+
+    pub fn mark_log_failed(&self) {
+        self.log_failed.store(true, Ordering::Release);
     }
 
     /// Record how a contracted run ended. Only the driver's `run_turn` calls

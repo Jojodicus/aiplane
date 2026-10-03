@@ -18,7 +18,7 @@ use super::envelope::{RpcError, result_response};
 use super::params::{SendParams, history_length, parse_send, task_id_param};
 use super::stream::stream;
 use aiplane_agents::db::a2a_contexts::{self, A2aContext, NewContext};
-use aiplane_agents::db::agent_audit::{self, AuditKind};
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_runtime::agents::a2a::{self as a2a_rt, TaskState};
 use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
 use aiplane_runtime::agents::resume::{AgentResume, AgentResumeError, ResumedBy, claim};
@@ -68,17 +68,17 @@ async fn audit(call: &Call, action: &str, context: &A2aContext, task: &str) {
         "caller_name": call.caller.name,
         "token_id": call.caller.token_id,
     });
-    if let Err(err) = agent_audit::record_run_event(
+    let _ = aiplane_runtime::agents::audit::record_event(
         &call.state.db,
-        AuditKind::A2aTask,
-        &call.served.agent.principal.id,
-        None,
-        detail,
+        NewEvent::new(AuditKind::A2aTask, &call.served.agent.principal.id, detail).at(
+            Correlation {
+                turn_id: Some(task.to_string()),
+                conversation_id: Some(context.session_id.clone()),
+                ..Correlation::default()
+            },
+        ),
     )
-    .await
-    {
-        tracing::warn!(error = %err, task, "recording an A2A task");
-    }
+    .await;
 }
 
 /// Task `task_id` of this agent, if this caller's context holds it: its

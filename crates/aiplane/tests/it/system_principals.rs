@@ -880,12 +880,14 @@ async fn the_audit_trail_shows_a_run_events_call_chain() {
         Some("v-1".into()),
         Frame::for_principal(&principal, Some(3)),
     );
-    agent_audit::record_run_event(
+    agent_audit::append_now(
         &fx.state.db,
-        AuditKind::ToolCall,
-        &id,
-        Some(&chain),
-        json!({"tool": TIME, "decision": "denied", "policy": "not_granted"}),
+        agent_audit::NewEvent::new(
+            AuditKind::ToolCall,
+            &id,
+            json!({"tool": TIME, "decision": "denied", "policy": "not_granted"}),
+        )
+        .in_run(Some(&chain)),
     )
     .await
     .unwrap();

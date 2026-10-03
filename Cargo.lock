@@ -134,6 +134,7 @@ dependencies = [
  "serde_json",
  "session-core",
  "sqlx",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",
