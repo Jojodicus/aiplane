@@ -29,6 +29,7 @@ use aiplane_core::server::db::agents::{self as agents_db, Access};
 use aiplane_runtime::agents::eval::{self, EvalIssue, RubricJudge};
 use aiplane_runtime::agents::eval_judge::PoolJudge;
 use aiplane_runtime::agents::profile::RunOptions;
+use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 
 macro_rules! or_return {
@@ -309,7 +310,10 @@ pub async fn run(State(state): State<Arc<RamaState>>, req: Request) -> Response 
 
     let started_at = Timestamp::now();
     let options = RunOptions::default();
-    let judge = PoolJudge::for_agent(state.clone(), id, &spec).await;
+    let judge = match AgentSpec::from_value(&spec) {
+        Ok(typed) => PoolJudge::for_agent(state.clone(), id, &typed).await,
+        Err(_) => None,
+    };
     let mut results = Vec::with_capacity(cases.len());
     for case in &cases {
         let outcome = eval::run_case(
@@ -416,19 +420,20 @@ fn failure_messages(report: &Value) -> Vec<String> {
     out
 }
 
-/// The publish guard. Passes when the draft does not ask for it
-/// (`publish.require_passing_tests`), or when the newest draft run is green
-/// for the draft and the suite as they are now. Otherwise 422
-/// `agent_tests_failing`, naming the failing cases, or saying the suite has
-/// to be run first.
+/// The publish guard. Passes when the draft (`checked`, as validation typed
+/// it) does not ask for it (`publish.require_passing_tests`), or when the
+/// newest draft run is green for the draft and the suite as they are now.
+/// Otherwise 422 `agent_tests_failing`, naming the failing cases, or saying
+/// the suite has to be run first.
 pub(super) async fn require_green_suite(
     state: &RamaState,
     agent: &agents_db::AgentRow,
+    checked: &AgentSpec,
 ) -> Result<(), Response> {
-    let draft = parse_spec(&agent.draft_spec);
-    if draft.pointer("/publish/require_passing_tests") != Some(&Value::Bool(true)) {
+    if !checked.publish.require_passing_tests {
         return Ok(());
     }
+    let draft = parse_spec(&agent.draft_spec);
     let id = &agent.principal.id;
     let cases = tests_db::cases(&state.db, id).await.map_err(internal)?;
     let run_it = || {

@@ -37,10 +37,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use session_core::db::TurnStatus;
 
-use super::bind::BindSource;
 use super::profile::RunOptions;
 use super::run::AgentTurn;
-use super::run::draft::{DraftDebug, collect_debug, run_draft_turn};
+use super::run::draft::{DRAFT_VERSION, DraftDebug, collect_debug, run_draft_turn};
+use super::spec_cache::CompiledSpec;
 use super::state::{AgentState, StateSchema, TrustedWriter, write_trusted};
 use crate::rama_server::state::RamaState;
 
@@ -895,14 +895,15 @@ async fn observe(
         .filter(|d| text(d, "decision").as_deref() == Some("allowed"))
         .filter_map(|d| text(d, "tool"))
         .collect();
-    if let Ok(schema) = StateSchema::from_spec(spec)
-        && let Ok(stored) = AgentState::load(&state.db, &schema, session_id).await
+    let compiled = CompiledSpec::compile(DRAFT_VERSION, spec.clone());
+    if let Ok(parts) = compiled.parts()
+        && let Ok(stored) = AgentState::load(&state.db, &parts.schema, session_id).await
     {
-        let routes = spec.get("routes").and_then(Value::as_object);
-        for (route, def) in routes.into_iter().flatten() {
-            let resolved = BindSource::parse_map(def.get("bind"))
-                .into_iter()
-                .filter_map(|(name, source)| Some((name, source.resolve(&stored).ok()?)))
+        for (route, def) in &parts.agent.routes {
+            let resolved = def
+                .bind
+                .iter()
+                .filter_map(|(name, source)| Some((name.clone(), source.resolve(&stored).ok()?)))
                 .collect();
             seen.binds.insert(route.clone(), resolved);
         }

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use aiplane_core::server::db::agent_audit::{self, AuditKind};
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
-use aiplane_core::server::limits::{LimitExceeded, Rate, RateExceeded, VisitorKey, VisitorRates};
+use aiplane_core::server::limits::{LimitExceeded, Rate, RateExceeded, VisitorKey};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
 
@@ -27,6 +27,7 @@ pub use super::resume::ClaimedResume;
 use super::resume::run_claimed;
 pub use super::run::OpenedTurn;
 use super::run::drive_opened;
+use super::spec::AgentSpec;
 use crate::rama_server::state::RamaState;
 
 /// A visitor session's idle TTL when the spec names no `publish.idle_ttl`.
@@ -36,26 +37,6 @@ pub const DEFAULT_IDLE_TTL: SignedDuration = SignedDuration::from_secs(30 * 60);
 /// `sessionStorage` already ends it with the tab, and this ends a tab that
 /// is never closed.
 pub const MAX_VISITOR_SESSION: SignedDuration = SignedDuration::from_secs(24 * 60 * 60);
-
-/// `publish.idle_ttl` of a spec, or [`DEFAULT_IDLE_TTL`]. A published spec
-/// passed validation, so an unparsable value only comes from a hand-edited
-/// row; it falls back rather than locking every visitor out.
-pub fn idle_ttl(spec: &Value) -> SignedDuration {
-    spec.pointer("/publish/idle_ttl")
-        .and_then(Value::as_str)
-        .and_then(super::spec::parse_duration)
-        .unwrap_or(DEFAULT_IDLE_TTL)
-}
-
-/// Whether the spec lets a browser on `origin` use the agent: always when it
-/// sets no `publish.origins`, otherwise only an origin listed there. The
-/// embed key's own list applies on top; an origin must pass both.
-pub fn spec_allows_origin(spec: &Value, origin: &str) -> bool {
-    match spec.pointer("/publish/origins").and_then(Value::as_array) {
-        None => true,
-        Some(list) => list.iter().any(|o| o.as_str() == Some(origin)),
-    }
-}
 
 /// Messages one visitor session may send when the spec sets no
 /// `publish.rate_limits.visitor`: a person typing, with room to spare.
@@ -71,33 +52,10 @@ pub const DEFAULT_IP_RATE: Rate = Rate {
     per: SignedDuration::from_secs(10 * 60),
 };
 
-fn rate(spec: &Value, scope: &str, default: Rate) -> Rate {
-    let at = |key: &str| spec.pointer(&format!("/publish/rate_limits/{scope}/{key}"));
-    let max = at("max")
-        .and_then(Value::as_u64)
-        .and_then(|m| u32::try_from(m).ok())
-        .filter(|m| *m > 0);
-    let per = at("per")
-        .and_then(Value::as_str)
-        .and_then(super::spec::parse_duration);
-    match (max, per) {
-        (Some(max), Some(per)) => Rate { max, per },
-        _ => default,
-    }
-}
-
-/// `publish.rate_limits` of a spec, each scope falling back to its default.
-pub fn visitor_rates(spec: &Value) -> VisitorRates {
-    VisitorRates {
-        visitor: rate(spec, "visitor", DEFAULT_VISITOR_RATE),
-        ip: rate(spec, "ip", DEFAULT_IP_RATE),
-    }
-}
-
 /// `publish.budget` of a spec as limits over the month: what the owner lets
 /// the agent's conversations spend. None by default: an owner who sets no
 /// budget relies on the operator's limits on the agent and its pools.
-pub fn owner_budget(spec: &Value) -> Vec<EffectiveLimit> {
+pub fn owner_budget(spec: &AgentSpec) -> Vec<EffectiveLimit> {
     let monthly = |dimension, value: Option<f64>| {
         value.filter(|v| *v > 0.0).map(|value| EffectiveLimit {
             model: None,
@@ -107,18 +65,10 @@ pub fn owner_budget(spec: &Value) -> Vec<EffectiveLimit> {
             source: SubjectType::AgentSpec,
         })
     };
-    let budget = |key: &str| spec.pointer(&format!("/publish/budget/{key}"));
+    let budget = &spec.publish.budget;
     [
-        monthly(
-            Dimension::Cost,
-            budget("monthly_cost").and_then(Value::as_f64),
-        ),
-        monthly(
-            Dimension::Tokens,
-            budget("monthly_tokens")
-                .and_then(Value::as_u64)
-                .map(|t| t as f64),
-        ),
+        monthly(Dimension::Cost, budget.monthly_cost),
+        monthly(Dimension::Tokens, budget.monthly_tokens.map(|t| t as f64)),
     ]
     .into_iter()
     .flatten()
@@ -206,10 +156,12 @@ pub async fn admit(
         a2a_context: who.a2a_context,
         ip: who.ip,
     };
-    let spec = &compiled.spec;
+    // A version whose spec does not read cannot run; its visitors are held
+    // to the default rates until the turn refuses them.
+    let spec = compiled.agent().unwrap_or(AgentSpec::empty());
     let refused = match state
         .enforcer
-        .check_visitor(&visitor_rates(spec), &key, now)
+        .check_visitor(&spec.publish.visitor_rates(), &key, now)
         .await
     {
         Err(rate) => Refusal::Rate(rate),
@@ -367,15 +319,15 @@ impl RefusalAudit {
 pub async fn limits_view(
     state: &RamaState,
     agent_id: &str,
-    live: Option<&Value>,
+    live: Option<&AgentSpec>,
     now: Timestamp,
 ) -> Value {
-    let spec = live.cloned().unwrap_or(Value::Null);
-    let rates = visitor_rates(&spec);
+    let spec = live.unwrap_or(AgentSpec::empty());
+    let rates = spec.publish.visitor_rates();
     let rate = |r: Rate| json!({ "max": r.max, "per_secs": r.per.as_secs() });
     let statuses = state
         .enforcer
-        .agent_statuses(agent_id, &owner_budget(&spec), now)
+        .agent_statuses(agent_id, &owner_budget(spec), now)
         .await;
     let budget: Vec<Value> = statuses
         .iter()
@@ -393,12 +345,12 @@ pub async fn limits_view(
         .collect();
     let exhausted = state
         .enforcer
-        .check_agent(agent_id, &owner_budget(&spec), now)
+        .check_agent(agent_id, &owner_budget(spec), now)
         .await
         .err();
     json!({
         "rate_limits": { "visitor": rate(rates.visitor), "ip": rate(rates.ip) },
-        "retention_days": super::retention::retention_days(&spec),
+        "retention_days": spec.publish.retention_days(),
         "budget": budget,
         "available": exhausted.is_none(),
         "unavailable_reason": exhausted.as_ref().map(budget_detail),
@@ -717,39 +669,48 @@ impl Drop for TurnClaim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::spec::model::Publish;
     use serde_json::json;
+
+    fn publish(spec: Value) -> Publish {
+        AgentSpec::from_value(&spec).unwrap().publish
+    }
 
     #[test]
     fn the_idle_ttl_comes_from_the_publish_settings_with_a_30_minute_default() {
         assert_eq!(
-            idle_ttl(&json!({ "publish": { "idle_ttl": "45m" } })),
+            publish(json!({ "publish": { "idle_ttl": "45m" } })).idle_ttl(),
             SignedDuration::from_secs(45 * 60)
         );
-        assert_eq!(idle_ttl(&json!({ "publish": {} })), DEFAULT_IDLE_TTL);
-        assert_eq!(idle_ttl(&json!({})), DEFAULT_IDLE_TTL);
         assert_eq!(
-            idle_ttl(&json!({ "publish": { "idle_ttl": "soon" } })),
+            publish(json!({ "publish": {} })).idle_ttl(),
             DEFAULT_IDLE_TTL
+        );
+        assert_eq!(publish(json!({})).idle_ttl(), DEFAULT_IDLE_TTL);
+        assert!(
+            AgentSpec::from_value(&json!({ "publish": { "idle_ttl": "soon" } })).is_err(),
+            "a duration that does not parse is refused, never a silent default"
         );
         assert_eq!(DEFAULT_IDLE_TTL, SignedDuration::from_secs(1800));
     }
 
     #[test]
     fn the_specs_origins_narrow_only_when_it_lists_some() {
-        let open = json!({ "publish": {} });
-        assert!(spec_allows_origin(&open, "https://any.example"));
-        let listed = json!({ "publish": { "origins": ["https://a.example"] } });
-        assert!(spec_allows_origin(&listed, "https://a.example"));
-        assert!(!spec_allows_origin(&listed, "https://b.example"));
-        let empty = json!({ "publish": { "origins": [] } });
-        assert!(!spec_allows_origin(&empty, "https://a.example"));
+        let open = publish(json!({ "publish": {} }));
+        assert!(open.allows_origin("https://any.example"));
+        let listed = publish(json!({ "publish": { "origins": ["https://a.example"] } }));
+        assert!(listed.allows_origin("https://a.example"));
+        assert!(!listed.allows_origin("https://b.example"));
+        let empty = publish(json!({ "publish": { "origins": [] } }));
+        assert!(!empty.allows_origin("https://a.example"));
     }
 
     #[test]
     fn visitor_rates_come_from_the_publish_settings_scope_by_scope() {
-        let set = visitor_rates(&json!({ "publish": { "rate_limits": {
+        let set = publish(json!({ "publish": { "rate_limits": {
             "visitor": { "max": 3, "per": "1m" }
-        } } }));
+        } } }))
+        .visitor_rates();
         assert_eq!(
             set.visitor,
             Rate {
@@ -758,25 +719,26 @@ mod tests {
             }
         );
         assert_eq!(set.ip, DEFAULT_IP_RATE, "an unset scope keeps its default");
-        let none = visitor_rates(&json!({}));
+        let none = publish(json!({})).visitor_rates();
         assert_eq!(none.visitor, DEFAULT_VISITOR_RATE);
         assert_eq!(DEFAULT_VISITOR_RATE.max, 20);
         assert_eq!(DEFAULT_IP_RATE.max, 60);
-        let half = visitor_rates(&json!({ "publish": { "rate_limits": {
-            "visitor": { "max": 3 }
-        } } }));
-        assert_eq!(
-            half.visitor, DEFAULT_VISITOR_RATE,
+        let half = json!({ "publish": { "rate_limits": { "visitor": { "max": 3 } } } });
+        assert!(
+            AgentSpec::from_value(&half).is_err(),
             "a rate is both or neither"
         );
     }
 
     #[test]
     fn the_owner_budget_is_a_monthly_ceiling_per_dimension_and_none_by_default() {
-        assert!(owner_budget(&json!({ "publish": {} })).is_empty());
-        let both = owner_budget(&json!({ "publish": { "budget": {
-            "monthly_cost": 25.5, "monthly_tokens": 1000
-        } } }));
+        assert!(owner_budget(AgentSpec::empty()).is_empty());
+        let both = owner_budget(
+            &AgentSpec::from_value(&json!({ "publish": { "budget": {
+                "monthly_cost": 25.5, "monthly_tokens": 1000
+            } } }))
+            .unwrap(),
+        );
         let cells: Vec<(Dimension, Window, f64, SubjectType)> = both
             .iter()
             .map(|l| (l.dimension, l.window, l.value, l.source))

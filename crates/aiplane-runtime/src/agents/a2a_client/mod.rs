@@ -44,6 +44,7 @@ use session_core::i18n::t;
 pub use card::AgentCard;
 pub use guard::check_card_url;
 
+use crate::agents::spec::model::A2aRouteSpec;
 use crate::finish::{FinishContract, IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{ToolContext, ToolError};
@@ -120,64 +121,36 @@ pub struct A2aTarget {
 
 impl A2aTarget {
     /// The route's target, or why it cannot run.
-    pub fn from_route(route: &Value) -> Result<Self, String> {
-        let a2a = route.get("a2a").ok_or("the route has no `a2a` target")?;
-        let card_url = a2a
-            .get("card_url")
-            .and_then(Value::as_str)
-            .ok_or("`a2a.card_url` is missing")?
-            .to_string();
+    pub fn from_route(a2a: &A2aRouteSpec) -> Result<Self, String> {
         let schema = a2a
-            .pointer("/finish/schema")
-            .cloned()
+            .finish
+            .as_ref()
+            .map(|f| f.schema.clone())
             .ok_or("`a2a.finish.schema` is missing, so the result could not be checked")?;
         let finish = FinishContract::new(schema).map_err(|e| e.to_string())?;
-        let auth = match a2a.get("auth") {
+        let auth = match &a2a.auth {
             None => None,
             Some(auth) => {
-                let kind = auth
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .and_then(AuthKind::parse)
-                    .ok_or("`a2a.auth.kind` is missing or unknown")?;
-                let sealed_key = format!("{}_sealed", kind.secret_key());
-                let secret_sealed = auth
-                    .get(&sealed_key)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| format!("`a2a.auth.{sealed_key}` is missing; save the spec with the credential again"))?
-                    .to_string();
+                let secret_sealed = auth.secret_sealed().ok_or_else(|| {
+                    format!(
+                        "`a2a.auth.{}_sealed` is missing; save the spec with the credential again",
+                        auth.kind.secret_key()
+                    )
+                })?;
                 Some(Auth {
-                    kind,
-                    scheme: auth
-                        .get("scheme")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    secret_sealed,
-                    client_id: auth
-                        .get("client_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    scopes: auth
-                        .get("scopes")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect(),
+                    kind: auth.kind,
+                    scheme: auth.scheme.clone(),
+                    secret_sealed: secret_sealed.to_string(),
+                    client_id: auth.client_id.clone(),
+                    scopes: auth.scopes.clone(),
                 })
             }
         };
-        let seconds = a2a
-            .pointer("/budget/seconds")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_SECONDS)
-            .clamp(1, MAX_SECONDS);
         Ok(Self {
-            card_url,
+            card_url: a2a.card_url.clone(),
             auth,
             finish,
-            seconds,
+            seconds: a2a.seconds(),
         })
     }
 }
@@ -720,7 +693,7 @@ pub struct Dispatch<'a> {
     pub ctx: &'a ToolContext,
     pub principal: &'a SystemPrincipal,
     pub route: &'a str,
-    pub route_spec: &'a Value,
+    pub route_spec: &'a A2aRouteSpec,
 }
 
 impl Dispatch<'_> {

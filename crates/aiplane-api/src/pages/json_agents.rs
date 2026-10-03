@@ -30,7 +30,7 @@ use aiplane_core::server::db::{
     agent_analytics, agent_audit, gateway_groups, system_principals as sp_db, users,
 };
 use aiplane_core::server::principal::GrantSet;
-use aiplane_runtime::agents::spec::{self, SpecContext, SpecIssue, Stage};
+use aiplane_runtime::agents::spec::{self, AgentSpec, SpecContext, SpecIssue, Stage};
 use aiplane_runtime::rama_server::state::RamaState;
 
 macro_rules! or_return {
@@ -171,6 +171,19 @@ async fn spec_issues(
     spec: &Value,
     stage: Stage,
 ) -> Result<Vec<SpecIssue>, Response> {
+    Ok(spec_check(state, agent_id, spec, stage)
+        .await?
+        .err()
+        .unwrap_or_default())
+}
+
+/// [`spec_issues`], with the typed spec when there are none.
+async fn spec_check(
+    state: &RamaState,
+    agent_id: &str,
+    spec: &Value,
+    stage: Stage,
+) -> Result<Result<AgentSpec, Vec<SpecIssue>>, Response> {
     let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
     let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
     let agents = agents_db::publication_status(&state.db)
@@ -182,7 +195,7 @@ async fn spec_issues(
         .into_iter()
         .map(|(id, text)| (id, parse_spec(&text)))
         .collect();
-    Ok(spec::validate(
+    Ok(spec::check(
         spec,
         &SpecContext {
             agent_id,
@@ -233,13 +246,10 @@ async fn require_valid(
     spec: &Value,
     stage: Stage,
     what: &str,
-) -> Result<(), Response> {
-    let issues = spec_issues(state, agent_id, spec, stage).await?;
-    if issues.is_empty() {
-        Ok(())
-    } else {
-        Err(invalid_spec(what, &issues))
-    }
+) -> Result<AgentSpec, Response> {
+    spec_check(state, agent_id, spec, stage)
+        .await?
+        .map_err(|issues| invalid_spec(what, &issues))
 }
 
 /// GET /api/v0/agents — the agents shared with the caller; every agent for
@@ -347,10 +357,13 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let draft = parse_spec(&agent.draft_spec);
     let publish_issues = or_return!(spec_issues(&state, id, &draft, Stage::Publish).await);
 
+    let live_typed = live_spec
+        .as_ref()
+        .and_then(|s| AgentSpec::from_value(s).ok());
     let limits = aiplane_runtime::agents::embed::limits_view(
         &state,
         id,
-        live_spec.as_ref(),
+        live_typed.as_ref(),
         jiff::Timestamp::now(),
     )
     .await;
@@ -417,8 +430,9 @@ pub async fn publish(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
     let id = &agent.principal.id;
     let draft = parse_spec(&agent.draft_spec);
-    or_return!(require_valid(&state, id, &draft, Stage::Publish, "publish the agent").await);
-    or_return!(super::json_agent_tests::require_green_suite(&state, &agent).await);
+    let checked =
+        or_return!(require_valid(&state, id, &draft, Stage::Publish, "publish the agent").await);
+    or_return!(super::json_agent_tests::require_green_suite(&state, &agent, &checked).await);
     match agents_db::publish(&state.db, id, &agent.draft_spec, &user.id).await {
         Ok(Some(version)) => json_ok(
             StatusCode::CREATED,

@@ -156,6 +156,10 @@ fn the_task_message_carries_the_task_and_the_bound_values_only() {
     assert_eq!(bare["parts"].as_array().unwrap().len(), 1);
 }
 
+fn a2a_of(route: &Value) -> A2aRouteSpec {
+    serde::Deserialize::deserialize(&route["a2a"]).unwrap()
+}
+
 #[test]
 fn credentials_are_sealed_and_the_sealed_route_reads_back() {
     let crypto = aiplane_core::server::crypto::Crypto::ephemeral();
@@ -176,7 +180,7 @@ fn credentials_are_sealed_and_the_sealed_route_reads_back() {
     seal_secrets(&mut spec, &crypto).unwrap();
     let text = spec.to_string();
     assert!(!text.contains("secret-token-123") && !text.contains("client-secret-456"));
-    let bearer = A2aTarget::from_route(&spec["routes"]["partner"]).unwrap();
+    let bearer = A2aTarget::from_route(&a2a_of(&spec["routes"]["partner"])).unwrap();
     let auth = bearer.auth.unwrap();
     assert_eq!(auth.kind, AuthKind::Bearer);
     assert_eq!(
@@ -184,7 +188,7 @@ fn credentials_are_sealed_and_the_sealed_route_reads_back() {
         Some("secret-token-123")
     );
     assert_eq!(bearer.seconds, 30);
-    let oauth = A2aTarget::from_route(&spec["routes"]["oauth"]).unwrap();
+    let oauth = A2aTarget::from_route(&a2a_of(&spec["routes"]["oauth"])).unwrap();
     assert_eq!(oauth.seconds, DEFAULT_SECONDS);
     let auth = oauth.auth.unwrap();
     assert_eq!(
@@ -201,7 +205,7 @@ fn credentials_are_sealed_and_the_sealed_route_reads_back() {
 fn a_route_without_its_finish_schema_cannot_run() {
     let route = json!({ "a2a": { "card_url": "https://p.example.com/card" } });
     assert!(
-        A2aTarget::from_route(&route)
+        A2aTarget::from_route(&a2a_of(&route))
             .unwrap_err()
             .contains("finish")
     );

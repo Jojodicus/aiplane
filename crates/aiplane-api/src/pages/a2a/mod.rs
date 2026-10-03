@@ -39,6 +39,8 @@ use super::{json_error, json_ok, raw_path_segment};
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::principal::{GrantKind, Principal};
 use aiplane_runtime::agents::a2a::{self as a2a_rt, CardFacts};
+use aiplane_runtime::agents::spec::AgentSpec;
+use aiplane_runtime::agents::spec_cache::CompiledSpec;
 use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
 use envelope::{RpcError, error_response};
@@ -51,7 +53,7 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 struct Served {
     agent: AgentRow,
     live_version: i64,
-    spec: Value,
+    live: Arc<CompiledSpec>,
 }
 
 async fn served(state: &RamaState, id: &str) -> Result<Option<Served>, RpcError> {
@@ -64,20 +66,21 @@ async fn served(state: &RamaState, id: &str) -> Result<Option<Served>, RpcError>
     if agent.principal.disabled_at.is_some() {
         return Ok(None);
     }
-    let Some((live_version, text)) = agents_db::live(&state.db, id)
+    let Some(live) = state
+        .agent_specs
+        .live(&state.db, id)
         .await
         .map_err(RpcError::internal)?
     else {
         return Ok(None);
     };
-    let spec: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    if !a2a_rt::enabled(&spec) {
+    if !live.agent().is_ok_and(|a| a.publish.a2a_enabled()) {
         return Ok(None);
     }
     Ok(Some(Served {
         agent,
-        live_version,
-        spec,
+        live_version: live.version,
+        live,
     }))
 }
 
@@ -115,7 +118,7 @@ pub async fn card(State(state): State<Arc<RamaState>>, req: Request) -> Response
         principal_display: &s.agent.principal.display,
         description: &s.agent.principal.description,
         live_version: s.live_version,
-        spec: &s.spec,
+        spec: s.live.agent().unwrap_or(AgentSpec::empty()),
         endpoint: &endpoint,
     });
     let mut resp = json_ok(StatusCode::OK, card);

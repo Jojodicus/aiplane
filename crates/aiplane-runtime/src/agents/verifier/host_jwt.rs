@@ -31,8 +31,10 @@ use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::{Map, Value, json};
 
-use super::{JwtAlgorithm, LIFETIME_DEFAULT, MAX_LIFETIME_CAP, duration};
+use super::JwtAlgorithm;
 use crate::agents::a2a_client::guard;
+use crate::agents::spec::AgentSpec;
+use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
 use crate::rama_server::state::RamaState;
 
@@ -83,48 +85,34 @@ pub struct HostJwt {
 
 impl HostJwt {
     /// The spec's `host_jwt` verifier, when it has a complete one.
-    pub fn from_spec(spec: &Value) -> Option<Self> {
-        let (id, cfg) = spec
-            .get("verifiers")?
-            .as_object()?
-            .iter()
-            .find(|(_, v)| v.get("kind").and_then(Value::as_str) == Some("host_jwt"))?;
-        let text = |k: &str| cfg.get(k).and_then(Value::as_str).map(str::to_string);
-        let algorithm = JwtAlgorithm::parse(cfg.get("algorithm")?.as_str()?)?;
-        let key = match (text("secret_sealed"), text("public_key"), text("jwks_url")) {
-            (Some(s), None, None) if algorithm == JwtAlgorithm::Hs256 => KeySource::Sealed(s),
-            (None, Some(pem), None) if algorithm != JwtAlgorithm::Hs256 => {
-                KeySource::PublicKey(pem)
+    pub fn from_spec(spec: &AgentSpec) -> Option<Self> {
+        let (id, cfg) = spec.host_jwt()?;
+        let algorithm = cfg.algorithm?;
+        let key = match (&cfg.secret_sealed, &cfg.public_key, &cfg.jwks_url) {
+            (Some(s), None, None) if algorithm == JwtAlgorithm::Hs256 => {
+                KeySource::Sealed(s.clone())
             }
-            (None, None, Some(url)) if algorithm != JwtAlgorithm::Hs256 => KeySource::Jwks(url),
+            (None, Some(pem), None) if algorithm != JwtAlgorithm::Hs256 => {
+                KeySource::PublicKey(pem.clone())
+            }
+            (None, None, Some(url)) if algorithm != JwtAlgorithm::Hs256 => {
+                KeySource::Jwks(url.clone())
+            }
             _ => return None,
         };
-        let claims: Option<Vec<(String, ClaimMap)>> = cfg
-            .get("claims")?
-            .as_object()?
+        let claims: Vec<(String, ClaimMap)> = cfg
+            .claims
             .iter()
-            .map(|(slot, c)| {
-                let map = match c {
-                    Value::String(claim) => ClaimMap::Claim(claim.clone()),
-                    Value::Object(fields) => ClaimMap::Object(
-                        fields
-                            .iter()
-                            .map(|(f, c)| Some((f.clone(), c.as_str()?.to_string())))
-                            .collect::<Option<_>>()?,
-                    ),
-                    _ => return None,
-                };
-                Some((slot.clone(), map))
-            })
+            .map(|(slot, c)| (slot.clone(), c.clone()))
             .collect();
         Some(Self {
-            id: id.clone(),
+            id: id.to_string(),
             algorithm,
             key,
-            issuer: text("issuer")?,
-            audience: text("audience")?,
-            max_lifetime: duration(cfg.get("max_lifetime"), LIFETIME_DEFAULT, MAX_LIFETIME_CAP),
-            claims: claims.filter(|c| !c.is_empty())?,
+            issuer: cfg.issuer.clone()?,
+            audience: cfg.audience.clone()?,
+            max_lifetime: cfg.max_lifetime(),
+            claims: (!claims.is_empty()).then_some(claims)?,
         })
     }
 }
@@ -463,7 +451,7 @@ pub async fn accept(
     state: &RamaState,
     agent_id: &str,
     session_id: &str,
-    spec: &Value,
+    spec: &CompiledSpec,
     token: &str,
     now: Timestamp,
 ) -> Result<Vec<String>, IdentityError> {
@@ -497,14 +485,15 @@ async fn accept_inner(
     state: &RamaState,
     agent_id: &str,
     session_id: &str,
-    spec: &Value,
+    spec: &CompiledSpec,
     token: &str,
     now: Timestamp,
 ) -> Result<Vec<String>, IdentityError> {
-    let cfg = HostJwt::from_spec(spec).ok_or(IdentityError::NotConfigured)?;
-    let schema = StateSchema::from_spec(spec).map_err(|i| IdentityError::Storage(i.message))?;
+    let parts = spec.parts().map_err(|_| IdentityError::NotConfigured)?;
+    let cfg = HostJwt::from_spec(&parts.agent).ok_or(IdentityError::NotConfigured)?;
+    let schema = &*parts.schema;
     let claims = verified_claims(state, &cfg, token.trim(), now).await?;
-    let values = slot_values(&cfg, &schema, &claims).map_err(IdentityError::Invalid)?;
+    let values = slot_values(&cfg, schema, &claims).map_err(IdentityError::Invalid)?;
     let storage = |e: &dyn std::fmt::Display| IdentityError::Storage(e.to_string());
     // One transaction: the `jti` is spent only together with every slot, so
     // a failed write neither leaves half an identity behind nor burns the
@@ -526,7 +515,7 @@ async fn accept_inner(
     }
     write_trusted_all(
         &mut tx,
-        &schema,
+        schema,
         session_id,
         &values,
         TrustedWriter::Host,

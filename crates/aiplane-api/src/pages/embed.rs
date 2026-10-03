@@ -44,6 +44,7 @@ use aiplane_runtime::agents::embed::{
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
 };
+use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::agents::spec_cache::CompiledSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
@@ -110,8 +111,9 @@ fn visitor_session_expired() -> Response {
 
 /// The request's `Origin`, which must be one the key lists and, when the
 /// conversation's version sets `publish.origins`, one listed there too. A
-/// browser always sends it on the widget's cross-origin calls.
-fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(), Response> {
+/// browser always sends it on the widget's cross-origin calls. A version
+/// whose spec does not read allows no origin.
+fn check_origin(key: &EmbedKey, spec: &CompiledSpec, headers: &HeaderMap) -> Result<(), Response> {
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
@@ -134,7 +136,7 @@ fn check_origin(key: &EmbedKey, spec: &Value, headers: &HeaderMap) -> Result<(),
             ),
         ));
     }
-    if embed_rt::spec_allows_origin(spec, origin) {
+    if spec.agent().is_ok_and(|a| a.publish.allows_origin(origin)) {
         return Ok(());
     }
     Err(json_error(
@@ -279,12 +281,17 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
         return embed_key_revoked();
     }
     let live = or_return!(live_agent(&state, &key.principal_id, None).await);
-    or_return!(check_origin(&key, &live.spec.spec, &headers));
+    or_return!(check_origin(&key, &live.spec, &headers));
     let lang = Lang::from_request(&headers);
     or_return!(admit(&state, &key.principal_id, None, ip.as_deref(), lang).await);
 
     let (visitor_token, token_hash) = token::mint_visitor();
-    let idle_ttl = embed_rt::idle_ttl(&live.spec.spec);
+    let idle_ttl = live
+        .spec
+        .agent()
+        .unwrap_or(AgentSpec::empty())
+        .publish
+        .idle_ttl();
     let started = visitor_sessions::start(
         &state.db,
         &NewVisitorSession {
@@ -351,7 +358,7 @@ async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> 
         .map_err(internal)?
         .and_then(|run| run.agent_version);
     let live = live_agent(state, &session.principal_id, pinned).await?;
-    check_origin(&key, &live.spec.spec, req.headers())?;
+    check_origin(&key, &live.spec, req.headers())?;
     let session = visitor_sessions::slide(&state.db, &session, now)
         .await
         .map_err(internal)?;
@@ -700,7 +707,7 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         &state,
         &v.session.principal_id,
         &v.session.session_id,
-        &v.live.spec.spec,
+        &v.live.spec,
         &body.token,
         Timestamp::now(),
     )

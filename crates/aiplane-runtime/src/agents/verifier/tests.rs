@@ -10,6 +10,18 @@ use super::host_jwt::{ClaimMap, HostJwt, KeySource, is_jwks_url, seal_secrets};
 use super::*;
 use crate::server::tools::tool_content_parts;
 
+fn typed(spec: &Value) -> AgentSpec {
+    AgentSpec::from_value(spec).unwrap()
+}
+
+fn verifiers(spec: &Value) -> Verifiers {
+    Verifiers::from_spec(&typed(spec))
+}
+
+fn host_jwt(spec: &Value) -> Option<HostJwt> {
+    HostJwt::from_spec(&typed(spec))
+}
+
 fn otp_spec(extra: Value) -> Value {
     let mut otp = json!({
         "kind": "mcp_code", "connector": "erp", "email_slot": "email",
@@ -39,7 +51,7 @@ fn write_sources_are_the_answer_a_field_or_an_input() {
 
 #[test]
 fn an_mcp_code_verifier_reads_with_its_defaults() {
-    let v = Verifiers::from_spec(&otp_spec(json!({})));
+    let v = verifiers(&otp_spec(json!({})));
     let [code] = v.codes.as_slice() else {
         panic!("{v:?}");
     };
@@ -66,7 +78,7 @@ fn an_mcp_code_verifier_reads_with_its_defaults() {
         ]
     );
 
-    let tuned = Verifiers::from_spec(&otp_spec(json!({
+    let tuned = verifiers(&otp_spec(json!({
         "send_tool": "mail_otp", "max_attempts": 3, "code_ttl": "5m",
         "send_limits": { "email": { "max": 2, "per": "1h" } }
     })));
@@ -92,10 +104,11 @@ fn an_incomplete_verifier_offers_nothing_to_run() {
                                         "email_slot": "email" } } }),
         json!({ "verifiers": { "l": { "kind": "lookup", "tool": "rag_search",
                                       "writes": { "v": "result" } } } }),
-        json!({ "verifiers": { "x": { "kind": "sms" } } }),
     ] {
-        assert!(Verifiers::from_spec(&spec).is_empty(), "{spec}");
+        assert!(verifiers(&spec).is_empty(), "{spec}");
     }
+    let unknown_kind = json!({ "verifiers": { "x": { "kind": "sms" } } });
+    assert!(AgentSpec::from_value(&unknown_kind).is_err());
 }
 
 #[test]
@@ -106,7 +119,7 @@ fn a_lookup_needs_its_tool_inputs_writes_and_assurance() {
                     "region": { "const": "eu" } },
         "writes": { "verified": "result" }
     } } });
-    let v = Verifiers::from_spec(&spec);
+    let v = verifiers(&spec);
     let [l] = v.lookups.as_slice() else {
         panic!("{v:?}");
     };
@@ -127,7 +140,7 @@ fn a_lookup_needs_its_tool_inputs_writes_and_assurance() {
         .as_object_mut()
         .unwrap()
         .remove("assurance");
-    assert!(Verifiers::from_spec(&no_label).is_empty());
+    assert!(verifiers(&no_label).is_empty());
 }
 
 #[test]
@@ -218,7 +231,7 @@ fn a_host_jwt_verifier_reads_its_key_and_claim_map() {
         "issuer": "https://www.example.com", "audience": "support",
         "claims": { "verified": { "customer_id": "sub" }, "email": "email" }
     } } });
-    let cfg = HostJwt::from_spec(&spec).unwrap();
+    let cfg = host_jwt(&spec).unwrap();
     assert!(matches!(cfg.key, KeySource::Sealed(_)));
     assert_eq!(cfg.max_lifetime, LIFETIME_DEFAULT);
     assert_eq!(
@@ -235,7 +248,7 @@ fn a_host_jwt_verifier_reads_its_key_and_claim_map() {
     let mut public = spec.clone();
     public["verifiers"]["site"]["algorithm"] = json!("RS256");
     assert!(
-        HostJwt::from_spec(&public).is_none(),
+        host_jwt(&public).is_none(),
         "RS256 with a secret is not a key it can verify with"
     );
 }

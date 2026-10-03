@@ -18,9 +18,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
-
-use super::spec::parse_duration;
+use super::spec::AgentSpec;
+use super::spec::model::Permission as Setting;
 use crate::server::tools::Tool;
 use crate::server::tools::ask_first::AskFirst;
 
@@ -42,25 +41,17 @@ pub struct Permissions {
 }
 
 impl Permissions {
-    pub fn from_spec(spec: &Value) -> Self {
+    pub fn from_spec(spec: &AgentSpec) -> Self {
         let tools = spec
-            .pointer("/main/tool_resources")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flatten()
+            .main
+            .tool_resources
+            .iter()
             .map(|(tool, resource)| {
-                let ask = match resource.get("permission").and_then(Value::as_str) {
-                    Some("always_ask") => Some(true),
-                    Some("always_allow") => Some(false),
-                    _ => None,
+                let permission = Permission {
+                    ask: resource.permission.map(|p| p == Setting::AlwaysAsk),
+                    timeout: resource.approval_timeout(),
                 };
-                let timeout = resource
-                    .get("approval_timeout")
-                    .and_then(Value::as_str)
-                    .and_then(parse_duration)
-                    .and_then(|d| u64::try_from(d.as_secs()).ok())
-                    .map_or(DEFAULT_APPROVAL_TIMEOUT, Duration::from_secs);
-                (tool.clone(), Permission { ask, timeout })
+                (tool.clone(), permission)
             })
             .collect();
         Self { tools }
@@ -87,7 +78,7 @@ mod tests {
     use crate::server::tools::echo::Echo;
     use crate::server::tools::{ToolContext, ToolFuture};
     use crate::suspend::{Suspend, extract_suspend};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use shared::api::ToolDef;
 
     /// The echo, saying it changes something as a destructive MCP tool
@@ -125,13 +116,17 @@ mod tests {
         extract_suspend(&body).map(|r| r.timeout_secs)
     }
 
+    fn permissions(spec: Value) -> Permissions {
+        Permissions::from_spec(&AgentSpec::from_value(&spec).unwrap())
+    }
+
     #[tokio::test]
     async fn always_ask_pauses_and_always_allow_runs() {
-        let ask = Permissions::from_spec(&json!({ "main": { "tool_resources": {
+        let ask = permissions(json!({ "main": { "tool_resources": {
             "company_echo": { "permission": "always_ask", "approval_timeout": "15m" }
         } } }));
         assert_eq!(asks(&ask, Arc::new(Echo)).await, Some(15 * 60));
-        let allow = Permissions::from_spec(&json!({ "main": { "tool_resources": {
+        let allow = permissions(json!({ "main": { "tool_resources": {
             "company_echo": { "permission": "always_allow" }
         } } }));
         assert_eq!(asks(&allow, Arc::new(Destructive)).await, None);
@@ -139,7 +134,7 @@ mod tests {
 
     #[tokio::test]
     async fn without_a_permission_only_a_state_changing_tool_asks() {
-        let p = Permissions::from_spec(&json!({}));
+        let p = Permissions::from_spec(AgentSpec::empty());
         assert_eq!(asks(&p, Arc::new(Echo)).await, None);
         assert_eq!(
             asks(&p, Arc::new(Destructive)).await,

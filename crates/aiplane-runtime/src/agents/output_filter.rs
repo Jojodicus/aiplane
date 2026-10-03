@@ -27,11 +27,13 @@ use session_core::i18n::{Lang, t};
 use super::human::REQUEST_HUMAN;
 use super::profile::AgentRun;
 use super::router::FORWARD_TOOL_NAME;
+use super::spec::AgentSpec;
 use super::state::{Provenance, StateSchema};
 use crate::rama_server::state::RamaState;
 
 /// What to do with an answer that names an untraceable identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Deliver nothing of it; the visitor gets a fixed fallback message. The
     /// default: a partially redacted sentence can still be misleading.
@@ -43,14 +45,6 @@ pub enum Action {
 
 impl Action {
     pub const NAMES: &'static [&'static str] = &["withhold", "redact"];
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "withhold" => Some(Self::Withhold),
-            "redact" => Some(Self::Redact),
-            _ => None,
-        }
-    }
 }
 
 /// One text the run established, with what the model itself put into it.
@@ -130,33 +124,28 @@ pub enum Verdict {
 
 impl OutputFilter {
     /// `None` when the spec configures no patterns: the filter is off.
-    pub fn from_spec(spec: &Value) -> Result<Option<Self>, String> {
-        let Some(filter) = spec.pointer("/publish/output_filter") else {
-            return Ok(None);
-        };
-        let Some(patterns) = filter
-            .get("patterns")
-            .and_then(Value::as_object)
-            .filter(|p| !p.is_empty())
+    pub fn from_spec(spec: &AgentSpec) -> Result<Option<Self>, String> {
+        let Some(filter) = spec
+            .publish
+            .output_filter
+            .as_ref()
+            .filter(|f| !f.patterns.is_empty())
         else {
             return Ok(None);
         };
-        let patterns = patterns
+        let patterns = filter
+            .patterns
             .iter()
             .map(|(name, pattern)| {
-                let pattern = pattern
-                    .as_str()
-                    .ok_or_else(|| format!("pattern `{name}` is not a string"))?;
                 Regex::new(pattern)
                     .map(|re| (name.clone(), re))
                     .map_err(|e| format!("pattern `{name}` is not a valid regex: {e}"))
             })
             .collect::<Result<_, _>>()?;
-        let action = match filter.get("action").and_then(Value::as_str) {
-            None => Action::default(),
-            Some(s) => Action::parse(s).ok_or_else(|| format!("unknown action `{s}`"))?,
-        };
-        Ok(Some(Self { patterns, action }))
+        Ok(Some(Self {
+            patterns,
+            action: filter.action,
+        }))
     }
 
     /// Judge `answer` against `trusted`, what the run established.
@@ -397,8 +386,13 @@ pub async fn guard_answer(
 mod tests {
     use super::*;
 
+    fn from_spec(spec: &Value) -> Result<Option<OutputFilter>, String> {
+        let spec = AgentSpec::from_value(spec).map_err(|e| e.to_string())?;
+        OutputFilter::from_spec(&spec)
+    }
+
     fn filter(action: &str) -> OutputFilter {
-        OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+        from_spec(&json!({"publish": {"output_filter": {
             "patterns": { "invoice": "RE-\\d{6}", "customer": "K-\\d{5}" },
             "action": action
         }}}))
@@ -480,7 +474,7 @@ mod tests {
                 "{args:?}"
             );
         }
-        let year_scoped = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+        let year_scoped = from_spec(&json!({"publish": {"output_filter": {
             "patterns": { "invoice": "RE-\\d{4}-\\d{4}" }
         }}}))
         .unwrap()
@@ -515,7 +509,7 @@ mod tests {
 
     #[test]
     fn an_identifier_without_a_long_digit_run_is_echoed_by_its_alphanumeric_core() {
-        let f = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+        let f = from_spec(&json!({"publish": {"output_filter": {
             "patterns": { "ticket": "T-[A-Z]{3}" }
         }}}))
         .unwrap()
@@ -583,13 +577,13 @@ mod tests {
             json!({"publish": {"output_filter": {}}}),
             json!({"publish": {"output_filter": {"patterns": {}}}}),
         ] {
-            assert!(OutputFilter::from_spec(&spec).unwrap().is_none(), "{spec}");
+            assert!(from_spec(&spec).unwrap().is_none(), "{spec}");
         }
     }
 
     #[test]
     fn the_action_defaults_to_withholding() {
-        let f = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+        let f = from_spec(&json!({"publish": {"output_filter": {
             "patterns": { "invoice": "RE-\\d{6}" }
         }}}))
         .unwrap()
@@ -600,10 +594,10 @@ mod tests {
     #[test]
     fn a_bad_regex_or_action_is_an_error_not_a_silent_pass() {
         let bad_re = json!({"publish": {"output_filter": {"patterns": {"x": "["}}}});
-        assert!(OutputFilter::from_spec(&bad_re).is_err());
+        assert!(from_spec(&bad_re).is_err());
         let bad_action = json!({"publish": {"output_filter": {
             "patterns": {"x": "a"}, "action": "shrug"}}});
-        assert!(OutputFilter::from_spec(&bad_action).is_err());
+        assert!(from_spec(&bad_action).is_err());
     }
 
     #[test]
@@ -657,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_trusted_value_only_vouches_for_the_pattern_it_matched() {
-        let f = OutputFilter::from_spec(&json!({"publish": {"output_filter": {
+        let f = from_spec(&json!({"publish": {"output_filter": {
             "patterns": { "a": "X-\\d+", "b": "Y-\\d+" }, "action": "withhold"
         }}}))
         .unwrap()

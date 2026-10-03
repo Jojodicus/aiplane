@@ -38,10 +38,12 @@ use serde_json::{Value, json};
 use shared::api::ToolDef;
 
 use super::a2a_client::Dispatch as A2aDispatch;
-use super::bind::{BindSource, render_task};
+use super::bind::render_task;
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
 use super::human::{answered, hand_off, human_routes};
 use super::profile::{Role, RunOptions, RunProfile, pool_model};
+use super::spec::AgentSpec;
+use super::spec::model::{A2aRouteSpec, Route, RouteTarget, RouterConfig, RouterKind};
 use super::state::{AgentState, SlotView, StateSchema, StateSnapshot};
 use crate::finish::{IncompleteReason, RunOutcome};
 use crate::rama_server::state::RamaState;
@@ -78,10 +80,10 @@ pub trait RouteClassifier: Send + Sync {
 /// spec.
 pub struct RouterSpec {
     pub principal: SystemPrincipal,
+    /// The typed spec: its `routes` and `router`.
+    pub agent: Arc<AgentSpec>,
     pub schema: Arc<StateSchema>,
     pub gates: Arc<RouteGates>,
-    pub routes: Value,
-    pub router: Option<Value>,
     pub main_pool: String,
     pub snapshot: Arc<StateSnapshot>,
 }
@@ -111,8 +113,8 @@ impl ForwardRequest {
         }
     }
 
-    fn router_kind(&self) -> Option<&str> {
-        self.spec.router.as_ref()?.get("kind")?.as_str()
+    fn router(&self) -> Option<&RouterConfig> {
+        self.spec.agent.router.as_ref()
     }
 
     /// The route to dispatch among `open` (name order, never empty), or why
@@ -123,17 +125,11 @@ impl ForwardRequest {
         open: &[String],
         state: &AgentState,
     ) -> Result<String, String> {
-        if self.router_kind() == Some("rules") {
-            let ranked = self
-                .spec
-                .router
-                .as_ref()
-                .and_then(|r| r.get("order"))
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .find(|name| open.iter().any(|o| o == name));
+        if let Some(router) = self.router().filter(|r| r.kind == RouterKind::Rules) {
+            let ranked = router
+                .order
+                .iter()
+                .find(|name| open.iter().any(|o| o == *name));
             return Ok(ranked.unwrap_or(&open[0]).to_string());
         }
         if let [only] = open {
@@ -145,10 +141,10 @@ impl ForwardRequest {
                 name: name.clone(),
                 description: self
                     .spec
+                    .agent
                     .routes
-                    .pointer(&format!("/{name}/description"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                    .get(name)
+                    .and_then(|r| r.description.clone()),
             })
             .collect();
         let view = state.view(&self.spec.schema);
@@ -176,11 +172,8 @@ impl ForwardRequest {
 
     fn pool_classifier(&self, ctx: &ToolContext) -> PoolClassifier {
         let pool = self
-            .spec
-            .router
-            .as_ref()
-            .and_then(|r| r.get("pool"))
-            .and_then(Value::as_str)
+            .router()
+            .and_then(|r| r.pool.as_deref())
             .unwrap_or(&self.spec.main_pool)
             .to_string();
         PoolClassifier {
@@ -270,13 +263,10 @@ impl ForwardRequest {
     fn task_and_binds(
         &self,
         name: &str,
-        spec: &Value,
+        route: &Route,
         state: &AgentState,
     ) -> Result<TaskOutcome, ToolError> {
-        let task = match render_task(
-            spec.get("task").and_then(Value::as_str).unwrap_or_default(),
-            state,
-        ) {
+        let task = match render_task(&route.task, state) {
             Ok(task) => task,
             Err(missing) => {
                 return Ok(TaskOutcome::Unwritten(json!({
@@ -292,14 +282,14 @@ impl ForwardRequest {
             }
         };
         let mut route_binds = BTreeMap::new();
-        for (arg, source) in BindSource::parse_map(spec.get("bind")) {
+        for (arg, source) in &route.bind {
             let value = source.resolve(state).map_err(|why| {
                 ToolError::Failed(format!(
                     "route `{name}` binds `{arg}`, and {why}; its gate should have required \
                      it. Nothing was forwarded"
                 ))
             })?;
-            route_binds.insert(arg, value);
+            route_binds.insert(arg.clone(), value);
         }
         Ok(TaskOutcome::Ready { task, route_binds })
     }
@@ -308,7 +298,7 @@ impl ForwardRequest {
         &'a self,
         ctx: &'a ToolContext,
         route: &'a str,
-        route_spec: &'a Value,
+        route_spec: &'a A2aRouteSpec,
     ) -> A2aDispatch<'a> {
         A2aDispatch {
             state: &self.state,
@@ -326,34 +316,40 @@ impl ForwardRequest {
         state: &AgentState,
     ) -> Result<Value, ToolError> {
         let name = route.name();
-        let spec = self.spec.routes.get(name).cloned().unwrap_or_default();
-        if spec.get("a2a").is_some() {
-            let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
-                TaskOutcome::Unwritten(answer) => return Ok(answer),
-            };
-            return self.a2a(ctx, name, &spec).start(&task, &route_binds).await;
-        }
-        if let Some(looped) = spec.get("loop") {
-            let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
-                TaskOutcome::Ready { task, route_binds } => (task, route_binds),
-                TaskOutcome::Unwritten(answer) => return Ok(answer),
-            };
-            return self.run_loop(ctx, name, looped, &task, route_binds).await;
-        }
-        let Some(agent_id) = spec.get("agent").and_then(Value::as_str) else {
-            let Some(human) = human_routes(&self.spec.routes).remove(name) else {
-                return Err(ToolError::Failed(format!(
-                    "route `{name}` names neither a sub-agent nor a person. Do not retry."
-                )));
-            };
-            let question = match human.description.clone() {
-                Some(description) => description,
-                None => last_visitor_message(ctx).await,
-            };
-            return hand_off(ctx, &human, &question, &self.spec, FORWARD_TOOL_NAME).await;
+        let neither = || {
+            ToolError::Failed(format!(
+                "route `{name}` names neither a sub-agent nor a person. Do not retry."
+            ))
         };
-        let (task, route_binds) = match self.task_and_binds(name, &spec, state)? {
+        let spec = self.spec.agent.routes.get(name).ok_or_else(neither)?;
+        let agent_id = match &spec.target {
+            RouteTarget::Human(_) => {
+                let human = human_routes(&self.spec.agent.routes)
+                    .remove(name)
+                    .ok_or_else(neither)?;
+                let question = match human.description.clone() {
+                    Some(description) => description,
+                    None => last_visitor_message(ctx).await,
+                };
+                return hand_off(ctx, &human, &question, &self.spec, FORWARD_TOOL_NAME).await;
+            }
+            RouteTarget::A2a(a2a) => {
+                let (task, route_binds) = match self.task_and_binds(name, spec, state)? {
+                    TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                    TaskOutcome::Unwritten(answer) => return Ok(answer),
+                };
+                return self.a2a(ctx, name, a2a).start(&task, &route_binds).await;
+            }
+            RouteTarget::Loop(looped) => {
+                let (task, route_binds) = match self.task_and_binds(name, spec, state)? {
+                    TaskOutcome::Ready { task, route_binds } => (task, route_binds),
+                    TaskOutcome::Unwritten(answer) => return Ok(answer),
+                };
+                return self.run_loop(ctx, name, looped, &task, route_binds).await;
+            }
+            RouteTarget::Agent(id) => id.as_str(),
+        };
+        let (task, route_binds) = match self.task_and_binds(name, spec, state)? {
             TaskOutcome::Ready { task, route_binds } => (task, route_binds),
             TaskOutcome::Unwritten(answer) => return Ok(answer),
         };
@@ -587,14 +583,20 @@ impl Tool for ForwardRequest {
         Box::pin(async move {
             if let Suspend::Decided(Decision::Value { value }) = &ctx.suspend {
                 if let Some(pending) = A2aDispatch::resume_pending(&ctx).await? {
-                    let route_spec = self
+                    let Some(RouteTarget::A2a(route_spec)) = self
                         .spec
+                        .agent
                         .routes
                         .get(&pending.route)
-                        .cloned()
-                        .unwrap_or_default();
+                        .map(|r| &r.target)
+                    else {
+                        return Err(ToolError::Failed(format!(
+                            "route `{}` cannot run: the route has no `a2a` target. Do not retry.",
+                            pending.route
+                        )));
+                    };
                     return self
-                        .a2a(&ctx, &pending.route, &route_spec)
+                        .a2a(&ctx, &pending.route, route_spec)
                         .answer(&pending, value)
                         .await;
                 }
