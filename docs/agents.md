@@ -1818,7 +1818,10 @@ verifiers:
   `host`".
 - **`mcp_code` flow.** `verify_<id>_request_code()` reads the email slot,
   checks the three send windows (`rates::sliding_window`, the #92 rate
-  type, with new scopes `email` and `session`), records the send, calls
+  type, with new scopes `email` and `session`) and records the send in one
+  write transaction (`agent_verifiers::record_event_within`, `BEGIN
+  IMMEDIATE`, so parallel requests cannot all pass the check before one is
+  counted; a lookup's attempts go through the same call), calls
   `send_code`, stores the outstanding code's address hash, send time and
   expiry, and pauses the turn with `SuspendRequest::secure_input` (message
   `agent-verifier-code-sent`, timeout `code_ttl`). The widget's secure field

@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
-use aiplane_agents::db::agent_verifiers::{self as rows, Counted, EventKind, MAX_WINDOW, NewEvent};
+use aiplane_agents::db::agent_verifiers::{
+    self as rows, Counted, EventKind, MAX_WINDOW, NewEvent, Window,
+};
+use aiplane_agents::rates::{Rate, RateScope};
 use aiplane_core::server::principal::GrantKind;
 use serde_json::{Map, Value, json};
 use shared::api::ToolDef;
@@ -154,7 +157,27 @@ impl Tool for LookupTool {
             )
             .await
             .map_err(|e| ToolError::Failed(e.to_string()))?;
-            if tried.len() >= self.cfg.max_attempts as usize {
+            let attempt = Window {
+                scope: RateScope::Session,
+                rate: Rate {
+                    max: self.cfg.max_attempts,
+                    per: MAX_WINDOW,
+                },
+                who: Counted::Session(session),
+            };
+            let event = NewEvent {
+                principal_id: &self.run.principal.id,
+                verifier: &self.cfg.id,
+                kind: EventKind::Lookup,
+                session_id: session,
+                email_hash: None,
+                ip_hash: None,
+                at: now,
+            };
+            let admitted = rows::record_event_within(db, &event, &[attempt])
+                .await
+                .map_err(|e| ToolError::Failed(e.to_string()))?;
+            if admitted.is_err() {
                 audit(&self.run, &ctx, self.outcome("too_many_attempts")).await;
                 return Ok(json!({
                     "verified": false,
@@ -164,20 +187,6 @@ impl Tool for LookupTool {
                              reach support.",
                 }));
             }
-            rows::record_event(
-                db,
-                &NewEvent {
-                    principal_id: &self.run.principal.id,
-                    verifier: &self.cfg.id,
-                    kind: EventKind::Lookup,
-                    session_id: session,
-                    email_hash: None,
-                    ip_hash: None,
-                    at: now,
-                },
-            )
-            .await
-            .map_err(|e| ToolError::Failed(e.to_string()))?;
             let answer = self
                 .call(&ctx, Value::Object(inputs.clone()))
                 .await
@@ -189,7 +198,7 @@ impl Tool for LookupTool {
                 return Ok(json!({
                     "verified": false,
                     "reason": "not_confirmed",
-                    "attempts_left": self.cfg.max_attempts as usize - tried.len() - 1,
+                    "attempts_left": (self.cfg.max_attempts as usize).saturating_sub(tried.len() + 1),
                     "next": "The details were not confirmed. Ask the visitor to check them; \
                              correct the slots and call this again.",
                 }));
