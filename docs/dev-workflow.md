@@ -120,8 +120,10 @@ just "see AGENTS.md":
   higher (AGENTS.md → "The gateway crate stack").
 
 ## Invariants to keep
-- Outbound URLs a user, model or agent owner chooses: the net_guard-pinned
-  client (`outbound_guard::get` / `pin`); operator backends: `AppState::http`.
+- Outbound URLs the operator does not configure (a user's, a model's, an
+  agent owner's, a browser's push endpoint, the MCP OAuth endpoints): the
+  net_guard-pinned client (`outbound_guard::get` / `get_with` / `pin`, with
+  the caller's `Policy`); operator backends: `AppState::http`.
 - Bodies: `read_body_capped` / `read_json_capped` / `read_capped`; whole-body
   drains only behind `BodyLimitLayer`.
 - Agent specs: the typed `AgentSpec`, never the JSON.

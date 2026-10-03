@@ -2347,9 +2347,9 @@ routes:
   multicast, and their IPv4-mapped forms. Refused unless
   `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true` (`Config.network`, environment
   only like `$AIPLANE_TRUSTED_PROXIES`): loopback, RFC 1918, 100.64.0.0/10,
-  fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
-  reused: it allows private ranges on purpose (an admin curates the MCP
-  catalog) and checks literal addresses only.
+  fc00::/7 and plain `http`. The MCP OAuth flow goes through the same
+  guard under a policy of its own (`Policy::mcp_oauth`), which allows
+  private ranges on purpose: an admin curates the MCP catalog.
 - **One origin.** The endpoint and the OAuth token URL the card names must
   share the granted card URL's origin (scheme, host, port), or the route ends
   `incomplete` before anything is sent. The grant names the card URL, so a

@@ -317,23 +317,17 @@ fn scan(needles: &[&str], view: fn(&Source) -> &str) -> Vec<(String, usize, Stri
 
 /// Where a reqwest client may be built. Everything else takes one of these
 /// (`AppState::http`, a provider context, a pinned client) as an argument.
-/// "Guarded" means the destination comes from outside the operator's own
-/// configuration and is checked against `net_guard` before connecting.
-/// The MCP transport is not listed because rmcp builds its own client inside
-/// the crate; its destinations are the admin-curated connector catalog.
+/// Every destination the operator does not configure — a user's, a model's,
+/// an agent owner's, a browser's push endpoint, the MCP OAuth endpoints —
+/// goes through the one guarded site, `outbound_guard`, with a policy of its
+/// own; no other guarded client exists. The MCP transport is not listed
+/// because rmcp builds its own client inside the crate; its destinations are
+/// the admin-curated connector catalog.
 const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
         path: "aiplane-core/src/server/outbound_guard.rs",
         why: "guarded: resolve-and-pin with net_guard, every redirect hop re-checked — the one \
               client for destinations a user, a model or an agent's owner chooses",
-    },
-    Allowed {
-        path: "aiplane-core/src/server/auth/mcp_oauth.rs",
-        why: "guarded: validate_outbound_url (net_guard) on the admin-curated MCP catalog",
-    },
-    Allowed {
-        path: "aiplane-features/src/server/push/mod.rs",
-        why: "guarded: a push endpoint must classify as public (net_guard)",
     },
     Allowed {
         path: "aiplane-runtime/src/server/state.rs",
@@ -371,10 +365,6 @@ const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
         path: "aiplane-tools/src/currency.rs",
         why: "fixed host: api.frankfurter.app",
-    },
-    Allowed {
-        path: "aiplane-tools/src/netcheck.rs",
-        why: "fixed hosts: Cloudflare DoH and rdap.org (redirects followed for RDAP bootstrap)",
     },
 ];
 

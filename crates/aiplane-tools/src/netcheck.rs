@@ -16,23 +16,29 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
-use aiplane_core::server::outbound_guard;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const USER_AGENT: &str = concat!("aiplane/", env!("CARGO_PKG_VERSION"), " netcheck");
 
-/// Shared HTTP client for the DoH / RDAP calls. Built per-invocation (these
-/// tools fire infrequently); redirects are followed so RDAP bootstrap
-/// (`rdap.org` → the authoritative registry server) works.
-// Vetted outbound client: fixed hosts (Cloudflare DoH, rdap.org).
-#[allow(clippy::disallowed_methods)]
-fn http_client() -> Result<reqwest::Client, ToolError> {
-    reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| ToolError::Failed(format!("HTTP client build: {e}")))
+/// The RDAP bootstrap service: it redirects a lookup to the registry that
+/// is authoritative for the domain's TLD.
+const RDAP_BASE: &str = "https://rdap.org";
+
+/// `GET url` with `accept`, through `outbound_guard`: public https hosts
+/// only, each pinned to the addresses it was checked at, and every redirect
+/// hop checked again — the RDAP bootstrap sends a lookup on to a registry
+/// server whose name nobody here chose, so no hop may lead into the
+/// gateway's own network.
+async fn get_public(url: &str, accept: &str) -> Result<reqwest::Response, String> {
+    outbound_guard::get_with(
+        url,
+        Policy::public_https(),
+        TIMEOUT,
+        &[("user-agent", USER_AGENT), ("accept", accept)],
+    )
+    .await
 }
 
 // ===========================================================================
@@ -117,11 +123,12 @@ impl Tool for DnsLookup {
                 )));
             }
 
-            let resp = http_client()?
-                .get("https://cloudflare-dns.com/dns-query")
-                .query(&[("name", name), ("type", record.as_str())])
-                .header("accept", "application/dns-json")
-                .send()
+            let url = reqwest::Url::parse_with_params(
+                "https://cloudflare-dns.com/dns-query",
+                &[("name", name), ("type", record.as_str())],
+            )
+            .map_err(|e| ToolError::InvalidArgs(format!("`name` does not fit a query: {e}")))?;
+            let resp = get_public(url.as_str(), "application/dns-json")
                 .await
                 .map_err(|e| ToolError::Failed(format!("DoH request failed: {e}")))?;
             let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
@@ -214,30 +221,38 @@ impl Tool for WhoisLookup {
                 return Err(ToolError::InvalidArgs("`domain` must not be empty".into()));
             }
 
-            let resp = http_client()?
-                .get(format!("https://rdap.org/domain/{domain}"))
-                .header("accept", "application/rdap+json")
-                .send()
-                .await
-                .map_err(|e| ToolError::Failed(format!("RDAP request failed: {e}")))?;
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                return Ok(json!({
-                    "domain": domain, "found": false,
-                    "note": "No RDAP record (domain unregistered, or its TLD has no RDAP service).",
-                }));
-            }
-            if !resp.status().is_success() {
-                return Err(ToolError::Failed(format!(
-                    "RDAP server returned {}",
-                    resp.status()
-                )));
-            }
-            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
-                .await
-                .map_err(|e| ToolError::Failed(format!("RDAP response parse: {e}")))?;
-            Ok(rdap_summary(domain, &body))
+            rdap_lookup(RDAP_BASE, domain).await
         })
     }
+}
+
+/// Look `domain` up at the RDAP service `base`, following its redirect to
+/// the registry.
+async fn rdap_lookup(base: &str, domain: &str) -> Result<Value, ToolError> {
+    let mut url = reqwest::Url::parse(base)
+        .map_err(|e| ToolError::Failed(format!("RDAP base `{base}`: {e}")))?;
+    url.path_segments_mut()
+        .map_err(|()| ToolError::Failed(format!("RDAP base `{base}` takes no path")))?
+        .extend(["domain", domain]);
+    let resp = get_public(url.as_str(), "application/rdap+json")
+        .await
+        .map_err(|e| ToolError::Failed(format!("RDAP request failed: {e}")))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(json!({
+            "domain": domain, "found": false,
+            "note": "No RDAP record (domain unregistered, or its TLD has no RDAP service).",
+        }));
+    }
+    if !resp.status().is_success() {
+        return Err(ToolError::Failed(format!(
+            "RDAP server returned {}",
+            resp.status()
+        )));
+    }
+    let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
+        .await
+        .map_err(|e| ToolError::Failed(format!("RDAP response parse: {e}")))?;
+    Ok(rdap_summary(domain, &body))
 }
 
 /// Pull the human-relevant fields out of an RDAP domain object.
@@ -553,6 +568,24 @@ mod tests {
             assert!(
                 msg.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS") || msg.contains("never reached"),
                 "{host}: {msg}"
+            );
+        }
+    }
+
+    /// The RDAP service redirects to a registry nobody here chose; the
+    /// lookup goes through the guard, so a service or a redirect target in
+    /// the gateway's own network is refused before anything connects.
+    #[tokio::test]
+    async fn an_rdap_lookup_never_reaches_the_gateways_own_network() {
+        for base in [
+            "https://127.0.0.1:9",
+            "https://10.0.0.1",
+            "http://93.184.216.34",
+        ] {
+            let err = super::rdap_lookup(base, "example.com").await.unwrap_err();
+            assert!(
+                err.to_string().contains("RDAP request failed"),
+                "{base}: {err}"
             );
         }
     }

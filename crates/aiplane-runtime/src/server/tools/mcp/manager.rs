@@ -98,7 +98,6 @@ pub enum AskContext<'a> {
 pub struct McpConnectionManager {
     db: Pool,
     crypto: Arc<Crypto>,
-    http: reqwest::Client,
     cache: Mutex<HashMap<String, Cached>>,
     /// Per-`(user,connector)` refresh locks: serialize token refreshes so the
     /// background worker and a live request can't both spend the same refresh
@@ -111,7 +110,6 @@ impl McpConnectionManager {
         Arc::new(Self {
             db,
             crypto,
-            http: mcp_oauth::discovery_http(),
             cache: Mutex::new(HashMap::new()),
             refresh_locks: Mutex::new(HashMap::new()),
         })
@@ -609,7 +607,7 @@ impl McpConnectionManager {
                     token_url: connector.token_url.clone(),
                     registration_url: connector.registration_url.clone(),
                 };
-                mcp_oauth::discover(&self.http, &connector.url, &ov)
+                mcp_oauth::discover(&connector.url, &ov)
                     .await
                     .map_err(|e| TokenError::transient(format!("discovery for refresh: {e}")))?
                     .token_url
@@ -624,7 +622,6 @@ impl McpConnectionManager {
         // a dead refresh token, or (for a DCR client) a server that no longer
         // knows the client we registered, e.g. after it lost its OAuth store.
         let tokens = mcp_oauth::refresh(
-            &self.http,
             &token_url,
             &refresh_token,
             &client_id,
@@ -741,11 +738,6 @@ impl McpConnectionManager {
     /// Access to the shared crypto (for the OAuth handlers that seal tokens).
     pub fn crypto(&self) -> &Crypto {
         &self.crypto
-    }
-
-    /// The discovery/token HTTP client (shared with the OAuth handlers).
-    pub fn http(&self) -> &reqwest::Client {
-        &self.http
     }
 }
 

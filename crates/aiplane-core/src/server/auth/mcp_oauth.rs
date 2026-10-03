@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
 
-use crate::server::net_guard::{IpClass, classify_host, is_loopback_host};
+use crate::server::outbound_guard::{self, Pinned, Policy};
 
 #[derive(Debug, Error)]
 pub enum OauthError {
@@ -49,6 +49,13 @@ pub enum OauthError {
     Provider { code: String, description: String },
     #[error("invalid URL `{0}`")]
     Url(String),
+    /// The endpoint is somewhere the gateway does not connect to
+    /// (`outbound_guard::Policy::mcp_oauth`).
+    #[error(
+        "the OAuth endpoint was refused: {0}. Fix the connector's URL in the MCP catalog, or its \
+         authorize/token URL overrides"
+    )]
+    Refused(String),
 }
 
 impl OauthError {
@@ -148,27 +155,24 @@ struct AuthServerMeta {
     registration_endpoint: Option<String>,
 }
 
-/// A short-timeout, redirect-free HTTP client for discovery / token calls.
-/// Redirect-free is an SSRF guard (operator-curated catalog, but defence in
-/// depth) and surfaces misconfigured servers instead of hiding them.
-// Vetted outbound client: every URL it is given passed `validate_outbound_url`.
-#[allow(clippy::disallowed_methods)]
-pub fn discovery_http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(10))
-        .user_agent(concat!("aiplane/", env!("CARGO_PKG_VERSION"), " mcp-oauth"))
-        .build()
-        .unwrap_or_default()
+/// How long one discovery, registration or token request may take.
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+const USER_AGENT: &str = concat!("aiplane/", env!("CARGO_PKG_VERSION"), " mcp-oauth");
+
+/// A client for one request to `url`: resolved, checked and pinned by
+/// `outbound_guard` under [`Policy::mcp_oauth`] — no proxy, no redirect
+/// (a misconfigured server shows instead of being followed), and no second
+/// DNS lookup that could swap in an address the check never saw.
+async fn pinned(url: &str) -> Result<Pinned, OauthError> {
+    outbound_guard::pin(url, Policy::mcp_oauth(), TIMEOUT)
+        .await
+        .map_err(OauthError::Refused)
 }
 
 /// Resolve the OAuth endpoints for an MCP server at `mcp_url`. Config overrides
 /// win; otherwise walk RFC 9728 → RFC 8414 (OIDC config as fallback).
-pub async fn discover(
-    http: &reqwest::Client,
-    mcp_url: &str,
-    ov: &Overrides,
-) -> Result<Endpoints, OauthError> {
+pub async fn discover(mcp_url: &str, ov: &Overrides) -> Result<Endpoints, OauthError> {
     // Fully overridden → no network.
     if let (Some(a), Some(t)) = (ov.authorize_url.as_ref(), ov.token_url.as_ref()) {
         return Ok(Endpoints {
@@ -183,7 +187,7 @@ pub async fn discover(
     // 1) Protected-resource metadata → authorization server URL. Try the
     //    server's `WWW-Authenticate` pointer first (RFC 9728 §5.1), then the
     //    well-known locations.
-    let as_url = match fetch_protected_resource(http, &base, mcp_url).await {
+    let as_url = match fetch_protected_resource(&base, mcp_url).await {
         Some(servers) if !servers.is_empty() => servers.into_iter().next().unwrap(),
         _ => {
             // No protected-resource doc: assume the MCP server's own origin is
@@ -193,7 +197,7 @@ pub async fn discover(
     };
 
     // 2) Authorization-server metadata (RFC 8414), OIDC config as fallback.
-    let meta = fetch_as_metadata(http, &as_url)
+    let meta = fetch_as_metadata(&as_url)
         .await
         .ok_or_else(|| OauthError::Discover(format!("no AS metadata at {as_url}")))?;
 
@@ -227,15 +231,11 @@ fn origin(u: &Url) -> String {
     }
 }
 
-async fn fetch_protected_resource(
-    http: &reqwest::Client,
-    base: &Url,
-    mcp_url: &str,
-) -> Option<Vec<String>> {
+async fn fetch_protected_resource(base: &Url, mcp_url: &str) -> Option<Vec<String>> {
     // Authoritative: hit the MCP endpoint unauthenticated and follow the
     // `resource_metadata` pointer in its `WWW-Authenticate` 401 (RFC 9728).
-    if let Some(rm) = probe_resource_metadata_url(http, mcp_url).await
-        && let Some(meta) = get_json::<ProtectedResourceMeta>(http, &rm).await
+    if let Some(rm) = probe_resource_metadata_url(mcp_url).await
+        && let Some(meta) = get_json::<ProtectedResourceMeta>(&rm).await
         && !meta.authorization_servers.is_empty()
     {
         return Some(meta.authorization_servers);
@@ -258,7 +258,7 @@ async fn fetch_protected_resource(
         base.as_str().trim_end_matches('/')
     ));
     for url in candidates {
-        if let Some(meta) = get_json::<ProtectedResourceMeta>(http, &url).await
+        if let Some(meta) = get_json::<ProtectedResourceMeta>(&url).await
             && !meta.authorization_servers.is_empty()
         {
             return Some(meta.authorization_servers);
@@ -269,15 +269,17 @@ async fn fetch_protected_resource(
 
 /// Probe the MCP endpoint unauthenticated; return the `resource_metadata` URL
 /// advertised in its `WWW-Authenticate` header, if any.
-async fn probe_resource_metadata_url(http: &reqwest::Client, mcp_url: &str) -> Option<String> {
-    validate_outbound_url(mcp_url).ok()?;
+async fn probe_resource_metadata_url(mcp_url: &str) -> Option<String> {
+    let pinned = pinned(mcp_url).await.ok()?;
     let probe = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                    "clientInfo": {"name": "aiplane", "version": "1"}}
     });
-    let resp = http
-        .post(mcp_url)
+    let resp = pinned
+        .client
+        .post(pinned.url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
         .json(&probe)
@@ -300,7 +302,7 @@ fn parse_resource_metadata(header: &str) -> Option<String> {
     }
 }
 
-async fn fetch_as_metadata(http: &reqwest::Client, as_url: &str) -> Option<AuthServerMeta> {
+async fn fetch_as_metadata(as_url: &str) -> Option<AuthServerMeta> {
     let trimmed = as_url.trim_end_matches('/');
     let mut candidates = vec![
         format!("{trimmed}/.well-known/oauth-authorization-server"),
@@ -322,7 +324,7 @@ async fn fetch_as_metadata(http: &reqwest::Client, as_url: &str) -> Option<AuthS
         }
     }
     for url in candidates {
-        if let Some(meta) = get_json::<AuthServerMeta>(http, &url).await
+        if let Some(meta) = get_json::<AuthServerMeta>(&url).await
             && meta.authorization_endpoint.is_some()
             && meta.token_endpoint.is_some()
         {
@@ -332,10 +334,12 @@ async fn fetch_as_metadata(http: &reqwest::Client, as_url: &str) -> Option<AuthS
     None
 }
 
-async fn get_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &str) -> Option<T> {
-    validate_outbound_url(url).ok()?;
-    let resp = http
-        .get(url)
+async fn get_json<T: for<'de> Deserialize<'de>>(url: &str) -> Option<T> {
+    let pinned = pinned(url).await.ok()?;
+    let resp = pinned
+        .client
+        .get(pinned.url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header("accept", "application/json")
         .send()
         .await
@@ -346,36 +350,6 @@ async fn get_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &st
     capped_read::read_capped_json::<T>(resp, capped_read::API_ANSWER_BYTES)
         .await
         .ok()
-}
-
-/// SSRF guard for every URL the gateway itself fetches/POSTs during the OAuth
-/// flow (discovery, AS metadata, registration, token). Requires `https`
-/// (allowing `http` only for loopback so a self-hosted MCP server on localhost
-/// still works in dev), and rejects literal link-local / unspecified /
-/// multicast addresses — notably the cloud metadata endpoint
-/// `169.254.169.254`. The catalog is admin-curated and private ranges
-/// (10/8, 192.168/16, …) are intentionally allowed for internal deployments.
-/// What an address is comes from `net_guard::classify`; this policy is the
-/// permissive one. Residual: a hostname that *resolves* to a blocked IP (DNS-rebind) isn't
-/// caught here — full protection would resolve-and-pin; this covers the
-/// realistic literal-IP pivot.
-pub fn validate_outbound_url(raw: &str) -> Result<(), OauthError> {
-    let url = Url::parse(raw).map_err(|_| OauthError::Url(raw.to_string()))?;
-    let host = url
-        .host()
-        .ok_or_else(|| OauthError::Url(format!("{raw}: no host")))?;
-    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback_host(&host)) {
-        return Err(OauthError::Url(format!(
-            "{raw}: only https is allowed (http permitted only for localhost)"
-        )));
-    }
-    if matches!(
-        classify_host(&host),
-        Some(IpClass::Unspecified | IpClass::Multicast | IpClass::LinkLocal)
-    ) {
-        return Err(OauthError::Url(format!("{raw}: blocked address range")));
-    }
-    Ok(())
 }
 
 // ---- dynamic client registration (RFC 7591) -------------------------------
@@ -390,13 +364,12 @@ struct RegistrationResponse {
 /// Register a public/confidential client at `registration_url`. Returns the
 /// `(client_id, client_secret?)`.
 pub async fn register_client(
-    http: &reqwest::Client,
     registration_url: &str,
     redirect_uri: &str,
     client_name: &str,
     scopes: &[String],
 ) -> Result<(String, Option<String>), OauthError> {
-    validate_outbound_url(registration_url)?;
+    let pinned = pinned(registration_url).await?;
     let body = serde_json::json!({
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
@@ -405,8 +378,10 @@ pub async fn register_client(
         "token_endpoint_auth_method": "none",
         "scope": scopes.join(" "),
     });
-    let resp = http
-        .post(registration_url)
+    let resp = pinned
+        .client
+        .post(pinned.url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header("accept", "application/json")
         .json(&body)
         .send()
@@ -513,7 +488,6 @@ fn tokens_from_raw(raw: TokenResponseRaw) -> Tokens {
 /// Exchange an authorization code for tokens.
 #[allow(clippy::too_many_arguments)]
 pub async fn exchange_code(
-    http: &reqwest::Client,
     token_url: &str,
     code: &str,
     pkce_verifier: &str,
@@ -537,12 +511,11 @@ pub async fn exchange_code(
     if let Some(secret) = client_secret {
         form.push(("client_secret", secret));
     }
-    post_token(http, token_url, &form).await
+    post_token(token_url, &form).await
 }
 
 /// Refresh an access token.
 pub async fn refresh(
-    http: &reqwest::Client,
     token_url: &str,
     refresh_token: &str,
     client_id: &str,
@@ -556,17 +529,15 @@ pub async fn refresh(
     if let Some(secret) = client_secret {
         form.push(("client_secret", secret));
     }
-    post_token(http, token_url, &form).await
+    post_token(token_url, &form).await
 }
 
-async fn post_token(
-    http: &reqwest::Client,
-    token_url: &str,
-    form: &[(&str, &str)],
-) -> Result<Tokens, OauthError> {
-    validate_outbound_url(token_url)?;
-    let resp = http
-        .post(token_url)
+async fn post_token(token_url: &str, form: &[(&str, &str)]) -> Result<Tokens, OauthError> {
+    let pinned = pinned(token_url).await?;
+    let resp = pinned
+        .client
+        .post(pinned.url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header("accept", "application/json")
         .form(form)
         .send()
@@ -715,7 +686,6 @@ mod tests {
     #[test]
     fn discover_short_circuits_on_full_overrides() {
         // Both endpoints overridden → discover() must not need the network.
-        let http = discovery_http();
         let ov = Overrides {
             authorize_url: Some("https://a/auth".into()),
             token_url: Some("https://a/token".into()),
@@ -723,7 +693,7 @@ mod tests {
         };
         let ep = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(discover(&http, "https://mcp.example/x", &ov))
+            .block_on(discover("https://mcp.example/x", &ov))
             .unwrap();
         assert_eq!(ep.authorize_url, "https://a/auth");
         assert_eq!(ep.token_url, "https://a/token");
@@ -745,27 +715,16 @@ mod tests {
         assert_eq!(parse_resource_metadata("Bearer realm=foo"), None);
     }
 
-    #[test]
-    fn ssrf_guard_blocks_metadata_and_non_https() {
-        // https public host: allowed.
-        assert!(validate_outbound_url("https://accounts.google.com/o/oauth2/token").is_ok());
-        // localhost over http: allowed (self-hosted dev).
-        assert!(validate_outbound_url("http://localhost:9000/token").is_ok());
-        assert!(validate_outbound_url("http://127.0.0.1:9000/token").is_ok());
-        // non-loopback http: rejected.
-        assert!(validate_outbound_url("http://example.com/token").is_err());
-        // cloud metadata endpoint (v4 link-local): rejected even over https.
-        assert!(validate_outbound_url("https://169.254.169.254/latest/meta-data").is_err());
-        // unspecified + multicast: rejected.
-        assert!(validate_outbound_url("https://0.0.0.0/x").is_err());
-        // IPv6 literals and IPv4-mapped spellings are classified too.
-        assert!(validate_outbound_url("https://[fe80::1]/x").is_err());
-        assert!(validate_outbound_url("https://[::ffff:169.254.169.254]/x").is_err());
-        assert!(validate_outbound_url("http://[::1]:9000/token").is_ok());
-        // private range stays allowed (internal deployments).
-        assert!(validate_outbound_url("https://10.1.2.3/token").is_ok());
-        // garbage.
-        assert!(validate_outbound_url("not a url").is_err());
+    #[tokio::test]
+    async fn an_endpoint_outside_the_policy_is_refused_before_connecting() {
+        for bad in [
+            "http://93.184.216.34/token",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::ffff:169.254.169.254]/x",
+        ] {
+            let err = refresh(bad, "rt", "client", None).await.unwrap_err();
+            assert!(matches!(err, OauthError::Refused(_)), "{bad}: {err}");
+        }
     }
 
     #[test]
