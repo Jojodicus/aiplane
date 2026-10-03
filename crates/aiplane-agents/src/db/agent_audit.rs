@@ -123,6 +123,11 @@ pub enum AuditKind {
     /// A conversation chain's head (`seq`, `hash`) at the end of a turn,
     /// kept in the agent's own chain.
     ChainAnchored,
+    /// The retention sweep cut the agent's own chain before this event: the
+    /// last removed event's `seq` and `hash` (where [`verify`] starts), how
+    /// many went and when they were written, and the anchors among them
+    /// that still guard a conversation.
+    ChainCheckpoint,
 }
 
 impl AuditKind {
@@ -169,6 +174,7 @@ impl AuditKind {
         Self::StateWritten,
         Self::ActivitySwept,
         Self::ChainAnchored,
+        Self::ChainCheckpoint,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -215,6 +221,7 @@ impl AuditKind {
             Self::StateWritten => "state_written",
             Self::ActivitySwept => "activity_swept",
             Self::ChainAnchored => "chain_anchored",
+            Self::ChainCheckpoint => "chain_checkpoint",
         }
     }
 
@@ -897,18 +904,27 @@ struct Walked {
     last_hash: Option<String>,
 }
 
-/// Walk chain `key` link by link, handing every event to `on`. `None` when a
-/// link does not hold; `out.broken` then says which.
+/// Where a walk starts: after `seq`, whose hash is `hash` — `(0, None)` for a
+/// chain that was never cut.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Base {
+    seq: i64,
+    hash: Option<String>,
+}
+
+/// Walk chain `key` link by link from `base`, handing every event to `on`.
+/// `None` when a link does not hold; `out.broken` then says which.
 async fn walk(
     pool: &Pool,
     key: &str,
+    base: Base,
     ring: &[ActivityKey],
     out: &mut Verification,
     mut on: impl FnMut(&StoredEvent),
 ) -> Result<Option<Walked>, DbError> {
     out.chains += 1;
-    let mut expected = 1i64;
-    let mut prev: Option<String> = None;
+    let mut expected = base.seq + 1;
+    let mut prev: Option<String> = base.hash;
     loop {
         let sql = format!(
             "SELECT {COLUMNS} FROM agent_audit WHERE chain_key = ? AND seq >= ?
@@ -1012,34 +1028,26 @@ pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError
         ..Verification::default()
     };
     let own = agent_chain(agent_id);
-    let mut anchors: HashMap<String, (i64, Option<String>)> = HashMap::new();
-    let mut swept: HashSet<String> = HashSet::new();
-    let walked = walk(pool, &own, &ring, &mut out, |e| {
-        let detail: Value = serde_json::from_str(&e.detail).unwrap_or(Value::Null);
-        let Some(chain) = detail["chain_key"].as_str() else {
-            return;
-        };
-        match e.kind.as_str() {
-            "chain_anchored" => {
-                anchors.insert(
-                    chain.to_string(),
-                    (
-                        detail["seq"].as_i64().unwrap_or(0),
-                        detail["hash"].as_str().map(str::to_string),
-                    ),
-                );
-            }
-            "activity_swept" => {
-                swept.insert(chain.to_string());
-            }
-            _ => {}
-        }
-    })
-    .await?;
+    let checkpoint: Option<String> = sqlx::query_scalar(LATEST_CHECKPOINT_SQL)
+        .bind(&own)
+        .fetch_optional(pool)
+        .await?;
+    let checkpoint: Value = checkpoint
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or(Value::Null);
+    let base = Base {
+        seq: checkpoint["base_seq"].as_i64().unwrap_or(0),
+        hash: checkpoint["base_hash"].as_str().map(str::to_string),
+    };
+    let base_seq = base.seq;
+    let mut book = AnchorBook::default();
+    book.carry(&checkpoint);
+    let walked = walk(pool, &own, base, &ring, &mut out, |e| book.read(e)).await?;
+    let AnchorBook { mut anchors, swept } = book;
     let Some(walked) = walked else {
         return Ok(out);
     };
-    if walked.last_seq == 0 {
+    if walked.last_seq == base_seq {
         out.chains -= 1;
     } else {
         out.head = Some(ChainHead {
@@ -1061,7 +1069,7 @@ pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError
         let anchor = anchors.remove(key).filter(|_| !swept.contains(key));
         let mut at_anchor: Option<Option<String>> = None;
         let anchored_seq = anchor.as_ref().map_or(0, |(seq, _)| *seq);
-        let Some(walked) = walk(pool, key, &ring, &mut out, |e| {
+        let Some(walked) = walk(pool, key, Base::default(), &ring, &mut out, |e| {
             if e.seq == Some(anchored_seq) {
                 at_anchor = Some(e.hash.clone());
             }
@@ -1117,31 +1125,193 @@ pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError
     Ok(out)
 }
 
+/// The newest checkpoint of a chain: where its stored part begins.
+const LATEST_CHECKPOINT_SQL: &str = "SELECT detail FROM agent_audit
+                                      WHERE chain_key = ? AND kind = 'chain_checkpoint'
+                                      ORDER BY seq DESC LIMIT 1";
+
+/// What an agent's own chain says about its conversation chains, read in
+/// chain order: the latest anchor of each and which ones the sweep removed.
+/// [`verify`] reads the whole stored chain into one; a cut reads the prefix
+/// it removes, and its checkpoint carries the anchors that still matter.
+#[derive(Default)]
+struct AnchorBook {
+    anchors: HashMap<String, (i64, Option<String>)>,
+    swept: HashSet<String>,
+}
+
+impl AnchorBook {
+    fn read(&mut self, e: &StoredEvent) {
+        let detail: Value = serde_json::from_str(&e.detail).unwrap_or(Value::Null);
+        match e.kind.as_str() {
+            "chain_anchored" => {
+                if let Some(chain) = detail["chain_key"].as_str() {
+                    self.anchors.insert(
+                        chain.to_string(),
+                        (
+                            detail["seq"].as_i64().unwrap_or(0),
+                            detail["hash"].as_str().map(str::to_string),
+                        ),
+                    );
+                }
+            }
+            "activity_swept" => {
+                if let Some(chain) = detail["chain_key"].as_str() {
+                    self.swept.insert(chain.to_string());
+                }
+            }
+            "chain_checkpoint" => self.carry(&detail),
+            _ => {}
+        }
+    }
+
+    /// The anchors a checkpoint carried. They are older than any anchor the
+    /// chain holds after the cut they were carried over, so they never
+    /// replace one already read.
+    fn carry(&mut self, checkpoint: &Value) {
+        let Some(carried) = checkpoint["anchors"].as_object() else {
+            return;
+        };
+        for (chain, anchor) in carried {
+            self.anchors.entry(chain.clone()).or_insert((
+                anchor["seq"].as_i64().unwrap_or(0),
+                anchor["hash"].as_str().map(str::to_string),
+            ));
+        }
+    }
+
+    /// The anchors of chains not swept, as a checkpoint carries them.
+    fn still_guarding(self) -> Value {
+        let mut carried: Vec<_> = self
+            .anchors
+            .into_iter()
+            .filter(|(chain, _)| !self.swept.contains(chain))
+            .collect();
+        carried.sort();
+        Value::Object(
+            carried
+                .into_iter()
+                .map(|(chain, (seq, hash))| (chain, json!({ "seq": seq, "hash": hash })))
+                .collect(),
+        )
+    }
+}
+
+/// Cut the prefix of `agent_id`'s own chain written before `before`, so the
+/// chain honours the same retention as its conversations: one transaction
+/// appends a `chain_checkpoint` — the last removed event's `seq` and `hash`,
+/// how many were removed, their `seq` range and when they were written, and
+/// the anchors among them of conversations not swept — and deletes the
+/// prefix. [`verify`] starts the chain at the newest checkpoint. Returns how
+/// many events went.
+async fn cut_agent_chain(pool: &Pool, agent_id: &str, before: Timestamp) -> Result<u64, DbError> {
+    let own = agent_chain(agent_id);
+    let cutoff = super::window_key(before);
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let (first, head): (Option<i64>, Option<i64>) =
+        sqlx::query_as("SELECT MIN(seq), MAX(seq) FROM agent_audit WHERE chain_key = ?")
+            .bind(&own)
+            .fetch_one(&mut *tx)
+            .await?;
+    let (Some(first), Some(head)) = (first, head) else {
+        return Ok(0);
+    };
+    let kept: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(seq) FROM agent_audit WHERE chain_key = ? AND rtrim(created_at, 'Z') >= ?",
+    )
+    .bind(&own)
+    .bind(&cutoff)
+    .fetch_one(&mut *tx)
+    .await?;
+    let last = kept.map_or(head, |k| k - 1);
+    if last < first {
+        return Ok(0);
+    }
+    let sql = format!(
+        "SELECT {COLUMNS} FROM agent_audit
+          WHERE chain_key = ? AND seq <= ?
+            AND kind IN ('chain_anchored', 'activity_swept', 'chain_checkpoint')
+          ORDER BY seq"
+    );
+    let mut book = AnchorBook::default();
+    for row in sqlx::query(&sql)
+        .bind(&own)
+        .bind(last)
+        .fetch_all(&mut *tx)
+        .await?
+    {
+        book.read(&stored(&row)?);
+    }
+    let edge = |seq: i64| {
+        sqlx::query_as::<_, (Option<String>, String)>(
+            "SELECT hash, created_at FROM agent_audit WHERE chain_key = ? AND seq = ?",
+        )
+        .bind(own.clone())
+        .bind(seq)
+    };
+    let (_, from) = edge(first).fetch_one(&mut *tx).await?;
+    let (base_hash, to) = edge(last).fetch_one(&mut *tx).await?;
+    let removed = u64::try_from(last - first + 1).unwrap_or(0);
+    append(
+        &mut tx,
+        NewEvent::new(
+            AuditKind::ChainCheckpoint,
+            agent_id,
+            json!({
+                "base_seq": last,
+                "base_hash": base_hash,
+                "removed": removed,
+                "seqs": [first, last],
+                "from": from,
+                "to": to,
+                "before": before,
+                "anchors": book.still_guarding(),
+            }),
+        ),
+    )
+    .await?;
+    sqlx::query("DELETE FROM agent_audit WHERE chain_key = ? AND seq <= ?")
+        .bind(&own)
+        .bind(last)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(removed)
+}
+
 /// What one sweep of one agent's log removed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweptChains {
     pub chains: u64,
     pub events: u64,
+    /// Events cut from the front of the agent's own chain.
+    pub agent_events: u64,
 }
 
 /// Delete the conversation chains of `agent_id` whose newest event is older
 /// than `before` and whose conversation no longer exists — whole chains
 /// only, so no chain is ever left with a hole — and the agent's events from
-/// before #111 (unchained) older than `before`. The agent's own chain is
-/// never swept. Each chain goes in its own transaction, together with an
-/// `activity_swept` event in the agent's chain that names it, so
-/// [`verify`] knows its anchors were let go on purpose.
+/// before #111 (unchained) older than `before`. Each chain goes in its own
+/// transaction, together with an `activity_swept` event in the agent's chain
+/// that names it, so [`verify`] knows its anchors were let go on purpose.
+/// First the agent's own chain is cut back to `before` behind a checkpoint
+/// ([`cut_agent_chain`]), so the markers this sweep writes stay for a
+/// retention period of their own.
 pub async fn sweep_conversation_chains(
     pool: &Pool,
     agent_id: &str,
     before: Timestamp,
 ) -> Result<SweptChains, DbError> {
+    let agent_events = cut_agent_chain(pool, agent_id, before).await?;
     let candidates: Vec<(String, Option<String>, String)> = sqlx::query_as(SWEEP_SQL)
         .bind(agent_id)
         .fetch_all(pool)
         .await?;
     let cutoff = super::window_key(before);
-    let mut out = SweptChains::default();
+    let mut out = SweptChains {
+        agent_events,
+        ..SweptChains::default()
+    };
     for (key, conversation, newest) in candidates {
         if newest >= cutoff {
             continue;

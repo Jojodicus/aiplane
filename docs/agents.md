@@ -2628,6 +2628,7 @@ logged and the request goes on as it would have.
 | `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
 | management kinds | the agent DB modules, on the change's transaction | as before |
 | `activity_swept` | the retention sweep, on the deletion's transaction | `chain_key`, `events`, `before` |
+| `chain_checkpoint` | the retention sweep, when it cuts the agent's own chain | `base_seq`, `base_hash`, `removed`, `seqs`, `from`, `to`, `before`, `anchors` |
 | `chain_anchored` | the end of every turn (`drive_opened_from`) | `chain_key`, `seq`, `hash` of the conversation chain's head |
 | `llm_exchange` | compaction, the rubric judge, the vision fallback | see below |
 
@@ -2675,8 +2676,22 @@ event is older than that, never part of a chain, and appends an
 `activity_swept` marker per chain to the agent's own chain, in the same
 transaction. The validator refuses a
 value below `publish.retention_days` (default 30), so a conversation's log
-always outlives the conversation. The agent's own chain is never swept;
-events from before #111 go by their age.
+always outlives the conversation. Events from before #111 go by their age.
+
+The agent's own chain honours the same retention, so it does not grow for
+ever with anchors, sweep markers and management events: before the
+conversation chains, the sweep cuts the chain's *prefix* written before the
+cutoff (`agent_audit::cut_agent_chain`), in one transaction with a signed
+`chain_checkpoint` appended at its head — `base_seq` and `base_hash` (the
+last removed event), `removed`, `seqs` (the removed range), `from`/`to`
+(when they were written), `before`, and `anchors`: the latest anchor of
+every conversation among them that was not swept, so a live conversation
+stays guarded. Anchors of swept conversations go with the prefix.
+`verify` starts the agent chain at the newest checkpoint (after
+`base_seq`, expecting `base_hash`) and seeds its anchors from it; a
+checkpoint met further along adds its carried anchors without replacing a
+newer one. Removing more of the prefix shows as a missing event, and
+removing the checkpoint as a gap in the chain.
 
 **Access and API** (`aiplane-api::pages::json_agent_activity`): the
 agent-management permission plus a `read` share (admins hold one on every

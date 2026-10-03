@@ -81,8 +81,9 @@ fn days_before(now: Timestamp, days: i64) -> Timestamp {
 }
 
 /// Delete the activity log's chains of `agent_id`'s conversations that are
-/// gone and quiet since `before`; each removal is marked on the agent's own
-/// chain in the same transaction (`agent_audit::sweep_conversation_chains`).
+/// gone and quiet since `before`, each removal marked on the agent's own
+/// chain in the same transaction, after cutting that chain back to `before`
+/// behind a checkpoint (`agent_audit::sweep_conversation_chains`).
 async fn sweep_activity(
     pool: &Pool,
     agent_id: &str,
@@ -90,12 +91,13 @@ async fn sweep_activity(
     before: Timestamp,
 ) -> Result<(), DbError> {
     let swept = agent_audit::sweep_conversation_chains(pool, agent_id, before).await?;
-    if swept.chains > 0 {
+    if swept.chains > 0 || swept.agent_events > 0 {
         tracing::info!(
             agent = agent_id,
             audit_retention_days = days,
             chains = swept.chains,
             events = swept.events,
+            agent_events = swept.agent_events,
             "agents: deleted activity log chains past their retention period"
         );
     }

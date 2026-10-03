@@ -78,7 +78,8 @@ export const KIND_GROUPS = {
 		'channel_deleted',
 		'conversations_swept',
 		'activity_swept',
-		'chain_anchored'
+		'chain_anchored',
+		'chain_checkpoint'
 	]
 } as const satisfies Record<string, readonly string[]>;
 
