@@ -9,6 +9,7 @@
  * judge: nothing here validates, it only keeps the validator's answers
  * attached to the field they are about (by `path`).
  */
+import type { ActivityPage, Verification } from './agent-activity.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request } from './api.ts';
@@ -251,6 +252,8 @@ export const agentsApi = {
 		call<{ live_version: number }>(`/api/v0/agents/${id}/live`, json('POST', { version })),
 	analytics: (id: string, query: string) =>
 		call<AgentAnalytics>(`/api/v0/agents/${id}/analytics?${query}`),
+	activity: (id: string, query: string) => call<ActivityPage>(`/api/v0/agents/${id}/activity?${query}`),
+	verifyActivity: (id: string) => call<Verification>(`/api/v0/agents/${id}/activity/verify`),
 	tests: (id: string) => call<TestsListing>(`/api/v0/agents/${id}/tests`),
 	createTest: (id: string, body: CaseBody) => call<{ case: TestCase }>(`/api/v0/agents/${id}/tests`, json('POST', body)),
 	updateTest: (id: string, caseId: string, body: CaseBody) =>

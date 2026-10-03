@@ -1,0 +1,39 @@
+# STATUS: llm-generated, unreviewed — pending native-speaker QA
+# Strings owned by the Activity tab of the agent builder (#111).
+
+agents-tab-activity = Actividad
+agents-act-intro = Todo lo que hizo este agente, registrado sin huecos: cada intercambio con el modelo con el prompt y la respuesta completos, cada llamada a herramienta con sus argumentos y resultado completos, escrituras de estado, enrutamiento, pausas y cada cambio en el agente. Cada conversación es una cadena de hashes, así que un cambio en el registro se detecta al verificarlo. El registro contiene conversaciones completas; solo quien tiene un acceso compartido al agente puede leerlo, y los secretos como los códigos de un solo uso nunca entran en él.
+agents-act-conversation = Conversación
+agents-act-conversation-all = Todas las conversaciones, las más recientes primero
+agents-act-kind = Mostrar
+agents-act-group-all = Todo
+agents-act-group-turns = Turnos y respuestas
+agents-act-group-exchanges = Intercambios con el modelo
+agents-act-group-tools = Llamadas a herramientas
+agents-act-group-state = Estado y verificadores
+agents-act-group-routing = Enrutamiento y subagentes
+agents-act-group-people = Pausas, personas y rechazos
+agents-act-group-management = Cambios en el agente
+agents-act-from = Desde
+agents-act-to = Hasta
+agents-act-export = Exportar JSONL
+agents-act-verify = Verificar cadena
+agents-act-verified = { $events } eventos en { $chains } cadenas están intactos.
+agents-act-unchained = { $count } eventos anteriores se registraron antes de encadenar el registro.
+agents-act-broken = La cadena { $chain } se rompe en el evento { $seq }: { $reason }
+agents-act-none = Ninguna actividad coincide con estos filtros.
+agents-act-more = Cargar más
+agents-act-turn = Turno { $turn }
+agents-act-agent-chain = Fuera de un turno
+agents-act-open-conversation = Mostrar esta conversación
+agents-act-round = ronda { $round }
+agents-act-took = { $ms } ms
+agents-act-sub-agent = subagente
+agents-act-sum-llm = { $model }: { $tokens } tokens, { $finish }
+agents-act-sum-llm-error = { $model } falló: { $error }
+agents-act-sum-tool = { $tool }: { $status }
+agents-act-sum-state = { $slot } escrito por { $provenance }
+agents-act-sum-message = «{ $text }»
+agents-act-sum-resumed = Continuado tras una decisión
+agents-act-sum-finished = { $status }: { $text }
+agents-act-sum-route = { $route }
