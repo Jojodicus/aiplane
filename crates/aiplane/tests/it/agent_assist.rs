@@ -576,6 +576,21 @@ async fn improve_returns_a_suggestion_and_why() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
+/// A reasoning model asked for JSON can spend its whole answer thinking and
+/// return empty content (seen with Qwen on SGLang: 5k tokens, no content), so
+/// the assistant switches thinking off the way the title and the compaction
+/// calls do.
+#[tokio::test]
+async fn the_assistant_asks_the_model_not_to_think() {
+    let fx = fixture(answer(&json!({ "suggestion": "Greet first.", "why": "Order." }))).await;
+    let (status, body) = fx
+        .improve(&fx.alice, json!({ "field": "task", "text": "help with orders" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sent = &fx.model_requests().await[0];
+    assert_eq!(sent["chat_template_kwargs"]["enable_thinking"], false, "{sent}");
+}
+
 /// Without a pool in the request or the draft, the assistant runs on the
 /// agents' chat default: the admin's "Balanced" choice (#116) when set, else
 /// the pool of the gateway's default chat model (Models & routing → Default

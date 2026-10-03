@@ -2979,7 +2979,10 @@ and applies what the manager accepts.
 - *Introduced:* `pool_choice::ask_json`, the one structured (`json_schema`,
   strict) non-streaming call on a pool, which `PoolChoice` (route classifier,
   topic guard) now runs on too; whose usage row it is stays the caller's
-  (`JsonExchange::usage_record`).
+  (`JsonExchange::usage_record`). It sends `chat_template_kwargs.enable_thinking:
+  false`, as the title and compaction calls do: a reasoning model (Qwen on
+  SGLang) asked for JSON otherwise spends the whole answer thinking now and
+  then and returns empty content.
 
 **It writes nothing.** Neither endpoint touches the draft, the grants, the
 versions or the test cases. A scenario that talks the model into proposing

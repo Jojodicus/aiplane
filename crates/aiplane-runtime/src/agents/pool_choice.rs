@@ -277,6 +277,9 @@ async fn call(
         ],
         "temperature": question.temperature,
         "stream": false,
+        // A reasoning model can spend the whole answer thinking and return no
+        // content; the title and compaction calls switch it off the same way.
+        "chat_template_kwargs": { "enable_thinking": false },
         "response_format": {
             "type": "json_schema",
             "json_schema": { "name": question.name, "strict": true, "schema": question.schema },
