@@ -51,6 +51,20 @@ pub(super) enum Kind {
     RunTestTurn,
 }
 
+impl Kind {
+    fn id(self) -> &'static str {
+        match self {
+            Kind::ListAgents => "list_agents",
+            Kind::ReadAgent => "read_agent",
+            Kind::ListGrantable => "list_grantable",
+            Kind::ProposeSetup => "propose_setup",
+            Kind::CreateAgentDraft => "create_agent_draft",
+            Kind::UpdateAgentDraft => "update_agent_draft",
+            Kind::RunTestTurn => "run_test_turn",
+        }
+    }
+}
+
 /// Every tool the architect has. Publishing is deliberately not one.
 pub(super) const KINDS: &[Kind] = &[
     Kind::ListAgents,
@@ -83,15 +97,7 @@ fn setup_url(agent_id: &str) -> String {
 
 impl Tool for ArchitectTool {
     fn id(&self) -> &str {
-        match self.kind {
-            Kind::ListAgents => "list_agents",
-            Kind::ReadAgent => "read_agent",
-            Kind::ListGrantable => "list_grantable",
-            Kind::ProposeSetup => "propose_setup",
-            Kind::CreateAgentDraft => "create_agent_draft",
-            Kind::UpdateAgentDraft => "update_agent_draft",
-            Kind::RunTestTurn => "run_test_turn",
-        }
+        self.kind.id()
     }
 
     fn schema(&self) -> ToolDef {
@@ -493,10 +499,7 @@ mod tests {
 
     #[test]
     fn the_architect_has_no_publish_tool() {
-        let names: Vec<String> = KINDS
-            .iter()
-            .map(|k| format!("{k:?}").to_lowercase())
-            .collect();
+        let names: Vec<String> = KINDS.iter().map(|k| k.id().to_string()).collect();
         assert!(names.iter().all(|n| !n.contains("publish")), "{names:?}");
         assert_eq!(KINDS.len(), 7);
     }
