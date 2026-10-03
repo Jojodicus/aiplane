@@ -585,13 +585,22 @@ async fn improve_returns_a_suggestion_and_why() {
 /// calls do.
 #[tokio::test]
 async fn the_assistant_asks_the_model_not_to_think() {
-    let fx = fixture(answer(&json!({ "suggestion": "Greet first.", "why": "Order." }))).await;
+    let fx = fixture(answer(
+        &json!({ "suggestion": "Greet first.", "why": "Order." }),
+    ))
+    .await;
     let (status, body) = fx
-        .improve(&fx.alice, json!({ "field": "task", "text": "help with orders" }))
+        .improve(
+            &fx.alice,
+            json!({ "field": "task", "text": "help with orders" }),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let sent = &fx.model_requests().await[0];
-    assert_eq!(sent["chat_template_kwargs"]["enable_thinking"], false, "{sent}");
+    assert_eq!(
+        sent["chat_template_kwargs"]["enable_thinking"], false,
+        "{sent}"
+    );
 }
 
 /// Without a pool in the request or the draft, the assistant runs on the
