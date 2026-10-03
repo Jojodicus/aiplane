@@ -287,7 +287,6 @@ export const fr: Catalog = {
  "agents-act-took": "{ms} ms",
  "agents-act-turn": "Tour {turn}",
  "agents-act-unanchored": "{count} événements plus récents ne sont pas encore ancrés : ils ont été écrits après la fin du dernier tour.",
- "agents-act-unchained": "{count} événements plus anciens ont été enregistrés avant le chaînage du journal.",
  "agents-act-verified": "{events} événements dans {chains} chaînes sont intacts.",
  "agents-act-verify": "Vérifier la chaîne",
  "agents-an-chart-empty": "Aucune activité sur cette période.",

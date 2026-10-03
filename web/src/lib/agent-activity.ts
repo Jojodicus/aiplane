@@ -41,7 +41,6 @@ export interface Verification {
 	ok: boolean;
 	chains: number;
 	events: number;
-	unchained: number;
 	unanchored: number;
 	head: { chain_key: string; seq: number; hash: string | null } | null;
 	broken: { chain_key: string; seq: number; event_id: string | null; reason: string } | null;

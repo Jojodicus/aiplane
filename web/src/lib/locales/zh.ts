@@ -287,7 +287,6 @@ export const zh: Catalog = {
  "agents-act-took": "{ms} 毫秒",
  "agents-act-turn": "轮次 {turn}",
  "agents-act-unanchored": "有 {count} 个较新的事件尚未锚定：它们写于上一轮结束之后。",
- "agents-act-unchained": "有 {count} 个较早的事件记录于日志成链之前。",
  "agents-act-verified": "{chains} 条链中的 {events} 个事件完好无损。",
  "agents-act-verify": "校验链",
  "agents-an-chart-empty": "此时间段内没有活动。",

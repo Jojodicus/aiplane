@@ -27,8 +27,8 @@
 //! database alone cannot forge a consistent chain. Each turn's end anchors
 //! its conversation's head in the agent's own chain ([`anchor_conversation`]),
 //! so a cut tail or a deleted conversation chain shows too. [`verify`] walks
-//! the chains and reports the first link that does not hold. Rows written
-//! before #111 have no chain and are reported as unchained.
+//! the chains and reports the first link that does not hold, and an event
+//! outside every chain as one inserted behind the gateway's back.
 //!
 //! **No foreign keys** (`migrations/0077_system_principals.sql`): the log
 //! outlives the principal, the acting user and the conversation, until the
@@ -956,8 +956,6 @@ pub struct ChainHead {
 pub struct Verification {
     pub chains: u64,
     pub events: u64,
-    /// Events recorded before #111, which belong to no chain.
-    pub unchained: u64,
     /// Conversation events newer than their chain's latest anchor: written
     /// after the last turn ended (or by a turn whose anchor failed), so a
     /// removal of them would not show yet.
@@ -1097,16 +1095,22 @@ async fn walk(
 /// anything forged by someone holding the gateway's at-rest key.
 pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError> {
     let ring = key_ring();
-    let mut out = Verification {
-        unchained: sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM agent_audit WHERE agent_id = ? AND chain_key IS NULL",
-        )
-        .bind(agent_id)
-        .fetch_one(pool)
-        .await?
-        .max(0) as u64,
-        ..Verification::default()
-    };
+    let mut out = Verification::default();
+    let outside: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM agent_audit WHERE agent_id = ? AND chain_key IS NULL LIMIT 1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(id) = outside {
+        out.broken = Some(BrokenLink {
+            chain_key: String::new(),
+            seq: 0,
+            event_id: Some(id),
+            reason: "it belongs to no chain: it was inserted outside the gateway".into(),
+        });
+        return Ok(out);
+    }
     let own = agent_chain(agent_id);
     let checkpoint: Option<String> = sqlx::query_scalar(LATEST_CHECKPOINT_SQL)
         .bind(&own)
@@ -1370,8 +1374,7 @@ pub struct SweptChains {
 
 /// Delete the conversation chains of `agent_id` whose newest event is older
 /// than `before` and whose conversation no longer exists — whole chains
-/// only, so no chain is ever left with a hole — and the agent's events from
-/// before #111 (unchained) older than `before`. Each chain goes in its own
+/// only, so no chain is ever left with a hole. Each chain goes in its own
 /// transaction, together with an `activity_swept` event in the agent's chain
 /// that names it, so [`verify`] knows its anchors were let go on purpose.
 /// First the agent's own chain is cut back to `before` behind a checkpoint
@@ -1427,15 +1430,6 @@ pub async fn sweep_conversation_chains(
         out.chains += 1;
         out.events += gone;
     }
-    out.events += sqlx::query(
-        "DELETE FROM agent_audit
-          WHERE agent_id = ? AND chain_key IS NULL AND rtrim(created_at, 'Z') < ?",
-    )
-    .bind(agent_id)
-    .bind(&cutoff)
-    .execute(pool)
-    .await?
-    .rows_affected();
     Ok(out)
 }
 

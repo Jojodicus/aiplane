@@ -183,7 +183,9 @@ async fn verify_names_the_first_link_that_was_changed_removed_or_never_chained()
     .execute(&pool)
     .await
     .unwrap();
-    assert_eq!(verify(&pool, "p-main").await.unwrap().unchained, 1);
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.event_id.as_deref(), Some("old"));
+    assert!(broken.reason.contains("no chain"), "{broken:?}");
 }
 
 #[tokio::test]

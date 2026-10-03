@@ -2562,8 +2562,10 @@ hash of the one before (`prev_hash`) and its own `hash` = HMAC-SHA256 over
 its canonical JSON — every column except `hash` and the rowid, keys sorted,
 no whitespace, `chain` and `detail` as the exact stored text — under the
 log key its `key_id` names. A unique index on `(chain_key, seq)` refuses a
-fork. Rows from before #111 have no chain; `verify` counts them as
-`unchained`.
+fork. Every event has a chain: the rows written before chains existed were
+never released and migration `0099_drop_unchained_activity.sql` deletes them,
+so `verify` reports an event outside every chain as inserted outside the
+gateway.
 
 **The log key.** No new secret: the key is derived from the gateway's
 at-rest key (`Crypto`, `$AIPLANE_ENCRYPTION_KEY` or the session secret) as
@@ -2729,7 +2731,7 @@ event is older than that, never part of a chain, and appends an
 `activity_swept` marker per chain to the agent's own chain, in the same
 transaction. The validator refuses a
 value below `publish.retention_days` (default 30), so a conversation's log
-always outlives the conversation. Events from before #111 go by their age.
+always outlives the conversation.
 
 The agent's own chain honours the same retention, so it does not grow for
 ever with anchors, sweep markers and management events: before the
@@ -2755,7 +2757,7 @@ handoffs without a share, cannot read it (`403`).
 |---|---|---|
 | GET | `/api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=` | A page of events (`limit` 1–500, default 100, and at most ~4 MiB of detail), newest first or `order=asc`; `kind` is a comma list; `from`/`to` RFC 3339 or `YYYY-MM-DD`; `{events, next_cursor, order}`. A conversation's events include its sub-agent runs |
 | GET | `/api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=` | Every matching event, oldest first, one JSON object per line (`application/x-ndjson`), streamed a ~1 MiB batch at a time with backpressure |
-| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unchained, unanchored, head: {chain_key, seq, hash} \| null, broken: {chain_key, seq, event_id, reason} \| null}` — keep `head` outside the gateway to detect a log cut back to an earlier one |
+| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unanchored, head: {chain_key, seq, hash} \| null, broken: {chain_key, seq, event_id, reason} \| null}` — keep `head` outside the gateway to detect a log cut back to an earlier one |
 
 An event reads `{cursor, id, kind, ts, principal_id, actor_id, agent_id,
 version, conversation_id, session_id, turn_id, round, call_id, visitor_id,

@@ -121,7 +121,6 @@
 			<div class="alert alert-success text-sm" role="status">
 				<span>
 					{t('agents-act-verified', { events: verification.events, chains: verification.chains })}
-					{#if verification.unchained}{t('agents-act-unchained', { count: verification.unchained })}{/if}
 					{#if verification.unanchored}{t('agents-act-unanchored', { count: verification.unanchored })}{/if}
 				</span>
 			</div>

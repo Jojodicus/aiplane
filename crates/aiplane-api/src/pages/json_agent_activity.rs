@@ -237,7 +237,6 @@ pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Respon
                 "ok": v.ok(),
                 "chains": v.chains,
                 "events": v.events,
-                "unchained": v.unchained,
                 "unanchored": v.unanchored,
                 "head": v.head,
                 "broken": v.broken,
