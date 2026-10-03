@@ -42,7 +42,8 @@ use crate::rama_server::setup_api;
 use crate::rama_server::{
     api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, sandbox_api, spa,
 };
-use aiplane_core::rama_server::cors::{EmbedCorsLayer, V1CorsLayer};
+use crate::rama_server::embed_cors::EmbedCorsLayer;
+use aiplane_core::rama_server::cors::V1CorsLayer;
 
 /// Builds the rama router. State is shared via `Arc` since handlers
 /// borrow it immutably.

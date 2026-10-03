@@ -1586,7 +1586,7 @@ untrusted audiences.
   working`) every 15 s. There is no status to report beyond "still running",
   and a comment needs no new `chat_json` event. A stream gives up after 10
   minutes with `idle`; the widget re-attaches.
-- **CORS.** `EmbedCorsLayer` (`aiplane-core::rama_server::cors`) handles
+- **CORS.** `EmbedCorsLayer` (`aiplane::rama_server::embed_cors`) handles
   `/api/v0/embed/*` only. A preflight carries neither key nor token, so the
   layer reflects an `Origin` only if some live key of an enabled agent lists
   it (and answers a preflight from any other origin `403`, without CORS
