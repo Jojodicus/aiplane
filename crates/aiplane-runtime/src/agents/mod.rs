@@ -19,6 +19,7 @@ pub mod approval;
 pub mod assist;
 pub mod audit;
 pub mod bind;
+pub mod defaults;
 pub mod embed;
 pub mod eval;
 pub mod eval_judge;

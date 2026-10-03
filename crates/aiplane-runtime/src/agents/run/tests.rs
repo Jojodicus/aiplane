@@ -385,6 +385,7 @@ impl World {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &live_specs,
+                voice_defaults: &Default::default(),
             },
             Stage::Publish,
         )

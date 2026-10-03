@@ -633,3 +633,154 @@ async fn a_manager_is_offered_the_speech_and_transcription_pools_they_hold() {
     );
     assert_eq!(body["pools"], json!(["pool"]), "chat pools only");
 }
+
+/// A direction that is on but names no pool runs on the pool of the
+/// gateway's default model for it (Models & routing → Default models),
+/// among the pools granted to the agent.
+#[tokio::test]
+async fn without_a_pool_of_its_own_voice_runs_on_the_gateways_default_models() {
+    use aiplane_core::server::feature_defaults::{self, Feature};
+
+    let mock = upstream().await;
+    let e = voice_embed(&mock, json!({ "input": true, "output": true }), json!({})).await;
+    for p in e.fx.state.upstreams.pools() {
+        if p.name == STT {
+            p.backends[0].set_models(["whisper-1".into(), "whisper-large".into()].into());
+        }
+    }
+    feature_defaults::set(
+        &e.fx.state.db,
+        Feature::Transcription,
+        Some("whisper-large"),
+    )
+    .await
+    .unwrap();
+    let token = e.visitor().await;
+
+    let r = e.transcribe(&token, wav(1.0)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["text"], TRANSCRIPT);
+    let sent = mock.received_requests().await.unwrap();
+    let upload = sent
+        .iter()
+        .find(|r| r.url.path() == "/audio/transcriptions")
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&upload.body).contains("whisper-large"),
+        "the gateway's default transcription model is asked"
+    );
+
+    let turn = e.answered(&token).await;
+    let (r, audio) = e.speak(&token, &turn).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(audio, SPOKEN);
+}
+
+/// Publishing a direction that nothing granted can serve is refused with
+/// the step to fix it in; granting a pool of the kind makes it publishable.
+#[tokio::test]
+async fn voice_without_a_granted_pool_is_refused_at_publish_naming_the_step() {
+    use aiplane_core::server::feature_defaults::{self, Feature};
+
+    let fx = agents::fixture_with_pools(
+        None,
+        ToolRegistry::new().with(CurrentTimestamp),
+        &[TIME],
+        vec![(
+            STT.into(),
+            voice_pool(PoolKind::Transcription, "http://127.0.0.1:9", &[]),
+            vec!["whisper-1".into()],
+        )],
+    )
+    .await;
+    feature_defaults::set(&fx.state.db, Feature::Transcription, Some("whisper-1"))
+        .await
+        .unwrap();
+    let agent = fx.runnable("support").await;
+    let mut s = spec("v1");
+    s["publish"]["voice"] = json!({ "input": true });
+    let (status, body) = fx.put_draft(&fx.alice, &agent, s).await;
+    assert_eq!(status, StatusCode::OK, "a draft may still lack it: {body}");
+
+    let (status, body) = fx.publish(&fx.alice, &agent).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let issue = &body["error"]["issues"][0];
+    assert_eq!(issue["path"], "publish.voice.transcription_pool");
+    assert!(
+        issue["message"]
+            .as_str()
+            .unwrap()
+            .contains("\"Website\" step"),
+        "{issue}"
+    );
+
+    assert_eq!(
+        fx.grant(&fx.alice, &agent, "pool", STT).await,
+        StatusCode::CREATED
+    );
+    let (status, body) = fx.publish(&fx.alice, &agent).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// What the setup preselects follows the gateway's defaults, but only among
+/// the pools the manager holds: a default on a pool they may not grant is
+/// never offered.
+#[tokio::test]
+async fn the_setup_defaults_follow_the_gateway_but_stay_within_what_the_manager_holds() {
+    use aiplane_core::server::feature_defaults::{self, Feature};
+
+    let mut private = voice_pool(PoolKind::Transcription, "http://127.0.0.1:9", &[]);
+    private.allowed_groups = vec!["support".into()];
+    let fx = agents::fixture_with_pools(
+        Some("http://127.0.0.1:9"),
+        ToolRegistry::new().with(CurrentTimestamp),
+        &[TIME],
+        vec![
+            (
+                STT.into(),
+                voice_pool(PoolKind::Transcription, "http://127.0.0.1:9", &[]),
+                vec!["whisper-1".into()],
+            ),
+            ("stt-private".into(), private, vec!["whisper-large".into()]),
+            (
+                TTS.into(),
+                voice_pool(PoolKind::Speech, "http://127.0.0.1:9", &[]),
+                vec!["tts-1".into()],
+            ),
+        ],
+    )
+    .await;
+    feature_defaults::set(&fx.state.db, Feature::Transcription, Some("whisper-large"))
+        .await
+        .unwrap();
+    feature_defaults::set(&fx.state.db, Feature::Speech, Some("tts-1"))
+        .await
+        .unwrap();
+    feature_defaults::set(&fx.state.db, Feature::Chat, Some("m"))
+        .await
+        .unwrap();
+
+    let (status, body) = fx.get(&fx.alice, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["defaults"],
+        json!({
+            "chat": { "pool": "pool", "model": "m" },
+            "transcription": { "pool": STT, "model": "whisper-1" },
+            "speech": { "pool": TTS, "model": "tts-1" },
+        }),
+        "the private pool's default is not the manager's to grant"
+    );
+    assert_eq!(
+        body["tiers"],
+        json!({ "fast": null, "balanced": null, "thorough": null }),
+        "no Fast/Balanced/Thorough choice an admin did not set up"
+    );
+
+    let (_, body) = fx.get(&fx.root, "/api/v0/agent-resources").await;
+    assert_eq!(
+        body["defaults"]["transcription"],
+        json!({ "pool": "stt-private", "model": "whisper-large" }),
+        "whoever holds the default's pool gets it"
+    );
+}

@@ -272,6 +272,7 @@ impl<'a> Reviewer<'a> {
             grants: &grants,
             agents: self.ctx.agents,
             live_specs: self.ctx.live_specs,
+            voice_defaults: &Default::default(),
         };
         spec::validate(draft, &ctx, Stage::Draft)
             .into_iter()

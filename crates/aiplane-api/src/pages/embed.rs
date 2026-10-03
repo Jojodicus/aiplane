@@ -256,8 +256,8 @@ fn agent_json(live: &Live) -> Value {
         "display": live.agent.principal.display,
         "color": spec.profile.color(),
         "voice": {
-            "input": voice.input_pool().is_some(),
-            "output": voice.output_pool().is_some(),
+            "input": voice.input,
+            "output": voice.output,
         },
     })
 }

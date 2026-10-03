@@ -758,9 +758,11 @@ pub fn is_hex_color(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Spoken input and output for the embed widget (`publish.voice`). Each
-/// direction runs only while it is on *and* names its pool; the validator
-/// requires the pool of a direction that is on before publishing.
+/// Spoken input and output for the embed widget (`publish.voice`). A
+/// direction that is on runs on the pool named here, else on the pool of the
+/// gateway's default model for it among the agent's grants
+/// (`agents::defaults::voice_pool`); the validator requires one of the two
+/// before publishing.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceSpec {

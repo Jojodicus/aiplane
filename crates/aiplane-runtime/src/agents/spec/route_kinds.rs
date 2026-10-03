@@ -349,6 +349,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: live,
+                voice_defaults: &Default::default(),
             },
             stage,
         )
