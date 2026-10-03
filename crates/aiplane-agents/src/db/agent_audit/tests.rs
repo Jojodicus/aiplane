@@ -646,6 +646,13 @@ fn canonical_json_sorts_keys_at_every_level_without_whitespace() {
 }
 
 #[test]
+fn the_insert_has_a_placeholder_per_column() {
+    let columns = event_columns!().split(',').count();
+    assert_eq!(INSERT_SQL.matches('?').count(), columns);
+    assert_eq!(COLUMNS.split(',').count(), columns + 1, "rowid first");
+}
+
+#[test]
 fn the_markers_are_what_the_agent_chain_says_about_other_chains() {
     let markers: Vec<AuditKind> = AuditKind::ALL
         .iter()

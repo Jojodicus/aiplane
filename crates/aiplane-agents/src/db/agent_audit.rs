@@ -668,37 +668,31 @@ pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appen
         .expected_hash(&ring)
         .expect("the signing key is the ring's own");
     row.hash = Some(hash.clone());
-    sqlx::query(
-        "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at,
-                                  chain_key, seq, prev_hash, hash, agent_id, version,
-                                  conversation_id, session_id, turn_id, round, call_id,
-                                  visitor_id, caller_id, duration_ms, key_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&row.id)
-    .bind(&row.kind)
-    .bind(&row.principal_id)
-    .bind(&row.actor_id)
-    .bind(&row.chain)
-    .bind(&row.detail)
-    .bind(&row.created_at)
-    .bind(&row.chain_key)
-    .bind(row.seq)
-    .bind(&row.prev_hash)
-    .bind(&row.hash)
-    .bind(&row.agent_id)
-    .bind(row.version)
-    .bind(&row.conversation_id)
-    .bind(&row.session_id)
-    .bind(&row.turn_id)
-    .bind(row.round)
-    .bind(&row.call_id)
-    .bind(&row.visitor_id)
-    .bind(&row.caller_id)
-    .bind(row.duration_ms)
-    .bind(&row.key_id)
-    .execute(&mut **conn)
-    .await?;
+    sqlx::query(INSERT_SQL)
+        .bind(&row.id)
+        .bind(&row.kind)
+        .bind(&row.principal_id)
+        .bind(&row.actor_id)
+        .bind(&row.agent_id)
+        .bind(row.version)
+        .bind(&row.conversation_id)
+        .bind(&row.session_id)
+        .bind(&row.turn_id)
+        .bind(row.round)
+        .bind(&row.call_id)
+        .bind(&row.visitor_id)
+        .bind(&row.caller_id)
+        .bind(row.duration_ms)
+        .bind(&row.chain)
+        .bind(&row.detail)
+        .bind(&row.created_at)
+        .bind(&row.chain_key)
+        .bind(row.seq)
+        .bind(&row.prev_hash)
+        .bind(&row.hash)
+        .bind(&row.key_id)
+        .execute(&mut **conn)
+        .await?;
     Ok(Appended {
         id: row.id,
         chain_key,
@@ -749,10 +743,24 @@ pub async fn anchor_conversation(
     Ok(Some(appended))
 }
 
-const COLUMNS: &str = "rowid, id, kind, principal_id, actor_id, agent_id, version, \
-                       conversation_id, session_id, turn_id, round, call_id, visitor_id, \
-                       caller_id, duration_ms, chain, detail, created_at, chain_key, seq, \
-                       prev_hash, hash, key_id";
+/// Every stored column of an event, in the order [`append`] binds them and
+/// [`COLUMNS`] reads them.
+macro_rules! event_columns {
+    () => {
+        "id, kind, principal_id, actor_id, agent_id, version, conversation_id, session_id, \
+         turn_id, round, call_id, visitor_id, caller_id, duration_ms, chain, detail, \
+         created_at, chain_key, seq, prev_hash, hash, key_id"
+    };
+}
+
+const COLUMNS: &str = concat!("rowid, ", event_columns!());
+
+/// The one `INSERT` of an event: a placeholder per [`event_columns`].
+const INSERT_SQL: &str = concat!(
+    "INSERT INTO agent_audit (",
+    event_columns!(),
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+);
 
 fn stored(row: &sqlx::sqlite::SqliteRow) -> Result<StoredEvent, DbError> {
     Ok(StoredEvent {
