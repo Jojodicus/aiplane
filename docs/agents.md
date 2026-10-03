@@ -1477,7 +1477,7 @@ untrusted audiences.
     /api/v0/embed/session` for the transcript, or `…/events`. After the TTL
     either answers `401 visitor_session_expired`, and the widget starts a new
     session.
-- **Routes** (`aiplane-api::pages::embed`, routed in `gateway`):
+- **Routes** (`aiplane-api::pages::embed`; the key routes in `pages::json_embed_keys`; routed in `gateway`):
 
   | Method | Path | Purpose |
   |---|---|---|

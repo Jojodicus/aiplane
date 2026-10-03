@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 croit GmbH
+
+//! `/api/v0/agents/{id}/embed-keys` — the keys a website's widget starts
+//! visitor conversations with. They follow the agent's share rules
+//! (`pages::json_agents`): `read` lists them, `write` creates and revokes
+//! them. The public side is `pages::embed`.
+
+use std::sync::Arc;
+
+use rama::http::service::web::extract::State;
+use rama::http::{Request, Response, StatusCode};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use super::json_agents::agent_at;
+use super::json_principals::require_agent_manager;
+use super::{bad_request, internal, json_ok, no_content, not_found, raw_path_segment};
+use aiplane_core::server::auth::token;
+use aiplane_core::server::db::agents::Access;
+use aiplane_core::server::db::embed_keys;
+use aiplane_runtime::agents::spec;
+use aiplane_runtime::rama_server::state::RamaState;
+
+macro_rules! or_return {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        }
+    };
+}
+
+fn embed_key_json(k: &embed_keys::EmbedKey) -> Value {
+    json!({
+        "id": k.id,
+        "name": k.name,
+        "origins": k.origins,
+        "created_by": k.created_by,
+        "created_at": k.created_at,
+        "revoked_at": k.revoked_at,
+    })
+}
+
+/// GET /api/v0/agents/{id}/embed-keys — every key, revoked ones included,
+/// never the key itself.
+pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
+    match embed_keys::list(&state.db, &agent.principal.id).await {
+        Ok(keys) => json_ok(
+            StatusCode::OK,
+            json!({ "embed_keys": keys.iter().map(embed_key_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbedKeyBody {
+    pub name: String,
+    pub origins: Vec<String>,
+}
+
+/// The origins as stored: trimmed, de-duplicated, each exactly
+/// `scheme://host[:port]`, at least one.
+fn parse_origins(origins: &[String]) -> Result<Vec<String>, Response> {
+    let mut out: Vec<String> = Vec::new();
+    for origin in origins.iter().map(|o| o.trim()) {
+        if !spec::is_origin(origin) {
+            return Err(bad_request(format!(
+                "`{origin}` is not an origin — write exactly what the browser sends in `Origin`: \
+                 `https://host` or `https://host:port`, without a path or trailing slash"
+            )));
+        }
+        if !out.iter().any(|o| o == origin) {
+            out.push(origin.to_string());
+        }
+    }
+    if out.is_empty() {
+        return Err(bad_request(
+            "an embed key needs at least one origin, e.g. `https://www.example.com` — no website \
+             could use it otherwise",
+        ));
+    }
+    Ok(out)
+}
+
+/// POST /api/v0/agents/{id}/embed-keys — a new `gwe_` key for the listed
+/// origins. The key is in this response only.
+pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let body: EmbedKeyBody =
+        or_return!(super::read_json(req.into_body(), "the embed key body").await);
+    let name = body.name.trim();
+    if name.is_empty() {
+        return bad_request("an embed key needs a `name`, e.g. the website it is for");
+    }
+    let origins = or_return!(parse_origins(&body.origins));
+    let (key, key_hash) = token::mint_embed_key();
+    match embed_keys::create(
+        &state.db,
+        &embed_keys::NewEmbedKey {
+            principal_id: &agent.principal.id,
+            name,
+            origins: &origins,
+            key_hash: &key_hash,
+        },
+        &user.id,
+    )
+    .await
+    {
+        Ok(k) => json_ok(
+            StatusCode::CREATED,
+            json!({ "embed_key": embed_key_json(&k), "key": key }),
+        ),
+        Err(err) => internal(err),
+    }
+}
+
+/// POST /api/v0/agents/{id}/embed-keys/{key_id}/revoke — websites using the
+/// key stop working at once, open visitor conversations included.
+pub async fn revoke(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    let (agent, _) = or_return!(agent_at(&state, &req, &user, 3, Access::Write).await);
+    let Some(key_id) = raw_path_segment(&req, 1) else {
+        return bad_request("the URL is missing the embed key id");
+    };
+    match embed_keys::revoke(&state.db, &agent.principal.id, &key_id, &user.id).await {
+        Ok(true) => no_content(),
+        Ok(false) => not_found(format!(
+            "`{}` has no live embed key `{key_id}` — list them with GET /api/v0/agents/{}/embed-keys",
+            agent.principal.name, agent.principal.id
+        )),
+        Err(err) => internal(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origins_are_exact_deduplicated_and_never_empty() {
+        let o = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_origins(&o(&[
+                " https://a.example ",
+                "https://a.example",
+                "http://localhost:5173"
+            ]))
+            .unwrap(),
+            o(&["https://a.example", "http://localhost:5173"])
+        );
+        for bad in ["https://a.example/", "a.example", "*", "ftp://a.example"] {
+            assert!(parse_origins(&o(&[bad])).is_err(), "{bad} accepted");
+        }
+        assert!(parse_origins(&[]).is_err());
+    }
+}

@@ -25,7 +25,7 @@ use session_core::chat_json::json_stream_response;
 use session_core::db as chat;
 use session_core::i18n::Lang;
 
-use super::json_agent_test::resume_error;
+use super::agent_errors::resume_error;
 use super::json_agents::agent_at;
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};

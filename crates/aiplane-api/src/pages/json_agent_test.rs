@@ -25,18 +25,16 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::agent_errors::resume_error;
 use super::json_agents::{agent_at, parse_spec};
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, raw_path_segment};
 use aiplane_core::server::db::agents::Access;
 use aiplane_runtime::agents::profile::{AgentRunError, RunOptions};
-use aiplane_runtime::agents::resume::{
-    AgentResume, AgentResumeError, ResumedBy, claim, run_claimed,
-};
+use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use aiplane_runtime::agents::run::draft::{DRAFT_VERSION, collect_debug, run_draft_turn};
 use aiplane_runtime::agents::run::{AgentReply, AgentTurn};
 use aiplane_runtime::rama_server::state::RamaState;
-use aiplane_runtime::suspend::ResumeRefused;
 use session_core::db as chat;
 
 macro_rules! or_return {
@@ -67,26 +65,6 @@ fn run_error(err: AgentRunError) -> Response {
         }
         AgentRunError::NoModel { .. } => (StatusCode::SERVICE_UNAVAILABLE, "agent_no_model"),
         AgentRunError::Db(_) => return internal(err),
-    };
-    json_error(status, code, &err.to_string())
-}
-
-/// A refused resume, in the `/api/v0` envelope. Shared with the visitor's
-/// route, so both name a refusal the same way.
-pub(crate) fn resume_error(err: AgentResumeError) -> Response {
-    let (status, code) = match &err {
-        AgentResumeError::Refused(ResumeRefused::NotSuspended)
-        | AgentResumeError::Refused(ResumeRefused::StaleRequest { .. }) => {
-            (StatusCode::CONFLICT, "not_suspended")
-        }
-        AgentResumeError::Refused(ResumeRefused::NotOffered { .. }) => {
-            (StatusCode::BAD_REQUEST, "decision_not_offered")
-        }
-        AgentResumeError::StaffOnly { .. } => (StatusCode::FORBIDDEN, "decision_for_staff"),
-        AgentResumeError::ParticipantOnly { .. } => (StatusCode::FORBIDDEN, "decision_for_visitor"),
-        AgentResumeError::Refused(ResumeRefused::Storage(_)) | AgentResumeError::Db(_) => {
-            return internal(err);
-        }
     };
     json_error(status, code, &err.to_string())
 }

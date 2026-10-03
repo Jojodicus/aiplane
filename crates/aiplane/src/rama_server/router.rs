@@ -329,15 +329,15 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
         )
         .with_get(
             "/api/v0/agents/{id}/embed-keys",
-            pages::json_agents::embed_keys_list,
+            pages::json_embed_keys::list,
         )
         .with_post(
             "/api/v0/agents/{id}/embed-keys",
-            pages::json_agents::embed_key_create,
+            pages::json_embed_keys::create,
         )
         .with_post(
             "/api/v0/agents/{id}/embed-keys/{key_id}/revoke",
-            pages::json_agents::embed_key_revoke,
+            pages::json_embed_keys::revoke,
         )
         // The public agent endpoint (docs/agents.md §5): anonymous visitors
         // with an embed key, then a `gwv_` visitor token. No session cookie
