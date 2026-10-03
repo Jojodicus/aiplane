@@ -1,7 +1,11 @@
 {
 	"_comment": "Starter specs for the agent setup assistant (docs/ui.md 'Agent setup'). A string \"@<key>\" is a Fluent message the SPA (and crates/aiplane/tests/it/agent_test_chat.rs, which creates each template in every language) replaces with its translation. Tone and language lines are the model-facing sentences of web/src/lib/agent-setup.ts and must match them exactly.",
 	"faq": {
-		"scope": { "topics": [], "refusal": "@agents-tpl-faq-refusal", "strict": false },
+		"scope": {
+			"topics": [],
+			"refusal": "@agents-tpl-faq-refusal",
+			"strict": false
+		},
 		"main": {
 			"instructions": {
 				"orchestration": "@agents-tpl-faq-task",
@@ -10,7 +14,11 @@
 		}
 	},
 	"support": {
-		"scope": { "topics": [], "refusal": "@agents-tpl-support-refusal", "strict": false },
+		"scope": {
+			"topics": [],
+			"refusal": "@agents-tpl-support-refusal",
+			"strict": false
+		},
 		"main": {
 			"instructions": {
 				"orchestration": "@agents-tpl-support-task",
@@ -18,21 +26,69 @@
 			}
 		},
 		"state": {
-			"name": { "type": "string", "max_length": 200, "set_by": ["llm"], "description": "@agents-tpl-slot-name" },
-			"email": { "type": "email", "set_by": ["llm"], "description": "@agents-tpl-slot-email" },
-			"request": { "type": "string", "max_length": 2000, "set_by": ["llm"], "description": "A short summary of what the visitor needs." },
-			"verified": { "type": "subject", "set_by": ["verifier:identity"] }
+			"name": {
+				"type": "string",
+				"max_length": 200,
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-name",
+				"order": 0
+			},
+			"email": {
+				"type": "email",
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-email",
+				"order": 1
+			},
+			"request": {
+				"type": "string",
+				"max_length": 2000,
+				"set_by": [
+					"llm"
+				],
+				"description": "A short summary of what the visitor needs."
+			},
+			"verified": {
+				"type": "subject",
+				"set_by": [
+					"verifier:identity"
+				]
+			}
 		},
 		"verifiers": {
-			"identity": { "kind": "mcp_code", "email_slot": "email", "writes": { "verified": "result" } }
+			"identity": {
+				"kind": "mcp_code",
+				"email_slot": "email",
+				"writes": {
+					"verified": "result"
+				}
+			}
 		},
 		"routes": {
-			"fallback": { "when": { "slot": "request", "set": true }, "human": {} }
+			"fallback": {
+				"when": {
+					"slot": "request",
+					"set": true
+				},
+				"human": {}
+			}
 		},
-		"router": { "kind": "rules", "order": ["fallback"] }
+		"router": {
+			"kind": "rules",
+			"order": [
+				"fallback"
+			]
+		}
 	},
 	"leads": {
-		"scope": { "topics": [], "refusal": "@agents-tpl-leads-refusal", "strict": false },
+		"scope": {
+			"topics": [],
+			"refusal": "@agents-tpl-leads-refusal",
+			"strict": false
+		},
 		"main": {
 			"instructions": {
 				"orchestration": "@agents-tpl-leads-task",
@@ -40,19 +96,72 @@
 			}
 		},
 		"state": {
-			"name": { "type": "string", "max_length": 200, "set_by": ["llm"], "description": "@agents-tpl-slot-name" },
-			"email": { "type": "email", "set_by": ["llm"], "description": "@agents-tpl-slot-email" },
-			"company": { "type": "string", "max_length": 200, "set_by": ["llm"], "description": "@agents-tpl-slot-company" },
-			"need": { "type": "string", "max_length": 2000, "set_by": ["llm"], "description": "@agents-tpl-slot-need" },
-			"request": { "type": "string", "max_length": 2000, "set_by": ["llm"], "description": "A short summary of what the visitor needs." }
+			"name": {
+				"type": "string",
+				"max_length": 200,
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-name",
+				"order": 0
+			},
+			"email": {
+				"type": "email",
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-email",
+				"order": 1
+			},
+			"company": {
+				"type": "string",
+				"max_length": 200,
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-company",
+				"order": 2
+			},
+			"need": {
+				"type": "string",
+				"max_length": 2000,
+				"set_by": [
+					"llm"
+				],
+				"description": "@agents-tpl-slot-need",
+				"order": 3
+			},
+			"request": {
+				"type": "string",
+				"max_length": 2000,
+				"set_by": [
+					"llm"
+				],
+				"description": "A short summary of what the visitor needs."
+			}
 		},
 		"routes": {
-			"fallback": { "when": { "slot": "request", "set": true }, "human": {} }
+			"fallback": {
+				"when": {
+					"slot": "request",
+					"set": true
+				},
+				"human": {}
+			}
 		},
-		"router": { "kind": "rules", "order": ["fallback"] }
+		"router": {
+			"kind": "rules",
+			"order": [
+				"fallback"
+			]
+		}
 	},
 	"internal": {
-		"scope": { "topics": [], "refusal": "@agents-tpl-internal-refusal", "strict": false },
+		"scope": {
+			"topics": [],
+			"refusal": "@agents-tpl-internal-refusal",
+			"strict": false
+		},
 		"main": {
 			"instructions": {
 				"orchestration": "@agents-tpl-internal-task",

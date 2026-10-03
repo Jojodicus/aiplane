@@ -141,14 +141,14 @@ test('details round-trip; a fresh row takes its key from its label, managed and 
 	const next: SlotRow[] = [...rows, { key: '', label: 'Customer number', kind: 'customer_number', values: [], fresh: true }, { key: '', label: 'Plan', kind: 'choice', values: ['basic', 'pro'], fresh: true }];
 	writeSlots(spec, next);
 	assert.deepEqual(Object.keys(spec.state), ['email', 'legacy', 'customer_number', 'plan', 'verified', 'topic']);
-	assert.deepEqual(spec.state.legacy, custom);
 	const back = readSlots(throughEditor(spec));
 	assert.deepEqual(back, [
-		{ key: 'customer_number', label: 'Customer number', kind: 'customer_number', values: [] },
 		{ key: 'email', label: 'E-mail', kind: 'email', values: [] },
 		{ key: 'legacy', label: 'Legacy', kind: 'custom', values: [] },
+		{ key: 'customer_number', label: 'Customer number', kind: 'customer_number', values: [] },
 		{ key: 'plan', label: 'Plan', kind: 'choice', values: ['basic', 'pro'] }
-	], 'the server keeps slots in key order');
+	], 'the order the person gave survives the server sorting the keys');
+	assert.deepEqual(spec.state.legacy, { ...custom, order: 1 });
 	writeSlots(spec, back.filter((r) => r.key !== 'legacy'));
 	assert.equal(spec.state.legacy, undefined);
 });
@@ -428,9 +428,25 @@ test('a proposal maps onto the steps: identity cards, friendly details, hand-off
 	assert.deepEqual(rows.map((r) => [r.key, r.kind, r.values]), [['order_number', 'text', []], ['quantity', 'whole_number', []], ['plan', 'choice', ['basic', 'pro']]]);
 	const spec: Spec = {};
 	writeSlots(spec, [...existing, ...rows]);
-	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.kind), ['email', 'text', 'choice', 'whole_number']);
+	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.kind), ['email', 'text', 'whole_number', 'choice']);
 
 	const rules = suggestedRules([{ topic: 'Invoices', target: 'b1' }, { topic: 'invoices', target: 'human' }, { topic: 'Returns', target: 'human' }], []);
 	assert.deepEqual(rules.map((r) => [r.topic, r.target]), [['Invoices', { kind: 'agent', id: 'b1' }], ['Returns', { kind: 'human' }]]);
 	assert.deepEqual(suggestedRules([{ topic: 'Returns', target: 'human' }], rules), []);
+});
+
+test('details keep the order they were given, and unordered slots follow by name', () => {
+	const spec: Spec = {
+		state: {
+			zeta: { type: 'string', set_by: ['llm'] },
+			alpha: { type: 'string', set_by: ['llm'] },
+			second: { ...slotDef('text', 'Second'), order: 1 },
+			first: { ...slotDef('email', 'First'), order: 0 }
+		}
+	};
+	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.key), ['first', 'second', 'alpha', 'zeta']);
+	const rows = readSlots(spec);
+	writeSlots(spec, [rows[1], rows[0], ...rows.slice(2)]);
+	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.key), ['second', 'first', 'alpha', 'zeta']);
+	assert.equal(slotKind(spec.state.first), 'email', 'the order is not part of the friendly kind');
 });

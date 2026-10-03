@@ -270,6 +270,10 @@ pub struct Slot {
     pub maximum: Option<f64>,
     pub pattern: Option<String>,
     pub schema: Option<Value>,
+    /// Where the slot sits in the setup's list of details (#116). A JSON
+    /// object's key order does not survive a save, so the order the manager
+    /// gave lives here; nothing at run time reads it.
+    pub order: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

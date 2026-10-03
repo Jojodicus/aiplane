@@ -11,7 +11,7 @@
 	let { spec = $bindable(), onfix }: { spec: Spec; onfix: (step: StepKey | null) => void } = $props();
 	const ws = useWorkspace();
 
-	const ctx = $derived({ tr: t, grants: ws.detail?.grants ?? [], resources: ws.resources, agents: ws.agents });
+	const ctx = $derived({ tr: t, grants: ws.grants, resources: ws.resources, agents: ws.agents });
 	const todos = $derived(checklist(spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
 	const name = $derived(spec.profile?.display || ws.detail?.display || ws.detail?.name || '');
 

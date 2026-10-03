@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
-	import type { AgentError, Spec } from '$lib/agents';
+	import type { Spec } from '$lib/agents';
 	import {
 		IDENTITY_METHODS,
 		newSecret,
@@ -37,23 +37,28 @@
 		...connectors.flatMap((c) => c.tools.map((id) => ({ id, name: `${c.name}: ${id.split('__').pop()}` })))
 	]);
 
-	let grantError = $state<string | null>(null);
 	let generated = $state(false);
 
-	async function pick(kind: 'connector' | 'tool', ref: string) {
-		grantError = null;
-		if (!ref) {
-			model[kind] = '';
-			return;
+	function pick(kind: 'connector' | 'tool', ref: string) {
+		const previous = model[kind];
+		model[kind] = ref;
+		const grantOf = (r: string) => {
+			const connector = kind === 'connector' ? r : connectors.find((c) => c.tools.includes(r))?.key;
+			return connector ? { kind: 'connector' as const, ref: connector } : { kind: 'tool' as const, ref: r };
+		};
+		if (ref) {
+			const g = grantOf(ref);
+			ws.stageGrant(g.kind, g.ref);
 		}
-		try {
-			const connector = kind === 'connector' ? ref : connectors.find((c) => c.tools.includes(ref))?.key;
-			if (connector) await ws.ensureGrant('connector', connector);
-			else await ws.ensureGrant('tool', ref);
-			model[kind] = ref;
-		} catch (err) {
-			grantError = t('agents-setup-grant-failed', { reason: (err as AgentError).message });
+		if (previous && previous !== ref) {
+			const g = grantOf(previous);
+			if (!(abilityUses(g.kind, g.ref))) ws.stageRevoke(g.kind, g.ref);
 		}
+	}
+	/** A connector or tool the agent's abilities also use stays granted when the identity check lets go of it. */
+	function abilityUses(kind: 'connector' | 'tool', ref: string): boolean {
+		const tools: string[] = spec.main?.tools ?? [];
+		return kind === 'tool' ? tools.includes(ref) : tools.some((id) => id.startsWith(`mcp__${ref}__`));
 	}
 
 	const suggested = $derived(ws.suggestion?.steps.identity ?? null);
@@ -90,13 +95,12 @@
 	{#if model.others}
 		<p class="m-0 text-sm text-base-content/60">{t('agents-setup-identity-custom', { count: model.others })}</p>
 	{/if}
-	{#if grantError}<div class="alert alert-error text-sm" role="alert"><span>{grantError}</span></div>{/if}
 
 	{#if model.method === 'email_code'}
 		<label class="flex flex-col gap-1">
 			<span class="font-semibold">{t('agents-setup-identity-connector')}</span>
 			{#if connectors.length || model.connector}
-				<select class="select w-full max-w-sm" value={model.connector} onchange={(e) => void pick('connector', e.currentTarget.value)}>
+				<select class="select w-full max-w-sm" value={model.connector} onchange={(e) => pick('connector', e.currentTarget.value)}>
 					<option value="">{t('agents-pick')}</option>
 					{#each connectors as c (c.key)}<option value={c.key}>{c.name}</option>{/each}
 					{#if model.connector && !connectors.some((c) => c.key === model.connector)}<option value={model.connector}>{model.connector}</option>{/if}
@@ -109,7 +113,7 @@
 	{:else if model.method === 'customer_lookup'}
 		<label class="flex flex-col gap-1">
 			<span class="font-semibold">{t('agents-setup-identity-tool')}</span>
-			<select class="select w-full max-w-sm" value={model.tool} onchange={(e) => void pick('tool', e.currentTarget.value)}>
+			<select class="select w-full max-w-sm" value={model.tool} onchange={(e) => pick('tool', e.currentTarget.value)}>
 				<option value="">{t('agents-pick')}</option>
 				{#each lookupTools as tool (tool.id)}<option value={tool.id}>{tool.name}</option>{/each}
 				{#if model.tool && !lookupTools.some((x) => x.id === model.tool)}<option value={model.tool}>{model.tool}</option>{/if}
