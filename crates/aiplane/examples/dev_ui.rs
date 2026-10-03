@@ -1005,8 +1005,7 @@ async fn mount_architect_model(chat_mock: &MockServer) {
             })
         })
         .respond_with(|request: &wiremock::Request| {
-            let body: serde_json::Value =
-                serde_json::from_slice(&request.body).unwrap_or_default();
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
             completion(&body, architect_step(&body))
         })
         .mount(chat_mock)
@@ -1029,7 +1028,10 @@ fn architect_step(body: &serde_json::Value) -> serde_json::Value {
         .filter(|m| m["role"] == "assistant")
         .flat_map(|m| m["tool_calls"].as_array().cloned().unwrap_or_default())
         .map(|c| {
-            let name = c["function"]["name"].as_str().unwrap_or_default().to_string();
+            let name = c["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let result = messages
                 .iter()
                 .find(|m| m["role"] == "tool" && m["tool_call_id"] == c["id"])

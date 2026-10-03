@@ -423,7 +423,12 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
         out.draft["main"]["instructions"]["orchestration"],
         "You answer questions about Acme orders."
     );
-    assert_eq!(out.suggestion.dropped.len(), 1, "{:#?}", out.suggestion.dropped);
+    assert_eq!(
+        out.suggestion.dropped.len(),
+        1,
+        "{:#?}",
+        out.suggestion.dropped
+    );
     assert_eq!(out.suggestion.dropped[0].step, "tests");
 
     let granted = GrantSet::new(

@@ -1110,8 +1110,18 @@ mod tests {
                 .is_none(),
             "the oldest revisions are dropped"
         );
-        assert!(draft_revision(&pool, id, last.unwrap()).await.unwrap().is_some());
-        assert!(draft_revision(&pool, "other", last.unwrap()).await.unwrap().is_none());
+        assert!(
+            draft_revision(&pool, id, last.unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            draft_revision(&pool, "other", last.unwrap())
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             update_draft(&pool, "missing", "{}", "alice").await.unwrap(),
             None

@@ -500,8 +500,7 @@ pub struct RestoreBody {
 pub async fn restore_draft(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
-    let body: RestoreBody =
-        or_return!(super::read_json(req.into_body(), "the restore body").await);
+    let body: RestoreBody = or_return!(super::read_json(req.into_body(), "the restore body").await);
     let id = &agent.principal.id;
     let revision = match agents_db::draft_revision(&state.db, id, body.revision).await {
         Ok(Some(r)) => r,

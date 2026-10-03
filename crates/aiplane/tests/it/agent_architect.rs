@@ -188,7 +188,13 @@ async fn fixture(script: Vec<Value>) -> Fx {
 }
 
 impl Fx {
-    async fn send(&self, cookie: &str, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    async fn send(
+        &self,
+        cookie: &str,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let req = Request::builder()
             .method(method)
             .uri(uri)
@@ -203,7 +209,10 @@ impl Fx {
         let resp = common::app(self.state.clone()).serve(req).await.unwrap();
         let status = resp.status();
         let bytes = common::read_body(resp).await;
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     async fn post(&self, cookie: &str, uri: &str, body: Value) -> (StatusCode, Value) {
@@ -278,19 +287,34 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
     let fx = fixture(vec![
         call("c1", "list_agents", json!({})),
         call("c2", "create_agent_draft", json!({ "display": "Harald" })),
-        call("c3", "propose_setup",
-             json!({ "agent_id": "harald", "scenario": "Answer questions about Acme orders." })),
-        call("c4", "update_agent_draft", json!({ "agent_id": "harald", "changes": {
-            "pool": "pool",
-            "task": "You answer questions about Acme orders.",
-            "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
-            "slots": [{ "name": "order", "label": "Order number", "type": "text",
-                        "choices": [] }]
-        }})),
-        call("c5", "update_agent_draft", json!({ "agent_id": "harald", "changes": {
-            "abilities": [{ "id": "run_in_sandbox", "why": "run code" }]
-        }})),
-        call("c6", "run_test_turn", json!({ "agent_id": "harald", "message": "Hi" })),
+        call(
+            "c3",
+            "propose_setup",
+            json!({ "agent_id": "harald", "scenario": "Answer questions about Acme orders." }),
+        ),
+        call(
+            "c4",
+            "update_agent_draft",
+            json!({ "agent_id": "harald", "changes": {
+                "pool": "pool",
+                "task": "You answer questions about Acme orders.",
+                "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
+                "slots": [{ "name": "order", "label": "Order number", "type": "text",
+                            "choices": [] }]
+            }}),
+        ),
+        call(
+            "c5",
+            "update_agent_draft",
+            json!({ "agent_id": "harald", "changes": {
+                "abilities": [{ "id": "run_in_sandbox", "why": "run code" }]
+            }}),
+        ),
+        call(
+            "c6",
+            "run_test_turn",
+            json!({ "agent_id": "harald", "message": "Hi" }),
+        ),
         call("c7", "publish_agent", json!({ "agent_id": "harald" })),
         json!({ "content": "Harald is drafted. Review it and press Publish on /agents/harald." }),
     ])
@@ -318,17 +342,33 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
         "every call is recorded in the conversation"
     );
     assert_eq!(output(&turn, 0)["agents"], json!([]));
-    assert_eq!(output(&turn, 2)["steps"]["task"]["orchestration"], proposal()["task"]);
+    assert_eq!(
+        output(&turn, 2)["steps"]["task"]["orchestration"],
+        proposal()["task"]
+    );
     let updated = output(&turn, 3);
-    assert_eq!(updated["changed"], json!(["pool", "task", "abilities", "slots"]));
+    assert_eq!(
+        updated["changed"],
+        json!(["pool", "task", "abilities", "slots"])
+    );
     let revision = updated["revision"].as_i64().expect("an undoable revision");
-    let refused = turn.tool_calls[4].output_json.as_deref().unwrap_or_default();
-    assert!(refused.contains("not an ability you may grant"), "{refused}");
+    let refused = turn.tool_calls[4]
+        .output_json
+        .as_deref()
+        .unwrap_or_default();
+    assert!(
+        refused.contains("not an ability you may grant"),
+        "{refused}"
+    );
     assert_eq!(output(&turn, 5)["answer"], DRAFT_ANSWER);
 
     let harald = fx.agent_named("harald").await;
     assert_eq!(harald["display"], "Harald");
-    assert_eq!(harald["live_version"], Value::Null, "the architect cannot publish");
+    assert_eq!(
+        harald["live_version"],
+        Value::Null,
+        "the architect cannot publish"
+    );
     let draft = &harald["draft_spec"];
     assert_eq!(draft["main"]["pool"], "pool");
     assert_eq!(draft["main"]["tools"], json!(["get_current_timestamp"]));
@@ -398,8 +438,14 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
-    assert_eq!(restored["draft_spec"], json!({ "profile": { "display": "Harald" } }));
-    assert!(restored["revision"].is_i64(), "an undo can itself be undone");
+    assert_eq!(
+        restored["draft_spec"],
+        json!({ "profile": { "display": "Harald" } })
+    );
+    assert!(
+        restored["revision"].is_i64(),
+        "an undo can itself be undone"
+    );
 }
 
 #[tokio::test]
@@ -432,7 +478,11 @@ async fn reopening_continues_the_conversation_and_fresh_starts_a_new_one() {
 async fn only_an_agent_manager_may_talk_to_the_architect() {
     let fx = fixture(vec![json!({ "content": "Hi" })]).await;
     let (status, body) = fx
-        .post(&fx.plain, "/api/v0/agent-architect", json!({ "title": "x" }))
+        .post(
+            &fx.plain,
+            "/api/v0/agent-architect",
+            json!({ "title": "x" }),
+        )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let (status, body) = fx

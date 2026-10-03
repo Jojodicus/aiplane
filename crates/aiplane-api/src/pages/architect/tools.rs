@@ -226,7 +226,9 @@ async fn refusal(resp: Response) -> ToolError {
             .await
             .unwrap_or(Value::Null);
     let error = &body["error"];
-    let message = error["message"].as_str().unwrap_or("the request was refused");
+    let message = error["message"]
+        .as_str()
+        .unwrap_or("the request was refused");
     match error["code"].as_str() {
         Some(code) => ToolError::Failed(format!("{message} ({code}, HTTP {})", status.as_u16())),
         None => ToolError::Failed(format!("{message} (HTTP {})", status.as_u16())),
@@ -335,8 +337,7 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<Value, Refusal> {
         .flatten()
         .is_some_and(|s| s.agent_id.is_some());
     if !planned
-        && let Err(err) =
-            architect_sessions::set_agent(&ctx.state.db, &ctx.session_id, &id).await
+        && let Err(err) = architect_sessions::set_agent(&ctx.state.db, &ctx.session_id, &id).await
     {
         tracing::warn!(error = %err, agent = %id, "pointing the architect conversation at its agent");
     }
@@ -417,8 +418,7 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
             })
             .collect();
         return Err(Refusal::Said(if reasons.is_empty() {
-            "nothing to change — `changes` names no step, or every step already is as given"
-                .into()
+            "nothing to change — `changes` names no step, or every step already is as given".into()
         } else {
             format!("nothing was changed — {}", reasons.join("; "))
         }));
@@ -482,7 +482,10 @@ mod tests {
     #[test]
     fn an_agent_id_is_derived_from_its_name_like_the_create_dialog_does() {
         assert_eq!(id_from_name("Harald"), "harald");
-        assert_eq!(id_from_name("  Kunden-Support für Ceph! "), "kunden-support-fuer-ceph");
+        assert_eq!(
+            id_from_name("  Kunden-Support für Ceph! "),
+            "kunden-support-fuer-ceph"
+        );
         assert_eq!(id_from_name("Café Größe"), "cafe-groesse");
         assert_eq!(id_from_name("!!!"), "agent");
         assert_eq!(id_from_name(&"x ".repeat(60)).len(), 47);
