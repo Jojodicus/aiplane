@@ -27,7 +27,7 @@ use serde_json::json;
 
 use super::json_agents::{agent_at, analytics_bound};
 use super::json_principals::require_agent_manager;
-use super::{bad_request, internal, json_ok};
+use super::{bad_request, internal, json_ok, parse_cursor, parse_limit, query_map};
 use aiplane_agents::db::agent_audit::{self, ActivityQuery, AuditKind, Order, Reconstructor};
 use aiplane_agents::db::agents::Access;
 use aiplane_runtime::rama_server::state::RamaState;
@@ -82,17 +82,13 @@ fn query_of(agent_id: &str, query: &HashMap<String, String>) -> Result<ActivityQ
     })
 }
 
-fn params(req: &Request) -> HashMap<String, String> {
-    serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default()
-}
-
 /// GET /api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=
 /// — one page of events, newest first unless `order=asc`, with a
 /// `next_cursor` to pass back while there are more.
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    let params = params(&req);
+    let params = query_map(&req);
     let mut query = or_return!(query_of(&agent.principal.id, &params));
     query.order = match params.get("order").map(String::as_str) {
         None | Some("desc") => Order::Desc,
@@ -101,28 +97,8 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
             return bad_request(format!("`order` is `{other}`; use `asc` or `desc`"));
         }
     };
-    query.cursor = match params.get("cursor").filter(|c| !c.is_empty()) {
-        None => None,
-        Some(c) => match c.parse::<i64>() {
-            Ok(c) => Some(c),
-            Err(_) => {
-                return bad_request(format!(
-                    "`cursor` is `{c}`; pass back the `next_cursor` of the previous page"
-                ));
-            }
-        },
-    };
-    query.limit = match params.get("limit") {
-        None => DEFAULT_LIMIT,
-        Some(l) => match l.parse::<usize>() {
-            Ok(n) if (1..=MAX_LIMIT).contains(&n) => n,
-            _ => {
-                return bad_request(format!(
-                    "`limit` is `{l}`; it must be a whole number from 1 to {MAX_LIMIT}"
-                ));
-            }
-        },
-    };
+    query.cursor = or_return!(parse_cursor(&params));
+    query.limit = or_return!(parse_limit(&params, DEFAULT_LIMIT, MAX_LIMIT));
     query.max_bytes = PAGE_BYTES;
     let page = match agent_audit::page(&state.db, &query).await {
         Ok(page) => page,
@@ -153,7 +129,7 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
 pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
-    let mut query = or_return!(query_of(&agent.principal.id, &params(&req)));
+    let mut query = or_return!(query_of(&agent.principal.id, &query_map(&req)));
     query.order = Order::Asc;
     query.limit = MAX_LIMIT;
     query.max_bytes = EXPORT_BATCH_BYTES;
@@ -222,7 +198,7 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
-    let verified = match params(&req).get("full").map(String::as_str) {
+    let verified = match query_map(&req).get("full").map(String::as_str) {
         None | Some("false") => agent_audit::verify(&state.db, &agent.principal.id).await,
         Some("true") => agent_audit::verify_full(&state.db, &agent.principal.id).await,
         Some(other) => {

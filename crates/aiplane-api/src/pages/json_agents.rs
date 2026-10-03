@@ -489,8 +489,7 @@ pub async fn analytics(State(state): State<Arc<RamaState>>, req: Request) -> Res
     use jiff::ToSpan;
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    let query: std::collections::HashMap<String, String> =
-        serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default();
+    let query = super::query_map(&req);
     let to = match query.get("to") {
         Some(v) => or_return!(analytics_bound("to", v, true)),
         None => jiff::Timestamp::now(),

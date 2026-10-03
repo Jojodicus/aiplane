@@ -280,6 +280,43 @@ pub(crate) fn json_error(status: rama::http::StatusCode, code: &str, message: &s
 // ---------------------------------------------------------------------------
 // Shared shapes for the `/api/v0` handlers.
 
+/// The request's query string as a map; a malformed one reads as empty.
+pub(crate) fn query_map(req: &Request) -> std::collections::HashMap<String, String> {
+    serde_urlencoded::from_str(req.uri().query().unwrap_or("")).unwrap_or_default()
+}
+
+/// A list route's `limit`: `default` when absent, else a whole number from 1
+/// to `max`, or a 400 saying so.
+pub(crate) fn parse_limit(
+    query: &std::collections::HashMap<String, String>,
+    default: usize,
+    max: usize,
+) -> Result<usize, Response> {
+    match query.get("limit") {
+        None => Ok(default),
+        Some(l) => match l.parse::<usize>() {
+            Ok(n) if (1..=max).contains(&n) => Ok(n),
+            _ => Err(bad_request(format!(
+                "`limit` is `{l}`; it must be a whole number from 1 to {max}"
+            ))),
+        },
+    }
+}
+
+/// A list route's `cursor`: the `next_cursor` of the page before, or a 400.
+pub(crate) fn parse_cursor(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<Option<i64>, Response> {
+    match query.get("cursor").filter(|c| !c.is_empty()) {
+        None => Ok(None),
+        Some(c) => c.parse::<i64>().map(Some).map_err(|_| {
+            bad_request(format!(
+                "`cursor` is `{c}`; pass back the `next_cursor` of the previous page"
+            ))
+        }),
+    }
+}
+
 /// 400 with the error envelope.
 pub(crate) fn bad_request(message: impl Into<String>) -> Response {
     json_error(StatusCode::BAD_REQUEST, "invalid_request", &message.into())
@@ -581,6 +618,25 @@ mod tests {
             .uri(format!("http://gw.example.com{path}"))
             .body(rama::http::Body::empty())
             .expect("test request")
+    }
+
+    #[test]
+    fn a_list_routes_limit_and_cursor_are_parsed_or_refused() {
+        let q = query_map(&get("/x?limit=20&cursor=41"));
+        assert_eq!(parse_limit(&q, 100, 500).ok(), Some(20));
+        assert_eq!(parse_cursor(&q).ok(), Some(Some(41)));
+
+        let none = query_map(&get("/x?cursor="));
+        assert_eq!(parse_limit(&none, 100, 500).ok(), Some(100));
+        assert_eq!(parse_cursor(&none).ok(), Some(None));
+
+        for bad in ["/x?limit=0", "/x?limit=501", "/x?limit=many"] {
+            let refused = parse_limit(&query_map(&get(bad)), 100, 500).unwrap_err();
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let refused = parse_cursor(&query_map(&get("/x?cursor=next"))).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(query_map(&get("/x")).is_empty());
     }
 
     /// The whole reason this helper exists instead of the `Path` extractor.
