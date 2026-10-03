@@ -712,6 +712,39 @@ fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() 
 }
 
 #[test]
+fn a_new_detail_joins_the_gate_of_a_hand_off_waiting_for_every_detail() {
+    let w = World::new();
+    let mut base = json!({ "main": { "pool": "main-pool" }, "state": {
+        "company": { "type": "string", "max_length": 200, "set_by": ["llm"], "order": 0 } } });
+    super::super::handoffs::write(
+        &mut base,
+        &super::super::handoffs::Handoffs {
+            rules: vec![Rule {
+                route: None,
+                topic: "Lead".into(),
+                details: true,
+                identity: false,
+                target: super::super::handoffs::Target::Human,
+                bind: Map::new(),
+            }],
+            ..Default::default()
+        },
+    );
+    let changes = json!({ "slots": [
+        { "name": "email", "label": "E-mail", "type": "email", "choices": [] } ] });
+    let out = apply_changes(&changes, &base, &w.ctx());
+    let gate: Vec<&str> = out.draft["routes"]["lead"]["when"]["all"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(2)
+        .filter_map(|leaf| leaf["slot"].as_str())
+        .collect();
+    assert_eq!(gate, ["company", "email"]);
+    assert!(super::super::handoffs::read(&out.draft).rules[0].details);
+}
+
+#[test]
 fn an_architect_cannot_give_an_agent_what_the_person_may_not_grant() {
     let w = World::new();
     let base = json!({ "main": { "pool": "main-pool" } });

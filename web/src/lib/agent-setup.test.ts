@@ -297,6 +297,15 @@ test('a hand-off can wait until every detail is collected, and follows the detai
 	assert.deepEqual(spec.routes.qualifizierte_vertriebsanfrage.when.all.at(-1), { slot: 'verified', provenance: 'verifier:identity' });
 });
 
+test('the identity step regates a hand-off waiting for every detail when it adds the slots it reads', () => {
+	const spec: Spec = {};
+	writeSlots(spec, [{ key: 'company', label: 'Company', kind: 'text', values: [] }]);
+	writeHandoffs(spec, { rules: [{ route: null, topic: 'Lead', details: true, identity: false, target: { kind: 'human' }, bind: {} }], fallback: false, custom: [] });
+	writeIdentity(spec, identity({ method: 'email_code', connector: 'erp' }), labels);
+	assert.deepEqual(spec.routes.lead.when.all.slice(2).map((leaf: Spec) => leaf.slot), ['company', 'email']);
+	assert.equal(readHandoffs(spec).rules[0].details, true);
+});
+
 test('a specialist’s route values come from trusted slots or the confirmed identity', () => {
 	const specialist = { main: { tool_resources: { mcp__erp__invoices: { bind: { customer_id: 'route.customer', region: { const: 'eu' } } }, other: { bind: { x: 'route.plan' } } } } };
 	const spec: Spec = { state: { plan: { type: 'string', set_by: ['host'] } } };

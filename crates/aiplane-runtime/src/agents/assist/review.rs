@@ -888,7 +888,10 @@ impl<'a> Reviewer<'a> {
         if self.ordered {
             def["order"] = json!(self.next_order());
         }
-        let candidate = self.with(&["state", &name], def.clone());
+        let mut candidate = self.draft.clone();
+        handoffs::with_details(&mut candidate, |d| {
+            set_at(d, &["state", &name], def.clone());
+        });
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.slots.push(SlotStep {
                 name,

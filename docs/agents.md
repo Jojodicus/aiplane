@@ -3162,7 +3162,10 @@ the reasons, so the chat shows it as an error.
 *Written in the setup's shapes.* What the architect writes must read in the
 setup assistant as what it is, not as "set up in the advanced editor":
 - a slot gets the setup's friendly-kind shape (`text` is ≤ 200, as
-  `SLOT_SHAPES`) and the next `order`;
+  `SLOT_SHAPES`) and the next `order`; a hand-off waiting for every detail
+  is regated on the new set (`handoffs::with_details`, the port of
+  `withDetails`, which the details step and the identity step's added slots
+  go through as well);
 - hand-offs are the hand-off step's rules: `assist::handoffs` is a port of
   `readHandoffs` / `writeHandoffs` / `deriveBind` from
   `web/src/lib/agent-setup.ts` (routes `when: {all: [topic eq, request set,

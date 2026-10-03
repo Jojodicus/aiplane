@@ -205,6 +205,20 @@ pub fn read(spec: &Value) -> Handoffs {
     out
 }
 
+/// Run `change`, which may add, rename or remove details; a rule waiting for
+/// every detail is regated on the new set (`withDetails` in the setup). The
+/// rules are read before the change, while their gates still name exactly
+/// the old details.
+pub fn with_details(spec: &mut Value, change: impl FnOnce(&mut Value)) {
+    let h = read(spec);
+    let before: BTreeSet<String> = detail_slots(spec).into_iter().collect();
+    change(spec);
+    let after: BTreeSet<String> = detail_slots(spec).into_iter().collect();
+    if h.rules.iter().any(|r| r.details) && before != after {
+        write(spec, &h);
+    }
+}
+
 /// Who writes the confirmed identity: what a gate's `provenance` names.
 pub fn identity_writer(spec: &Value) -> Option<String> {
     let kind = spec

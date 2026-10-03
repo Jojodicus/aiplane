@@ -460,7 +460,10 @@ export function slotKeys(rows: SlotRow[], reserved: Iterable<string>): string[] 
 
 /** Writes the details; a hand-off waiting for all of them is regated on the new set. */
 export function writeSlots(spec: Spec, rows: SlotRow[]): void {
-	const handoffs = readHandoffs(spec);
+	withDetails(spec, () => replaceSlots(spec, rows));
+}
+
+function replaceSlots(spec: Spec, rows: SlotRow[]): void {
 	const before = (spec.state ?? {}) as Record<string, Spec>;
 	const managed = Object.entries(before).filter(([key]) => MANAGED_SLOTS.has(key));
 	const keys = slotKeys(rows, managed.map(([k]) => k));
@@ -470,7 +473,21 @@ export function writeSlots(spec: Spec, rows: SlotRow[]): void {
 	});
 	for (const [key, def] of managed) next[key] = def;
 	spec.state = next;
-	if (handoffs.rules.some((r) => r.details)) writeHandoffs(spec, handoffs);
+}
+
+const detailKeys = (spec: Spec) => readSlots(spec).map((row) => row.key);
+const sameKeys = (a: string[], b: string[]) => new Set(a).size === a.length && a.length === b.length && a.every((k) => b.includes(k));
+
+/**
+ * Runs `change`, which may add, rename or remove details; a hand-off waiting
+ * for every detail is regated on the new set. The rules are read before the
+ * change, while their gates still name exactly the old details.
+ */
+export function withDetails(spec: Spec, change: () => void): void {
+	const handoffs = readHandoffs(spec);
+	const before = detailKeys(spec);
+	change();
+	if (handoffs.rules.some((r) => r.details) && !sameKeys(before, detailKeys(spec))) writeHandoffs(spec, handoffs);
 }
 
 /** Slots the identity check reads, which the details step may not remove. */
@@ -558,6 +575,10 @@ function rewriteProvenance(cond: any, from: string, to: string): any {
 }
 
 export function writeIdentity(spec: Spec, id: Identity, labels: IdentityLabels): void {
+	withDetails(spec, () => replaceIdentity(spec, id, labels));
+}
+
+function replaceIdentity(spec: Spec, id: Identity, labels: IdentityLabels): void {
 	const before = spec.verifiers?.[IDENTITY_VERIFIER] ?? {};
 	const fromWriter = identityWriter(spec);
 	if (spec.verifiers) delete spec.verifiers[IDENTITY_VERIFIER];
@@ -720,7 +741,7 @@ export function readHandoffs(spec: Spec): Handoffs {
 export function writeHandoffs(spec: Spec, h: Handoffs): void {
 	const before = (spec.routes ?? {}) as Record<string, Spec>;
 	const writer = identityWriter(spec);
-	const details = readSlots(spec).map((row) => row.key);
+	const details = detailKeys(spec);
 	const rules = h.rules.filter((r) => r.topic.trim());
 	const taken = new Set([...h.custom, FALLBACK_ROUTE]);
 	const routes: Record<string, Spec> = {};
