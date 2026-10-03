@@ -182,6 +182,14 @@ impl AgentRun {
         *self.outcome.lock().unwrap_or_else(|p| p.into_inner()) = Some(outcome);
     }
 
+    /// How the run ended, if the driver settled it yet, without taking it.
+    pub fn outcome(&self) -> Option<RunOutcome> {
+        self.outcome
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
     /// How the run ended. A run the driver never settled — its turn panicked
     /// before `run_turn` returned — was interrupted, and is incomplete.
     pub fn take_outcome(&self) -> RunOutcome {

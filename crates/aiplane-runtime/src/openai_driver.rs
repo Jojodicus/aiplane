@@ -37,6 +37,7 @@ use aiplane_core::server::db::user_memories::KindCounts;
 use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
 
 mod call_policy;
+mod exchange;
 mod resume;
 mod turn_policy;
 
@@ -630,6 +631,10 @@ impl SessionDriver for OpenAiDriver {
     async fn run_turn(&self, ctx: SessionContext) -> Result<TurnOutcome, TurnError> {
         let policy = TurnPolicy::of(self);
         let end = run_one_turn(self, policy, ctx.clone()).await;
+        let end = match end {
+            Ok(_) if self.agent().is_some_and(AgentRun::log_failed) => Err(log_unavailable()),
+            end => end,
+        };
         policy.settle(&end, ctx.cancel.load(Ordering::SeqCst));
         let result = end.and_then(TurnEnd::into_turn);
         // Free the turn's sandbox container (if any) here, the single choke
@@ -681,6 +686,21 @@ impl SessionDriver for OpenAiDriver {
             });
         }
         result
+    }
+}
+
+/// How a run whose activity log failed ends: closed, with nothing more done.
+fn log_unavailable() -> TurnError {
+    TurnError::Aborted {
+        message: crate::agents::audit::LOG_UNAVAILABLE.into(),
+    }
+}
+
+/// Stop an agent run whose activity log could not be written.
+fn fail_closed(d: &OpenAiDriver) -> Result<(), TurnError> {
+    match d.agent() {
+        Some(run) if run.log_failed() => Err(log_unavailable()),
+        _ => Ok(()),
     }
 }
 
@@ -1242,6 +1262,10 @@ async fn run_one_turn(
         if ctx.cancel.load(Ordering::SeqCst) {
             return Ok(TurnOutcome::default().into());
         }
+        if let Some(run) = d.agent() {
+            run.enter_round(round);
+        }
+        fail_closed(d)?;
 
         // Anything the user typed since the last round goes into the prompt
         // before this one is built. A round boundary is the only place an
@@ -1349,16 +1373,35 @@ async fn run_one_turn(
         let affinity = aiplane_core::server::upstreams::affinity::AffinityHint::for_conversation(
             &ctx.session_id,
         );
-        let acquired = d
-            .state
-            .upstreams
-            .route_access_affine(
-                &real_model,
-                aiplane_core::server::upstreams::PoolKind::Chat,
-                &access,
-                Some(&affinity),
-            )
-            .map_err(upstream_err)?;
+        let sent_at = std::time::Instant::now();
+        let unsent = |backend: Option<&'static str>| exchange::Served {
+            model: &ctx.model,
+            real_model: &real_model,
+            backend,
+        };
+        let acquired = match d.state.upstreams.route_access_affine(
+            &real_model,
+            aiplane_core::server::upstreams::PoolKind::Chat,
+            &access,
+            Some(&affinity),
+        ) {
+            Ok(acquired) => acquired,
+            Err(err) => {
+                let err = upstream_err(err);
+                let answer = exchange::Answer::from_error(&err);
+                exchange::record(
+                    d,
+                    &tool_ctx,
+                    round,
+                    &request_body,
+                    unsent(None),
+                    answer,
+                    sent_at,
+                )
+                .await;
+                return Err(err);
+            }
+        };
         let backend = acquired.backend();
         let backend_name = backend.name.clone();
         let url = format!("{}/chat/completions", backend.base_url);
@@ -1378,7 +1421,29 @@ async fn run_one_turn(
             http_req = http_req.bearer_auth(key);
         }
         let started = std::time::Instant::now();
-        let upstream = http_req.send().await.map_err(transport_err)?;
+        let served = || exchange::Served {
+            model: &ctx.model,
+            real_model: &real_model,
+            backend: Some(&backend_name),
+        };
+        let upstream = match http_req.send().await {
+            Ok(upstream) => upstream,
+            Err(err) => {
+                let err = transport_err(err);
+                let answer = exchange::Answer::from_error(&err);
+                exchange::record(
+                    d,
+                    &tool_ctx,
+                    round,
+                    &request_body,
+                    served(),
+                    answer,
+                    started,
+                )
+                .await;
+                return Err(err);
+            }
+        };
         if !upstream.status().is_success() {
             let status = upstream.status();
             let bytes = capped_read::read_capped(upstream, capped_read::MODEL_ANSWER_BYTES)
@@ -1395,6 +1460,17 @@ async fn run_one_turn(
                 (None, None, None),
             );
             let body = String::from_utf8_lossy(&bytes);
+            let answer = exchange::Answer::failed(Some(status.as_u16()), body.to_string());
+            exchange::record(
+                d,
+                &tool_ctx,
+                round,
+                &request_body,
+                served(),
+                answer,
+                started,
+            )
+            .await;
             // A context overflow is the one upstream 400 a *user* can act on,
             // and the raw backend JSON ("This model's maximum context length
             // is 262144 tokens…") tells them nothing they can act on. Say what
@@ -1439,8 +1515,15 @@ async fn run_one_turn(
         // frame carries it (backends put it on the last delta frame, sometimes
         // on a choice-less one), so it is captured before the delta guard.
         let mut finish_reason: Option<String> = None;
+        // The round's whole reasoning, for an agent run's log.
+        let mut round_reasoning = String::new();
+        let keep_reasoning = d.agent().is_some();
         let mut upstream_stream = upstream.bytes_stream();
 
+        // The stream, as one block: every way out of it — the end, a stall,
+        // a loop, a cancel, a failed write — comes back here, so the round is
+        // recorded whichever it was.
+        let streamed: Result<Option<TurnEnd>, TurnError> = async {
         'chunks: loop {
             // Bound the wait for each chunk so a silently-wedged upstream
             // can't pin the turn `in_progress` forever; a real stall finalizes
@@ -1468,8 +1551,7 @@ async fn run_one_turn(
                     }
                 };
             if ctx.cancel.load(Ordering::SeqCst) {
-                drop(acquired);
-                return Ok(TurnOutcome::default().into());
+                return Ok(Some(TurnOutcome::default().into()));
             }
             let Ok(chunk) = chunk else { break 'chunks };
             byte_buf.extend_from_slice(&chunk);
@@ -1521,6 +1603,9 @@ async fn run_one_turn(
                         .and_then(|c| c.as_str())
                         .or_else(|| delta.get("reasoning").and_then(|c| c.as_str()));
                     if let Some(reasoning) = reasoning_chunk {
+                        if keep_reasoning {
+                            round_reasoning.push_str(reasoning);
+                        }
                         if !traced_first_reasoning {
                             tracing::info!(
                                 len = reasoning.len(),
@@ -1631,7 +1716,35 @@ async fn run_one_turn(
                 }
             }
         }
+        Ok(None)
+        }
+        .await;
         drop(acquired);
+        if d.agent().is_some() {
+            let answer = exchange::Answer {
+                status: Some(status_code),
+                content: format!("{round_content}{content_tag_buf}"),
+                reasoning: std::mem::take(&mut round_reasoning),
+                tool_calls: tool_acc.values().map(assistant_tool_call).collect(),
+                finish_reason: finish_reason.clone(),
+                usage: round_tokens,
+                error: streamed.as_ref().err().map(ToString::to_string),
+                cancelled: matches!(streamed, Ok(Some(_))),
+            };
+            exchange::record(
+                d,
+                &tool_ctx,
+                round,
+                &request_body,
+                served(),
+                answer,
+                started,
+            )
+            .await;
+        }
+        if let Some(end) = streamed? {
+            return Ok(end);
+        }
 
         // One usage row per upstream round (a tool-using turn emits several).
         emit_usage(
@@ -1857,6 +1970,7 @@ async fn run_one_turn(
             return Ok(TurnOutcome::default().into());
         }
 
+        fail_closed(d)?;
         let mut results = match runner::execute_tool_calls_guarded(
             &tool_source,
             &tool_ctx,

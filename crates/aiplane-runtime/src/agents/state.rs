@@ -786,12 +786,22 @@ async fn write(
     now: Timestamp,
 ) -> Result<SlotEntry, StateWriteError> {
     check_write(schema, slot, &value, &provenance)?;
-    agent_state::put(pool, session_id, slot, &value, &provenance.to_string(), now)
-        .await
-        .map_err(|source| StateWriteError::Db {
-            slot: slot.to_string(),
-            source,
-        })?;
+    let db_error = |source: DbError| StateWriteError::Db {
+        slot: slot.to_string(),
+        source,
+    };
+    let mut tx = pool.begin().await.map_err(|e| db_error(e.into()))?;
+    agent_state::put(
+        &mut tx,
+        session_id,
+        slot,
+        &value,
+        &provenance.to_string(),
+        now,
+    )
+    .await
+    .map_err(db_error)?;
+    tx.commit().await.map_err(|e| db_error(e.into()))?;
     Ok(SlotEntry {
         value,
         provenance,

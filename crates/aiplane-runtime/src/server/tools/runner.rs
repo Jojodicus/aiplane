@@ -41,11 +41,11 @@ use serde_json::{Value, json};
 
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use aiplane_agents::db::agent_audit::AuditKind;
-use aiplane_core::server::db::Pool;
-use aiplane_core::server::principal::Principal;
 
-use crate::server::tools::injection::InjectionScan;
+use crate::server::tools::injection::{InjectionScan, Screened, Signal};
 use crate::server::tools::{ToolContext, ToolError, ToolPhase, ToolSource};
+use std::time::Duration;
+use tracing::Instrument as _;
 
 /// Streaming accumulator for one tool call, folded from its SSE delta
 /// fragments. OpenAI-compatible backends stream a tool call as a sequence of
@@ -930,11 +930,30 @@ async fn execute_tool_call(
         call_id: Some(call.id.clone()),
         ..ctx.clone()
     };
+    let span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+    run_one(tools, ctx, call, scan).instrument(span).await
+}
+
+async fn run_one(
+    tools: &dyn ToolSource,
+    ctx: ToolContext,
+    call: ToolCallRef,
+    scan: &InjectionScan,
+) -> ToolResultRecord {
+    let journal = ctx.clone();
     let Some(tool) = tools.get(&call.name) else {
-        return ToolResultRecord::failure(
-            call.id,
+        let record = ToolResultRecord::failure(
+            call.id.clone(),
             &format!("tool `{name}` is no longer registered", name = call.name),
         );
+        let result = CallResult {
+            status: "unregistered",
+            body: &record.body,
+            signals: &[],
+            elapsed: Duration::ZERO,
+        };
+        record_call(&journal, &call, false, scan, result).await;
+        return record;
     };
     let args: Value = tool_arguments_object(&call.arguments_raw);
     // Trace each tool call with timing + the args we sent. Lets
@@ -948,7 +967,8 @@ async fn execute_tool_call(
     // what the timing story needs — without putting the text someone
     // typed into their own browser into the journal.
     let started = std::time::Instant::now();
-    let logged_args = if tool.sensitive_args() {
+    let sensitive = tool.sensitive_args();
+    let logged_args = if sensitive {
         "[redacted]".to_string()
     } else {
         truncate_for_log(&call.arguments_raw)
@@ -961,19 +981,19 @@ async fn execute_tool_call(
     );
     // Most tools finish well within TOOL_TIMEOUT; a few (the sandbox
     // family) declare a longer ceiling via `max_duration`.
-    let (principal, db, agent) = (ctx.principal.clone(), ctx.db.clone(), ctx.agent.clone());
     let tool_timeout = tool.max_duration().unwrap_or(TOOL_TIMEOUT);
     let outcome = tokio::time::timeout(tool_timeout, tool.run(ctx, args)).await;
-    let elapsed_ms = started.elapsed().as_millis();
+    let elapsed = started.elapsed();
+    let elapsed_ms = elapsed.as_millis();
     let failed = !matches!(outcome, Ok(Ok(_)));
-    let body = match outcome {
+    let (status, body) = match outcome {
         Ok(Ok(value)) => {
             tracing::info!(
                 tool = %call.name,
                 elapsed_ms,
                 "tool call completed"
             );
-            value
+            ("completed", value)
         }
         Ok(Err(ToolError::InvalidArgs(m))) => {
             tracing::warn!(
@@ -982,7 +1002,10 @@ async fn execute_tool_call(
                 error = %m,
                 "tool rejected arguments"
             );
-            error_to_tool_message(&format!("invalid arguments: {m}"))
+            (
+                "invalid_args",
+                error_to_tool_message(&format!("invalid arguments: {m}")),
+            )
         }
         Ok(Err(ToolError::Failed(m))) => {
             tracing::warn!(
@@ -991,7 +1014,7 @@ async fn execute_tool_call(
                 error = %m,
                 "tool failed"
             );
-            error_to_tool_message(&m)
+            ("failed", error_to_tool_message(&m))
         }
         Err(_) => {
             tracing::warn!(
@@ -1000,46 +1023,111 @@ async fn execute_tool_call(
                 timeout_secs = tool_timeout.as_secs(),
                 "tool timed out"
             );
-            error_to_tool_message(&format!("tool execution timed out after {tool_timeout:?}"))
+            (
+                "timed_out",
+                error_to_tool_message(&format!("tool execution timed out after {tool_timeout:?}")),
+            )
         }
     };
-    let body = screen_result(scan, &principal, agent.as_deref(), &db, &call, body).await;
+    // Only an agent run keeps the tool's own answer for its log: the
+    // screened body is what the model reads.
+    let raw = journal.agent.is_some().then(|| body.clone());
+    let screened = screen_result(scan, &journal, &call, body).await;
+    if let Some(raw) = &raw {
+        let result = CallResult {
+            status,
+            body: raw,
+            signals: &screened.signals,
+            elapsed,
+        };
+        record_call(&journal, &call, sensitive, scan, result).await;
+    }
     ToolResultRecord {
         call_id: call.id,
-        body,
+        body: screened.body,
         failed,
     }
+}
+
+/// How one call ended, as its `tool_result` event records it.
+struct CallResult<'a> {
+    status: &'static str,
+    /// The tool's own answer, before injection screening and before the
+    /// prompt's byte budget trims it.
+    body: &'a Value,
+    signals: &'a [Signal],
+    elapsed: Duration,
+}
+
+/// The `tool_result` event of a call in an agent run: the full arguments
+/// (or a marker, for a tool that declares them sensitive), the full result,
+/// how it ended, how long it took and what the injection scan found. A
+/// value the participant typed into a secure field is withheld from the
+/// result even when the tool repeats it. A person's turn records nothing.
+async fn record_call(
+    ctx: &ToolContext,
+    call: &ToolCallRef,
+    sensitive: bool,
+    scan: &InjectionScan,
+    result: CallResult<'_>,
+) {
+    if ctx.agent.is_none() {
+        return;
+    }
+    let arguments = if sensitive {
+        json!({ "redacted": true })
+    } else {
+        serde_json::from_str(&call.arguments_raw)
+            .unwrap_or_else(|_| Value::String(call.arguments_raw.clone()))
+    };
+    let body = match &ctx.suspend {
+        crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
+            crate::suspend::withhold_secret(result.body.clone(), value)
+        }
+        _ => result.body.clone(),
+    };
+    let signals: Vec<&str> = result.signals.iter().map(|s| s.as_str()).collect();
+    ctx.audit_event(
+        AuditKind::ToolResult,
+        Some(u64::try_from(result.elapsed.as_millis()).unwrap_or(u64::MAX)),
+        json!({
+            "tool": call.name,
+            "arguments": arguments,
+            "status": result.status,
+            "result": body,
+            "injection": {
+                "policy": format!("{:?}", scan.policy).to_lowercase(),
+                "signals": signals,
+            },
+        }),
+    )
+    .await;
 }
 
 /// The one place a gateway-owned result is screened before it can become a
 /// `role: tool` message, whichever loop ran the tool.
 async fn screen_result(
     scan: &InjectionScan,
-    principal: &Principal,
-    agent: Option<&crate::agent_run::AgentRun>,
-    db: &Pool,
+    ctx: &ToolContext,
     call: &ToolCallRef,
     body: Value,
-) -> Value {
+) -> Screened {
     let screened = scan.apply(&call.name, body).await;
     if screened.signals.is_empty() {
-        return screened.body;
+        return screened;
     }
     let signals: Vec<&str> = screened.signals.iter().map(|s| s.as_str()).collect();
     tracing::warn!(
         tool = %call.name,
-        principal = %principal.subject_id(),
+        principal = %ctx.principal.subject_id(),
         policy = ?scan.policy,
         ?signals,
         "tool result matched prompt-injection signals"
     );
-    if let Some(agent) = agent {
-        crate::agents::audit::record(
-            db,
+    if ctx.agent.is_some() {
+        ctx.audit_event(
             AuditKind::InjectionDetected,
-            principal.subject_id(),
             None,
-            Some(agent.chain().as_ref()),
             json!({
                 "tool": call.name,
                 "call_id": call.id,
@@ -1049,7 +1137,7 @@ async fn screen_result(
         )
         .await;
     }
-    screened.body
+    screened
 }
 
 /// A turn the [`RepeatedCallGuard`] gave up on.
@@ -1093,14 +1181,29 @@ pub async fn execute_tool_calls_guarded(
     let mut executed = execute_tool_calls(tools, ctx, &runnable, scan)
         .await
         .into_iter();
-    Ok(calls
-        .iter()
-        .zip(&verdicts)
-        .map(|(call, verdict)| match verdict {
+    let mut results = Vec::with_capacity(calls.len());
+    for (call, verdict) in calls.iter().zip(&verdicts) {
+        let record = match verdict {
             CallVerdict::Run => executed.next().expect("one result per runnable call"),
-            _ => ToolResultRecord::failure(call.id.clone(), REFUSAL_MESSAGE),
-        })
-        .collect())
+            _ => {
+                let refused = ToolResultRecord::failure(call.id.clone(), REFUSAL_MESSAGE);
+                let ctx = ToolContext {
+                    call_id: Some(call.id.clone()),
+                    ..ctx.clone()
+                };
+                let result = CallResult {
+                    status: "refused_repeated",
+                    body: &refused.body,
+                    signals: &[],
+                    elapsed: Duration::ZERO,
+                };
+                record_call(&ctx, call, false, scan, result).await;
+                refused
+            }
+        };
+        results.push(record);
+    }
+    Ok(results)
 }
 
 /// Name why the gateway cut the turn short, next to the budget signal that

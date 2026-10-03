@@ -32,13 +32,16 @@ use aiplane_agents::db::run_sessions;
 use session_core::db as chat;
 use uuid::Uuid;
 
-use crate::agent_run::Actor;
+use crate::agent_run::{Actor, AgentRun};
 use crate::budget::Clock;
 use crate::finish::RunOutcome;
 use crate::rama_server::state::RamaState;
 use crate::suspend::ResumeFrom;
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::{DbError, Pool};
+use serde_json::json;
+use tracing::Instrument as _;
 
 /// Who a freshly-minted run session belongs to.
 #[derive(Debug, Clone, Copy)]
@@ -166,6 +169,7 @@ async fn drive_inner(
     resume: Option<ResumeFrom>,
 ) -> Option<RunOutcome> {
     let agent = p.actor.agent().cloned();
+    let resumed = resume.is_some();
     let worker = agent
         .as_ref()
         .map(|run| AgentWorker::of(state, run.chain(), &p.session_id, &p.assistant_turn_id));
@@ -220,15 +224,134 @@ async fn drive_inner(
         // that, and costs the driver one lock-free check per round.
         steers: session_core::workers::SteerInbox::default(),
     };
-    session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
-    drop(worker);
     let Some(agent) = agent else {
+        session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
+        drop(worker);
         announce_if_waiting(state, &assistant_turn_id).await;
         return None;
     };
+    let span = turn_span(&agent, &ctx.session_id, &assistant_turn_id);
+    let session_id = ctx.session_id.clone();
+    async {
+        turn_started(state, &agent, &session_id, &assistant_turn_id, resumed).await;
+        session_core::worker::run_session_turn(state.db.clone(), driver, ctx).await;
+        turn_finished(state, &agent, &session_id, &assistant_turn_id).await;
+    }
+    .instrument(span)
+    .await;
+    drop(worker);
 
     agent.contract()?;
     Some(agent.take_outcome())
+}
+
+/// The tracing span of one agent turn, with the correlation ids its activity
+/// events carry, so a log line and an event can be joined.
+fn turn_span(run: &AgentRun, session_id: &str, turn_id: &str) -> tracing::Span {
+    let chain = run.chain();
+    tracing::info_span!(
+        "agent_turn",
+        agent = %chain.agent().principal_id,
+        principal = %chain.current().principal_id,
+        version = ?chain.current().version,
+        conversation = %chain.root_session,
+        session = %session_id,
+        turn = %turn_id,
+        visitor = ?chain.visitor_id,
+        caller = ?chain.caller.as_ref().map(|c| c.principal_id.as_str()),
+        depth = chain.depth(),
+    )
+}
+
+/// `turn_started`: the message the turn answers — the visitor's, or a
+/// sub-agent's task — unless it continues a paused turn, whose decision
+/// `run_resumed` records.
+async fn turn_started(
+    state: &Arc<RamaState>,
+    run: &AgentRun,
+    session_id: &str,
+    turn_id: &str,
+    resumed: bool,
+) {
+    let mut detail = json!({ "resumed": resumed });
+    if !resumed {
+        let prompt = match chat::get_turn(&state.db, session_id, turn_id).await {
+            Ok(Some(turn)) => chat::turn_before(&state.db, session_id, turn.seq)
+                .await
+                .ok()
+                .flatten(),
+            _ => None,
+        };
+        detail["message"] = json!(prompt.and_then(|t| t.user_content));
+    }
+    turn_event(
+        state,
+        run,
+        session_id,
+        turn_id,
+        AuditKind::TurnStarted,
+        detail,
+    )
+    .await;
+}
+
+/// `turn_finished`: how the turn ended and what it answered, as stored. An
+/// event that cannot be written errors the turn after the fact: an answer
+/// the log does not show is not delivered.
+async fn turn_finished(state: &Arc<RamaState>, run: &AgentRun, session_id: &str, turn_id: &str) {
+    let turn = chat::get_turn(&state.db, session_id, turn_id)
+        .await
+        .ok()
+        .flatten();
+    let detail = json!({
+        "status": turn.as_ref().map(|t| t.status.as_str()),
+        "answer": turn.as_ref().and_then(|t| t.content.clone()),
+        "error": turn.as_ref().and_then(|t| t.error_message.clone()),
+        "outcome": run.outcome(),
+    });
+    turn_event(
+        state,
+        run,
+        session_id,
+        turn_id,
+        AuditKind::TurnFinished,
+        detail,
+    )
+    .await;
+    if run.log_failed()
+        && turn
+            .as_ref()
+            .is_some_and(|t| t.status != chat::TurnStatus::Errored)
+    {
+        if let Err(err) = chat::finalize_turn(
+            &state.db,
+            turn_id,
+            chat::TurnStatus::Errored,
+            Some(crate::agents::audit::LOG_UNAVAILABLE),
+        )
+        .await
+        {
+            tracing::error!(error = %err, turn = turn_id, "erroring a turn whose log failed");
+        }
+    }
+}
+
+async fn turn_event(
+    state: &Arc<RamaState>,
+    run: &AgentRun,
+    session_id: &str,
+    turn_id: &str,
+    kind: AuditKind,
+    detail: serde_json::Value,
+) {
+    let event = NewEvent::new(kind, &run.system_principal().id, detail)
+        .in_run(Some(run.chain()))
+        .at(Correlation {
+            session_id: Some(session_id.to_string()),
+            turn_id: Some(turn_id.to_string()),
+            ..Correlation::default()
+        });
+    crate::agents::audit::record_for_run(&state.db, Some(run), event).await;
 }
 
 /// The worker an agent run reports on and stops by, in the session worker

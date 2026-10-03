@@ -1320,10 +1320,13 @@ async fn an_answer_naming_another_customers_invoice_is_withheld_and_audited() {
     assert_eq!(blocked[0].detail["action"], "withheld");
     assert_eq!(blocked[0].detail["patterns"], json!(["invoice"]));
     assert!(
-        !blocked[0].detail.to_string().contains("RE-2"),
-        "the matched value is never logged: {}",
+        blocked[0].detail["original"]
+            .as_str()
+            .is_some_and(|original| original.contains("RE-2")),
+        "the activity log keeps the withheld original for the agent's managers: {}",
         blocked[0].detail
     );
+    assert_eq!(blocked[0].detail["delivered"], json!(fallback));
     let chain = blocked[0]
         .chain
         .as_ref()
@@ -1514,6 +1517,7 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
 }
 
 mod a2a;
+mod activity;
 mod hil;
 mod loop_route;
 mod output_filter;

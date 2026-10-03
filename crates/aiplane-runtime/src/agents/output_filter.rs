@@ -363,6 +363,8 @@ pub async fn guard_answer(
         "session_id": at.session_id,
         "turn_id": at.turn_id,
         "patterns": hits,
+        "original": answer,
+        "delivered": delivered,
     });
     if let Err(e) = &trusted {
         detail["error"] = json!(format!("the trusted text could not be read: {e}"));
