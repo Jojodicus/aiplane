@@ -202,6 +202,8 @@ impl Tool for SearchWeb {
                 },
             };
 
+            // Vetted outbound client: the operator's search provider.
+            #[allow(clippy::disallowed_methods)]
             let client = reqwest::Client::builder()
                 .timeout(SEARCH_TIMEOUT)
                 .user_agent(concat!(
@@ -542,6 +544,9 @@ async fn tavily(
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use aiplane_core::server::crypto::Crypto;

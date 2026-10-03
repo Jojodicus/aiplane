@@ -150,6 +150,8 @@ struct AuthServerMeta {
 /// A short-timeout, redirect-free HTTP client for discovery / token calls.
 /// Redirect-free is an SSRF guard (operator-curated catalog, but defence in
 /// depth) and surfaces misconfigured servers instead of hiding them.
+// Vetted outbound client: every URL it is given passed `validate_outbound_url`.
+#[allow(clippy::disallowed_methods)]
 pub fn discovery_http() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())

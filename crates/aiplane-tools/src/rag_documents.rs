@@ -638,6 +638,9 @@ impl Tool for RagFetchDocument {
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use aiplane_core::server::db;

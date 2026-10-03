@@ -92,6 +92,8 @@ impl std::fmt::Debug for Client {
 
 impl Client {
     pub fn new(base_url: String) -> Result<Self, ComfyuiClientError> {
+        // Vetted outbound client: the ComfyUI server is the operator's own.
+        #[allow(clippy::disallowed_methods)]
         let http = HttpClient::builder()
             .timeout(Duration::from_secs(30))
             .build()

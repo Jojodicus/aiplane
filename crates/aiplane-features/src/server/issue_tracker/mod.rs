@@ -107,6 +107,9 @@ pub(crate) fn decode_png(b64: &str) -> Result<Vec<u8>, TrackerError> {
 }
 
 #[cfg(test)]
+// Tests build plain clients and drain bodies to talk to their in-process
+// mocks; the outbound and body rules are about production paths.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

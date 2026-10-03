@@ -14,6 +14,10 @@
 //! (no instance, no token), which makes pinning the wire format here the only
 //! guard it has.
 
+// The client here talks to the mock tracker; clippy.toml's outbound rule is
+// about production paths.
+#![allow(clippy::disallowed_methods)]
+
 use aiplane_core::server::config::FeedbackConfig;
 use aiplane_features::server::issue_tracker::{IssueInput, create_feedback_issue};
 use serde_json::json;

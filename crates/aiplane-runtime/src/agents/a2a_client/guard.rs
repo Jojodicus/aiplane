@@ -93,6 +93,8 @@ pub async fn pin(raw: &str, allow_private: bool, timeout: Duration) -> Result<Pi
     for addr in &addrs {
         check_ip(addr.ip(), allow_private).map_err(|why| format!("`{host}` resolves to {why}"))?;
     }
+    // The guarded client: pinned to the addresses checked above.
+    #[allow(clippy::disallowed_methods)]
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)

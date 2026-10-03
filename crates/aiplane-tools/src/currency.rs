@@ -87,6 +87,8 @@ impl Tool for ConvertCurrency {
                 }));
             }
 
+            // Vetted outbound client: a fixed host.
+            #[allow(clippy::disallowed_methods)]
             let client = reqwest::Client::builder()
                 .timeout(TIMEOUT)
                 .user_agent(USER_AGENT)

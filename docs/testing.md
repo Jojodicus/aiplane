@@ -57,6 +57,21 @@ scan reads files, not the module tree), watch the test fail naming it, remove
 it. Prefer a `clippy.toml` entry as well where clippy can resolve the path (see
 below), so the editor points at the line.
 
+### The same rules in `clippy.toml`
+
+Where a rule is a call clippy can resolve by path, the workspace `clippy.toml`
+lists it under `disallowed-methods`, so `mise run lint` (and the editor) points
+at the line: `reqwest::Client::new`, `reqwest::Client::builder`,
+`reqwest::ClientBuilder::new`, `reqwest::get` and
+`http_body_util::BodyExt::collect` (which rama's `body::util::BodyExt`
+re-exports). Each production site on the scan's allow-list carries
+`#[allow(clippy::disallowed_methods)]` with a comment saying why; test modules
+and the integration crates allow it once at the module or crate root, because
+tests build plain clients and drain bodies to talk to their in-process mocks.
+The spec-key and dispatch rules have no clippy form — what they forbid is a
+`serde_json::Value` accessor or a `Tool::run` call that is fine elsewhere — so
+only the scan checks them.
+
 ## Style: test-first, Chicago / Classicist
 
 Write the test before the code — red, green, refactor (**TDD**). Tests are **state-based**: assert on observable results, exercising real collaborators (in-memory SQLite, `wiremock` upstreams, the actual `ToolRegistry` / `UpstreamRegistry`) rather than interaction mocks. Behaviour-verification (London-school) mocks are the exception, reserved for collaborators you genuinely can't stand up in-process — and the test says why in a comment. The mocking philosophy below is the practical edge of this: we fake only the things that reach outside the process.

@@ -73,6 +73,11 @@ pub fn sse_response(events: &[rama::bytes::Bytes]) -> Response {
 // ---------------------------------------------------------------------------
 // Body collection.
 
+/// The whole body, uncapped. Only for handlers behind the router's
+/// `BodyLimitLayer`, which has already buffered it up to the route's cap.
+// The one uncapped reader; the architecture test keeps its callers behind the
+// layer.
+#[allow(clippy::disallowed_methods)]
 pub async fn read_body_to_bytes(body: Body) -> Result<rama::bytes::Bytes, String> {
     use rama::http::body::util::BodyExt;
     body.collect()

@@ -283,6 +283,9 @@ impl AppState {
         // historical behaviour; production replaces it with the shared handle
         // via `with_runtime_handle` and then fills it in from the DB.
         let runtime = RuntimeSettings::new_handle(config.public_url_fallback());
+        // Vetted outbound client: the shared one for the operator's upstream
+        // pools and model backends.
+        #[allow(clippy::disallowed_methods)]
         let http = reqwest::Client::new();
         let automatic_router = Arc::new(AutomaticRouter::new(
             db.clone(),

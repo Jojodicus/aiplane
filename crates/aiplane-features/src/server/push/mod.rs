@@ -147,6 +147,9 @@ impl PushSender {
     /// (defense-in-depth alongside the subscribe-time endpoint validation).
     pub async fn new(pool: &Pool, crypto: &Crypto, contact: String) -> anyhow::Result<Self> {
         let vapid = load_or_create_vapid(pool, crypto).await?;
+        // Vetted outbound client: an endpoint is accepted only when net_guard
+        // classifies it public.
+        #[allow(clippy::disallowed_methods)]
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())

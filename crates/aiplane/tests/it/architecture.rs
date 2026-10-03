@@ -501,7 +501,15 @@ const HANDLER_CAPPED_MODULES: &[(&str, &[&str])] = &[
 
 #[test]
 fn request_bodies_are_read_only_through_the_capped_readers() {
-    let hits = scan(&["BodyExt", "http_body_util"], |s| s.code.as_str());
+    let hits = scan(
+        &[
+            "BodyExt",
+            "http_body_util",
+            ".try_into_json(",
+            ".try_into_string(",
+        ],
+        |s| s.code.as_str(),
+    );
     assert_within(
         "A body is read outside session_core::chrome. Reading frames or collecting a body \
          by hand bypasses the cap; call read_body_capped (or read_body_prefix), or \
