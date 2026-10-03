@@ -645,6 +645,20 @@ fn canonical_json_sorts_keys_at_every_level_without_whitespace() {
     );
 }
 
+#[test]
+fn the_markers_are_what_the_agent_chain_says_about_other_chains() {
+    let markers: Vec<AuditKind> = AuditKind::ALL
+        .iter()
+        .copied()
+        .filter(|k| k.is_marker())
+        .collect();
+    assert_eq!(
+        sql_kinds(markers),
+        "'activity_swept', 'chain_anchored', 'chain_checkpoint'"
+    );
+    assert_eq!(sql_kinds([]), "");
+}
+
 async fn live_conversation(pool: &Pool, id: &str) {
     sqlx::query(
         "INSERT INTO users (id, email, created_at, updated_at)

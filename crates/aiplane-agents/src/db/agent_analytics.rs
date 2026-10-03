@@ -23,21 +23,20 @@ use jiff::{Timestamp, ToSpan, tz::TimeZone};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::agent_audit::{AuditKind, sql_kinds};
 use super::agents::DRAFT_VERSION;
 use super::{DbError, Pool, window_key};
 
 /// The audit kind #96 writes when a conversation is handed to a person. Named
 /// here so the count starts moving the day that kind exists; until then it is 0.
-pub const HUMAN_HANDOFF_KIND: &str = "human_handoff";
-
 /// The audit kinds whose numbers are in `detail`; the rest are only counted.
-const DETAILED_KINDS: [&str; 4] = [
-    "route_decision",
-    "sub_agent_finished",
-    "output_blocked",
-    "limit_refused",
+const DETAILED_KINDS: [AuditKind; 4] = [
+    AuditKind::RouteDecision,
+    AuditKind::SubAgentFinished,
+    AuditKind::OutputBlocked,
+    AuditKind::LimitRefused,
 ];
-const COUNTED_KINDS: [&str; 2] = ["sub_agent_dispatched", HUMAN_HANDOFF_KIND];
+const COUNTED_KINDS: [AuditKind; 2] = [AuditKind::SubAgentDispatched, AuditKind::HumanHandoff];
 
 /// A half-open range `[from, to)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,14 +165,6 @@ macro_rules! bind_all {
     }};
 }
 
-fn kinds_list(kinds: &[&str]) -> String {
-    kinds
-        .iter()
-        .map(|k| format!("'{k}'"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 fn text(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -278,7 +269,7 @@ pub async fn compute(
         "SELECT kind, COUNT(*) FROM agent_audit
           WHERE principal_id = ?1 AND kind IN ({}) AND {} AND {}
           GROUP BY kind",
-        kinds_list(&COUNTED_KINDS),
+        sql_kinds(COUNTED_KINDS),
         counts("chain"),
         in_range("created_at")
     );
@@ -286,9 +277,9 @@ pub async fn compute(
         .fetch_all(pool)
         .await?;
     for (kind, n) in counted {
-        match kind.as_str() {
-            "sub_agent_dispatched" => out.sub_agents.dispatched += n as u64,
-            HUMAN_HANDOFF_KIND => out.human_handoffs += n as u64,
+        match AuditKind::parse(&kind) {
+            Some(AuditKind::SubAgentDispatched) => out.sub_agents.dispatched += n as u64,
+            Some(AuditKind::HumanHandoff) => out.human_handoffs += n as u64,
             _ => {}
         }
     }
@@ -296,7 +287,7 @@ pub async fn compute(
     let sql = format!(
         "SELECT kind, detail, substr(created_at, 1, 10) FROM agent_audit
           WHERE principal_id = ?1 AND kind IN ({}) AND {} AND {}",
-        kinds_list(&DETAILED_KINDS),
+        sql_kinds(DETAILED_KINDS),
         counts("chain"),
         in_range("created_at")
     );
@@ -307,8 +298,8 @@ pub async fn compute(
     let mut missing: BTreeMap<(String, String), u64> = BTreeMap::new();
     for (kind, detail, day) in detailed {
         let detail: Value = serde_json::from_str(&detail).unwrap_or(Value::Null);
-        match kind.as_str() {
-            "route_decision" => match text(&detail, "picked") {
+        match AuditKind::parse(&kind) {
+            Some(AuditKind::RouteDecision) => match text(&detail, "picked") {
                 Some(route) => *out.routes_chosen.entry(route).or_default() += 1,
                 None if detail["reason"] == "no_open_route" => {
                     out.gate_refusals.total += 1;
@@ -332,7 +323,7 @@ pub async fn compute(
                 }
                 None => {}
             },
-            "sub_agent_finished" => match detail["outcome"]["status"].as_str() {
+            Some(AuditKind::SubAgentFinished) => match detail["outcome"]["status"].as_str() {
                 Some("finished") => out.sub_agents.finished += 1,
                 Some("incomplete") => {
                     out.sub_agents.incomplete += 1;
@@ -345,12 +336,12 @@ pub async fn compute(
                 }
                 _ => {}
             },
-            "output_blocked" => {
+            Some(AuditKind::OutputBlocked) => {
                 out.output_blocks.total += 1;
                 let action = text(&detail, "action").unwrap_or_else(|| "unknown".into());
                 *out.output_blocks.by_action.entry(action).or_default() += 1;
             }
-            "limit_refused" => {
+            Some(AuditKind::LimitRefused) => {
                 let refused = detail["count"].as_u64().unwrap_or(1);
                 out.limit_refusals.total += refused;
                 if let Some(d) = bucket(&mut days, &day) {

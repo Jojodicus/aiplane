@@ -249,6 +249,25 @@ impl AuditKind {
             Self::LlmExchange | Self::ToolResult | Self::TurnStarted | Self::TurnFinished
         )
     }
+
+    /// The kinds the agent's own chain keeps about its conversation chains —
+    /// an anchor, a sweep, a checkpoint — which a check and a cut read back.
+    pub fn is_marker(self) -> bool {
+        matches!(
+            self,
+            Self::ChainAnchored | Self::ActivitySwept | Self::ChainCheckpoint
+        )
+    }
+}
+
+/// `kinds` as the list of an SQL `kind IN (…)`. Each is the enum's own name,
+/// never input, so it is inlined rather than bound.
+pub fn sql_kinds(kinds: impl IntoIterator<Item = AuditKind>) -> String {
+    kinds
+        .into_iter()
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Where in a run an event happened, beyond what its [`RunChain`] says.
@@ -792,15 +811,6 @@ impl AuditEvent {
     }
 }
 
-fn content_kinds() -> String {
-    AuditKind::ALL
-        .iter()
-        .filter(|k| k.is_content())
-        .map(|k| format!("'{}'", k.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// `principal_id`'s decision trail, newest first: every event attributed to
 /// it except the content kinds ([`AuditKind::is_content`]).
 pub async fn for_principal(pool: &Pool, principal_id: &str) -> Result<Vec<AuditEvent>, DbError> {
@@ -808,7 +818,7 @@ pub async fn for_principal(pool: &Pool, principal_id: &str) -> Result<Vec<AuditE
         "SELECT {COLUMNS} FROM agent_audit
           WHERE principal_id = ? AND kind NOT IN ({})
           ORDER BY rowid DESC",
-        content_kinds()
+        sql_kinds(AuditKind::ALL.iter().copied().filter(|k| k.is_content()))
     );
     let rows = sqlx::query(&sql).bind(principal_id).fetch_all(pool).await?;
     rows.iter().map(|r| AuditEvent::of(stored(r)?)).collect()
@@ -888,12 +898,10 @@ async fn batch(
         sql.push_str(" AND conversation_id = ?");
     }
     if !q.kinds.is_empty() {
-        let list: Vec<String> = q
-            .kinds
-            .iter()
-            .map(|k| format!("'{}'", k.as_str()))
-            .collect();
-        sql.push_str(&format!(" AND kind IN ({})", list.join(", ")));
+        sql.push_str(&format!(
+            " AND kind IN ({})",
+            sql_kinds(q.kinds.iter().copied())
+        ));
     }
     if q.from.is_some() {
         sql.push_str(" AND rtrim(created_at, 'Z') >= ?");
@@ -961,9 +969,9 @@ async fn cut_agent_chain(pool: &Pool, agent_id: &str, before: Timestamp) -> Resu
     }
     let sql = format!(
         "SELECT {COLUMNS} FROM agent_audit
-          WHERE chain_key = ? AND seq <= ?
-            AND kind IN ('chain_anchored', 'activity_swept', 'chain_checkpoint')
-          ORDER BY seq"
+          WHERE chain_key = ? AND seq <= ? AND kind IN ({})
+          ORDER BY seq",
+        sql_kinds(AuditKind::ALL.iter().copied().filter(|k| k.is_marker()))
     );
     let mut book = AnchorBook::default();
     for row in sqlx::query(&sql)

@@ -21,7 +21,7 @@ use sqlx::Row;
 
 use super::super::{DbError, Pool};
 use super::{
-    COLUMNS, StoredEvent, UNKEYED, agent_chain, canonical_json, key_ring, sign_with,
+    AuditKind, COLUMNS, StoredEvent, UNKEYED, agent_chain, canonical_json, key_ring, sign_with,
     signing_key_id, stored,
 };
 use aiplane_core::server::crypto::ActivityKey;
@@ -540,8 +540,8 @@ pub(super) struct AnchorBook {
 impl AnchorBook {
     pub(super) fn read(&mut self, e: &StoredEvent) {
         let detail: Value = serde_json::from_str(&e.detail).unwrap_or(Value::Null);
-        match e.kind.as_str() {
-            "chain_anchored" => {
+        match AuditKind::parse(&e.kind) {
+            Some(AuditKind::ChainAnchored) => {
                 if let Some(chain) = detail["chain_key"].as_str() {
                     self.anchors.insert(
                         chain.to_string(),
@@ -552,12 +552,12 @@ impl AnchorBook {
                     );
                 }
             }
-            "activity_swept" => {
+            Some(AuditKind::ActivitySwept) => {
                 if let Some(chain) = detail["chain_key"].as_str() {
                     self.swept.insert(chain.to_string());
                 }
             }
-            "chain_checkpoint" => self.carry(&detail),
+            Some(AuditKind::ChainCheckpoint) => self.carry(&detail),
             _ => {}
         }
     }
