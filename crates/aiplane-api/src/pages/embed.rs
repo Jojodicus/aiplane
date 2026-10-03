@@ -246,18 +246,15 @@ fn refused(refusal: &Refusal, lang: Lang) -> Response {
     resp
 }
 
-/// The agent as the widget shows it: its name, and which directions of
-/// voice it offers, so the widget draws a microphone and a speaker only for
-/// those.
+/// The agent as the widget shows it: its name, its colour, and which
+/// directions of voice it offers, so the widget draws a microphone and a
+/// speaker only for those.
 fn agent_json(live: &Live) -> Value {
-    let voice = &live
-        .spec
-        .agent()
-        .unwrap_or(AgentSpec::empty())
-        .publish
-        .voice;
+    let spec = live.spec.agent().unwrap_or(AgentSpec::empty());
+    let voice = &spec.publish.voice;
     json!({
         "display": live.agent.principal.display,
+        "color": spec.profile.color(),
         "voice": {
             "input": voice.input_pool().is_some(),
             "output": voice.output_pool().is_some(),

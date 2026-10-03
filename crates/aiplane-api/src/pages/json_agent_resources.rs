@@ -63,14 +63,23 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
     let is_admin = state.rbac.is_admin(&role_ids);
 
     let access = state.pool_access_for(&user.roles);
-    let mut pools: Vec<String> = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .filter(|p| p.kind == PoolKind::Chat && access.allows(p))
-        .map(|p| p.name.clone())
-        .collect();
-    pools.sort();
+    let held = |kind: PoolKind| {
+        let mut names: Vec<String> = state
+            .upstreams
+            .pools()
+            .into_iter()
+            .filter(|p| p.kind == kind && access.allows(p))
+            .map(|p| p.name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    let pools = held(PoolKind::Chat);
+    // `publish.voice` names one of each for the embed widget.
+    let voice_pools = json!({
+        "speech": held(PoolKind::Speech),
+        "transcription": held(PoolKind::Transcription),
+    });
 
     let grantable = state.grantable_tool_ids();
     let tools: Vec<_> = grantable_tools(&state, &role_ids)
@@ -134,6 +143,7 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         StatusCode::OK,
         json!({
             "pools": pools,
+            "voice_pools": voice_pools,
             "tiers": tiers,
             "tools": tools,
             "connectors": connectors,

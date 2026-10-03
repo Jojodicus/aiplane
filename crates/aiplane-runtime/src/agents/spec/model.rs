@@ -144,6 +144,15 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// `color` as `#rrggbb` in lowercase, unless it is blank or not one.
+    pub fn color(&self) -> Option<String> {
+        self.color
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| is_hex_color(c))
+            .map(str::to_ascii_lowercase)
+    }
+
     /// `display`, unless it is blank.
     pub fn display(&self) -> Option<&str> {
         self.display.as_deref().filter(|d| !d.trim().is_empty())
@@ -740,6 +749,11 @@ impl Publish {
     }
 }
 
+/// `#rrggbb`: the one colour form the widget and the builder both read.
+pub fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Spoken input and output for the embed widget (`publish.voice`). Each
 /// direction runs only while it is on *and* names its pool; the validator
 /// requires the pool of a direction that is on before publishing.
@@ -854,6 +868,14 @@ mod tests {
         assert!(!spec.publish.a2a_enabled());
         assert!(!spec.publish.require_passing_tests);
         assert!(spec.main_pool().is_none() && spec.routes.is_empty());
+    }
+
+    #[test]
+    fn only_a_hex_colour_reads_as_the_agents_colour() {
+        let colour = |c: Value| read(json!({ "profile": { "color": c } })).profile.color();
+        assert_eq!(colour(json!("#0B6BCB")), Some("#0b6bcb".into()));
+        assert_eq!(colour(json!(" ")), None);
+        assert_eq!(colour(Value::Null), None);
     }
 
     #[test]

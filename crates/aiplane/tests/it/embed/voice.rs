@@ -574,6 +574,19 @@ async fn the_widget_learns_which_voice_directions_the_agent_offers() {
     );
     let started = e.start_with(&e.key, Some(SITE)).await;
     assert_eq!(started.body["agent"]["voice"]["input"], true);
+    assert_eq!(started.body["agent"]["color"], Value::Null);
+
+    let mut coloured = spec("v2");
+    coloured["profile"] = json!({ "color": "#FFD400" });
+    let (status, body) = e.fx.put_draft(&e.fx.alice, &e.agent, coloured).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        e.fx.publish(&e.fx.alice, &e.agent).await.0,
+        StatusCode::CREATED
+    );
+    let started = e.start_with(&e.key, Some(SITE)).await;
+    assert_eq!(started.body["agent"]["color"], "#ffd400");
+    assert_eq!(started.body["agent"]["voice"]["input"], false);
 
     let r = e
         .send(
@@ -606,4 +619,17 @@ async fn the_recorder_worklet_is_served_to_the_widget() {
     assert_eq!(resp.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], SITE);
     let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
     assert!(body.contains("registerProcessor('pcm-recorder'"), "{body}");
+}
+
+#[tokio::test]
+async fn a_manager_is_offered_the_speech_and_transcription_pools_they_hold() {
+    let mock = upstream().await;
+    let e = voice_embed(&mock, both(), json!({})).await;
+    let (status, body) = e.fx.get(&e.fx.alice, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["voice_pools"],
+        json!({ "speech": [TTS], "transcription": [STT] })
+    );
+    assert_eq!(body["pools"], json!(["pool"]), "chat pools only");
 }

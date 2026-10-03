@@ -690,10 +690,19 @@ impl<'a> Check<'a> {
         if let Some(d) = map.get("display") {
             self.string(d, "profile.display");
         }
-        for key in ["avatar", "color"] {
-            if let Some(x) = map.get(key) {
-                self.nullable_string(x, &join("profile", key));
-            }
+        if let Some(x) = map.get("avatar") {
+            self.nullable_string(x, "profile.avatar");
+        }
+        if let Some(Value::String(c)) = map.get("color")
+            && !c.trim().is_empty()
+            && !model::is_hex_color(c.trim())
+        {
+            self.issue(
+                "profile.color",
+                format!("`{c}` is not a colour — write it as `#rrggbb`, for example `#2563eb`"),
+            );
+        } else if let Some(x) = map.get("color") {
+            self.nullable_string(x, "profile.color");
         }
     }
 
@@ -2861,6 +2870,17 @@ mod tests {
             "{}",
             over[0].message
         );
+    }
+
+    #[test]
+    fn the_profile_colour_is_a_hex_colour() {
+        for ok in [json!("#2563eb"), json!(""), Value::Null] {
+            assert!(check(json!({ "profile": { "color": ok } }), Stage::Draft).is_empty());
+        }
+        for bad in [json!("blue"), json!("#fff"), json!(3)] {
+            let issues = check(json!({ "profile": { "color": bad } }), Stage::Draft);
+            assert_eq!(paths(&issues), ["profile.color"], "{bad}");
+        }
     }
 
     #[test]
