@@ -40,6 +40,9 @@ export default defineConfig({
 			strict: true
 		})
 	})],
+	// Only pages that render Markdown import these; found mid-session, Vite
+	// re-bundles its dependencies and every page loaded before fails with 504.
+	optimizeDeps: { include: ['marked', 'dompurify'] },
 	server: {
 		host: '127.0.0.1',
 		port: Number(process.env.AIPLANE_DEV_PUBLIC_PORT ?? 8080),
