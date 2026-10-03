@@ -347,8 +347,9 @@ impl Asker<'_> {
 
     /// The pool to ask, once the manager's rate and spend limits allow a
     /// call: `requested` if they may use it, else the draft's `main.pool`
-    /// if they may, else the first chat pool they may use that serves a
-    /// model.
+    /// if they may, else the admin's "Balanced" model choice
+    /// (`agents.pool_balanced`, #116) if they may, else the first chat pool
+    /// they may use that serves a model.
     async fn admit(
         &self,
         requested: Option<&str>,
@@ -458,6 +459,10 @@ pub fn choose_pool(
         return with_model(pool).ok_or(AssistError::NoModel);
     }
     if let Some(found) = draft_pool.and_then(with_model) {
+        return Ok(found);
+    }
+    let balanced = state.config().agents.pool_balanced.clone();
+    if let Some(found) = balanced.as_deref().and_then(with_model) {
         return Ok(found);
     }
     let mut pools: Vec<String> = state

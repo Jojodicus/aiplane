@@ -1,0 +1,208 @@
+/**
+ * One agent being edited, shared by every page under `/agents/[id]`: the
+ * overview and tabs, the setup assistant at `/agents/[id]/setup/[step]`, and
+ * the advanced editor. The layout creates it once and hands it down through
+ * context, so moving between those pages keeps the unsaved buffer, and a
+ * reload simply loads the saved draft again.
+ *
+ * The spec being edited is a buffer; `save()` sends it, and the server's
+ * validation answer is kept as `issues` beside the fields it is about. The
+ * test chat and Publish act on what is saved, so both save first when the
+ * buffer is ahead.
+ */
+import { getContext, setContext } from 'svelte';
+import {
+	agentsApi,
+	cleanSpec,
+	ensureShape,
+	liveIssues,
+	type AgentDetail,
+	type AgentError,
+	type AgentResources,
+	type AgentSummary,
+	type AgentVersion,
+	type AssistSuggestion,
+	type Granted,
+	type GrantKind,
+	type Spec,
+	type SpecIssue,
+	type TestDebug
+} from './agents.ts';
+import { liveUses } from './agent-setup.ts';
+
+export class AgentWorkspace {
+	readonly id: string;
+	detail = $state<AgentDetail | null>(null);
+	versions = $state<AgentVersion[]>([]);
+	resources = $state<AgentResources | null>(null);
+	/** Other agents, the hand-off targets. */
+	agents = $state<AgentSummary[]>([]);
+	spec = $state<Spec>(ensureShape({}));
+	savedJson = $state('');
+	/** Bumped whenever the buffer is replaced from outside a form, so forms re-read it. */
+	formKey = $state(0);
+	issues = $state<SpecIssue[]>([]);
+	loading = $state(true);
+	loadError = $state<string | null>(null);
+	error = $state<string | null>(null);
+	/** A catalog key and its arguments: the page translates it, so a language switch follows. */
+	notice = $state<{ key: string; args?: Record<string, string | number> } | null>(null);
+	busy = $state(false);
+	lastDebug = $state<TestDebug | null>(null);
+	/** The prompt assistant's latest proposal (#117), offered step by step until applied or dismissed. */
+	suggestion = $state<AssistSuggestion | null>(null);
+	/** Proposal parts already applied or dismissed (`task`, `tone`, `scope`, …). */
+	handled = $state<string[]>([]);
+
+	readonly writable = $derived(this.detail?.access === 'write');
+	readonly dirty = $derived(JSON.stringify(cleanSpec(this.spec)) !== this.savedJson);
+	/** Only what still points into the draft: removing the route a refusal was about clears it. */
+	readonly shownIssues = $derived(liveIssues(this.issues, this.spec));
+	readonly staleRefusal = $derived(this.issues.length > 0 && this.shownIssues.length === 0);
+	readonly granted = $derived.by((): Granted => {
+		const grants = this.detail?.grants ?? [];
+		const toolName = (tid: string) => this.resources?.tools.find((x) => x.id === tid)?.name ?? tid;
+		const connectorTools = grants
+			.filter((g) => g.kind === 'connector')
+			.flatMap((g) => this.resources?.connectors.find((c) => c.key === g.ref)?.tools ?? []);
+		return {
+			pools: grants.filter((g) => g.kind === 'pool').map((g) => g.ref),
+			tools: [...grants.filter((g) => g.kind === 'tool').map((g) => g.ref), ...connectorTools].map((tid) => ({ id: tid, name: toolName(tid) })),
+			skills: grants.filter((g) => g.kind === 'skill').map((g) => g.ref)
+		};
+	});
+
+	/** Whether the proposal still offers `part`. */
+	offers(part: keyof AssistSuggestion['steps']): boolean {
+		const value = this.suggestion?.steps[part];
+		const present = Array.isArray(value) ? value.length > 0 : !!value;
+		return present && !this.handled.includes(part);
+	}
+
+	propose(suggestion: AssistSuggestion) {
+		this.suggestion = suggestion;
+		this.handled = [];
+	}
+
+	settle(part: string) {
+		if (!this.handled.includes(part)) this.handled = [...this.handled, part];
+	}
+
+	constructor(id: string) {
+		this.id = id;
+	}
+
+	private adopt(next: AgentDetail) {
+		this.detail = next;
+		const shaped = ensureShape(next.draft_spec);
+		this.spec = shaped;
+		this.savedJson = JSON.stringify(cleanSpec(shaped));
+		this.formKey++;
+	}
+
+	async refresh(keepBuffer = false) {
+		const [next, vs] = await Promise.all([agentsApi.get(this.id), agentsApi.versions(this.id)]);
+		this.versions = vs.versions;
+		if (keepBuffer) this.detail = next;
+		else this.adopt(next);
+	}
+
+	async load() {
+		try {
+			await this.refresh();
+			const [r, a] = await Promise.all([agentsApi.resources(), agentsApi.list()]);
+			this.resources = r;
+			this.agents = a.filter((x) => x.id !== this.id);
+		} catch (err) {
+			this.loadError = (err as AgentError).message;
+		} finally {
+			this.loading = false;
+		}
+	}
+
+	fail(err: unknown) {
+		const e = err as AgentError;
+		this.error = e.message;
+		this.issues = e.issues ?? [];
+	}
+
+	async save(): Promise<boolean> {
+		this.busy = true;
+		this.error = null;
+		this.notice = null;
+		try {
+			const clean = cleanSpec(this.spec);
+			await agentsApi.saveDraft(this.id, clean);
+			this.savedJson = JSON.stringify(clean);
+			this.issues = [];
+			await this.refresh(true);
+			this.notice = { key: 'agents-saved' };
+			return true;
+		} catch (err) {
+			this.fail(err);
+			return false;
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	/** Replaces the buffer (an applied template, the JSON tab, a modal's Apply) and re-reads the forms. */
+	replace(next: Spec) {
+		this.spec = ensureShape(next);
+		this.formKey++;
+	}
+
+	async publish(): Promise<number> {
+		if (this.dirty && !(await this.save())) throw new Error('save failed');
+		this.busy = true;
+		this.error = null;
+		this.notice = null;
+		try {
+			const result = await agentsApi.publish(this.id);
+			this.issues = [];
+			await this.refresh(true);
+			this.notice = { key: 'agents-published', args: { version: result.version } };
+			return result.version;
+		} catch (err) {
+			this.fail(err);
+			throw err;
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	async madeLive(version: number) {
+		this.error = null;
+		this.notice = { key: 'agents-live-is', args: { version } };
+		await this.refresh(true);
+	}
+
+	/** Grants `ref` to the agent unless it already holds it. Rejects with the server's reason. */
+	async ensureGrant(kind: GrantKind, ref: string) {
+		if (this.detail?.grants.some((g) => g.kind === kind && g.ref === ref)) return;
+		await agentsApi.grant(this.id, kind, ref);
+		await this.refresh(true);
+	}
+
+	/**
+	 * Revokes `ref` unless the published version still uses it (revoking would
+	 * break the live agent). Returns whether it was revoked.
+	 */
+	async releaseGrant(kind: GrantKind, ref: string): Promise<boolean> {
+		if (!this.detail?.grants.some((g) => g.kind === kind && g.ref === ref)) return false;
+		if (liveUses(this.detail.live_spec, kind, ref)) return false;
+		await agentsApi.revokeGrant(this.id, kind, ref);
+		await this.refresh(true);
+		return true;
+	}
+}
+
+const KEY = Symbol('agent-workspace');
+
+export function provideWorkspace(ws: AgentWorkspace): AgentWorkspace {
+	return setContext(KEY, ws);
+}
+
+export function useWorkspace(): AgentWorkspace {
+	return getContext<AgentWorkspace>(KEY);
+}

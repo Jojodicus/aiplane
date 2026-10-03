@@ -438,9 +438,20 @@ are `web/src/lib/agents.ts` (unit-tested in `agents.test.ts`); the components
 are in `web/src/lib/components/agents/`.
 
 - **`/agents`**: the agents shared with the caller, and a dialog to create one.
-- **`/agents/{id}`** (`AgentWorkbench`): header with live/draft badges and
-  Save draft / Publish / Delete, and nine tabs (`?tab=` keeps the choice in the
-  URL):
+  A new agent opens in the setup assistant (`/agents/{id}/setup/start`).
+- **`/agents/{id}`** (`AgentShell` from the route's layout, `AgentWorkbench` as
+  the page): header with live/draft badges, the open-points pill and Save
+  draft / Publish / Delete, and four tabs. `?tab=` keeps the tab in the URL and
+  `?sub=` the panel inside it:
+  - **Setup**: the plain-language overview ([Agent setup](#agent-setup)), or
+    with the *Advanced editor* switch (`?view=advanced`) the expert panels
+    below — *Builder*, *Canvas*, *JSON*, *Grants* — on the same buffer.
+  - **Try it**: *Test chat* and *Tests*.
+  - **Insights**: *Analytics* and *Activity*.
+  - **Settings**: *Versions* and *Sharing* (shares, responders, notification
+    channels, embed keys).
+
+  The panels:
   - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
     permission and `bind` rows, budget), **State slots**, **Routes and
@@ -560,7 +571,7 @@ are in `web/src/lib/components/agents/`.
   conversation the resume answers with a fresh debug view too, so a verifier's
   slot or a gate the decision opened shows on the reply. In a test
   conversation the manager may answer a `secure_input` too.
-- **Embed keys.** The Sharing tab's *Embed keys* card lists the agent's keys
+- **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
   /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name
   and an origin per line. The server returns the key only in the create
@@ -570,6 +581,99 @@ are in `web/src/lib/components/agents/`.
 - **Not built yet.** A `state` or `gate` SSE event so the debug view could
   stream, and conversation history for test sessions (they are stored with
   `agent_version = 0`).
+
+### Agent setup
+
+The way a manager who is not technical sets an agent up (#116). It edits the
+same spec as the advanced editor and never shows it: every step reads its
+plain-language model out of the spec and writes it back. The pure half is
+`web/src/lib/agent-setup.ts` (unit-tested in `agent-setup.test.ts`, including
+that every step round-trips through the advanced editor's
+`ensureShape`/`cleanSpec`); the components are in
+`web/src/lib/components/agents/setup/`.
+
+- **One buffer for every page.** `routes/agents/[id]/+layout.svelte` mounts
+  `AgentShell`, which creates the `AgentWorkspace`
+  (`lib/agent-workspace.svelte.ts`: detail, versions, resources, the spec
+  buffer, save, publish, grant helpers) and hands it down through context. The
+  overview, the assistant and the advanced editor all bind the same
+  `ws.spec`, so moving between them keeps unsaved edits; a reload loads the
+  saved draft.
+- **Overview** (`SetupOverview`, the Setup tab): one row per section — task &
+  tone, topics, knowledge & abilities, information to collect, identity
+  check, hand-offs, website — with a one-line summary (`summary`), a
+  `StatusPill` (*Done*, *Open* when the checklist has an item for it,
+  *Optional*) and *Edit*. Beside it the pre-publish checklist
+  (`SetupChecklist`, from `checklist`) whose *Fix* opens the step that fixes
+  the item, and a sketch of the widget (`WidgetPreview`: the name and, under a
+  strict scope, the refusal an off-topic question gets). Publish in the header
+  is disabled while a blocking item is open; a missing website is advisory.
+  Server `publish_issues` join the checklist by path (`stepForPath`); one no
+  step reaches links to the advanced editor.
+- **Edit = the same step in a centred `Modal`**, sized to the step. It binds a
+  copy of the buffer; *Apply* puts it back and saves the draft. A refused save
+  keeps the modal open with the server's reasons, and *Cancel* then restores
+  the buffer as it was. Never a side drawer.
+- **The assistant** (`SetupAssistant`) is its own route,
+  `/agents/{id}/setup/{step}` with `step` one of `start`, `basics`, `scope`,
+  `abilities`, `slots`, `identity`, `routes`, `site`, `review`: deep-linkable,
+  the browser's back goes one step back, a reload lands on the same step, and
+  the footer (Back / Step n of 9 / Next or Done) stays at the bottom on a
+  phone. A `StepIndicator` jumps between steps. *Next*, a jump and *Done* save
+  the draft first and stay on the step when the save is refused, which is what
+  makes a reload safe.
+- **Steps** (`SetupStep` picks one; each is a component shared by both hosts):
+
+  | Step | What the person sees | What it writes |
+  |---|---|---|
+  | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field with *Suggest a setup* (below) | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
+  | Task & tone | name, what the agent does, tone chips, answer language, free text, *How thorough?* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.pool` |
+  | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_pool` kept |
+  | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
+  | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`; a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
+  | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
+  | Hand-offs | sentences: "When it is about [topic] and [always / the identity is confirmed], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]" | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: verified, provenance})]}`, `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |
+  | Website | the websites (one per line), a widget sketch, *Create embed code* | `publish.origins` (each reduced to its origin); the key itself is created through the embed-keys API and shown once |
+  | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` (#99) |
+
+- **Grants follow the cards.** Switching a card on grants what it needs to the
+  agent's principal at once (`AgentWorkspace.ensureGrant`; the server's
+  `grant_exceeds_manager` is shown as the reason) and then edits the spec;
+  switching it off edits the spec and revokes the grant unless the published
+  version still uses it (`liveUses`; the card says so). A card for something
+  the agent holds but the manager does not is shown disabled ("Granted by
+  someone else"). In the modal the grant is immediate even if the edit is then
+  cancelled.
+- **Model choice.** *Fast / Balanced / Thorough* is a `SegmentedControl` over
+  the pools an admin mapped in `/admin/settings` → Chat → *Agent model choices*
+  (`agents.pool_fast`, `…_balanced`, `…_thorough`), which
+  `GET /api/v0/agent-resources` returns as `tiers`. Choosing one grants the pool
+  and sets `main.pool`; a choice whose pool the manager does not hold says so.
+  Without a mapping the step lists the pools the manager may grant by a
+  readable name.
+- **Strings.** Everything a person reads is in `agent_setup.ftl` (six
+  languages), the templates' texts too (`@key` strings in
+  `agent-templates.json`, which `tests/it/agent_test_chat.rs` creates in every
+  language to prove each is a valid draft). What the model reads — tone and
+  language lines, the hand-off task, the descriptions of `topic` and
+  `request` — is English, like the structured system prompt (#115).
+- **The prompt assistant** (#117, [`agents.md`](agents.md#what-117-built)).
+  *Suggest a setup* sends the scenario, the chosen template and the current
+  buffer to `POST …/assist/suggest`; the proposal is kept on the workspace
+  (`ws.suggestion`) and every step shows its part in an `AiSuggestion`
+  (`SuggestionBox`) with *Apply* / *Dismiss*: the task, the tone (read back
+  into chips, language and free text), the topics, the tools (granted when
+  applied), the details (`suggestedSlotRows`), the identity card
+  (`suggestedMethod`), the hand-offs as sentences (`suggestedRules`) and, on
+  the last step, test conversations. Applying edits the step's model like a
+  manual edit, so it reaches the spec only through the normal save; the
+  endpoint writes nothing. What the assistant left out is listed on the start
+  step with its reason. The task, the tone and the answer for other topics
+  each have *Improve* (`ImproveText`, `…/assist/improve`): the proposed text
+  before / after with the reason, applied only on *Apply*.
+- **Not built here.** The agent architect (#118), voice in the widget (#119),
+  and a widget colour (the embed widget has no per-agent colour yet, so the
+  step does not offer one).
 
 ## Inbox
 
@@ -594,7 +698,7 @@ paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
   sidebar badge (hidden at 0) and makes the open page refetch the list. The
   stream ends after ten minutes and `EventSource` reconnects on its own,
   which is what it is for here, unlike the chat stream.
-- **Workbench.** The agent workbench's Sharing tab has two more cards:
+- **Workbench.** The agent workbench's Sharing panel (Settings tab) has two more cards:
   *Responders* (users or groups who answer without a share; they need no
   agent-management permission) and *Notification channels* (Slack or Discord
   incoming webhooks; the URL is write-only, the list shows its host, whether
@@ -644,7 +748,7 @@ Where daisyUI has no component for a pattern the mockup uses, `web/src/lib/compo
 | Component | Use it for | Not for |
 |---|---|---|
 | `Modal` | Any centred dialog: bindable `open`, title, optional description, `size` (`sm`–`xl`), body, optional `footer` snippet. Escape, backdrop and the ✕ all close it; nothing renders while closed. `EditModal` is `Modal` plus the admin rows' Cancel/Save footers. | Full-screen pickers (`CapabilityPicker`) and the feedback sheet, which are bottom sheets on mobile. |
-| `ChoiceCard` | A single pick between options that each need a sentence ("on the website" / "by e-mail"). Several in a `role="radiogroup"` grid. | Two or three short words — use `SegmentedControl`. |
+| `ChoiceCard` | A single pick between options that each need a sentence ("on the website" / "by e-mail"). Several in a `role="radiogroup"` grid; with `multiple` a switch of a multi-pick set (`role="checkbox"` in a `role="group"`, the agent setup's abilities). | Two or three short words — use `SegmentedControl`. |
 | `SegmentedControl` | A small closed enum (2–4 options) shown at once, as a daisyUI `join` of radio buttons. | Long or data-driven lists — `SearchableSelect`. |
 | `ChipToggle` | Multi-pick from a short visible set (channels, tags); with `onremove` a removable token. | A grant field over a closed server-known set — `SearchableSelect multiple`. |
 | `AiSuggestion` | Anything the model proposed that the user has not accepted yet; the dashed primary edge is reserved for this. `actions` holds Apply / Dismiss. | Settled configuration or help text — `alert alert-info`. |
