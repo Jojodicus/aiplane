@@ -1028,7 +1028,7 @@ mod tests {
         name: &str,
         tools: &[&str],
     ) -> aiplane_core::server::principal::SystemPrincipal {
-        use aiplane_core::server::db::system_principals as sp;
+        use aiplane_agents::db::system_principals as sp;
         let row = sp::create(
             &state.db,
             &sp::NewPrincipal {
@@ -1278,11 +1278,10 @@ mod tests {
             text("done"),
         ])
         .await;
-        let events =
-            aiplane_core::server::db::agent_audit::for_principal(&r.state.db, &r.principal.id)
-                .await
-                .unwrap();
-        let calls: Vec<&aiplane_core::server::db::agent_audit::AuditEvent> =
+        let events = aiplane_agents::db::agent_audit::for_principal(&r.state.db, &r.principal.id)
+            .await
+            .unwrap();
+        let calls: Vec<&aiplane_agents::db::agent_audit::AuditEvent> =
             events.iter().filter(|e| e.kind == "tool_call").collect();
         let decision = |tool: &str| {
             let e = calls

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use aiplane_core::server::db::{agent_audit, agents as agents_db, system_principals as sp};
+use aiplane_agents::db::{agent_audit, agents as agents_db, system_principals as sp};
 use aiplane_core::server::principal::{GrantKind, GrantSet};
 use aiplane_core::server::upstreams::{
     self,

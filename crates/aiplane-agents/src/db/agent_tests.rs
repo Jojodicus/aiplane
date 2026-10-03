@@ -15,7 +15,7 @@ use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 use super::{DbError, Pool};
-use crate::server::crypto::sha256_hex;
+use aiplane_core::server::crypto::sha256_hex;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TestCase {
@@ -352,12 +352,14 @@ pub async fn results(pool: &Pool, run_id: &str) -> Result<Vec<CaseResult>, DbErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::{self, agents, system_principals as sp};
+    use crate::db::{agents, system_principals as sp};
     use serde_json::json;
     use std::path::Path;
 
     async fn pool_with_agent() -> (Pool, String) {
-        let pool = db::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let agent = agents::create(
             &pool,
             &sp::NewPrincipal {

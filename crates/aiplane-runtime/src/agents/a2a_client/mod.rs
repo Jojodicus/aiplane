@@ -35,8 +35,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::agent_a2a_tasks::{self, PendingTask};
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_a2a_tasks::{self, PendingTask};
+use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use serde_json::{Value, json};
 use session_core::i18n::t;

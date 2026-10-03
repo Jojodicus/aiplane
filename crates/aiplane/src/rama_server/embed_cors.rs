@@ -9,8 +9,8 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use aiplane_agents::db::embed_keys::EmbeddableOrigins;
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::db::embed_keys::EmbeddableOrigins;
 use rama::http::{Body, HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use rama::{Layer, Service};
 

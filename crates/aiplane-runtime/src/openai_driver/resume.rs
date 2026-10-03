@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 use session_core::db::{
     self as chat, BudgetUsed, Decision, DenyReason, PendingCall, SuspensionKind, ToolCallStatus,

@@ -21,7 +21,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::agents::{self, Fx, TIME};
 use crate::common;
 
-use aiplane_core::server::db::agent_audit;
+use aiplane_agents::db::agent_audit;
 use aiplane_runtime::agents::embed::LiveAgentRunner;
 use aiplane_runtime::server::tools::ToolRegistry;
 use aiplane_runtime::server::tools::ask_first::AskFirst;

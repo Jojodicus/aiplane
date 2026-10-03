@@ -40,8 +40,8 @@ use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
+use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::db::agent_audit::AuditKind;
 use aiplane_core::server::principal::Principal;
 
 use crate::server::tools::injection::InjectionScan;
@@ -1864,7 +1864,7 @@ mod tests {
     #[tokio::test]
     async fn an_agent_run_gets_an_audit_row_for_a_hit() {
         use crate::server::tools::injection::InjectionPolicy;
-        use aiplane_core::server::db::agent_audit;
+        use aiplane_agents::db::agent_audit;
         let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
@@ -1894,7 +1894,7 @@ mod tests {
     #[tokio::test]
     async fn clean_results_and_off_runs_write_no_audit_row() {
         use crate::server::tools::injection::InjectionPolicy;
-        use aiplane_core::server::db::agent_audit;
+        use aiplane_agents::db::agent_audit;
         let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();

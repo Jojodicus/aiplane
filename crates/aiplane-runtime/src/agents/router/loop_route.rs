@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 
 use super::{Caller, ChildRun, ForwardRequest, record_finished};

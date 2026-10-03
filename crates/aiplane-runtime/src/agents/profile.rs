@@ -22,7 +22,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use aiplane_core::server::db::{DbError, Pool, agents as agents_db, system_principals as sp};
+use aiplane_agents::db::{agents as agents_db, system_principals as sp};
+use aiplane_core::server::db::{DbError, Pool};
 use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};

@@ -18,6 +18,7 @@ publish.workspace = true
 # drives a live probe through the gateway's own client pool.
 aiplane-core = { path = "../aiplane-core" }
 aiplane-features = { path = "../aiplane-features" }
+aiplane-agents = { path = "../aiplane-agents" }
 aiplane-runtime = { path = "../aiplane-runtime" }
 session-core = { path = "../session-core" }
 serde = { workspace = true }

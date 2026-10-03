@@ -23,10 +23,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_channels;
-use aiplane_core::server::db::agents::{self as agents_db, Access, SubjectKind};
-use aiplane_core::server::db::{DbError, agent_responders, push_subscriptions, users};
-use aiplane_features::server::notify_channels::{self, Notice};
+use aiplane_agents::db::agent_channels;
+use aiplane_agents::db::agent_responders;
+use aiplane_agents::db::agents::{self as agents_db, Access, SubjectKind};
+use aiplane_agents::notify_channels::{self, Notice};
+use aiplane_core::server::db::{DbError, push_subscriptions, users};
 use aiplane_features::server::push::{PushMessage, SendOutcome};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -491,7 +492,7 @@ pub fn items_json(items: &[InboxItem]) -> Value {
 #[cfg(test)]
 mod tests {
 
-    use aiplane_core::server::db::agent_channels::ChannelKind;
+    use aiplane_agents::db::agent_channels::ChannelKind;
 
     #[test]
     fn a_channel_kind_names_itself_as_the_notify_list_does() {

@@ -5,6 +5,7 @@ members = [
     "crates/session-core",
     "crates/aiplane-core",
     "crates/aiplane-features",
+    "crates/aiplane-agents",
     "crates/aiplane-runtime",
     "crates/aiplane-tools",
     "crates/aiplane-api",

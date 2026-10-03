@@ -25,10 +25,9 @@ use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
-use aiplane_core::server::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
-use aiplane_core::server::db::{
-    agent_analytics, agent_audit, gateway_groups, system_principals as sp_db, users,
-};
+use aiplane_agents::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
+use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
+use aiplane_core::server::db::{gateway_groups, users};
 use aiplane_core::server::principal::GrantSet;
 use aiplane_runtime::agents::spec::{self, AgentSpec, SpecContext, SpecIssue, Stage};
 use aiplane_runtime::rama_server::state::RamaState;

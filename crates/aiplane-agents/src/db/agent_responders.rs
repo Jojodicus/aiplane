@@ -140,11 +140,13 @@ pub async fn is_responder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::{agents, system_principals as sp};
+    use crate::db::{agents, system_principals as sp};
     use std::path::Path;
 
     async fn pool_with_agent() -> (Pool, String) {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let id = agents::create(
             &pool,
             &sp::NewPrincipal {

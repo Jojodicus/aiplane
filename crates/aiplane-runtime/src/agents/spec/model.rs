@@ -27,7 +27,7 @@ use std::num::NonZeroU64;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use aiplane_core::server::limits::{Rate, VisitorRates};
+use aiplane_agents::rates::{Rate, VisitorRates};
 use jiff::SignedDuration;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};

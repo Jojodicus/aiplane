@@ -96,8 +96,9 @@ pub async fn delete_idle_conversations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::visitor_sessions::{self, NewVisitorSession};
-    use crate::server::db::{agent_state, agents, embed_keys, system_principals as sp, users};
+    use crate::db::visitor_sessions::{self, NewVisitorSession};
+    use crate::db::{agent_state, agents, embed_keys, system_principals as sp};
+    use aiplane_core::server::db::users;
     use jiff::SignedDuration;
     use session_core::db as chat;
     use std::path::Path;
@@ -179,7 +180,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_idle_conversation_goes_with_its_sub_agent_runs_state_and_visitor() {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let support = agent(&pool, "support").await;
         let billing = agent(&pool, "billing").await;
         let key = embed_keys::create(
@@ -245,7 +248,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_conversation_waiting_for_a_decision_is_kept_until_it_is_settled() {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let support = agent(&pool, "support").await;
         let waiting = visitor_conversation_without_key(&pool, &support).await;
         chat::create_assistant_turn_in_progress(&pool, &waiting, "paused", "m")
@@ -302,7 +307,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_persons_chats_are_never_swept() {
-        let pool = super::super::open(Path::new(":memory:")).await.unwrap();
+        let pool = aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap();
         let support = agent(&pool, "support").await;
         let now = Timestamp::now();
         users::upsert(

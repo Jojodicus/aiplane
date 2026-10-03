@@ -194,7 +194,7 @@ mod tests {
     use super::*;
     use crate::agents::state::tests::{at, pool_with_session, schema};
     use crate::agents::state::{AgentState, Provenance};
-    use aiplane_core::server::db::agent_state;
+    use aiplane_agents::db::agent_state;
 
     fn tools() -> SlotTools {
         SlotTools::with_clock(Arc::new(schema()), Arc::new(|| at("2026-10-02T12:00:00Z")))

@@ -29,11 +29,10 @@ use serde_json::{Value, json};
 
 use super::json_agents::guard_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
+use aiplane_agents::db::agents::{self as agents_db, Access};
+use aiplane_agents::db::{agent_audit, system_principals as sp_db};
 use aiplane_core::server::auth::token;
-use aiplane_core::server::db::agents::{self as agents_db, Access};
-use aiplane_core::server::db::{
-    agent_audit, mcp_catalog, rag as rag_db, system_principals as sp_db, users,
-};
+use aiplane_core::server::db::{mcp_catalog, rag as rag_db, users};
 use aiplane_core::server::principal::GrantKind;
 use aiplane_runtime::rama_server::state::RamaState;
 

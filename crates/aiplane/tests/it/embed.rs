@@ -1335,7 +1335,7 @@ async fn the_public_path_withholds_an_unverified_identifier_in_the_visitors_lang
         .collect();
     let german = session_core::i18n::t(session_core::i18n::Lang::De, "agent-output-withheld");
     assert_eq!(delivered, german, "{frames:?}");
-    let audit = aiplane_core::server::db::agent_audit::for_principal(&e.fx.state.db, &e.agent)
+    let audit = aiplane_agents::db::agent_audit::for_principal(&e.fx.state.db, &e.agent)
         .await
         .unwrap();
     assert!(audit.iter().any(|a| a.kind == "output_blocked"));

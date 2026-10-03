@@ -29,12 +29,12 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::crypto::sha256_hex;
-use aiplane_core::server::db::agent_verifiers::{
+use aiplane_agents::db::agent_verifiers::{
     self as rows, Counted, EventKind, NewEvent, PendingCode,
 };
-use aiplane_core::server::db::visitor_sessions;
-use aiplane_core::server::limits::{RateExceeded, RateScope, sliding_window};
+use aiplane_agents::db::visitor_sessions;
+use aiplane_agents::rates::{RateExceeded, RateScope, sliding_window};
+use aiplane_core::server::crypto::sha256_hex;
 use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 use session_core::db::Decision;

@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_channels::ChannelKind;
+use crate::db::agent_channels::ChannelKind;
 use serde_json::{Value, json};
 
 /// How long one webhook post may take. A slow chat service must not hold

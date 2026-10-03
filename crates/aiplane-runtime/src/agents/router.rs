@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource, usage_from_value};
 use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
 use aiplane_core::server::run_chain::{CallSite, Frame, RunChain};

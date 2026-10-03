@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 use super::json_agents::agent_at;
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_ok, no_content, not_found, raw_path_segment};
+use aiplane_agents::db::agents::Access;
+use aiplane_agents::db::embed_keys;
 use aiplane_core::server::auth::token;
-use aiplane_core::server::db::agents::Access;
-use aiplane_core::server::db::embed_keys;
 use aiplane_runtime::agents::spec;
 use aiplane_runtime::rama_server::state::RamaState;
 

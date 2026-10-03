@@ -25,7 +25,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use aiplane_core::server::db::agent_state::{self, StoredSlot};
+use aiplane_agents::db::agent_state::{self, StoredSlot};
 use aiplane_core::server::db::{DbError, Pool};
 use jiff::Timestamp;
 use regex::Regex;

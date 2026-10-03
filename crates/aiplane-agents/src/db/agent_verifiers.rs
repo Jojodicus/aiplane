@@ -248,7 +248,7 @@ pub async fn use_jti(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::open;
+    use aiplane_core::server::db::open;
     use std::path::Path;
 
     async fn fresh() -> Pool {

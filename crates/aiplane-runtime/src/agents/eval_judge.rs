@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiplane_core::server::db::system_principals as sp;
+use aiplane_agents::db::system_principals as sp;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use async_trait::async_trait;
 use serde_json::{Value, json};

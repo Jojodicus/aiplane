@@ -16,9 +16,9 @@
 pub mod api;
 pub mod body_limit;
 pub mod comfyui_api;
-pub mod embed_cors;
 #[cfg(debug_assertions)]
 pub mod dev_seed;
+pub mod embed_cors;
 pub mod first_run;
 pub mod messages;
 pub mod oidc_handlers;

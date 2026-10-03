@@ -15,7 +15,8 @@
 
 use std::sync::Arc;
 
-use aiplane_core::server::db::{DbError, agent_audit, agents as agents_db};
+use aiplane_agents::db::{agent_audit, agents as agents_db};
+use aiplane_core::server::db::DbError;
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -44,7 +45,7 @@ pub async fn run_draft_turn(
             .map_err(DbError::from)?
             .is_some_and(|run| run.agent_version == Some(DRAFT_VERSION));
         if !continues {
-            let agent = aiplane_core::server::db::system_principals::get(&state.db, turn.agent_id)
+            let agent = aiplane_agents::db::system_principals::get(&state.db, turn.agent_id)
                 .await?
                 .map_or_else(|| turn.agent_id.to_string(), |p| p.name);
             return Err(AgentRunError::UnknownSession {

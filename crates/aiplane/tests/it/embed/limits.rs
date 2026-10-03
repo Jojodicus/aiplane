@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::{Embed, Reply, SITE, ScriptedRunner, code, embed_with};
 use crate::common;
 
-use aiplane_core::server::db::agent_audit;
+use aiplane_agents::db::agent_audit;
 use aiplane_core::server::db::usage::{self, UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::principal::PrincipalKind;
 use aiplane_runtime::agents::retention;
@@ -372,7 +372,7 @@ async fn retention_deletes_only_the_agents_idle_conversations() {
             principal_id: &e.agent,
             title: None,
             parent_turn_id: None,
-            agent_version: Some(aiplane_core::server::db::agents::DRAFT_VERSION),
+            agent_version: Some(aiplane_agents::db::agents::DRAFT_VERSION),
         },
     )
     .await

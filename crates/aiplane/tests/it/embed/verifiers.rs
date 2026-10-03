@@ -262,7 +262,7 @@ async fn a_visitor_verifies_with_the_code_in_the_secure_field_and_the_gate_opens
     assert_eq!(done.content.as_deref(), Some("Thanks, you are verified."));
 
     let session = e.conversation_of(&token).await;
-    let slots = aiplane_core::server::db::agent_state::for_session(&e.fx.state.db, &session)
+    let slots = aiplane_agents::db::agent_state::for_session(&e.fx.state.db, &session)
         .await
         .unwrap();
     let verified = slots.iter().find(|s| s.slot == "verified").unwrap();
@@ -341,7 +341,7 @@ async fn a_website_vouches_for_its_visitor_with_a_signed_token() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     assert_eq!(r.body, json!({ "slots": ["verified"] }));
     let session = e.conversation_of(&token).await;
-    let slots = aiplane_core::server::db::agent_state::for_session(&e.fx.state.db, &session)
+    let slots = aiplane_agents::db::agent_state::for_session(&e.fx.state.db, &session)
         .await
         .unwrap();
     assert_eq!(slots[0].provenance, "host");

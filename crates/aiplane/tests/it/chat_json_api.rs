@@ -2947,7 +2947,7 @@ async fn a_stale_enablement_for_a_revoked_grant_is_neither_offered_nor_runnable(
 /// not in the list, not in search, not openable, not deletable.
 #[tokio::test]
 async fn an_agent_run_is_in_no_persons_chats() {
-    use aiplane_core::server::db::system_principals as sp;
+    use aiplane_agents::db::system_principals as sp;
     use aiplane_runtime::server::headless::{OpenParams, Owner, open_session};
 
     let (state, alice) = setup("http://unused.invalid").await;

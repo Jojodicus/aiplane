@@ -548,10 +548,16 @@ async fn a_per_user_connector_cannot_be_granted_and_is_ignored_if_present() {
     );
 
     // Even a grant row that got in some other way reads nobody's connection.
-    db::system_principals::add_grant(&fx.state.db, &id, GrantKind::Connector, PER_USER, "x")
-        .await
-        .unwrap();
-    let principal = db::system_principals::load_active(&fx.state.db, &id)
+    aiplane_agents::db::system_principals::add_grant(
+        &fx.state.db,
+        &id,
+        GrantKind::Connector,
+        PER_USER,
+        "x",
+    )
+    .await
+    .unwrap();
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
         .await
         .unwrap()
         .unwrap();
@@ -822,7 +828,7 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
     let (id, _) = fx.principal_with_pool("support-website").await;
     let (status, body) = fx.grant(&fx.admin, &id, "tool", TIME).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    let principal = db::system_principals::load_active(&fx.state.db, &id)
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
         .await
         .unwrap()
         .unwrap();
@@ -861,11 +867,11 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
 
 #[tokio::test]
 async fn the_audit_trail_shows_a_run_events_call_chain() {
-    use aiplane_core::server::db::agent_audit::{self, AuditKind};
+    use aiplane_agents::db::agent_audit::{self, AuditKind};
     use aiplane_core::server::run_chain::{Frame, RunChain};
     let fx = fixture().await;
     let id = fx.create(&fx.admin, "support-website").await;
-    let principal = db::system_principals::load_active(&fx.state.db, &id)
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
         .await
         .unwrap()
         .unwrap();
@@ -1211,7 +1217,7 @@ async fn only_an_admin_grants_an_external_a2a_agent_and_only_by_a_valid_card_url
 
     let (status, body) = fx.grant(&fx.admin, &id, "a2a_agent", CARD).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    let principal = db::system_principals::load_active(&fx.state.db, &id)
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
         .await
         .unwrap()
         .unwrap();

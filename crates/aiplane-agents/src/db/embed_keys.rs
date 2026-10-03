@@ -270,11 +270,13 @@ impl EmbeddableOrigins {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::db::{agents, system_principals as sp};
+    use crate::db::{agents, system_principals as sp};
     use std::path::Path;
 
     async fn pool() -> Pool {
-        super::super::open(Path::new(":memory:")).await.unwrap()
+        aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap()
     }
 
     async fn agent(pool: &Pool, name: &str) -> String {

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::agent_audit::{self, AuditKind};
 use super::{DbError, Pool};
-use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
 
 const MAX_NAME_LEN: usize = 64;
 
@@ -448,11 +448,13 @@ pub async fn touch_token(pool: &Pool, token_id: &str) -> Result<(), DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::auth::token;
+    use aiplane_core::server::auth::token;
     use std::path::Path;
 
     async fn pool() -> Pool {
-        super::super::open(Path::new(":memory:")).await.unwrap()
+        aiplane_core::server::db::open(Path::new(":memory:"))
+            .await
+            .unwrap()
     }
 
     async fn principal(pool: &Pool, name: &str) -> PrincipalRow {

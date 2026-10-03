@@ -250,7 +250,7 @@ async fn types(
 }
 
 async fn slot_rows(world: &World, session: &str) -> Vec<(String, Value, String)> {
-    aiplane_core::server::db::agent_state::for_session(world.db(), session)
+    aiplane_agents::db::agent_state::for_session(world.db(), session)
         .await
         .unwrap()
         .into_iter()

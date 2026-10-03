@@ -29,8 +29,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use aiplane_core::server::db::agent_audit;
-use aiplane_core::server::db::agent_tests::TestCase;
+use aiplane_agents::db::agent_audit;
+use aiplane_agents::db::agent_tests::TestCase;
 use async_trait::async_trait;
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};

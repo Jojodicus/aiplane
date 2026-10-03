@@ -719,8 +719,8 @@ const DEV_EMBED_KEY: &str = "gwe_0123456789abcdef0123456789abcdef0123456789abcde
 /// A published agent on the `chat` pool with an embed key for the example
 /// page, served from `localhost:8000` or `127.0.0.1:8000`.
 async fn seed_embed_agent(state: &RamaState) -> anyhow::Result<()> {
+    use aiplane_agents::db::{agents, embed_keys, system_principals};
     use aiplane_core::server::auth::token;
-    use aiplane_core::server::db::{agents, embed_keys, system_principals};
     use aiplane_core::server::principal::GrantKind;
 
     let spec = serde_json::json!({

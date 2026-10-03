@@ -37,12 +37,12 @@ use crate::rama_server::RamaState;
 use crate::rama_server::body_limit::BodyLimitLayer;
 #[cfg(debug_assertions)]
 use crate::rama_server::dev_seed;
+use crate::rama_server::embed_cors::EmbedCorsLayer;
 use crate::rama_server::first_run::FirstRunLayer;
 use crate::rama_server::setup_api;
 use crate::rama_server::{
     api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, sandbox_api, spa,
 };
-use crate::rama_server::embed_cors::EmbedCorsLayer;
 use aiplane_core::rama_server::cors::V1CorsLayer;
 
 /// Builds the rama router. State is shared via `Arc` since handlers

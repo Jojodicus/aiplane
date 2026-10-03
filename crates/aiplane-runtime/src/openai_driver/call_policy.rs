@@ -8,7 +8,7 @@
 //! the run's call chain, so "which agent called what, through whom, for which
 //! visitor, and what let it" is answerable afterwards.
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 
 use crate::agent_run::AgentRun;
 use crate::server::tools::ToolContext;

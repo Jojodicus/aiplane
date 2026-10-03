@@ -17,9 +17,11 @@ use std::sync::{Arc, Mutex};
 use session_core::SessionWorkers;
 use session_core::workers::{ActiveWorker, RegisterOutcome, TurnUpdate};
 
-use aiplane_core::server::db::agent_audit::{self, AuditKind};
+use aiplane_agents::db::agent_audit::{self, AuditKind};
+use aiplane_agents::db::inbound::Inbound;
+use aiplane_agents::rates::{self, Rate, RateExceeded, VisitorKey};
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
-use aiplane_core::server::limits::{LimitExceeded, Rate, RateExceeded, VisitorKey};
+use aiplane_core::server::limits::LimitExceeded;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
 
@@ -86,6 +88,15 @@ pub struct Admission<'a> {
     /// The A2A context asking, which counts like a visitor session.
     pub a2a_context: Option<&'a str>,
     pub ip: Option<&'a str>,
+}
+
+impl<'a> Admission<'a> {
+    /// The conversation asking, whichever channel it came on.
+    fn conversation(&self) -> Option<Inbound<'a>> {
+        self.visitor_id
+            .map(Inbound::Visitor)
+            .or(self.a2a_context.map(Inbound::A2a))
+    }
 }
 
 /// Why a visitor request was refused before it reached the agent.
@@ -155,28 +166,24 @@ pub async fn admit(
     };
     let key = VisitorKey {
         principal_id: agent_id,
-        visitor_id: who.visitor_id,
-        a2a_context: who.a2a_context,
+        conversation: who.conversation(),
         ip: who.ip,
     };
     // A version whose spec does not read cannot run; its visitors are held
     // to the default rates until the turn refuses them.
     let spec = compiled.agent().unwrap_or(AgentSpec::empty());
-    let refused = match state
-        .enforcer
-        .check_visitor(&spec.publish.visitor_rates(), &key, now)
-        .await
-    {
-        Err(rate) => Refusal::Rate(rate),
-        Ok(()) => match state
-            .enforcer
-            .check_agent(agent_id, &owner_budget(spec), now)
-            .await
-        {
-            Err(budget) => Refusal::Budget(budget),
-            Ok(()) => return Ok(()),
-        },
-    };
+    let refused =
+        match rates::check_visitor(&state.db, &spec.publish.visitor_rates(), &key, now).await {
+            Err(rate) => Refusal::Rate(rate),
+            Ok(()) => match state
+                .enforcer
+                .check_agent(agent_id, &owner_budget(spec), now)
+                .await
+            {
+                Err(budget) => Refusal::Budget(budget),
+                Ok(()) => return Ok(()),
+            },
+        };
     let subject = who.visitor_id.or(who.a2a_context).or(who.ip).unwrap_or("");
     state
         .refusals

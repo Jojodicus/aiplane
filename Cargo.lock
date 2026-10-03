@@ -89,6 +89,7 @@ dependencies = [
 name = "aiplane"
 version = "0.1.0"
 dependencies = [
+ "aiplane-agents",
  "aiplane-api",
  "aiplane-core",
  "aiplane-features",
@@ -122,9 +123,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiplane-agents"
+version = "0.1.0"
+dependencies = [
+ "aiplane-core",
+ "anyhow",
+ "jiff",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "session-core",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "aiplane-api"
 version = "0.1.0"
 dependencies = [
+ "aiplane-agents",
  "aiplane-core",
  "aiplane-features",
  "aiplane-runtime",
@@ -218,6 +239,7 @@ dependencies = [
 name = "aiplane-runtime"
 version = "0.1.0"
 dependencies = [
+ "aiplane-agents",
  "aiplane-core",
  "aiplane-features",
  "arc-swap",

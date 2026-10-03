@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiplane_core::server::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::AuditKind;
 use serde_json::{Value, json};
 use session_core::db::{self as chat, Decision, ToolCallStatus, TurnRole, TurnStatus};
 use session_core::i18n::{Lang, t};

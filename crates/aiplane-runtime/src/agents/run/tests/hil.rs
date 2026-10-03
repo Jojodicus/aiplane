@@ -12,9 +12,9 @@ use super::suspend::{answer, staff, visitor_says, wait_settled};
 use super::*;
 use crate::agents::inbox::{self, Standing, Viewer};
 use crate::agents::resume::{AgentResume, claim, resume_expired, run_claimed};
-use aiplane_core::server::db::agent_channels::{self, ChannelKind, NewChannel};
-use aiplane_core::server::db::agent_responders;
-use aiplane_core::server::db::agents::SubjectKind;
+use aiplane_agents::db::agent_channels::{self, ChannelKind, NewChannel};
+use aiplane_agents::db::agent_responders;
+use aiplane_agents::db::agents::SubjectKind;
 use session_core::db::{Decision, DecisionKind, DenyReason, SuspensionKind};
 
 const ECHO: &str = "company_echo";
