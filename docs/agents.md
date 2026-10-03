@@ -2498,7 +2498,8 @@ routes:
 
 A complete, tamper-evident activity log: everything an agent does, enough to
 reconstruct any conversation, decision and model exchange afterwards, with
-no secret in it. Migration `0096_agent_activity_log.sql`; the log is
+no secret in it. Migrations `0096_agent_activity_log.sql` and
+`0097_activity_blobs.sql`; the log is
 `aiplane-agents::db::agent_audit`, the runtime's door to it
 `aiplane-runtime::agents::audit`.
 
@@ -2623,7 +2624,7 @@ logged and the request goes on as it would have.
 
 | Event | Written by | Detail |
 |---|---|---|
-| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
+| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` or, after a turn's first round, `request_delta` (see "Storage") (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
 | `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
@@ -2728,12 +2729,26 @@ with `agent`, `principal`, `version`, `conversation`, `session`, `turn`,
 `visitor`, `caller` and `depth`, and every tool call in a `tool_call` span
 with `tool` and `call_id`, so a log line joins the events it belongs to.
 
-**Storage.** The log keeps payloads whole, and a model round's request
-carries the whole conversation so far: a conversation of *r* rounds over a
-prompt growing to *p* bytes stores roughly *r × p / 2* bytes of requests,
-plus every tool result once. A 20-round conversation with a 40 KB prompt is
-about 0.5 MB; image parts sent to a vision model count at their base64
-size. SQLite stores rows that large on overflow pages, which the hourly
+**Storage.** A model round's request carries the whole conversation so
+far, so the log does not store it whole every round
+(`agent_audit::exchange`): the first round of a turn keeps its `request`;
+every later round keeps a `request_delta` against the round before it —
+`prev` (that exchange's event id), `keep` (how many of its messages this
+request starts with), the `messages` after them, the `system` message only
+when it changed, `tools` only when the offer changed (`null` when it was
+dropped), and `rest` (model, stream and sampling parameters). A request that
+shares nothing with the previous one beyond the system message is stored
+whole. A `data:` URL of at least 4 KiB (a base64 image) is stored once per
+chain in `activity_blobs` by its SHA-256, and the detail holds
+`activity-blob:sha256:<hash>` instead; the reference is inside the event's
+signed hash, a blob whose content no longer matches its hash is not served,
+and the sweep deletes a chain's blobs with it. The activity API's page and
+export serve every exchange as the whole request it stood for
+(`agent_audit::Reconstructor`, which follows `prev` back to a whole request
+and puts the blobs back); `activity::a_whole_run_is_one_hash_chain…` checks
+that what it gives back is what was sent. So a turn of *r* rounds stores its
+prompt about once plus what each round added, plus every tool result once.
+SQLite stores large rows on overflow pages, which the hourly
 sweep frees whole chain by chain; the file does not shrink without a
 `VACUUM`, but freed pages are reused. The columns #111 added sit after
 `detail` in the row, and reading a column behind an overflowing `detail`

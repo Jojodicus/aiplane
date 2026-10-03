@@ -268,3 +268,69 @@ async fn admins_and_share_holders_read_the_log_and_responders_do_not() {
         );
     }
 }
+
+/// A round stored as a delta, with an image stored as a blob, reads back as
+/// the whole request it stood for, on a page and in the export.
+#[tokio::test]
+async fn a_delta_and_its_blobs_read_back_as_the_whole_request() {
+    let (fx, agent) = setup().await;
+    let principal = SystemPrincipal {
+        id: agent.clone(),
+        name: "support".into(),
+        grants: std::sync::Arc::new(GrantSet::default()),
+    };
+    let chain = RunChain::root("s-d", None, Frame::for_principal(&principal, Some(1)));
+    let image = format!(
+        "data:image/png;base64,{}",
+        "Q".repeat(agent_audit::exchange::BLOB_MIN_BYTES)
+    );
+    let first = json!({ "model": "m", "messages": [
+        { "role": "system", "content": "s" },
+        { "role": "user", "content": [{ "type": "image_url", "image_url": { "url": image } }] }
+    ] });
+    let mut second = first.clone();
+    second["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "role": "assistant", "content": "a cat" }));
+    let append = |detail: Value| {
+        agent_audit::append_now(
+            &fx.state.db,
+            NewEvent::new(AuditKind::LlmExchange, &agent, detail).in_run(Some(&chain)),
+        )
+    };
+    let a = append(json!({ "purpose": "round", "request": first }))
+        .await
+        .unwrap();
+    let mut delta = agent_audit::exchange::request_delta(&first, &second).unwrap();
+    delta["prev"] = json!(a.id);
+    append(json!({ "purpose": "round", "request_delta": delta }))
+        .await
+        .unwrap();
+
+    let (status, page) = activity(&fx, &fx.alice, &agent, "conversation=s-d&order=asc").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let requests: Vec<Value> = page["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["detail"]["request"].clone())
+        .collect();
+    assert_eq!(requests, [first.clone(), second.clone()]);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(format!(
+            "/api/v0/agents/{agent}/activity/export?conversation=s-d"
+        ))
+        .header("cookie", format!("id={}", fx.alice))
+        .body(Body::empty())
+        .unwrap();
+    let resp = common::app(fx.state.clone()).serve(req).await.unwrap();
+    let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
+    let exported: Vec<Value> = body
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["detail"]["request"].clone())
+        .collect();
+    assert_eq!(exported, [first, second]);
+}

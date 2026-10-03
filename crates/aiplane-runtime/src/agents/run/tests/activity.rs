@@ -286,12 +286,42 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
             .all(|e| e.chain_key.as_deref() == Some(&format!("conversation:{}", run.session)))
     );
 
-    // Every model request, exactly as sent, and what came back.
+    // Every model request, exactly as sent, and what came back. A round
+    // after the first of its turn is stored as a delta against the one
+    // before; the log reads it back whole.
+    let stored: Vec<Value> = events
+        .iter()
+        .filter(|e| e.kind == "llm_exchange" && e.principal_id == run.support)
+        .map(detail)
+        .collect();
+    assert!(
+        stored[0].get("request").is_some(),
+        "a turn's first round is whole"
+    );
+    let deltas = stored
+        .iter()
+        .filter(|d| d.get("request_delta").is_some())
+        .count();
+    assert!(
+        deltas >= stored.len() - 3,
+        "every round but each turn's first is a delta: {deltas} of {}",
+        stored.len()
+    );
+    let mut reconstructor = agent_audit::Reconstructor::default();
+    let mut read_back = Vec::new();
+    for event in &events {
+        read_back.push(
+            reconstructor
+                .event_json(run.world.db(), event)
+                .await
+                .unwrap(),
+        );
+    }
     let exchanges = |principal: &str| -> Vec<Value> {
-        events
+        read_back
             .iter()
-            .filter(|e| e.kind == "llm_exchange" && e.principal_id == principal)
-            .map(detail)
+            .filter(|e| e["kind"] == "llm_exchange" && e["principal_id"] == principal)
+            .map(|e| e["detail"].clone())
             .collect()
     };
     let main_exchanges = exchanges(&run.support);

@@ -121,9 +121,9 @@ pub const LOG_UNAVAILABLE: &str = "The agent's activity log could not be written
                                    shortly; if it keeps happening, the gateway's database needs \
                                    attention.";
 
-/// Append one event, bounded by [`WRITE_BOUND`]. A failure is logged here,
-/// once, with the event's correlation ids.
-pub async fn record_event(db: &Pool, event: NewEvent<'_>) -> Result<(), LogError> {
+/// Append one event, bounded by [`WRITE_BOUND`], and return its id. A
+/// failure is logged here, once, with the event's correlation ids.
+pub async fn record_event(db: &Pool, event: NewEvent<'_>) -> Result<String, LogError> {
     let kind = event.kind.as_str();
     let principal = event.principal_id.to_string();
     let conversation = event
@@ -133,7 +133,7 @@ pub async fn record_event(db: &Pool, event: NewEvent<'_>) -> Result<(), LogError
     let turn = event.at.turn_id.clone();
     let written = match tokio::time::timeout(WRITE_BOUND, agent_audit::append_now(db, event)).await
     {
-        Ok(Ok(_)) => return Ok(()),
+        Ok(Ok(appended)) => return Ok(appended.id),
         Ok(Err(err)) => LogError::Db(err),
         Err(_) => LogError::TimedOut,
     };
@@ -169,13 +169,19 @@ pub async fn record(
 }
 
 /// [`record_event`] for an event of `run`, which is stopped when the event
-/// cannot be written.
-pub(crate) async fn record_for_run(db: &Pool, run: Option<&AgentRun>, event: NewEvent<'_>) {
-    if record_event(db, event).await.is_err()
+/// cannot be written; the event's id when it was.
+pub(crate) async fn record_for_run(
+    db: &Pool,
+    run: Option<&AgentRun>,
+    event: NewEvent<'_>,
+) -> Option<String> {
+    let recorded = record_event(db, event).await;
+    if recorded.is_err()
         && let Some(run) = run
     {
         run.mark_log_failed();
     }
+    recorded.ok()
 }
 
 /// Anchor conversation `conversation_id`'s chain head in agent `agent_id`'s
@@ -327,17 +333,17 @@ impl ToolContext {
     }
 
     /// [`Self::audit`] without touching `detail`, with how long the thing
-    /// recorded took.
+    /// recorded took; the event's id once written.
     pub(crate) async fn audit_event(
         &self,
         kind: AuditKind,
         duration_ms: Option<u64>,
         detail: Value,
-    ) {
+    ) -> Option<String> {
         let mut event = NewEvent::new(kind, self.principal.subject_id(), detail)
             .in_run(self.chain())
             .at(self.correlation());
         event.duration_ms = duration_ms;
-        record_for_run(&self.db, self.agent.as_deref(), event).await;
+        record_for_run(&self.db, self.agent.as_deref(), event).await
     }
 }

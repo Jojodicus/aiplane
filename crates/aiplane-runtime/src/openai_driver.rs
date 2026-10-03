@@ -1238,9 +1238,9 @@ async fn run_one_turn(
     // Everything from here on is this turn's own rounds — what a suspension
     // stores as its tail, and what a resume appends after the rebuilt history.
     let prefix_len = messages.len();
-    let exchange_log = exchange::ExchangeLog {
-        tools: &tool_source,
-        redaction: crate::agents::audit::Redaction {
+    let exchange_log = exchange::ExchangeLog::new(
+        &tool_source,
+        crate::agents::audit::Redaction {
             decided: d.resume.as_ref().and_then(|from| match &from.decision {
                 chat::Decision::Value { value }
                     if from.suspension.kind == chat::SuspensionKind::SecureInput =>
@@ -1250,7 +1250,7 @@ async fn run_one_turn(
                 _ => None,
             }),
         },
-    };
+    );
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {
         match resume::resume_into(

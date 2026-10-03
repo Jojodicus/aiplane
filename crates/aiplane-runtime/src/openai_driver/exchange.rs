@@ -6,9 +6,10 @@
 //! it. A person's turn records nothing here — their chat keeps its own
 //! history and its logging is unchanged.
 
+use std::sync::Mutex;
 use std::time::Instant;
 
-use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::{AuditKind, exchange};
 use serde_json::{Value, json};
 use session_core::driver::TurnError;
 
@@ -83,14 +84,26 @@ pub(super) async fn record_vision_fallback(
     }
 }
 
-/// The rounds of one turn, as the log keeps them.
+/// The rounds of one turn, as the log keeps them: the first whole, every
+/// later one as a delta against the round before
+/// (`agent_audit::exchange::request_delta`).
 pub(super) struct ExchangeLog<'a> {
     /// The turn's tools: which of them declare their arguments sensitive.
-    pub tools: &'a dyn ToolSource,
-    pub redaction: Redaction<'a>,
+    tools: &'a dyn ToolSource,
+    redaction: Redaction<'a>,
+    /// The last round recorded: its event's id and its request as stored.
+    previous: Mutex<Option<(String, Value)>>,
 }
 
-impl ExchangeLog<'_> {
+impl<'a> ExchangeLog<'a> {
+    pub fn new(tools: &'a dyn ToolSource, redaction: Redaction<'a>) -> Self {
+        Self {
+            tools,
+            redaction,
+            previous: Mutex::new(None),
+        }
+    }
+
     /// Record one round. `request` is the body that went (or would have
     /// gone) upstream; `started` is when it was sent.
     #[allow(clippy::too_many_arguments)]
@@ -113,18 +126,33 @@ impl ExchangeLog<'_> {
             .exchange(&mut request, &mut answer.tool_calls, |name| {
                 self.tools.get(name).is_some_and(|t| t.sensitive_args())
             });
-        record(tool_ctx, round, &request, served, answer, started).await;
+        let previous = self
+            .previous
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        let stored = match previous.and_then(|(id, prev)| {
+            exchange::request_delta(&prev, &request).map(|mut delta| {
+                delta["prev"] = json!(id);
+                delta
+            })
+        }) {
+            Some(delta) => ("request_delta", delta),
+            None => ("request", request.clone()),
+        };
+        let id = record(tool_ctx, round, stored, served, answer, started).await;
+        *self.previous.lock().unwrap_or_else(|p| p.into_inner()) = id.map(|id| (id, request));
     }
 }
 
 async fn record(
     tool_ctx: &ToolContext,
     round: u32,
-    request: &Value,
+    (request_key, request): (&str, Value),
     served: Served<'_>,
     answer: Answer,
     started: Instant,
-) {
+) -> Option<String> {
     let (prompt, completion, total) = answer.usage;
     let latency = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let ctx = ToolContext {
@@ -137,7 +165,7 @@ async fn record(
         "model": served.model,
         "real_model": served.real_model,
         "backend": served.backend,
-        "request": request,
+        request_key: request,
         "response": {
             "status": answer.status,
             "content": answer.content,
@@ -159,5 +187,5 @@ async fn record(
         event["cancelled"] = json!(true);
     }
     ctx.audit_event(AuditKind::LlmExchange, Some(latency), event)
-        .await;
+        .await
 }

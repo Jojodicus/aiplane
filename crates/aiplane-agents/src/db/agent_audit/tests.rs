@@ -751,3 +751,69 @@ async fn a_removed_checkpoint_after_a_cut_breaks_the_agent_chain() {
     assert_eq!(broken.chain_key, "agent:p-main");
     assert!(broken.reason.contains("missing"), "{broken:?}");
 }
+
+#[tokio::test]
+async fn an_image_sent_in_every_round_is_stored_once_and_read_back_whole() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    let image = format!(
+        "data:image/png;base64,{}",
+        "Q".repeat(exchange::BLOB_MIN_BYTES)
+    );
+    let chain = main_chain("s1");
+    let first = json!({ "model": "m", "messages": [
+        { "role": "system", "content": "s" },
+        { "role": "user", "content": [{ "type": "image_url", "image_url": { "url": image } }] }
+    ] });
+    let mut second = first.clone();
+    second["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "role": "assistant", "content": "a cat" }));
+    let round = |request: Value| json!({ "purpose": "round", "request": request });
+    let a = run_event(&pool, &chain, AuditKind::LlmExchange, round(first.clone())).await;
+    let mut delta = exchange::request_delta(&first, &second).unwrap();
+    delta["prev"] = json!(a.id);
+    run_event(
+        &pool,
+        &chain,
+        AuditKind::LlmExchange,
+        json!({ "purpose": "round", "request_delta": delta }),
+    )
+    .await;
+    run_event(&pool, &chain, AuditKind::LlmExchange, round(first.clone())).await;
+
+    let blobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM activity_blobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blobs, 1, "the image is stored once");
+    let stored: Vec<String> = sqlx::query_scalar("SELECT detail FROM agent_audit")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(stored.iter().all(|d| !d.contains(&image)));
+
+    let mut reconstructor = Reconstructor::default();
+    let mut requests = Vec::new();
+    for event in chain_rows(&pool, "conversation:s1").await {
+        let json = reconstructor.event_json(&pool, &event).await.unwrap();
+        assert!(json["detail"].get("request_delta").is_none());
+        requests.push(json["detail"]["request"].clone());
+    }
+    assert_eq!(requests, [first.clone(), second, first]);
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+
+    sweep_conversation_chains(
+        &pool,
+        "p-main",
+        Timestamp::now() + jiff::SignedDuration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    let blobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM activity_blobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blobs, 0, "the chain's blobs go with it");
+}

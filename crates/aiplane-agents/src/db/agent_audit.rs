@@ -44,6 +44,9 @@ use super::{DbError, Pool};
 use aiplane_core::server::crypto::{ActivityKey, sha256_hex};
 use aiplane_core::server::run_chain::RunChain;
 
+pub mod exchange;
+pub use exchange::Reconstructor;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
     PrincipalCreated,
@@ -517,13 +520,28 @@ const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at
 /// `(chain_key, seq)` refuses a fork should one try.
 pub async fn append(
     conn: &mut sqlx::SqliteConnection,
-    event: NewEvent<'_>,
+    mut event: NewEvent<'_>,
 ) -> Result<Appended, DbError> {
     let conversation_id = event.conversation_id();
     let chain_key = match &conversation_id {
         Some(c) => conversation_chain(c),
         None => agent_chain(event.principal_id),
     };
+    if event.kind == AuditKind::LlmExchange {
+        let created_at = Timestamp::now().to_string();
+        for (hash, data) in exchange::take_blobs(&mut event.detail) {
+            sqlx::query(
+                "INSERT INTO activity_blobs (chain_key, hash, data, created_at)
+                 VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind(&chain_key)
+            .bind(&hash)
+            .bind(&data)
+            .bind(&created_at)
+            .execute(&mut *conn)
+            .await?;
+        }
+    }
     let head: Option<(i64, Option<String>)> = sqlx::query_as(HEAD_SQL)
         .bind(&chain_key)
         .fetch_optional(&mut *conn)
@@ -1330,6 +1348,10 @@ pub async fn sweep_conversation_chains(
             .execute(&mut *tx)
             .await?
             .rows_affected();
+        sqlx::query("DELETE FROM activity_blobs WHERE chain_key = ?")
+            .bind(&key)
+            .execute(&mut *tx)
+            .await?;
         append(
             &mut tx,
             NewEvent::new(
