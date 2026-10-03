@@ -21,6 +21,7 @@ import {
 	splitList,
 	slotInfos,
 	suspensionLabel,
+	answerField,
 	testTurnLabel,
 	type SpecIssue
 } from './agents.ts';
@@ -179,6 +180,19 @@ test('a paused test turn says what it waits for', () => {
 	assert.equal(suspensionLabel('secure_input'), 'agents-test-waiting-secure-input');
 	assert.equal(suspensionLabel('approval'), 'agents-test-waiting-approval');
 	assert.equal(suspensionLabel('human_answer'), 'agents-test-waiting-human');
+});
+
+test('a staff answer is typed in the clear, a visitor secret masked', () => {
+	assert.deepEqual(answerField('human_answer'), {
+		secret: false,
+		label: 'inbox-answer-label',
+		submit: 'inbox-send-answer'
+	});
+	assert.deepEqual(answerField('secure_input'), {
+		secret: true,
+		label: 'agents-test-value-label',
+		submit: 'agents-test-answer'
+	});
 });
 
 test('renaming a key keeps its place and refuses a taken name', () => {

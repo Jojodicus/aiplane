@@ -440,6 +440,17 @@ export function suspensionLabel(kind: Suspension['kind']): string {
 	}
 }
 
+/**
+ * How the test chat takes a pause's `value`: a code the visitor would type is
+ * masked, a staff member's answer to a handoff is plain text they read back,
+ * labelled as in the inbox.
+ */
+export function answerField(kind: Suspension['kind']): { secret: boolean; label: string; submit: string } {
+	return kind === 'human_answer'
+		? { secret: false, label: 'inbox-answer-label', submit: 'inbox-send-answer' }
+		: { secret: true, label: 'agents-test-value-label', submit: 'agents-test-answer' };
+}
+
 export function testTurnLabel(status: string): string {
 	switch (status) {
 		case 'completed':
