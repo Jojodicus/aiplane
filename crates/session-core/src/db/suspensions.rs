@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Turns paused at a tool call that waits for a decision from outside the
-//! model (`chat_turn_suspensions`, migration 0078).
+//! model (`chat_turn_suspensions`, migration `0077_agent_builder.sql`).
 //!
 //! A suspension is the durable half of what `FeedbackHub` does in memory: the
 //! run state at the pause point is written down, the turn's status becomes

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Rows the identity verifiers keep (`migrations/0088_agent_verifiers.sql`,
+//! Rows the identity verifiers keep (`migrations/0077_agent_builder.sql`,
 //! `docs/agents.md` "What #95 built").
 //!
 //! Storage only: the outstanding code of a verifier in a conversation (never

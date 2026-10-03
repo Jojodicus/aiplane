@@ -1,0 +1,1722 @@
+index agent_embed_keys_principal on agent_embed_keys: CREATE INDEX agent_embed_keys_principal ON agent_embed_keys(principal_id)
+index agent_notify_channels_principal on agent_notify_channels: CREATE INDEX agent_notify_channels_principal ON agent_notify_channels(principal_id)
+index automatic_route_decisions_alias_created on automatic_route_decisions: CREATE INDEX automatic_route_decisions_alias_created ON automatic_route_decisions(route_alias,created_at DESC)
+index chat_pending_turns_session on chat_pending_turns: CREATE INDEX chat_pending_turns_session ON chat_pending_turns(session_id,created_at)
+index chat_pending_turns_user_created on chat_pending_turns: CREATE INDEX chat_pending_turns_user_created ON chat_pending_turns(user_id,created_at)
+index chat_sessions_parent_turn on chat_sessions: CREATE INDEX chat_sessions_parent_turn ON chat_sessions(parent_turn_id)WHERE parent_turn_id IS NOT NULL
+index chat_sessions_principal_updated on chat_sessions: CREATE INDEX chat_sessions_principal_updated ON chat_sessions(principal_id,updated_at DESC)
+index chat_sessions_user_updated on chat_sessions: CREATE INDEX chat_sessions_user_updated ON chat_sessions(user_id,updated_at DESC)
+index chat_tool_calls_turn_seq on chat_tool_calls: CREATE INDEX chat_tool_calls_turn_seq ON chat_tool_calls(turn_id,seq)
+index chat_turn_steers_turn_seq on chat_turn_steers: CREATE INDEX chat_turn_steers_turn_seq ON chat_turn_steers(turn_id,seq)
+index chat_turn_suspensions_expires_at on chat_turn_suspensions: CREATE INDEX chat_turn_suspensions_expires_at ON chat_turn_suspensions(expires_at)
+index chat_turns_session_seq on chat_turns: CREATE INDEX chat_turns_session_seq ON chat_turns(session_id,seq)
+index comfyui_jobs_session on comfyui_jobs: CREATE INDEX comfyui_jobs_session ON comfyui_jobs(session_id)
+index comfyui_jobs_status on comfyui_jobs: CREATE INDEX comfyui_jobs_status ON comfyui_jobs(status)
+index comfyui_jobs_user on comfyui_jobs: CREATE INDEX comfyui_jobs_user ON comfyui_jobs(user_id)
+index idx_a2a_contexts_agent_ip on a2a_contexts: CREATE INDEX idx_a2a_contexts_agent_ip ON a2a_contexts(agent_id,client_ip)
+index idx_agent_audit_agent on agent_audit: CREATE INDEX idx_agent_audit_agent ON agent_audit(agent_id)
+index idx_agent_audit_chain on agent_audit: CREATE UNIQUE INDEX idx_agent_audit_chain ON agent_audit(chain_key,seq)
+index idx_agent_audit_chain_head on agent_audit: CREATE INDEX idx_agent_audit_chain_head ON agent_audit(chain_key,seq,hash)
+index idx_agent_audit_conversation on agent_audit: CREATE INDEX idx_agent_audit_conversation ON agent_audit(conversation_id)
+index idx_agent_audit_principal on agent_audit: CREATE INDEX idx_agent_audit_principal ON agent_audit(principal_id,created_at DESC)
+index idx_agent_audit_principal_kind on agent_audit: CREATE INDEX idx_agent_audit_principal_kind ON agent_audit(principal_id,kind,created_at)
+index idx_agent_audit_sweep on agent_audit: CREATE INDEX idx_agent_audit_sweep ON agent_audit(agent_id,chain_key,conversation_id,created_at)
+index idx_agent_shares_subject on agent_shares: CREATE INDEX idx_agent_shares_subject ON agent_shares(subject_kind,subject_id)
+index idx_agent_test_runs_principal on agent_test_runs: CREATE INDEX idx_agent_test_runs_principal ON agent_test_runs(principal_id,started_at)
+index idx_browser_action_audit_created on browser_action_audit: CREATE INDEX idx_browser_action_audit_created ON browser_action_audit(created_at DESC)
+index idx_browser_action_audit_user on browser_action_audit: CREATE INDEX idx_browser_action_audit_user ON browser_action_audit(user_id,created_at DESC)
+index idx_chat_session_skills_session on chat_session_skills: CREATE INDEX idx_chat_session_skills_session ON chat_session_skills(session_id)
+index idx_chat_session_tools_session on chat_session_tools: CREATE INDEX idx_chat_session_tools_session ON chat_session_tools(session_id)
+index idx_documents_session on documents: CREATE INDEX idx_documents_session ON documents(session_id)
+index idx_mcp_tool_audit_connector on mcp_tool_audit: CREATE INDEX idx_mcp_tool_audit_connector ON mcp_tool_audit(connector_key,created_at DESC)
+index idx_mcp_tool_audit_created on mcp_tool_audit: CREATE INDEX idx_mcp_tool_audit_created ON mcp_tool_audit(created_at DESC)
+index idx_ocr_derivatives_updated on ocr_derivatives: CREATE INDEX idx_ocr_derivatives_updated ON ocr_derivatives(updated_at)
+index idx_pending_mcp_oauth_expires on pending_mcp_oauth: CREATE INDEX idx_pending_mcp_oauth_expires ON pending_mcp_oauth(expires_at)
+index idx_pending_rag_oauth_expires on pending_rag_oauth: CREATE INDEX idx_pending_rag_oauth_expires ON pending_rag_oauth(expires_at)
+index idx_rag_collections_sync_token on rag_collections: CREATE UNIQUE INDEX idx_rag_collections_sync_token ON rag_collections(sync_token_hash)WHERE sync_token_hash IS NOT NULL
+index idx_rag_log_ref on rag_index_log: CREATE INDEX idx_rag_log_ref ON rag_index_log(ref_id,id DESC)
+index idx_rag_refs_collection on rag_collection_refs: CREATE INDEX idx_rag_refs_collection ON rag_collection_refs(collection_id)
+index idx_rag_refs_one_primary on rag_collection_refs: CREATE UNIQUE INDEX idx_rag_refs_one_primary ON rag_collection_refs(collection_id)WHERE is_primary = 1
+index idx_rag_refs_unique_source on rag_collection_refs: CREATE UNIQUE INDEX idx_rag_refs_unique_source ON rag_collection_refs(collection_id,COALESCE(git_url,''),git_ref)
+index idx_system_tokens_principal on system_tokens: CREATE INDEX idx_system_tokens_principal ON system_tokens(principal_id)
+index idx_user_mcp_connections_user on user_mcp_connections: CREATE INDEX idx_user_mcp_connections_user ON user_mcp_connections(user_id)
+index idx_user_memories_user_created on user_memories: CREATE INDEX idx_user_memories_user_created ON user_memories(user_id,created_at DESC)
+index impersonation_audit_created_at on impersonation_audit: CREATE INDEX impersonation_audit_created_at ON impersonation_audit(created_at)
+index limits_subject on limits: CREATE INDEX limits_subject ON limits(subject_type,subject_id)
+index limits_unique on limits: CREATE UNIQUE INDEX limits_unique ON limits(subject_type,subject_id,IFNULL(model,''),dimension,window_kind)
+index pending_logins_expires_at on pending_logins: CREATE INDEX pending_logins_expires_at ON pending_logins(expires_at)
+index push_subscriptions_endpoint on push_subscriptions: CREATE UNIQUE INDEX push_subscriptions_endpoint ON push_subscriptions(endpoint)
+index push_subscriptions_user on push_subscriptions: CREATE INDEX push_subscriptions_user ON push_subscriptions(user_id)
+index rate_events_by_counter on rate_events: CREATE INDEX rate_events_by_counter ON rate_events(principal_id,counter,created_at)
+index rate_events_by_expiry on rate_events: CREATE INDEX rate_events_by_expiry ON rate_events(principal_id,expires_at)
+index scheduled_actions_due on scheduled_actions: CREATE INDEX scheduled_actions_due ON scheduled_actions(enabled,next_run_at)
+index scheduled_actions_user on scheduled_actions: CREATE INDEX scheduled_actions_user ON scheduled_actions(user_id,created_at DESC)
+index scheduled_runs_by_action on scheduled_runs: CREATE INDEX scheduled_runs_by_action ON scheduled_runs(action_id,fired_at DESC)
+index sessions_expires_at on sessions: CREATE INDEX sessions_expires_at ON sessions(expires_at)
+index sessions_user_id on sessions: CREATE INDEX sessions_user_id ON sessions(user_id)
+index sqlite_autoindex__sqlx_migrations_1 on _sqlx_migrations: 
+index sqlite_autoindex_a2a_contexts_1 on a2a_contexts: 
+index sqlite_autoindex_activity_verified_1 on activity_verified: 
+index sqlite_autoindex_agent_a2a_tasks_1 on agent_a2a_tasks: 
+index sqlite_autoindex_agent_audit_1 on agent_audit: 
+index sqlite_autoindex_agent_embed_keys_1 on agent_embed_keys: 
+index sqlite_autoindex_agent_embed_keys_2 on agent_embed_keys: 
+index sqlite_autoindex_agent_identity_jtis_1 on agent_identity_jtis: 
+index sqlite_autoindex_agent_notify_channels_1 on agent_notify_channels: 
+index sqlite_autoindex_agent_notify_channels_2 on agent_notify_channels: 
+index sqlite_autoindex_agent_responders_1 on agent_responders: 
+index sqlite_autoindex_agent_shares_1 on agent_shares: 
+index sqlite_autoindex_agent_state_1 on agent_state: 
+index sqlite_autoindex_agent_test_cases_1 on agent_test_cases: 
+index sqlite_autoindex_agent_test_cases_2 on agent_test_cases: 
+index sqlite_autoindex_agent_test_results_1 on agent_test_results: 
+index sqlite_autoindex_agent_test_runs_1 on agent_test_runs: 
+index sqlite_autoindex_agent_verifier_codes_1 on agent_verifier_codes: 
+index sqlite_autoindex_agent_versions_1 on agent_versions: 
+index sqlite_autoindex_agents_1 on agents: 
+index sqlite_autoindex_app_settings_1 on app_settings: 
+index sqlite_autoindex_automatic_route_candidates_1 on automatic_route_candidates: 
+index sqlite_autoindex_automatic_route_candidates_2 on automatic_route_candidates: 
+index sqlite_autoindex_automatic_routes_1 on automatic_routes: 
+index sqlite_autoindex_backend_aliases_1 on backend_aliases: 
+index sqlite_autoindex_backend_detected_context_1 on backend_detected_context: 
+index sqlite_autoindex_backend_models_1 on backend_models: 
+index sqlite_autoindex_backend_probed_models_1 on backend_probed_models: 
+index sqlite_autoindex_backends_1 on backends: 
+index sqlite_autoindex_browser_action_audit_1 on browser_action_audit: 
+index sqlite_autoindex_chat_compactions_1 on chat_compactions: 
+index sqlite_autoindex_chat_pending_turns_1 on chat_pending_turns: 
+index sqlite_autoindex_chat_session_settings_1 on chat_session_settings: 
+index sqlite_autoindex_chat_session_skills_1 on chat_session_skills: 
+index sqlite_autoindex_chat_session_tools_1 on chat_session_tools: 
+index sqlite_autoindex_chat_sessions_1 on chat_sessions: 
+index sqlite_autoindex_chat_tool_calls_1 on chat_tool_calls: 
+index sqlite_autoindex_chat_tool_calls_2 on chat_tool_calls: 
+index sqlite_autoindex_chat_turn_steers_1 on chat_turn_steers: 
+index sqlite_autoindex_chat_turn_steers_2 on chat_turn_steers: 
+index sqlite_autoindex_chat_turn_suspensions_1 on chat_turn_suspensions: 
+index sqlite_autoindex_chat_turn_suspensions_2 on chat_turn_suspensions: 
+index sqlite_autoindex_chat_turns_1 on chat_turns: 
+index sqlite_autoindex_chat_turns_2 on chat_turns: 
+index sqlite_autoindex_comfyui_jobs_1 on comfyui_jobs: 
+index sqlite_autoindex_document_versions_1 on document_versions: 
+index sqlite_autoindex_documents_1 on documents: 
+index sqlite_autoindex_fallback_models_1 on fallback_models: 
+index sqlite_autoindex_gateway_groups_1 on gateway_groups: 
+index sqlite_autoindex_group_tool_grants_1 on group_tool_grants: 
+index sqlite_autoindex_impersonation_audit_1 on impersonation_audit: 
+index sqlite_autoindex_limits_1 on limits: 
+index sqlite_autoindex_mcp_catalog_connectors_1 on mcp_catalog_connectors: 
+index sqlite_autoindex_mcp_connector_tools_1 on mcp_connector_tools: 
+index sqlite_autoindex_mcp_tool_audit_1 on mcp_tool_audit: 
+index sqlite_autoindex_model_defaults_1 on model_defaults: 
+index sqlite_autoindex_ocr_derivatives_1 on ocr_derivatives: 
+index sqlite_autoindex_oidc_group_mappings_1 on oidc_group_mappings: 
+index sqlite_autoindex_pending_logins_1 on pending_logins: 
+index sqlite_autoindex_pending_mcp_oauth_1 on pending_mcp_oauth: 
+index sqlite_autoindex_pending_rag_oauth_1 on pending_rag_oauth: 
+index sqlite_autoindex_pool_backends_1 on pool_backends: 
+index sqlite_autoindex_pool_models_1 on pool_models: 
+index sqlite_autoindex_pool_offer_voices_1 on pool_offer_voices: 
+index sqlite_autoindex_pool_voices_1 on pool_voices: 
+index sqlite_autoindex_pools_1 on pools: 
+index sqlite_autoindex_principal_grants_1 on principal_grants: 
+index sqlite_autoindex_push_subscriptions_1 on push_subscriptions: 
+index sqlite_autoindex_rag_collections_1 on rag_collections: 
+index sqlite_autoindex_rag_document_profiles_1 on rag_document_profiles: 
+index sqlite_autoindex_rag_extractions_1 on rag_extractions: 
+index sqlite_autoindex_scheduled_actions_1 on scheduled_actions: 
+index sqlite_autoindex_scheduled_runs_1 on scheduled_runs: 
+index sqlite_autoindex_sessions_1 on sessions: 
+index sqlite_autoindex_skill_role_grants_1 on skill_role_grants: 
+index sqlite_autoindex_system_principals_1 on system_principals: 
+index sqlite_autoindex_system_principals_2 on system_principals: 
+index sqlite_autoindex_system_tokens_1 on system_tokens: 
+index sqlite_autoindex_system_tokens_2 on system_tokens: 
+index sqlite_autoindex_token_mcp_policy_1 on token_mcp_policy: 
+index sqlite_autoindex_token_models_1 on token_models: 
+index sqlite_autoindex_token_tool_prefs_1 on token_tool_prefs: 
+index sqlite_autoindex_tokens_1 on tokens: 
+index sqlite_autoindex_tokens_2 on tokens: 
+index sqlite_autoindex_usage_daily_1 on usage_daily: 
+index sqlite_autoindex_usage_events_1 on usage_events: 
+index sqlite_autoindex_user_mcp_connections_1 on user_mcp_connections: 
+index sqlite_autoindex_user_mcp_connections_2 on user_mcp_connections: 
+index sqlite_autoindex_user_mcp_tool_prefs_1 on user_mcp_tool_prefs: 
+index sqlite_autoindex_user_memories_1 on user_memories: 
+index sqlite_autoindex_user_tool_prefs_1 on user_tool_prefs: 
+index sqlite_autoindex_users_1 on users: 
+index sqlite_autoindex_visitor_sessions_1 on visitor_sessions: 
+index sqlite_autoindex_visitor_sessions_2 on visitor_sessions: 
+index sqlite_autoindex_webhook_runs_1 on webhook_runs: 
+index sqlite_autoindex_webhooks_1 on webhooks: 
+index token_models_token on token_models: CREATE INDEX token_models_token ON token_models(token_id)
+index tokens_user_id on tokens: CREATE INDEX tokens_user_id ON tokens(user_id)
+index usage_daily_day on usage_daily: CREATE INDEX usage_daily_day ON usage_daily(day)
+index usage_daily_token on usage_daily: CREATE INDEX usage_daily_token ON usage_daily(token_id,day)
+index usage_daily_user on usage_daily: CREATE INDEX usage_daily_user ON usage_daily(user_id,day)
+index usage_events_agent on usage_events: CREATE INDEX usage_events_agent ON usage_events(agent_id,created_at)WHERE agent_id IS NOT NULL
+index usage_events_backend_created on usage_events: CREATE INDEX usage_events_backend_created ON usage_events(backend,created_at)
+index usage_events_created_at on usage_events: CREATE INDEX usage_events_created_at ON usage_events(created_at)
+index usage_events_token_created on usage_events: CREATE INDEX usage_events_token_created ON usage_events(token_id,created_at)
+index usage_events_user_created on usage_events: CREATE INDEX usage_events_user_created ON usage_events(user_id,created_at)
+index users_email on users: CREATE INDEX users_email ON users(email)
+index visitor_sessions_ip on visitor_sessions: CREATE INDEX visitor_sessions_ip ON visitor_sessions(principal_id,client_ip)
+index visitor_sessions_principal on visitor_sessions: CREATE INDEX visitor_sessions_principal ON visitor_sessions(principal_id)
+index visitor_sessions_session on visitor_sessions: CREATE INDEX visitor_sessions_session ON visitor_sessions(session_id)
+index webhook_runs_by_hook on webhook_runs: CREATE INDEX webhook_runs_by_hook ON webhook_runs(webhook_id,fired_at DESC)
+index webhooks_secret on webhooks: CREATE UNIQUE INDEX webhooks_secret ON webhooks(secret_hash)
+index webhooks_user on webhooks: CREATE INDEX webhooks_user ON webhooks(user_id,created_at DESC)
+table a2a_contexts on a2a_contexts: CREATE TABLE a2a_contexts(session_id TEXT PRIMARY KEY NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,agent_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,caller_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,caller_name TEXT NOT NULL,token_id TEXT NOT NULL,client_ip TEXT,created_at TEXT NOT NULL)STRICT
+table activity_blobs on activity_blobs: CREATE TABLE activity_blobs(chain_key TEXT NOT NULL,hash TEXT NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(chain_key,hash))STRICT,WITHOUT ROWID
+table activity_verified on activity_verified: CREATE TABLE activity_verified(chain_key TEXT PRIMARY KEY NOT NULL,seq INTEGER NOT NULL,hash TEXT,book TEXT,key_id TEXT NOT NULL,mac TEXT NOT NULL,verified_at TEXT NOT NULL)STRICT
+table agent_a2a_tasks on agent_a2a_tasks: CREATE TABLE agent_a2a_tasks(turn_id TEXT NOT NULL REFERENCES chat_turns(id)ON DELETE CASCADE,tool_call_id TEXT NOT NULL,route TEXT NOT NULL,card_url TEXT NOT NULL,task_id TEXT NOT NULL,context_id TEXT,created_at TEXT NOT NULL,PRIMARY KEY(turn_id,tool_call_id))STRICT
+table agent_audit on agent_audit: CREATE TABLE agent_audit(id TEXT PRIMARY KEY NOT NULL,kind TEXT NOT NULL,principal_id TEXT NOT NULL,actor_id TEXT,chain TEXT,detail TEXT NOT NULL,created_at TEXT NOT NULL,chain_key TEXT,seq INTEGER,prev_hash TEXT,hash TEXT,agent_id TEXT,version INTEGER,conversation_id TEXT,session_id TEXT,turn_id TEXT,round INTEGER,call_id TEXT,visitor_id TEXT,caller_id TEXT,duration_ms INTEGER,key_id TEXT)STRICT
+table agent_embed_keys on agent_embed_keys: CREATE TABLE agent_embed_keys(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,key_hash TEXT NOT NULL UNIQUE,origins TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL,revoked_at TEXT)STRICT
+table agent_identity_jtis on agent_identity_jtis: CREATE TABLE agent_identity_jtis(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,jti_hash TEXT NOT NULL,expires_at TEXT NOT NULL,PRIMARY KEY(principal_id,jti_hash))STRICT
+table agent_notify_channels on agent_notify_channels: CREATE TABLE agent_notify_channels(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN('slack','discord')),name TEXT NOT NULL,url_nonce BLOB NOT NULL,url_ct BLOB NOT NULL,url_host TEXT NOT NULL,details INTEGER NOT NULL DEFAULT 0 CHECK(details IN(0,1)),lang TEXT NOT NULL DEFAULT 'en',created_by TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
+table agent_responders on agent_responders: CREATE TABLE agent_responders(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,subject_kind TEXT NOT NULL CHECK(subject_kind IN('user','group')),subject_id TEXT NOT NULL,added_by TEXT NOT NULL,added_at TEXT NOT NULL,PRIMARY KEY(principal_id,subject_kind,subject_id))STRICT
+table agent_shares on agent_shares: CREATE TABLE agent_shares(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,subject_kind TEXT NOT NULL CHECK(subject_kind IN('user','group')),subject_id TEXT NOT NULL,access TEXT NOT NULL CHECK(access IN('read','write')),PRIMARY KEY(principal_id,subject_kind,subject_id))STRICT
+table agent_state on agent_state: CREATE TABLE agent_state(session_id TEXT NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,slot TEXT NOT NULL,value TEXT NOT NULL,provenance TEXT NOT NULL CHECK(provenance IN('llm','host')OR provenance LIKE 'verifier:_%'),set_at TEXT NOT NULL,PRIMARY KEY(session_id,slot))STRICT
+table agent_test_cases on agent_test_cases: CREATE TABLE agent_test_cases(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,script TEXT NOT NULL,expect TEXT NOT NULL,rubric TEXT,created_by TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
+table agent_test_results on agent_test_results: CREATE TABLE agent_test_results(run_id TEXT NOT NULL REFERENCES agent_test_runs(id)ON DELETE CASCADE,case_id TEXT NOT NULL,case_name TEXT NOT NULL,position INTEGER NOT NULL,passed INTEGER NOT NULL CHECK(passed IN(0,1)),report TEXT NOT NULL,session_id TEXT,PRIMARY KEY(run_id,case_id))STRICT
+table agent_test_runs on agent_test_runs: CREATE TABLE agent_test_runs(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,source TEXT NOT NULL,version INTEGER,spec_hash TEXT NOT NULL,suite_hash TEXT NOT NULL,started_by TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT NOT NULL)STRICT
+table agent_verifier_codes on agent_verifier_codes: CREATE TABLE agent_verifier_codes(session_id TEXT NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,verifier TEXT NOT NULL,email_hash TEXT NOT NULL,sent_at TEXT NOT NULL,expires_at TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,verifier))STRICT
+table agent_versions on agent_versions: CREATE TABLE agent_versions(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,version INTEGER NOT NULL,spec TEXT NOT NULL,published_by TEXT NOT NULL,published_at TEXT NOT NULL,PRIMARY KEY(principal_id,version))STRICT
+table agents on agents: CREATE TABLE agents(principal_id TEXT PRIMARY KEY NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,draft_spec TEXT NOT NULL,live_version INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)STRICT
+table app_settings on app_settings: CREATE TABLE app_settings(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updated_at TEXT NOT NULL)
+table automatic_route_candidates on automatic_route_candidates: CREATE TABLE automatic_route_candidates(route_alias TEXT NOT NULL REFERENCES automatic_routes(alias)ON DELETE CASCADE,key TEXT NOT NULL,target TEXT NOT NULL,description TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(route_alias,key),UNIQUE(route_alias,target))
+table automatic_route_decisions on automatic_route_decisions: CREATE TABLE automatic_route_decisions(id INTEGER PRIMARY KEY,created_at TEXT NOT NULL,route_alias TEXT NOT NULL,route_version INTEGER NOT NULL,selector_model TEXT NOT NULL,selected_key TEXT,selected_target TEXT,effective_target TEXT NOT NULL,confidence REAL,reason TEXT NOT NULL,eligible_targets TEXT NOT NULL,probabilities TEXT,duration_ms INTEGER NOT NULL)
+table automatic_routes on automatic_routes: CREATE TABLE automatic_routes(alias TEXT PRIMARY KEY,selector_model TEXT NOT NULL,objective TEXT NOT NULL CHECK(objective IN('quality','balanced','cost')),instructions TEXT NOT NULL DEFAULT '',minimum_confidence REAL NOT NULL DEFAULT 0.0 CHECK(minimum_confidence >= 0.0 AND minimum_confidence <= 1.0),selector_timeout_ms INTEGER NOT NULL DEFAULT 1500 CHECK(selector_timeout_ms BETWEEN 100 AND 30000),fallback_target TEXT NOT NULL,session_affinity INTEGER NOT NULL DEFAULT 0 CHECK(session_affinity IN(0,1)),session_ttl_seconds INTEGER NOT NULL DEFAULT 3600 CHECK(session_ttl_seconds BETWEEN 60 AND 604800),rollout TEXT NOT NULL DEFAULT 'shadow' CHECK(rollout IN('active','shadow')),version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)
+table backend_aliases on backend_aliases: CREATE TABLE backend_aliases(backend_id INTEGER NOT NULL REFERENCES "backends"(id)ON DELETE CASCADE,alias TEXT NOT NULL,target TEXT,-- NULL = sole-model binding PRIMARY KEY(backend_id,alias))STRICT
+table backend_detected on backend_detected: CREATE TABLE backend_detected(backend_id INTEGER PRIMARY KEY REFERENCES backends(id)ON DELETE CASCADE,-- 'generic' | 'vllm' | 'ollama' | 'llamacpp' | 'sglang'. An unknown value -- parses back to 'generic',which is the pre-detection behaviour,so a row -- written by a newer version degrades instead of breaking. profile TEXT NOT NULL,-- The context this server said it actually allocated(llama.cpp's -- `/props`),as a ceiling over the per-model windows below. Kept apart from -- them because `/models` reports a model's *trained* context,which on -- llama.cpp is routinely many times what the server was started with. context_cap INTEGER,-- Requests this server said it runs at once(llama.cpp's slot count). -- NULL = it did not say,and the operator's `max_inflight` stands. max_parallel INTEGER,-- The server's own version string. Shown to the operator,never parsed: -- behaviour is decided by the profile,not by a version number. version TEXT,detected_at TEXT NOT NULL -- RFC3339 UTC,base_url TEXT NOT NULL DEFAULT '')STRICT
+table backend_detected_context on backend_detected_context: CREATE TABLE backend_detected_context(backend_id INTEGER NOT NULL REFERENCES backends(id)ON DELETE CASCADE,model_id TEXT NOT NULL,context_window INTEGER NOT NULL,PRIMARY KEY(backend_id,model_id))STRICT
+table backend_models on backend_models: CREATE TABLE backend_models(backend_id INTEGER NOT NULL REFERENCES "backends"(id)ON DELETE CASCADE,model_id TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(backend_id,model_id))STRICT
+table backend_probed_models on backend_probed_models: CREATE TABLE backend_probed_models(backend_id INTEGER NOT NULL REFERENCES "backends"(id)ON DELETE CASCADE,model_id TEXT NOT NULL,-- When this set was last written,for operator debugging("these models are -- from a probe three weeks ago"). Not read by the routing path. seen_at TEXT NOT NULL,PRIMARY KEY(backend_id,model_id))STRICT
+table backends on backends: CREATE TABLE backends(id INTEGER PRIMARY KEY,-- rowid alias; stable across renames name TEXT NOT NULL UNIQUE,-- operator-facing label base_url TEXT NOT NULL,api_key_env TEXT,-- env-var NAME,never the key value api_key_ct BLOB,api_key_nonce BLOB,weight INTEGER NOT NULL DEFAULT 1,max_inflight INTEGER NOT NULL DEFAULT 16,health_path TEXT NOT NULL DEFAULT '/models',supports_edit INTEGER NOT NULL DEFAULT 0,-- 0/1(image pools only)enabled INTEGER NOT NULL DEFAULT 1,-- 0 = drained for maintenance created_at TEXT NOT NULL,-- RFC3339 UTC updated_at TEXT NOT NULL)STRICT
+table browser_action_audit on browser_action_audit: CREATE TABLE browser_action_audit(id TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL,user_email TEXT NOT NULL,-- denormalised; survives user deletion turn_id TEXT NOT NULL,-- assistant turn that asked session_id TEXT,-- chat session context,when present actions TEXT NOT NULL,-- comma-separated step names,no payloads writes INTEGER NOT NULL,-- how many of them change a page outcome TEXT NOT NULL,-- 'ok' | 'partial' | 'refused' | 'no_extension' | 'timeout' detail TEXT,-- error or refusal reason created_at TEXT NOT NULL)STRICT
+table chat_compactions on chat_compactions: CREATE TABLE chat_compactions(session_id TEXT PRIMARY KEY NOT NULL,-- Highest turn `seq` covered by `summary`. Turns with seq <= this -- are replaced by the summary on replay; turns with a greater seq -- go upstream verbatim. up_to_seq INTEGER NOT NULL,-- The LLM-generated summary of turns [0,up_to_seq]. summary TEXT NOT NULL,-- Context size(prompt_tokens)that triggered this compaction,and -- an estimate of the summary's own token cost — bookkeeping for the -- admin/telemetry,never load-bearing. tokens_before INTEGER,tokens_after INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE)
+table chat_pending_turns on chat_pending_turns: CREATE TABLE chat_pending_turns(turn_id TEXT PRIMARY KEY NOT NULL,-- the user turn waiting for an answer session_id TEXT NOT NULL,user_id TEXT NOT NULL,model TEXT NOT NULL,-- what to answer with voice INTEGER NOT NULL DEFAULT 0,-- submitted from voice mode client_ip TEXT,-- as seen when it was accepted secure INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,FOREIGN KEY(turn_id)REFERENCES chat_turns(id)ON DELETE CASCADE,FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE,FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+table chat_session_settings on chat_session_settings: CREATE TABLE chat_session_settings(session_id TEXT PRIMARY KEY NOT NULL,effort TEXT,updated_at TEXT NOT NULL,FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE)
+table chat_session_skills on chat_session_skills: CREATE TABLE chat_session_skills(session_id TEXT NOT NULL,skill_name TEXT NOT NULL,loaded_at TEXT NOT NULL,PRIMARY KEY(session_id,skill_name),FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE)
+table chat_session_tools on chat_session_tools: CREATE TABLE chat_session_tools(session_id TEXT NOT NULL,tool_key TEXT NOT NULL,enabled INTEGER NOT NULL,source TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(session_id,tool_key),FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE)
+table chat_sessions on chat_sessions: CREATE TABLE chat_sessions(id TEXT PRIMARY KEY NOT NULL,user_id TEXT REFERENCES users(id)ON DELETE CASCADE,principal_id TEXT REFERENCES system_principals(id)ON DELETE CASCADE,parent_turn_id TEXT,agent_version INTEGER,title TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,shared INTEGER NOT NULL DEFAULT 0,pinned INTEGER NOT NULL DEFAULT 0,visitor_id TEXT REFERENCES visitor_sessions(id)ON DELETE SET NULL,lang TEXT,CHECK((user_id IS NULL)!=(principal_id IS NULL)),CHECK(principal_id IS NULL OR shared = 0))
+table chat_tool_calls on chat_tool_calls: CREATE TABLE chat_tool_calls(id TEXT NOT NULL,-- the model's tool_call_id(unique within its turn)turn_id TEXT NOT NULL,seq INTEGER NOT NULL,-- order within turn,0-based name TEXT NOT NULL,arguments_json TEXT NOT NULL,-- raw arguments JSON string output_json TEXT,-- nullable until tool finishes status TEXT NOT NULL,-- 'running'|'completed'|'errored' created_at TEXT NOT NULL,completed_at TEXT,PRIMARY KEY(turn_id,id),FOREIGN KEY(turn_id)REFERENCES chat_turns(id)ON DELETE CASCADE,UNIQUE(turn_id,seq))
+table chat_turn_steers on chat_turn_steers: CREATE TABLE chat_turn_steers(id TEXT PRIMARY KEY NOT NULL,-- UUID turn_id TEXT NOT NULL,-- the assistant turn being steered seq INTEGER NOT NULL,-- order within turn,0-based text TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',-- pending|delivered|resent|discarded created_at TEXT NOT NULL,settled_at TEXT,-- when it stopped being pending FOREIGN KEY(turn_id)REFERENCES chat_turns(id)ON DELETE CASCADE,UNIQUE(turn_id,seq))
+table chat_turn_suspensions on chat_turn_suspensions: CREATE TABLE chat_turn_suspensions(turn_id TEXT PRIMARY KEY NOT NULL REFERENCES chat_turns(id)ON DELETE CASCADE,request_id TEXT NOT NULL UNIQUE,kind TEXT NOT NULL,message TEXT,tool_call TEXT NOT NULL,tail TEXT NOT NULL,budget_used TEXT NOT NULL,child_turn TEXT,on_timeout TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,run_context TEXT,notified_at TEXT)STRICT
+table chat_turns on chat_turns: CREATE TABLE chat_turns(id TEXT PRIMARY KEY NOT NULL,-- UUID; doubles as DOM id suffix session_id TEXT NOT NULL,seq INTEGER NOT NULL,-- order within session,0-based role TEXT NOT NULL,-- 'user' | 'assistant' -- user-turn payload user_content TEXT,-- iff role='user' -- assistant-turn payload(all nullable so the row exists from the -- moment the worker starts,with status='in_progress')model TEXT,-- iff role='assistant' content TEXT,-- accumulated markdown reasoning TEXT,-- accumulated reasoning reasoning_elapsed_ms INTEGER,-- frozen when content starts status TEXT NOT NULL,-- 'completed' for user; -- 'in_progress'|'completed' -- |'cancelled'|'errored' for assistant error_message TEXT,-- iff status='errored' created_at TEXT NOT NULL,completed_at TEXT,context_tokens INTEGER,reasoning_started_at TEXT,-- nullable until finalize FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE,UNIQUE(session_id,seq))
+table chat_turns_fts on chat_turns_fts: CREATE VIRTUAL TABLE chat_turns_fts USING fts5(user_content,content,content='chat_turns',tokenize='unicode61')
+table chat_turns_fts_config on chat_turns_fts_config: CREATE TABLE 'chat_turns_fts_config'(k PRIMARY KEY,v)WITHOUT ROWID
+table chat_turns_fts_data on chat_turns_fts_data: CREATE TABLE 'chat_turns_fts_data'(id INTEGER PRIMARY KEY,block BLOB)
+table chat_turns_fts_docsize on chat_turns_fts_docsize: CREATE TABLE 'chat_turns_fts_docsize'(id INTEGER PRIMARY KEY,sz BLOB)
+table chat_turns_fts_idx on chat_turns_fts_idx: CREATE TABLE 'chat_turns_fts_idx'(segid,term,pgno,PRIMARY KEY(segid,term))WITHOUT ROWID
+table comfyui_jobs on comfyui_jobs: CREATE TABLE comfyui_jobs(id INTEGER PRIMARY KEY AUTOINCREMENT,prompt_id TEXT NOT NULL UNIQUE,-- ComfyUI's prompt UUID session_id TEXT NOT NULL,-- chat session the request came from turn_id TEXT NOT NULL,-- assistant turn that submitted the job user_id TEXT NOT NULL,-- who requested it workflow_id TEXT NOT NULL,-- manifest id(e.g. "text_to_image")output_kind TEXT NOT NULL,-- "image" | "video" | "audio" | "json" output_node_id TEXT NOT NULL,-- which ComfyUI node holds the result filename_prefix TEXT NOT NULL DEFAULT '',-- manifest's output_filename_prefix status TEXT NOT NULL DEFAULT 'pending',-- pending | completed | failed | timeout error_message TEXT,output_filename TEXT,-- S3 attachment name once completed output_mime TEXT,created_at TEXT NOT NULL,completed_at TEXT)
+table document_versions on document_versions: CREATE TABLE document_versions(document_id TEXT NOT NULL,version INTEGER NOT NULL,content TEXT NOT NULL,summary TEXT,-- short changelog line for this revision turn_id TEXT,-- assistant turn that produced it(if any)created_at TEXT NOT NULL,author TEXT NOT NULL DEFAULT 'assistant',PRIMARY KEY(document_id,version),FOREIGN KEY(document_id)REFERENCES documents(id)ON DELETE CASCADE)
+table documents on documents: CREATE TABLE documents(id TEXT PRIMARY KEY NOT NULL,-- doc_<uuid> session_id TEXT NOT NULL,user_id TEXT NOT NULL,title TEXT NOT NULL,format TEXT NOT NULL,-- markdown|text|html|json|yaml|toml current_ver INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT,FOREIGN KEY(session_id)REFERENCES chat_sessions(id)ON DELETE CASCADE)
+table fallback_models on fallback_models: CREATE TABLE fallback_models(kind TEXT PRIMARY KEY NOT NULL,-- chat|embedding|transcription|image model_id TEXT NOT NULL)STRICT
+table gateway_groups on gateway_groups: CREATE TABLE gateway_groups(-- Clean,stable,IdP-independent name. Referenced by resource -- `allowed_groups` and by the grant tables below. name TEXT PRIMARY KEY NOT NULL,description TEXT NOT NULL DEFAULT '',-- Grants the admin UI(`/admin/*`)+ admin-only actions,exactly like the -- old `[[roles]].admin` flag. More than one group may carry it. is_admin INTEGER NOT NULL DEFAULT 0,-- Applied to every authenticated user regardless of their claims — the DB -- equivalent of the old `[rbac].default_role`. At most one group should -- carry this,but the resolver tolerates several(unions them). is_default INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,can_manage_agents INTEGER NOT NULL DEFAULT 0)STRICT
+table group_tool_grants on group_tool_grants: CREATE TABLE group_tool_grants(gateway_group TEXT NOT NULL REFERENCES gateway_groups(name)ON DELETE CASCADE,tool_id TEXT NOT NULL,PRIMARY KEY(gateway_group,tool_id))STRICT
+table impersonation_audit on impersonation_audit: CREATE TABLE impersonation_audit(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 actor_id TEXT NOT NULL,-- admin who impersonated actor_email TEXT NOT NULL,-- denormalised for display after deletes target_id TEXT NOT NULL,-- user being impersonated target_email TEXT NOT NULL,-- denormalised for display after deletes action TEXT NOT NULL,-- 'start' | 'stop' created_at TEXT NOT NULL -- RFC 3339)
+table limits on limits: CREATE TABLE limits(id TEXT PRIMARY KEY NOT NULL,-- uuid v4 subject_type TEXT NOT NULL,-- 'global' | 'role' | 'user' subject_id TEXT NOT NULL,-- ''(global)| role id | users.id model TEXT,-- NULL = all enforce_limits models dimension TEXT NOT NULL,-- 'requests' | 'tokens' | 'cost' window_kind TEXT NOT NULL,-- 'hour' | 'day' | 'week' | 'month' value REAL NOT NULL,-- threshold(>= 0)created_at TEXT NOT NULL,-- RFC3339 UTC updated_at TEXT NOT NULL,managed_by TEXT NOT NULL DEFAULT 'admin')
+table mcp_catalog_connectors on mcp_catalog_connectors: CREATE TABLE mcp_catalog_connectors(key TEXT PRIMARY KEY NOT NULL,-- stable id,e.g. "gmail" name TEXT NOT NULL,description TEXT,icon TEXT,-- asset key / emoji for the store UI category TEXT,-- grouping label,e.g. "Google" url TEXT NOT NULL,-- remote streamable-HTTP MCP endpoint auth TEXT NOT NULL DEFAULT 'oauth2',-- 'oauth2' | 'none' | 'static_bearer' use_dcr INTEGER NOT NULL DEFAULT 1,-- try Dynamic Client Registration first client_id TEXT,-- static OAuth client(when no DCR)client_secret_ct BLOB,client_secret_nonce BLOB,authorize_url TEXT,-- discovery overrides(optional)token_url TEXT,registration_url TEXT,scopes_json TEXT NOT NULL DEFAULT '[]',enabled INTEGER NOT NULL DEFAULT 0,-- admin must turn it on seeded INTEGER NOT NULL DEFAULT 0,-- 1 = shipped default(vs admin-created)created_at TEXT NOT NULL,updated_at TEXT NOT NULL,scope TEXT NOT NULL DEFAULT 'per_user',audit INTEGER NOT NULL DEFAULT 0,allowed_groups TEXT NOT NULL DEFAULT '[]')STRICT
+table mcp_connector_tools on mcp_connector_tools: CREATE TABLE mcp_connector_tools(-- The connector this tool belongs to(`mcp_catalog_connectors.key`). connector_key TEXT NOT NULL REFERENCES mcp_catalog_connectors(key)ON DELETE CASCADE,-- The gateway-side tool id(`mcp__<server>__<tool>`),i.e. exactly the -- string a grant names — stored whole so the admin surface never has to -- rebuild it and risk disagreeing with `mcp::tool_id`. tool_id TEXT NOT NULL,-- The server's own description,for the picker row. Empty when it gave none. description TEXT NOT NULL DEFAULT '',seen_at TEXT NOT NULL,PRIMARY KEY(connector_key,tool_id))STRICT
+table mcp_tool_audit on mcp_tool_audit: CREATE TABLE mcp_tool_audit(id TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL,user_email TEXT NOT NULL,-- denormalised; survives user deletion connector_key TEXT NOT NULL,tool_id TEXT NOT NULL,-- namespaced tool id(mcp__<key>__<tool>)arguments TEXT,-- truncated JSON of the call arguments outcome TEXT NOT NULL,-- 'ok' | 'error' error TEXT,-- error detail when outcome = 'error' session_id TEXT,-- chat session context,when present created_at TEXT NOT NULL,principal_kind TEXT NOT NULL DEFAULT 'user',chain TEXT)STRICT
+table model_defaults on model_defaults: CREATE TABLE model_defaults(model_name TEXT PRIMARY KEY NOT NULL,defaults_toml TEXT NOT NULL,updated_at TEXT NOT NULL -- RFC3339,reasoning_style TEXT,thinking_budget_standard INTEGER,thinking_budget_deep INTEGER,thinking_budget_max INTEGER,reasoning_effort_standard TEXT,reasoning_effort_deep TEXT,reasoning_effort_max TEXT,context_window INTEGER,input_price REAL,output_price REAL,cap_vision INTEGER,cap_audio_input INTEGER,cap_pdf_input INTEGER,cap_tools INTEGER,cap_parallel_tools INTEGER,cap_structured_output INTEGER,fallback_vision TEXT,fallback_tools TEXT,cap_updated_at TEXT,pricing_unit TEXT NOT NULL DEFAULT 'tokens')STRICT
+table ocr_derivatives on ocr_derivatives: CREATE TABLE ocr_derivatives(doc_sha256 TEXT NOT NULL,model TEXT NOT NULL,prompt_version TEXT NOT NULL,settings_key TEXT NOT NULL,-- Provenance of the run,for operator debugging. Not part of the identity: -- the same bytes under a different filename are the same document. filename TEXT NOT NULL,mime TEXT NOT NULL,doc_bytes INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN('queued','running','completed','failed')),-- Recognised text. NULL until the run completes; capped by the configured -- output ceiling with `truncated` set when it bit. markdown TEXT,pages_total INTEGER,pages_processed INTEGER,truncated INTEGER NOT NULL DEFAULT 0,-- Operator-facing failure reason for a `failed` row; NULL otherwise. error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(doc_sha256,model,prompt_version,settings_key))
+table oidc_group_mappings on oidc_group_mappings: CREATE TABLE oidc_group_mappings(-- Which OIDC claim the value came from(e.g. `groups`). Informational today -- — matching is by `oidc_value` across the user's whole claim list — but -- kept for a future per-claim disambiguation,matching the old -- `[[rbac.mapping]].oidc_claim`. oidc_claim TEXT NOT NULL DEFAULT 'groups',oidc_value TEXT NOT NULL,gateway_group TEXT NOT NULL REFERENCES gateway_groups(name)ON DELETE CASCADE,PRIMARY KEY(oidc_value,gateway_group))STRICT
+table pending_logins on pending_logins: CREATE TABLE pending_logins(state TEXT PRIMARY KEY NOT NULL,-- OIDC state param(also our CSRF token)pkce_verifier TEXT NOT NULL,nonce TEXT NOT NULL,return_to TEXT,-- where to redirect after successful login created_at TEXT NOT NULL,expires_at TEXT NOT NULL,purpose TEXT NOT NULL DEFAULT 'login')
+table pending_mcp_oauth on pending_mcp_oauth: CREATE TABLE pending_mcp_oauth(state TEXT PRIMARY KEY NOT NULL,user_id TEXT NOT NULL,connector_key TEXT NOT NULL,pkce_verifier TEXT NOT NULL,redirect_uri TEXT NOT NULL,token_url TEXT NOT NULL,resource TEXT,-- RFC 8707 canonical MCP URI dcr_client_id TEXT,dcr_client_secret_ct BLOB,dcr_client_secret_nonce BLOB,return_to TEXT,created_at TEXT NOT NULL,expires_at TEXT NOT NULL)STRICT
+table pending_rag_oauth on pending_rag_oauth: CREATE TABLE pending_rag_oauth(state TEXT PRIMARY KEY NOT NULL,-- CSRF token,also the lookup key collection_id INTEGER NOT NULL,-- Which provider this consent is for,so the callback can find the -- factory without trusting anything from the redirect. source_kind TEXT NOT NULL,pkce_verifier TEXT NOT NULL,redirect_uri TEXT NOT NULL,token_url TEXT NOT NULL,admin_user_id TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT NOT NULL,FOREIGN KEY(collection_id)REFERENCES rag_collections(id)ON DELETE CASCADE)STRICT
+table pool_backends on pool_backends: CREATE TABLE pool_backends(pool_id INTEGER NOT NULL REFERENCES "pools"(id)ON DELETE CASCADE,backend_id INTEGER NOT NULL REFERENCES "backends"(id)ON DELETE CASCADE,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(pool_id,backend_id))STRICT
+table pool_models on pool_models: CREATE TABLE pool_models(pool_id INTEGER NOT NULL REFERENCES "pools"(id)ON DELETE CASCADE,model_id TEXT NOT NULL,sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(pool_id,model_id))STRICT
+table pool_offer_voices on pool_offer_voices: CREATE TABLE pool_offer_voices(pool_id INTEGER NOT NULL REFERENCES "pools"(id)ON DELETE CASCADE,voice_id TEXT NOT NULL,-- Menu order,so an operator can put the house voice first rather than -- having the UI sort alphabetically. sort_order INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(pool_id,voice_id))STRICT
+table pool_voices on pool_voices: CREATE TABLE pool_voices(pool_id INTEGER NOT NULL REFERENCES "pools"(id)ON DELETE CASCADE,lang_code TEXT NOT NULL,-- lowercase ISO-639-1,'' = default voice_id TEXT NOT NULL,PRIMARY KEY(pool_id,lang_code))STRICT
+table pools on pools: CREATE TABLE pools(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,kind TEXT NOT NULL,-- chat|transcription|embedding|image|speech strategy TEXT NOT NULL DEFAULT 'least_inflight',-- least_inflight|round_robin fallback_offline TEXT,-- model id for known-but-down spill compliance_gdpr INTEGER NOT NULL DEFAULT 1,-- 0/1(advisory UI warning)compliance_nda INTEGER NOT NULL DEFAULT 1,-- 0/1 enforce_limits INTEGER NOT NULL DEFAULT 1,-- 0/1(count toward quotas?)allowed_groups TEXT NOT NULL DEFAULT '[]',-- JSON array of group names sort_order INTEGER NOT NULL DEFAULT 0,-- deterministic iteration order created_at TEXT NOT NULL,updated_at TEXT NOT NULL)STRICT
+table principal_grants on principal_grants: CREATE TABLE principal_grants(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN('tool','connector','skill','rag_collection','pool','a2a_caller','a2a_agent')),ref TEXT NOT NULL,granted_by TEXT NOT NULL,granted_at TEXT NOT NULL,PRIMARY KEY(principal_id,kind,ref))STRICT
+table push_subscriptions on push_subscriptions: CREATE TABLE push_subscriptions(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 user_id TEXT NOT NULL,-- owner; sends are scoped to it endpoint TEXT NOT NULL,-- push service URL(unique per browser sub)p256dh TEXT NOT NULL,-- client public key,base64url(65-byte point)auth TEXT NOT NULL,-- client auth secret,base64url(16 bytes)lang TEXT,-- UI language code at subscribe time(en/de/…),-- so the notification is localized for this device; -- NULL falls back to the gateway default user_agent TEXT,-- UA string at subscribe time,for the list UI created_at TEXT NOT NULL,-- RFC 3339 updated_at TEXT NOT NULL,-- RFC 3339 FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+table rag_collection_refs on rag_collection_refs: CREATE TABLE rag_collection_refs(id INTEGER PRIMARY KEY AUTOINCREMENT,collection_id INTEGER NOT NULL,git_ref TEXT NOT NULL,-- branch,tag,or commit sha git_url TEXT,-- NULL = the collection's git_url is_primary INTEGER NOT NULL DEFAULT 0,data_uuid TEXT NOT NULL,-- names <data_dir>/<uuid>/ status TEXT NOT NULL DEFAULT 'pending',last_indexed_at TEXT,last_indexed_commit TEXT,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,dir_versions_json TEXT NOT NULL DEFAULT '{}',force_full_rebuild INTEGER NOT NULL DEFAULT 0,extractor_fingerprint TEXT,FOREIGN KEY(collection_id)REFERENCES rag_collections(id)ON DELETE CASCADE)STRICT
+table rag_collections on rag_collections: CREATE TABLE rag_collections(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT,git_url TEXT NOT NULL,git_ref TEXT NOT NULL DEFAULT 'main',-- Personal access token for private repos. Plaintext is deliberate: -- gateway runs on trusted infra,see docs/rag.md. pat TEXT,embedding_model TEXT NOT NULL,include_globs_json TEXT NOT NULL DEFAULT '[]',-- JSON array exclude_globs_json TEXT NOT NULL DEFAULT '[]',-- JSON array chunk_size INTEGER NOT NULL DEFAULT 800,chunk_overlap INTEGER NOT NULL DEFAULT 100,-- Indexer-owned. status ∈ {pending,cloning,indexing,ready,error}. created_at TEXT NOT NULL,-- RFC 3339 updated_at TEXT NOT NULL -- RFC 3339,data_uuid TEXT,search_mode TEXT NOT NULL DEFAULT 'versioned',allowed_groups TEXT NOT NULL DEFAULT '[]',source_kind TEXT NOT NULL DEFAULT 'git',source_config_json TEXT NOT NULL DEFAULT '{}',source_secrets_ct BLOB,source_secrets_nonce BLOB,profile_id INTEGER,extraction_model TEXT,sync_token_hash TEXT,connected_account TEXT,connected_by TEXT,connected_at TEXT,refresh_interval_mins INTEGER NOT NULL DEFAULT 0)STRICT
+table rag_document_profiles on rag_document_profiles: CREATE TABLE rag_document_profiles(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT,-- Instruction text prepended to the extraction call. Operator-editable,-- because what "vendor" means differs between an invoice archive and a -- contract repository. prompt TEXT NOT NULL,fields_json TEXT NOT NULL,-- Bumped on any semantic edit to the prompt or fields. Part of the -- extraction cache key,so a changed profile re-extracts rather than -- serving fields that answered a different question. version INTEGER NOT NULL DEFAULT 1,-- 1 for the profiles seeded below. They can be edited like any other,-- but the UI says where they came from. builtin INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)STRICT
+table rag_extractions on rag_extractions: CREATE TABLE rag_extractions(doc_sha256 TEXT NOT NULL,profile_id INTEGER NOT NULL,profile_version INTEGER NOT NULL,model TEXT NOT NULL,-- The extracted object,or NULL when the run failed. fields_json TEXT,summary TEXT,-- Kept for the operator; reads as a miss so a transient backend failure -- retries next pass instead of poisoning the document forever. error TEXT,created_at TEXT NOT NULL,PRIMARY KEY(doc_sha256,profile_id,profile_version,model))STRICT
+table rag_index_log on rag_index_log: CREATE TABLE rag_index_log(id INTEGER PRIMARY KEY AUTOINCREMENT,ref_id INTEGER NOT NULL,collection_id INTEGER NOT NULL,created_at TEXT NOT NULL,-- RFC 3339 level TEXT NOT NULL,-- info | warn | error phase TEXT NOT NULL,-- queued | cloning | indexing | ready | error message TEXT NOT NULL,commit_sha TEXT,-- resolved HEAD sha,when known files INTEGER,-- indexed-file count,on success chunks INTEGER,-- embedded-chunk count,on success duration_ms INTEGER,-- wall-clock of the build,when known FOREIGN KEY(ref_id)REFERENCES rag_collection_refs(id)ON DELETE CASCADE,FOREIGN KEY(collection_id)REFERENCES rag_collections(id)ON DELETE CASCADE)STRICT
+table rate_events on rate_events: CREATE TABLE rate_events(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,counter TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT NOT NULL)STRICT
+table scheduled_actions on scheduled_actions: CREATE TABLE scheduled_actions(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 user_id TEXT NOT NULL,-- owner; rows are scoped to it everywhere name TEXT NOT NULL,-- sidebar/list label + the run's chat title prompt TEXT NOT NULL,-- the message sent to the model each run model TEXT NOT NULL,-- upstream model id cron TEXT NOT NULL,-- 5-field cron expression timezone TEXT NOT NULL,-- IANA tz the cron is evaluated in tools_enabled INTEGER NOT NULL DEFAULT 1,-- 1 = run with the user's normal tools enabled INTEGER NOT NULL DEFAULT 1,-- 0 = paused(worker skips it)next_run_at TEXT,-- precomputed UTC RFC 3339; NULL when paused last_run_at TEXT,-- when the most recent run started last_status TEXT,-- 'ok' | 'error' for the most recent run last_session_id TEXT,-- chat session the most recent run opened last_error TEXT,-- error detail when last_status = 'error' created_at TEXT NOT NULL,-- RFC 3339 updated_at TEXT NOT NULL,reuse_conversation INTEGER NOT NULL DEFAULT 0,reuse_rounds INTEGER NOT NULL DEFAULT 5,-- RFC 3339 FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+table scheduled_runs on scheduled_runs: CREATE TABLE scheduled_runs(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 action_id TEXT NOT NULL,-- owning scheduled action fired_at TEXT NOT NULL,-- RFC 3339,when the run started status TEXT,-- NULL(in flight)| 'ok' | 'error' session_id TEXT,-- the chat session this run opened error TEXT,-- error detail when status = 'error' created_at TEXT NOT NULL,-- RFC 3339 FOREIGN KEY(action_id)REFERENCES scheduled_actions(id)ON DELETE CASCADE)
+table sessions on sessions: CREATE TABLE sessions(id TEXT PRIMARY KEY NOT NULL,-- random 256-bit,hex-encoded user_id TEXT NOT NULL,created_at TEXT NOT NULL,-- RFC 3339 expires_at TEXT NOT NULL,timezone TEXT,impersonator_id TEXT,-- RFC 3339 FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+table skill_role_grants on skill_role_grants: CREATE TABLE skill_role_grants(skill_name TEXT NOT NULL,role_id TEXT NOT NULL,granted_at TEXT NOT NULL,PRIMARY KEY(skill_name,role_id))
+table sqlite_sequence on sqlite_sequence: CREATE TABLE sqlite_sequence(name,seq)
+table system_principals on system_principals: CREATE TABLE system_principals(id TEXT PRIMARY KEY NOT NULL,name TEXT NOT NULL UNIQUE,display TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',created_by TEXT NOT NULL,created_at TEXT NOT NULL,disabled_at TEXT)STRICT
+table system_tokens on system_tokens: CREATE TABLE system_tokens(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,name TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,created_by TEXT NOT NULL,created_at TEXT NOT NULL,last_used_at TEXT,expires_at TEXT NOT NULL,revoked_at TEXT)STRICT
+table token_mcp_policy on token_mcp_policy: CREATE TABLE token_mcp_policy(token_id TEXT NOT NULL,connector_key TEXT NOT NULL,-- '*' = default ask_over_api TEXT NOT NULL,-- 'block' | 'allow' updated_at TEXT NOT NULL,PRIMARY KEY(token_id,connector_key),FOREIGN KEY(token_id)REFERENCES tokens(id)ON DELETE CASCADE)STRICT
+table token_models on token_models: CREATE TABLE token_models(token_id TEXT NOT NULL,model TEXT NOT NULL,-- model id as advertised by /v1/models -- 'owner'(set at /tokens)| 'admin'(set at /admin/tokens). Part of the -- key: both authors may list the same model,and each list is edited as a -- whole by whoever owns it. managed_by TEXT NOT NULL DEFAULT 'owner',created_at TEXT NOT NULL,-- RFC3339 UTC PRIMARY KEY(token_id,managed_by,model),FOREIGN KEY(token_id)REFERENCES tokens(id)ON DELETE CASCADE)
+table token_tool_prefs on token_tool_prefs: CREATE TABLE token_tool_prefs(token_id TEXT NOT NULL,tool_key TEXT NOT NULL,enabled INTEGER NOT NULL,-- 0 = off,1 = on updated_at TEXT NOT NULL,-- RFC3339 PRIMARY KEY(token_id,tool_key),FOREIGN KEY(token_id)REFERENCES tokens(id)ON DELETE CASCADE)STRICT
+table tokens on tokens: CREATE TABLE tokens(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 user_id TEXT NOT NULL,name TEXT NOT NULL,-- user-supplied label hash TEXT NOT NULL UNIQUE,-- SHA-256 hex of the bearer string created_at TEXT NOT NULL,last_used_at TEXT,expires_at TEXT NOT NULL,revoked_at TEXT,tools_enabled INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+table usage_daily on usage_daily: CREATE TABLE usage_daily(day TEXT NOT NULL,-- 'YYYY-MM-DD'(UTC)user_id TEXT NOT NULL,user_email TEXT,token_id TEXT NOT NULL DEFAULT '',-- '' = chat / scheduled token_name TEXT,-- denormalised for display source TEXT NOT NULL,kind TEXT NOT NULL,backend TEXT NOT NULL,model TEXT NOT NULL,req_count INTEGER NOT NULL DEFAULT 0,error_count INTEGER NOT NULL DEFAULT 0,prompt_tokens INTEGER NOT NULL DEFAULT 0,completion_tokens INTEGER NOT NULL DEFAULT 0,total_tokens INTEGER NOT NULL DEFAULT 0,input_units REAL NOT NULL DEFAULT 0,output_units REAL NOT NULL DEFAULT 0,cost REAL NOT NULL DEFAULT 0,PRIMARY KEY(day,user_id,token_id,source,kind,backend,model))
+table usage_events on usage_events: CREATE TABLE usage_events(id TEXT PRIMARY KEY NOT NULL,-- uuid v4 created_at TEXT NOT NULL,-- RFC3339 UTC(request time)user_id TEXT NOT NULL,user_email TEXT,-- denormalised for display token_id TEXT,-- /v1 only; NULL for chat/scheduled token_name TEXT,-- denormalised for display source TEXT NOT NULL,-- 'v1_api' | 'chat' | 'scheduled' kind TEXT NOT NULL,-- 'chat' | 'embedding' | 'transcription' backend TEXT NOT NULL,-- Backend.name model TEXT NOT NULL,status INTEGER NOT NULL,-- upstream HTTP status duration_ms INTEGER NOT NULL,prompt_tokens INTEGER,-- NULL when unavailable completion_tokens INTEGER,total_tokens INTEGER,cost REAL NOT NULL DEFAULT 0,enforce_limits INTEGER NOT NULL DEFAULT 1,input_units REAL NOT NULL DEFAULT 0,output_units REAL NOT NULL DEFAULT 0,principal_kind TEXT NOT NULL DEFAULT 'user',agent_id TEXT,chain TEXT)
+table user_mcp_connections on user_mcp_connections: CREATE TABLE user_mcp_connections(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 user_id TEXT NOT NULL,connector_key TEXT NOT NULL,status TEXT NOT NULL,-- 'connected'|'expired'|'error' access_token_ct BLOB,access_token_nonce BLOB,refresh_token_ct BLOB,refresh_token_nonce BLOB,token_expires_at TEXT,-- Resolved OAuth token endpoint,persisted so refresh reuses it instead of -- re-running(and re-trusting)discovery on the long-lived refresh path. token_url TEXT,scopes_json TEXT NOT NULL DEFAULT '[]',-- Dynamically-registered client(RFC 7591),kept so refresh can re-auth. dcr_client_id TEXT,dcr_client_secret_ct BLOB,dcr_client_secret_nonce BLOB,last_error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(user_id,connector_key),FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)STRICT
+table user_mcp_tool_prefs on user_mcp_tool_prefs: CREATE TABLE user_mcp_tool_prefs(user_id TEXT NOT NULL,connector_key TEXT NOT NULL,tool_name TEXT NOT NULL,-- remote tool name mode TEXT NOT NULL,-- 'always' | 'ask' | 'off' updated_at TEXT NOT NULL,PRIMARY KEY(user_id,connector_key,tool_name),FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)STRICT
+table user_memories on user_memories: CREATE TABLE user_memories(id TEXT PRIMARY KEY NOT NULL,-- uuid v4 user_id TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL,-- RFC3339 updated_at TEXT NOT NULL -- RFC3339,kind TEXT NOT NULL DEFAULT 'fact')STRICT
+table user_tool_prefs on user_tool_prefs: CREATE TABLE user_tool_prefs(user_id TEXT NOT NULL,tool_key TEXT NOT NULL,enabled INTEGER NOT NULL,-- 0 = off,1 = on updated_at TEXT NOT NULL,-- RFC3339 PRIMARY KEY(user_id,tool_key))STRICT
+table users on users: CREATE TABLE users(id TEXT PRIMARY KEY NOT NULL,-- OIDC subject(sub claim)email TEXT NOT NULL,name TEXT,roles_json TEXT NOT NULL DEFAULT '[]',-- JSON array of role strings created_at TEXT NOT NULL,updated_at TEXT NOT NULL,timezone TEXT,loc_lat REAL,loc_lon REAL,loc_accuracy REAL,loc_updated_at TEXT,speech_voice TEXT)
+table visitor_sessions on visitor_sessions: CREATE TABLE visitor_sessions(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,embed_key_id TEXT NOT NULL REFERENCES agent_embed_keys(id)ON DELETE CASCADE,token_hash TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,client_ip TEXT,idle_ttl_secs INTEGER NOT NULL CHECK(idle_ttl_secs > 0),created_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,expires_at TEXT NOT NULL,max_expires_at TEXT NOT NULL)STRICT
+table webhook_runs on webhook_runs: CREATE TABLE webhook_runs(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 webhook_id TEXT NOT NULL,-- owning webhook fired_at TEXT NOT NULL,-- RFC 3339,when the run started status TEXT,-- NULL(pending)| 'ok' | 'error' session_id TEXT,-- the chat session this run opened error TEXT,-- error detail when status = 'error' prompt TEXT NOT NULL,-- the prompt used for this run payload TEXT NOT NULL,-- the request body replayed for this run source TEXT NOT NULL,-- 'fire'(external trigger)| 'rerun' created_at TEXT NOT NULL,-- RFC 3339 FOREIGN KEY(webhook_id)REFERENCES webhooks(id)ON DELETE CASCADE)
+table webhooks on webhooks: CREATE TABLE webhooks(id TEXT PRIMARY KEY NOT NULL,-- UUID v4 user_id TEXT NOT NULL,-- owner; rows are scoped to it everywhere name TEXT NOT NULL,-- list label + the run's chat title prompt TEXT NOT NULL,-- instruction sent to the model each fire model TEXT NOT NULL,-- upstream model id tools_enabled INTEGER NOT NULL DEFAULT 0,-- 1 = run with the owner's normal tools synchronous INTEGER NOT NULL DEFAULT 0,-- 1 = caller waits for the model output secret_hash TEXT NOT NULL,-- SHA-256 hex of the gwh_ trigger secret enabled INTEGER NOT NULL DEFAULT 1,-- 0 = paused(the trigger 404s)last_fired_at TEXT,-- when the most recent fire started last_status TEXT,-- 'ok' | 'error' for the most recent fire last_session_id TEXT,-- chat session the most recent fire opened last_error TEXT,-- error detail when last_status = 'error' last_payload TEXT,-- raw body of the most recent fire,kept so the -- owner can "rerun with a different prompt" without -- the external caller having to re-send it created_at TEXT NOT NULL,-- RFC 3339 updated_at TEXT NOT NULL,reuse_conversation INTEGER NOT NULL DEFAULT 0,reuse_rounds INTEGER NOT NULL DEFAULT 5,-- RFC 3339 FOREIGN KEY(user_id)REFERENCES users(id)ON DELETE CASCADE)
+trigger automatic_route_candidates_reject_nesting on automatic_route_candidates: CREATE TRIGGER automatic_route_candidates_reject_nesting BEFORE INSERT ON automatic_route_candidates WHEN EXISTS(SELECT 1 FROM automatic_routes WHERE alias = NEW.target)BEGIN SELECT RAISE(ABORT,'nested automatic routes are not supported'); END
+trigger automatic_routes_reject_reverse_nesting on automatic_routes: CREATE TRIGGER automatic_routes_reject_reverse_nesting BEFORE INSERT ON automatic_routes WHEN EXISTS(SELECT 1 FROM automatic_route_candidates WHERE target = NEW.alias)BEGIN SELECT RAISE(ABORT,'nested automatic routes are not supported'); END
+trigger chat_turns_fts_ad on chat_turns: CREATE TRIGGER chat_turns_fts_ad AFTER DELETE ON chat_turns WHEN old.status != 'in_progress' BEGIN INSERT INTO chat_turns_fts(chat_turns_fts,rowid,user_content,content)VALUES('delete',old.rowid,old.user_content,old.content); END
+trigger chat_turns_fts_ai on chat_turns: CREATE TRIGGER chat_turns_fts_ai AFTER INSERT ON chat_turns WHEN new.status != 'in_progress' BEGIN INSERT INTO chat_turns_fts(rowid,user_content,content)VALUES(new.rowid,new.user_content,new.content); END
+trigger chat_turns_fts_au on chat_turns: CREATE TRIGGER chat_turns_fts_au AFTER UPDATE OF user_content,content,status ON chat_turns WHEN old.status != 'in_progress' OR new.status != 'in_progress' BEGIN -- Drop the previously-indexed copy,but only if it was indexed --(terminal). A freshly-finalized turn(in_progress → terminal)was -- never indexed,so there is nothing to delete. INSERT INTO chat_turns_fts(chat_turns_fts,rowid,user_content,content)SELECT 'delete',old.rowid,old.user_content,old.content WHERE old.status != 'in_progress'; -- Index the new copy once it is terminal. INSERT INTO chat_turns_fts(rowid,user_content,content)SELECT new.rowid,new.user_content,new.content WHERE new.status != 'in_progress'; END
+a2a_contexts column 0|session_id|TEXT|1|NULL|1|0
+a2a_contexts column 1|agent_id|TEXT|1|NULL|0|0
+a2a_contexts column 2|caller_id|TEXT|1|NULL|0|0
+a2a_contexts column 3|caller_name|TEXT|1|NULL|0|0
+a2a_contexts column 4|token_id|TEXT|1|NULL|0|0
+a2a_contexts column 5|client_ip|TEXT|0|NULL|0|0
+a2a_contexts column 6|created_at|TEXT|1|NULL|0|0
+a2a_contexts fk 0|0|system_principals|caller_id|id|NO ACTION|CASCADE|NONE
+a2a_contexts fk 1|0|agents|agent_id|principal_id|NO ACTION|CASCADE|NONE
+a2a_contexts fk 2|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+a2a_contexts index idx_a2a_contexts_agent_ip 0|c|0
+a2a_contexts index idx_a2a_contexts_agent_ip 0|1|agent_id|0|BINARY|1
+a2a_contexts index idx_a2a_contexts_agent_ip 1|5|client_ip|0|BINARY|1
+a2a_contexts index idx_a2a_contexts_agent_ip 2|-1|NULL|0|BINARY|0
+a2a_contexts index sqlite_autoindex_a2a_contexts_1 1|pk|0
+a2a_contexts index sqlite_autoindex_a2a_contexts_1 0|0|session_id|0|BINARY|1
+a2a_contexts index sqlite_autoindex_a2a_contexts_1 1|-1|NULL|0|BINARY|0
+activity_blobs column 0|chain_key|TEXT|1|NULL|1|0
+activity_blobs column 1|hash|TEXT|1|NULL|2|0
+activity_blobs column 2|data|TEXT|1|NULL|0|0
+activity_blobs column 3|created_at|TEXT|1|NULL|0|0
+activity_blobs index sqlite_autoindex_activity_blobs_1 1|pk|0
+activity_blobs index sqlite_autoindex_activity_blobs_1 0|0|chain_key|0|BINARY|1
+activity_blobs index sqlite_autoindex_activity_blobs_1 1|1|hash|0|BINARY|1
+activity_blobs index sqlite_autoindex_activity_blobs_1 2|2|data|0|BINARY|0
+activity_blobs index sqlite_autoindex_activity_blobs_1 3|3|created_at|0|BINARY|0
+activity_verified column 0|chain_key|TEXT|1|NULL|1|0
+activity_verified column 1|seq|INTEGER|1|NULL|0|0
+activity_verified column 2|hash|TEXT|0|NULL|0|0
+activity_verified column 3|book|TEXT|0|NULL|0|0
+activity_verified column 4|key_id|TEXT|1|NULL|0|0
+activity_verified column 5|mac|TEXT|1|NULL|0|0
+activity_verified column 6|verified_at|TEXT|1|NULL|0|0
+activity_verified index sqlite_autoindex_activity_verified_1 1|pk|0
+activity_verified index sqlite_autoindex_activity_verified_1 0|0|chain_key|0|BINARY|1
+activity_verified index sqlite_autoindex_activity_verified_1 1|-1|NULL|0|BINARY|0
+agent_a2a_tasks column 0|turn_id|TEXT|1|NULL|1|0
+agent_a2a_tasks column 1|tool_call_id|TEXT|1|NULL|2|0
+agent_a2a_tasks column 2|route|TEXT|1|NULL|0|0
+agent_a2a_tasks column 3|card_url|TEXT|1|NULL|0|0
+agent_a2a_tasks column 4|task_id|TEXT|1|NULL|0|0
+agent_a2a_tasks column 5|context_id|TEXT|0|NULL|0|0
+agent_a2a_tasks column 6|created_at|TEXT|1|NULL|0|0
+agent_a2a_tasks fk 0|0|chat_turns|turn_id|id|NO ACTION|CASCADE|NONE
+agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 1|pk|0
+agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 0|0|turn_id|0|BINARY|1
+agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 1|1|tool_call_id|0|BINARY|1
+agent_a2a_tasks index sqlite_autoindex_agent_a2a_tasks_1 2|-1|NULL|0|BINARY|0
+agent_audit column 0|id|TEXT|1|NULL|1|0
+agent_audit column 1|kind|TEXT|1|NULL|0|0
+agent_audit column 2|principal_id|TEXT|1|NULL|0|0
+agent_audit column 3|actor_id|TEXT|0|NULL|0|0
+agent_audit column 4|chain|TEXT|0|NULL|0|0
+agent_audit column 5|detail|TEXT|1|NULL|0|0
+agent_audit column 6|created_at|TEXT|1|NULL|0|0
+agent_audit column 7|chain_key|TEXT|0|NULL|0|0
+agent_audit column 8|seq|INTEGER|0|NULL|0|0
+agent_audit column 9|prev_hash|TEXT|0|NULL|0|0
+agent_audit column 10|hash|TEXT|0|NULL|0|0
+agent_audit column 11|agent_id|TEXT|0|NULL|0|0
+agent_audit column 12|version|INTEGER|0|NULL|0|0
+agent_audit column 13|conversation_id|TEXT|0|NULL|0|0
+agent_audit column 14|session_id|TEXT|0|NULL|0|0
+agent_audit column 15|turn_id|TEXT|0|NULL|0|0
+agent_audit column 16|round|INTEGER|0|NULL|0|0
+agent_audit column 17|call_id|TEXT|0|NULL|0|0
+agent_audit column 18|visitor_id|TEXT|0|NULL|0|0
+agent_audit column 19|caller_id|TEXT|0|NULL|0|0
+agent_audit column 20|duration_ms|INTEGER|0|NULL|0|0
+agent_audit column 21|key_id|TEXT|0|NULL|0|0
+agent_audit index idx_agent_audit_agent 0|c|0
+agent_audit index idx_agent_audit_agent 0|11|agent_id|0|BINARY|1
+agent_audit index idx_agent_audit_agent 1|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_chain 1|c|0
+agent_audit index idx_agent_audit_chain 0|7|chain_key|0|BINARY|1
+agent_audit index idx_agent_audit_chain 1|8|seq|0|BINARY|1
+agent_audit index idx_agent_audit_chain 2|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_chain_head 0|c|0
+agent_audit index idx_agent_audit_chain_head 0|7|chain_key|0|BINARY|1
+agent_audit index idx_agent_audit_chain_head 1|8|seq|0|BINARY|1
+agent_audit index idx_agent_audit_chain_head 2|10|hash|0|BINARY|1
+agent_audit index idx_agent_audit_chain_head 3|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_conversation 0|c|0
+agent_audit index idx_agent_audit_conversation 0|13|conversation_id|0|BINARY|1
+agent_audit index idx_agent_audit_conversation 1|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_principal 0|c|0
+agent_audit index idx_agent_audit_principal 0|2|principal_id|0|BINARY|1
+agent_audit index idx_agent_audit_principal 1|6|created_at|1|BINARY|1
+agent_audit index idx_agent_audit_principal 2|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_principal_kind 0|c|0
+agent_audit index idx_agent_audit_principal_kind 0|2|principal_id|0|BINARY|1
+agent_audit index idx_agent_audit_principal_kind 1|1|kind|0|BINARY|1
+agent_audit index idx_agent_audit_principal_kind 2|6|created_at|0|BINARY|1
+agent_audit index idx_agent_audit_principal_kind 3|-1|NULL|0|BINARY|0
+agent_audit index idx_agent_audit_sweep 0|c|0
+agent_audit index idx_agent_audit_sweep 0|11|agent_id|0|BINARY|1
+agent_audit index idx_agent_audit_sweep 1|7|chain_key|0|BINARY|1
+agent_audit index idx_agent_audit_sweep 2|13|conversation_id|0|BINARY|1
+agent_audit index idx_agent_audit_sweep 3|6|created_at|0|BINARY|1
+agent_audit index idx_agent_audit_sweep 4|-1|NULL|0|BINARY|0
+agent_audit index sqlite_autoindex_agent_audit_1 1|pk|0
+agent_audit index sqlite_autoindex_agent_audit_1 0|0|id|0|BINARY|1
+agent_audit index sqlite_autoindex_agent_audit_1 1|-1|NULL|0|BINARY|0
+agent_embed_keys column 0|id|TEXT|1|NULL|1|0
+agent_embed_keys column 1|principal_id|TEXT|1|NULL|0|0
+agent_embed_keys column 2|name|TEXT|1|NULL|0|0
+agent_embed_keys column 3|key_hash|TEXT|1|NULL|0|0
+agent_embed_keys column 4|origins|TEXT|1|NULL|0|0
+agent_embed_keys column 5|created_by|TEXT|1|NULL|0|0
+agent_embed_keys column 6|created_at|TEXT|1|NULL|0|0
+agent_embed_keys column 7|revoked_at|TEXT|0|NULL|0|0
+agent_embed_keys fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_embed_keys index agent_embed_keys_principal 0|c|0
+agent_embed_keys index agent_embed_keys_principal 0|1|principal_id|0|BINARY|1
+agent_embed_keys index agent_embed_keys_principal 1|-1|NULL|0|BINARY|0
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_1 1|pk|0
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_1 0|0|id|0|BINARY|1
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_1 1|-1|NULL|0|BINARY|0
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_2 1|u|0
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_2 0|3|key_hash|0|BINARY|1
+agent_embed_keys index sqlite_autoindex_agent_embed_keys_2 1|-1|NULL|0|BINARY|0
+agent_identity_jtis column 0|principal_id|TEXT|1|NULL|1|0
+agent_identity_jtis column 1|jti_hash|TEXT|1|NULL|2|0
+agent_identity_jtis column 2|expires_at|TEXT|1|NULL|0|0
+agent_identity_jtis fk 0|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+agent_identity_jtis index sqlite_autoindex_agent_identity_jtis_1 1|pk|0
+agent_identity_jtis index sqlite_autoindex_agent_identity_jtis_1 0|0|principal_id|0|BINARY|1
+agent_identity_jtis index sqlite_autoindex_agent_identity_jtis_1 1|1|jti_hash|0|BINARY|1
+agent_identity_jtis index sqlite_autoindex_agent_identity_jtis_1 2|-1|NULL|0|BINARY|0
+agent_notify_channels column 0|id|TEXT|1|NULL|1|0
+agent_notify_channels column 1|principal_id|TEXT|1|NULL|0|0
+agent_notify_channels column 2|kind|TEXT|1|NULL|0|0
+agent_notify_channels column 3|name|TEXT|1|NULL|0|0
+agent_notify_channels column 4|url_nonce|BLOB|1|NULL|0|0
+agent_notify_channels column 5|url_ct|BLOB|1|NULL|0|0
+agent_notify_channels column 6|url_host|TEXT|1|NULL|0|0
+agent_notify_channels column 7|details|INTEGER|1|0|0|0
+agent_notify_channels column 8|lang|TEXT|1|'en'|0|0
+agent_notify_channels column 9|created_by|TEXT|1|NULL|0|0
+agent_notify_channels column 10|created_at|TEXT|1|NULL|0|0
+agent_notify_channels fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_notify_channels index agent_notify_channels_principal 0|c|0
+agent_notify_channels index agent_notify_channels_principal 0|1|principal_id|0|BINARY|1
+agent_notify_channels index agent_notify_channels_principal 1|-1|NULL|0|BINARY|0
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_1 1|pk|0
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_1 0|0|id|0|BINARY|1
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_1 1|-1|NULL|0|BINARY|0
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 1|u|0
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 0|1|principal_id|0|BINARY|1
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 1|3|name|0|BINARY|1
+agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 2|-1|NULL|0|BINARY|0
+agent_responders column 0|principal_id|TEXT|1|NULL|1|0
+agent_responders column 1|subject_kind|TEXT|1|NULL|2|0
+agent_responders column 2|subject_id|TEXT|1|NULL|3|0
+agent_responders column 3|added_by|TEXT|1|NULL|0|0
+agent_responders column 4|added_at|TEXT|1|NULL|0|0
+agent_responders fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_responders index sqlite_autoindex_agent_responders_1 1|pk|0
+agent_responders index sqlite_autoindex_agent_responders_1 0|0|principal_id|0|BINARY|1
+agent_responders index sqlite_autoindex_agent_responders_1 1|1|subject_kind|0|BINARY|1
+agent_responders index sqlite_autoindex_agent_responders_1 2|2|subject_id|0|BINARY|1
+agent_responders index sqlite_autoindex_agent_responders_1 3|-1|NULL|0|BINARY|0
+agent_shares column 0|principal_id|TEXT|1|NULL|1|0
+agent_shares column 1|subject_kind|TEXT|1|NULL|2|0
+agent_shares column 2|subject_id|TEXT|1|NULL|3|0
+agent_shares column 3|access|TEXT|1|NULL|0|0
+agent_shares fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_shares index idx_agent_shares_subject 0|c|0
+agent_shares index idx_agent_shares_subject 0|1|subject_kind|0|BINARY|1
+agent_shares index idx_agent_shares_subject 1|2|subject_id|0|BINARY|1
+agent_shares index idx_agent_shares_subject 2|-1|NULL|0|BINARY|0
+agent_shares index sqlite_autoindex_agent_shares_1 1|pk|0
+agent_shares index sqlite_autoindex_agent_shares_1 0|0|principal_id|0|BINARY|1
+agent_shares index sqlite_autoindex_agent_shares_1 1|1|subject_kind|0|BINARY|1
+agent_shares index sqlite_autoindex_agent_shares_1 2|2|subject_id|0|BINARY|1
+agent_shares index sqlite_autoindex_agent_shares_1 3|-1|NULL|0|BINARY|0
+agent_state column 0|session_id|TEXT|1|NULL|1|0
+agent_state column 1|slot|TEXT|1|NULL|2|0
+agent_state column 2|value|TEXT|1|NULL|0|0
+agent_state column 3|provenance|TEXT|1|NULL|0|0
+agent_state column 4|set_at|TEXT|1|NULL|0|0
+agent_state fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+agent_state index sqlite_autoindex_agent_state_1 1|pk|0
+agent_state index sqlite_autoindex_agent_state_1 0|0|session_id|0|BINARY|1
+agent_state index sqlite_autoindex_agent_state_1 1|1|slot|0|BINARY|1
+agent_state index sqlite_autoindex_agent_state_1 2|-1|NULL|0|BINARY|0
+agent_test_cases column 0|id|TEXT|1|NULL|1|0
+agent_test_cases column 1|principal_id|TEXT|1|NULL|0|0
+agent_test_cases column 2|name|TEXT|1|NULL|0|0
+agent_test_cases column 3|script|TEXT|1|NULL|0|0
+agent_test_cases column 4|expect|TEXT|1|NULL|0|0
+agent_test_cases column 5|rubric|TEXT|0|NULL|0|0
+agent_test_cases column 6|created_by|TEXT|1|NULL|0|0
+agent_test_cases column 7|created_at|TEXT|1|NULL|0|0
+agent_test_cases column 8|updated_at|TEXT|1|NULL|0|0
+agent_test_cases fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_test_cases index sqlite_autoindex_agent_test_cases_1 1|pk|0
+agent_test_cases index sqlite_autoindex_agent_test_cases_1 0|0|id|0|BINARY|1
+agent_test_cases index sqlite_autoindex_agent_test_cases_1 1|-1|NULL|0|BINARY|0
+agent_test_cases index sqlite_autoindex_agent_test_cases_2 1|u|0
+agent_test_cases index sqlite_autoindex_agent_test_cases_2 0|1|principal_id|0|BINARY|1
+agent_test_cases index sqlite_autoindex_agent_test_cases_2 1|2|name|0|BINARY|1
+agent_test_cases index sqlite_autoindex_agent_test_cases_2 2|-1|NULL|0|BINARY|0
+agent_test_results column 0|run_id|TEXT|1|NULL|1|0
+agent_test_results column 1|case_id|TEXT|1|NULL|2|0
+agent_test_results column 2|case_name|TEXT|1|NULL|0|0
+agent_test_results column 3|position|INTEGER|1|NULL|0|0
+agent_test_results column 4|passed|INTEGER|1|NULL|0|0
+agent_test_results column 5|report|TEXT|1|NULL|0|0
+agent_test_results column 6|session_id|TEXT|0|NULL|0|0
+agent_test_results fk 0|0|agent_test_runs|run_id|id|NO ACTION|CASCADE|NONE
+agent_test_results index sqlite_autoindex_agent_test_results_1 1|pk|0
+agent_test_results index sqlite_autoindex_agent_test_results_1 0|0|run_id|0|BINARY|1
+agent_test_results index sqlite_autoindex_agent_test_results_1 1|1|case_id|0|BINARY|1
+agent_test_results index sqlite_autoindex_agent_test_results_1 2|-1|NULL|0|BINARY|0
+agent_test_runs column 0|id|TEXT|1|NULL|1|0
+agent_test_runs column 1|principal_id|TEXT|1|NULL|0|0
+agent_test_runs column 2|source|TEXT|1|NULL|0|0
+agent_test_runs column 3|version|INTEGER|0|NULL|0|0
+agent_test_runs column 4|spec_hash|TEXT|1|NULL|0|0
+agent_test_runs column 5|suite_hash|TEXT|1|NULL|0|0
+agent_test_runs column 6|started_by|TEXT|1|NULL|0|0
+agent_test_runs column 7|started_at|TEXT|1|NULL|0|0
+agent_test_runs column 8|finished_at|TEXT|1|NULL|0|0
+agent_test_runs fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_test_runs index idx_agent_test_runs_principal 0|c|0
+agent_test_runs index idx_agent_test_runs_principal 0|1|principal_id|0|BINARY|1
+agent_test_runs index idx_agent_test_runs_principal 1|7|started_at|0|BINARY|1
+agent_test_runs index idx_agent_test_runs_principal 2|-1|NULL|0|BINARY|0
+agent_test_runs index sqlite_autoindex_agent_test_runs_1 1|pk|0
+agent_test_runs index sqlite_autoindex_agent_test_runs_1 0|0|id|0|BINARY|1
+agent_test_runs index sqlite_autoindex_agent_test_runs_1 1|-1|NULL|0|BINARY|0
+agent_verifier_codes column 0|session_id|TEXT|1|NULL|1|0
+agent_verifier_codes column 1|verifier|TEXT|1|NULL|2|0
+agent_verifier_codes column 2|email_hash|TEXT|1|NULL|0|0
+agent_verifier_codes column 3|sent_at|TEXT|1|NULL|0|0
+agent_verifier_codes column 4|expires_at|TEXT|1|NULL|0|0
+agent_verifier_codes column 5|attempts|INTEGER|1|0|0|0
+agent_verifier_codes fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+agent_verifier_codes index sqlite_autoindex_agent_verifier_codes_1 1|pk|0
+agent_verifier_codes index sqlite_autoindex_agent_verifier_codes_1 0|0|session_id|0|BINARY|1
+agent_verifier_codes index sqlite_autoindex_agent_verifier_codes_1 1|1|verifier|0|BINARY|1
+agent_verifier_codes index sqlite_autoindex_agent_verifier_codes_1 2|-1|NULL|0|BINARY|0
+agent_versions column 0|principal_id|TEXT|1|NULL|1|0
+agent_versions column 1|version|INTEGER|1|NULL|2|0
+agent_versions column 2|spec|TEXT|1|NULL|0|0
+agent_versions column 3|published_by|TEXT|1|NULL|0|0
+agent_versions column 4|published_at|TEXT|1|NULL|0|0
+agent_versions fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+agent_versions index sqlite_autoindex_agent_versions_1 1|pk|0
+agent_versions index sqlite_autoindex_agent_versions_1 0|0|principal_id|0|BINARY|1
+agent_versions index sqlite_autoindex_agent_versions_1 1|1|version|0|BINARY|1
+agent_versions index sqlite_autoindex_agent_versions_1 2|-1|NULL|0|BINARY|0
+agents column 0|principal_id|TEXT|1|NULL|1|0
+agents column 1|draft_spec|TEXT|1|NULL|0|0
+agents column 2|live_version|INTEGER|0|NULL|0|0
+agents column 3|created_at|TEXT|1|NULL|0|0
+agents column 4|updated_at|TEXT|1|NULL|0|0
+agents fk 0|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+agents index sqlite_autoindex_agents_1 1|pk|0
+agents index sqlite_autoindex_agents_1 0|0|principal_id|0|BINARY|1
+agents index sqlite_autoindex_agents_1 1|-1|NULL|0|BINARY|0
+app_settings column 0|key|TEXT|1|NULL|1|0
+app_settings column 1|value|TEXT|1|NULL|0|0
+app_settings column 2|updated_at|TEXT|1|NULL|0|0
+app_settings index sqlite_autoindex_app_settings_1 1|pk|0
+app_settings index sqlite_autoindex_app_settings_1 0|0|key|0|BINARY|1
+app_settings index sqlite_autoindex_app_settings_1 1|-1|NULL|0|BINARY|0
+automatic_route_candidates column 0|route_alias|TEXT|1|NULL|1|0
+automatic_route_candidates column 1|key|TEXT|1|NULL|2|0
+automatic_route_candidates column 2|target|TEXT|1|NULL|0|0
+automatic_route_candidates column 3|description|TEXT|1|NULL|0|0
+automatic_route_candidates column 4|sort_order|INTEGER|1|0|0|0
+automatic_route_candidates fk 0|0|automatic_routes|route_alias|alias|NO ACTION|CASCADE|NONE
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_1 1|pk|0
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_1 0|0|route_alias|0|BINARY|1
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_1 1|1|key|0|BINARY|1
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_1 2|-1|NULL|0|BINARY|0
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_2 1|u|0
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_2 0|0|route_alias|0|BINARY|1
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_2 1|2|target|0|BINARY|1
+automatic_route_candidates index sqlite_autoindex_automatic_route_candidates_2 2|-1|NULL|0|BINARY|0
+automatic_route_decisions column 0|id|INTEGER|0|NULL|1|0
+automatic_route_decisions column 1|created_at|TEXT|1|NULL|0|0
+automatic_route_decisions column 2|route_alias|TEXT|1|NULL|0|0
+automatic_route_decisions column 3|route_version|INTEGER|1|NULL|0|0
+automatic_route_decisions column 4|selector_model|TEXT|1|NULL|0|0
+automatic_route_decisions column 5|selected_key|TEXT|0|NULL|0|0
+automatic_route_decisions column 6|selected_target|TEXT|0|NULL|0|0
+automatic_route_decisions column 7|effective_target|TEXT|1|NULL|0|0
+automatic_route_decisions column 8|confidence|REAL|0|NULL|0|0
+automatic_route_decisions column 9|reason|TEXT|1|NULL|0|0
+automatic_route_decisions column 10|eligible_targets|TEXT|1|NULL|0|0
+automatic_route_decisions column 11|probabilities|TEXT|0|NULL|0|0
+automatic_route_decisions column 12|duration_ms|INTEGER|1|NULL|0|0
+automatic_route_decisions index automatic_route_decisions_alias_created 0|c|0
+automatic_route_decisions index automatic_route_decisions_alias_created 0|2|route_alias|0|BINARY|1
+automatic_route_decisions index automatic_route_decisions_alias_created 1|1|created_at|1|BINARY|1
+automatic_route_decisions index automatic_route_decisions_alias_created 2|-1|NULL|0|BINARY|0
+automatic_routes column 0|alias|TEXT|0|NULL|1|0
+automatic_routes column 1|selector_model|TEXT|1|NULL|0|0
+automatic_routes column 2|objective|TEXT|1|NULL|0|0
+automatic_routes column 3|instructions|TEXT|1|''|0|0
+automatic_routes column 4|minimum_confidence|REAL|1|0.0|0|0
+automatic_routes column 5|selector_timeout_ms|INTEGER|1|1500|0|0
+automatic_routes column 6|fallback_target|TEXT|1|NULL|0|0
+automatic_routes column 7|session_affinity|INTEGER|1|0|0|0
+automatic_routes column 8|session_ttl_seconds|INTEGER|1|3600|0|0
+automatic_routes column 9|rollout|TEXT|1|'shadow'|0|0
+automatic_routes column 10|version|INTEGER|1|1|0|0
+automatic_routes column 11|created_at|TEXT|1|NULL|0|0
+automatic_routes column 12|updated_at|TEXT|1|NULL|0|0
+automatic_routes index sqlite_autoindex_automatic_routes_1 1|pk|0
+automatic_routes index sqlite_autoindex_automatic_routes_1 0|0|alias|0|BINARY|1
+automatic_routes index sqlite_autoindex_automatic_routes_1 1|-1|NULL|0|BINARY|0
+backend_aliases column 0|backend_id|INTEGER|1|NULL|1|0
+backend_aliases column 1|alias|TEXT|1|NULL|2|0
+backend_aliases column 2|target|TEXT|0|NULL|0|0
+backend_aliases fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+backend_aliases index sqlite_autoindex_backend_aliases_1 1|pk|0
+backend_aliases index sqlite_autoindex_backend_aliases_1 0|0|backend_id|0|BINARY|1
+backend_aliases index sqlite_autoindex_backend_aliases_1 1|1|alias|0|BINARY|1
+backend_aliases index sqlite_autoindex_backend_aliases_1 2|-1|NULL|0|BINARY|0
+backend_detected column 0|backend_id|INTEGER|0|NULL|1|0
+backend_detected column 1|profile|TEXT|1|NULL|0|0
+backend_detected column 2|context_cap|INTEGER|0|NULL|0|0
+backend_detected column 3|max_parallel|INTEGER|0|NULL|0|0
+backend_detected column 4|version|TEXT|0|NULL|0|0
+backend_detected column 5|detected_at|TEXT|1|NULL|0|0
+backend_detected column 6|base_url|TEXT|1|''|0|0
+backend_detected fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+backend_detected_context column 0|backend_id|INTEGER|1|NULL|1|0
+backend_detected_context column 1|model_id|TEXT|1|NULL|2|0
+backend_detected_context column 2|context_window|INTEGER|1|NULL|0|0
+backend_detected_context fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+backend_detected_context index sqlite_autoindex_backend_detected_context_1 1|pk|0
+backend_detected_context index sqlite_autoindex_backend_detected_context_1 0|0|backend_id|0|BINARY|1
+backend_detected_context index sqlite_autoindex_backend_detected_context_1 1|1|model_id|0|BINARY|1
+backend_detected_context index sqlite_autoindex_backend_detected_context_1 2|-1|NULL|0|BINARY|0
+backend_models column 0|backend_id|INTEGER|1|NULL|1|0
+backend_models column 1|model_id|TEXT|1|NULL|2|0
+backend_models column 2|sort_order|INTEGER|1|0|0|0
+backend_models fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+backend_models index sqlite_autoindex_backend_models_1 1|pk|0
+backend_models index sqlite_autoindex_backend_models_1 0|0|backend_id|0|BINARY|1
+backend_models index sqlite_autoindex_backend_models_1 1|1|model_id|0|BINARY|1
+backend_models index sqlite_autoindex_backend_models_1 2|-1|NULL|0|BINARY|0
+backend_probed_models column 0|backend_id|INTEGER|1|NULL|1|0
+backend_probed_models column 1|model_id|TEXT|1|NULL|2|0
+backend_probed_models column 2|seen_at|TEXT|1|NULL|0|0
+backend_probed_models fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+backend_probed_models index sqlite_autoindex_backend_probed_models_1 1|pk|0
+backend_probed_models index sqlite_autoindex_backend_probed_models_1 0|0|backend_id|0|BINARY|1
+backend_probed_models index sqlite_autoindex_backend_probed_models_1 1|1|model_id|0|BINARY|1
+backend_probed_models index sqlite_autoindex_backend_probed_models_1 2|-1|NULL|0|BINARY|0
+backends column 0|id|INTEGER|0|NULL|1|0
+backends column 1|name|TEXT|1|NULL|0|0
+backends column 2|base_url|TEXT|1|NULL|0|0
+backends column 3|api_key_env|TEXT|0|NULL|0|0
+backends column 4|api_key_ct|BLOB|0|NULL|0|0
+backends column 5|api_key_nonce|BLOB|0|NULL|0|0
+backends column 6|weight|INTEGER|1|1|0|0
+backends column 7|max_inflight|INTEGER|1|16|0|0
+backends column 8|health_path|TEXT|1|'/models'|0|0
+backends column 9|supports_edit|INTEGER|1|0|0|0
+backends column 10|enabled|INTEGER|1|1|0|0
+backends column 11|created_at|TEXT|1|NULL|0|0
+backends column 12|updated_at|TEXT|1|NULL|0|0
+backends index sqlite_autoindex_backends_1 1|u|0
+backends index sqlite_autoindex_backends_1 0|1|name|0|BINARY|1
+backends index sqlite_autoindex_backends_1 1|-1|NULL|0|BINARY|0
+browser_action_audit column 0|id|TEXT|1|NULL|1|0
+browser_action_audit column 1|user_id|TEXT|1|NULL|0|0
+browser_action_audit column 2|user_email|TEXT|1|NULL|0|0
+browser_action_audit column 3|turn_id|TEXT|1|NULL|0|0
+browser_action_audit column 4|session_id|TEXT|0|NULL|0|0
+browser_action_audit column 5|actions|TEXT|1|NULL|0|0
+browser_action_audit column 6|writes|INTEGER|1|NULL|0|0
+browser_action_audit column 7|outcome|TEXT|1|NULL|0|0
+browser_action_audit column 8|detail|TEXT|0|NULL|0|0
+browser_action_audit column 9|created_at|TEXT|1|NULL|0|0
+browser_action_audit index idx_browser_action_audit_created 0|c|0
+browser_action_audit index idx_browser_action_audit_created 0|9|created_at|1|BINARY|1
+browser_action_audit index idx_browser_action_audit_created 1|-1|NULL|0|BINARY|0
+browser_action_audit index idx_browser_action_audit_user 0|c|0
+browser_action_audit index idx_browser_action_audit_user 0|1|user_id|0|BINARY|1
+browser_action_audit index idx_browser_action_audit_user 1|9|created_at|1|BINARY|1
+browser_action_audit index idx_browser_action_audit_user 2|-1|NULL|0|BINARY|0
+browser_action_audit index sqlite_autoindex_browser_action_audit_1 1|pk|0
+browser_action_audit index sqlite_autoindex_browser_action_audit_1 0|0|id|0|BINARY|1
+browser_action_audit index sqlite_autoindex_browser_action_audit_1 1|-1|NULL|0|BINARY|0
+chat_compactions column 0|session_id|TEXT|1|NULL|1|0
+chat_compactions column 1|up_to_seq|INTEGER|1|NULL|0|0
+chat_compactions column 2|summary|TEXT|1|NULL|0|0
+chat_compactions column 3|tokens_before|INTEGER|0|NULL|0|0
+chat_compactions column 4|tokens_after|INTEGER|0|NULL|0|0
+chat_compactions column 5|created_at|TEXT|1|NULL|0|0
+chat_compactions column 6|updated_at|TEXT|1|NULL|0|0
+chat_compactions fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_compactions index sqlite_autoindex_chat_compactions_1 1|pk|0
+chat_compactions index sqlite_autoindex_chat_compactions_1 0|0|session_id|0|BINARY|1
+chat_compactions index sqlite_autoindex_chat_compactions_1 1|-1|NULL|0|BINARY|0
+chat_pending_turns column 0|turn_id|TEXT|1|NULL|1|0
+chat_pending_turns column 1|session_id|TEXT|1|NULL|0|0
+chat_pending_turns column 2|user_id|TEXT|1|NULL|0|0
+chat_pending_turns column 3|model|TEXT|1|NULL|0|0
+chat_pending_turns column 4|voice|INTEGER|1|0|0|0
+chat_pending_turns column 5|client_ip|TEXT|0|NULL|0|0
+chat_pending_turns column 6|secure|INTEGER|1|0|0|0
+chat_pending_turns column 7|created_at|TEXT|1|NULL|0|0
+chat_pending_turns fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+chat_pending_turns fk 1|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_pending_turns fk 2|0|chat_turns|turn_id|id|NO ACTION|CASCADE|NONE
+chat_pending_turns index chat_pending_turns_session 0|c|0
+chat_pending_turns index chat_pending_turns_session 0|1|session_id|0|BINARY|1
+chat_pending_turns index chat_pending_turns_session 1|7|created_at|0|BINARY|1
+chat_pending_turns index chat_pending_turns_session 2|-1|NULL|0|BINARY|0
+chat_pending_turns index chat_pending_turns_user_created 0|c|0
+chat_pending_turns index chat_pending_turns_user_created 0|2|user_id|0|BINARY|1
+chat_pending_turns index chat_pending_turns_user_created 1|7|created_at|0|BINARY|1
+chat_pending_turns index chat_pending_turns_user_created 2|-1|NULL|0|BINARY|0
+chat_pending_turns index sqlite_autoindex_chat_pending_turns_1 1|pk|0
+chat_pending_turns index sqlite_autoindex_chat_pending_turns_1 0|0|turn_id|0|BINARY|1
+chat_pending_turns index sqlite_autoindex_chat_pending_turns_1 1|-1|NULL|0|BINARY|0
+chat_session_settings column 0|session_id|TEXT|1|NULL|1|0
+chat_session_settings column 1|effort|TEXT|0|NULL|0|0
+chat_session_settings column 2|updated_at|TEXT|1|NULL|0|0
+chat_session_settings fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_session_settings index sqlite_autoindex_chat_session_settings_1 1|pk|0
+chat_session_settings index sqlite_autoindex_chat_session_settings_1 0|0|session_id|0|BINARY|1
+chat_session_settings index sqlite_autoindex_chat_session_settings_1 1|-1|NULL|0|BINARY|0
+chat_session_skills column 0|session_id|TEXT|1|NULL|1|0
+chat_session_skills column 1|skill_name|TEXT|1|NULL|2|0
+chat_session_skills column 2|loaded_at|TEXT|1|NULL|0|0
+chat_session_skills fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_session_skills index idx_chat_session_skills_session 0|c|0
+chat_session_skills index idx_chat_session_skills_session 0|0|session_id|0|BINARY|1
+chat_session_skills index idx_chat_session_skills_session 1|-1|NULL|0|BINARY|0
+chat_session_skills index sqlite_autoindex_chat_session_skills_1 1|pk|0
+chat_session_skills index sqlite_autoindex_chat_session_skills_1 0|0|session_id|0|BINARY|1
+chat_session_skills index sqlite_autoindex_chat_session_skills_1 1|1|skill_name|0|BINARY|1
+chat_session_skills index sqlite_autoindex_chat_session_skills_1 2|-1|NULL|0|BINARY|0
+chat_session_tools column 0|session_id|TEXT|1|NULL|1|0
+chat_session_tools column 1|tool_key|TEXT|1|NULL|2|0
+chat_session_tools column 2|enabled|INTEGER|1|NULL|0|0
+chat_session_tools column 3|source|TEXT|1|NULL|0|0
+chat_session_tools column 4|updated_at|TEXT|1|NULL|0|0
+chat_session_tools fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_session_tools index idx_chat_session_tools_session 0|c|0
+chat_session_tools index idx_chat_session_tools_session 0|0|session_id|0|BINARY|1
+chat_session_tools index idx_chat_session_tools_session 1|-1|NULL|0|BINARY|0
+chat_session_tools index sqlite_autoindex_chat_session_tools_1 1|pk|0
+chat_session_tools index sqlite_autoindex_chat_session_tools_1 0|0|session_id|0|BINARY|1
+chat_session_tools index sqlite_autoindex_chat_session_tools_1 1|1|tool_key|0|BINARY|1
+chat_session_tools index sqlite_autoindex_chat_session_tools_1 2|-1|NULL|0|BINARY|0
+chat_sessions column 0|id|TEXT|1|NULL|1|0
+chat_sessions column 1|user_id|TEXT|0|NULL|0|0
+chat_sessions column 2|principal_id|TEXT|0|NULL|0|0
+chat_sessions column 3|parent_turn_id|TEXT|0|NULL|0|0
+chat_sessions column 4|agent_version|INTEGER|0|NULL|0|0
+chat_sessions column 5|title|TEXT|0|NULL|0|0
+chat_sessions column 6|created_at|TEXT|1|NULL|0|0
+chat_sessions column 7|updated_at|TEXT|1|NULL|0|0
+chat_sessions column 8|shared|INTEGER|1|0|0|0
+chat_sessions column 9|pinned|INTEGER|1|0|0|0
+chat_sessions column 10|visitor_id|TEXT|0|NULL|0|0
+chat_sessions column 11|lang|TEXT|0|NULL|0|0
+chat_sessions fk 0|0|visitor_sessions|visitor_id|id|NO ACTION|SET NULL|NONE
+chat_sessions fk 1|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+chat_sessions fk 2|0|users|user_id|id|NO ACTION|CASCADE|NONE
+chat_sessions index chat_sessions_parent_turn 0|c|1
+chat_sessions index chat_sessions_parent_turn 0|3|parent_turn_id|0|BINARY|1
+chat_sessions index chat_sessions_parent_turn 1|-1|NULL|0|BINARY|0
+chat_sessions index chat_sessions_principal_updated 0|c|0
+chat_sessions index chat_sessions_principal_updated 0|2|principal_id|0|BINARY|1
+chat_sessions index chat_sessions_principal_updated 1|7|updated_at|1|BINARY|1
+chat_sessions index chat_sessions_principal_updated 2|-1|NULL|0|BINARY|0
+chat_sessions index chat_sessions_user_updated 0|c|0
+chat_sessions index chat_sessions_user_updated 0|1|user_id|0|BINARY|1
+chat_sessions index chat_sessions_user_updated 1|7|updated_at|1|BINARY|1
+chat_sessions index chat_sessions_user_updated 2|-1|NULL|0|BINARY|0
+chat_sessions index sqlite_autoindex_chat_sessions_1 1|pk|0
+chat_sessions index sqlite_autoindex_chat_sessions_1 0|0|id|0|BINARY|1
+chat_sessions index sqlite_autoindex_chat_sessions_1 1|-1|NULL|0|BINARY|0
+chat_tool_calls column 0|id|TEXT|1|NULL|2|0
+chat_tool_calls column 1|turn_id|TEXT|1|NULL|1|0
+chat_tool_calls column 2|seq|INTEGER|1|NULL|0|0
+chat_tool_calls column 3|name|TEXT|1|NULL|0|0
+chat_tool_calls column 4|arguments_json|TEXT|1|NULL|0|0
+chat_tool_calls column 5|output_json|TEXT|0|NULL|0|0
+chat_tool_calls column 6|status|TEXT|1|NULL|0|0
+chat_tool_calls column 7|created_at|TEXT|1|NULL|0|0
+chat_tool_calls column 8|completed_at|TEXT|0|NULL|0|0
+chat_tool_calls fk 0|0|chat_turns|turn_id|id|NO ACTION|CASCADE|NONE
+chat_tool_calls index chat_tool_calls_turn_seq 0|c|0
+chat_tool_calls index chat_tool_calls_turn_seq 0|1|turn_id|0|BINARY|1
+chat_tool_calls index chat_tool_calls_turn_seq 1|2|seq|0|BINARY|1
+chat_tool_calls index chat_tool_calls_turn_seq 2|-1|NULL|0|BINARY|0
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_1 1|pk|0
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_1 0|1|turn_id|0|BINARY|1
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_1 1|0|id|0|BINARY|1
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_1 2|-1|NULL|0|BINARY|0
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_2 1|u|0
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_2 0|1|turn_id|0|BINARY|1
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_2 1|2|seq|0|BINARY|1
+chat_tool_calls index sqlite_autoindex_chat_tool_calls_2 2|-1|NULL|0|BINARY|0
+chat_turn_steers column 0|id|TEXT|1|NULL|1|0
+chat_turn_steers column 1|turn_id|TEXT|1|NULL|0|0
+chat_turn_steers column 2|seq|INTEGER|1|NULL|0|0
+chat_turn_steers column 3|text|TEXT|1|NULL|0|0
+chat_turn_steers column 4|status|TEXT|1|'pending'|0|0
+chat_turn_steers column 5|created_at|TEXT|1|NULL|0|0
+chat_turn_steers column 6|settled_at|TEXT|0|NULL|0|0
+chat_turn_steers fk 0|0|chat_turns|turn_id|id|NO ACTION|CASCADE|NONE
+chat_turn_steers index chat_turn_steers_turn_seq 0|c|0
+chat_turn_steers index chat_turn_steers_turn_seq 0|1|turn_id|0|BINARY|1
+chat_turn_steers index chat_turn_steers_turn_seq 1|2|seq|0|BINARY|1
+chat_turn_steers index chat_turn_steers_turn_seq 2|-1|NULL|0|BINARY|0
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_1 1|pk|0
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_1 0|0|id|0|BINARY|1
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_1 1|-1|NULL|0|BINARY|0
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_2 1|u|0
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_2 0|1|turn_id|0|BINARY|1
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_2 1|2|seq|0|BINARY|1
+chat_turn_steers index sqlite_autoindex_chat_turn_steers_2 2|-1|NULL|0|BINARY|0
+chat_turn_suspensions column 0|turn_id|TEXT|1|NULL|1|0
+chat_turn_suspensions column 1|request_id|TEXT|1|NULL|0|0
+chat_turn_suspensions column 2|kind|TEXT|1|NULL|0|0
+chat_turn_suspensions column 3|message|TEXT|0|NULL|0|0
+chat_turn_suspensions column 4|tool_call|TEXT|1|NULL|0|0
+chat_turn_suspensions column 5|tail|TEXT|1|NULL|0|0
+chat_turn_suspensions column 6|budget_used|TEXT|1|NULL|0|0
+chat_turn_suspensions column 7|child_turn|TEXT|0|NULL|0|0
+chat_turn_suspensions column 8|on_timeout|TEXT|1|NULL|0|0
+chat_turn_suspensions column 9|expires_at|TEXT|1|NULL|0|0
+chat_turn_suspensions column 10|created_at|TEXT|1|NULL|0|0
+chat_turn_suspensions column 11|run_context|TEXT|0|NULL|0|0
+chat_turn_suspensions column 12|notified_at|TEXT|0|NULL|0|0
+chat_turn_suspensions fk 0|0|chat_turns|turn_id|id|NO ACTION|CASCADE|NONE
+chat_turn_suspensions index chat_turn_suspensions_expires_at 0|c|0
+chat_turn_suspensions index chat_turn_suspensions_expires_at 0|9|expires_at|0|BINARY|1
+chat_turn_suspensions index chat_turn_suspensions_expires_at 1|-1|NULL|0|BINARY|0
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_1 1|pk|0
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_1 0|0|turn_id|0|BINARY|1
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_1 1|-1|NULL|0|BINARY|0
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_2 1|u|0
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_2 0|1|request_id|0|BINARY|1
+chat_turn_suspensions index sqlite_autoindex_chat_turn_suspensions_2 1|-1|NULL|0|BINARY|0
+chat_turns column 0|id|TEXT|1|NULL|1|0
+chat_turns column 1|session_id|TEXT|1|NULL|0|0
+chat_turns column 2|seq|INTEGER|1|NULL|0|0
+chat_turns column 3|role|TEXT|1|NULL|0|0
+chat_turns column 4|user_content|TEXT|0|NULL|0|0
+chat_turns column 5|model|TEXT|0|NULL|0|0
+chat_turns column 6|content|TEXT|0|NULL|0|0
+chat_turns column 7|reasoning|TEXT|0|NULL|0|0
+chat_turns column 8|reasoning_elapsed_ms|INTEGER|0|NULL|0|0
+chat_turns column 9|status|TEXT|1|NULL|0|0
+chat_turns column 10|error_message|TEXT|0|NULL|0|0
+chat_turns column 11|created_at|TEXT|1|NULL|0|0
+chat_turns column 12|completed_at|TEXT|0|NULL|0|0
+chat_turns column 13|context_tokens|INTEGER|0|NULL|0|0
+chat_turns column 14|reasoning_started_at|TEXT|0|NULL|0|0
+chat_turns fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+chat_turns index chat_turns_session_seq 0|c|0
+chat_turns index chat_turns_session_seq 0|1|session_id|0|BINARY|1
+chat_turns index chat_turns_session_seq 1|2|seq|0|BINARY|1
+chat_turns index chat_turns_session_seq 2|-1|NULL|0|BINARY|0
+chat_turns index sqlite_autoindex_chat_turns_1 1|pk|0
+chat_turns index sqlite_autoindex_chat_turns_1 0|0|id|0|BINARY|1
+chat_turns index sqlite_autoindex_chat_turns_1 1|-1|NULL|0|BINARY|0
+chat_turns index sqlite_autoindex_chat_turns_2 1|u|0
+chat_turns index sqlite_autoindex_chat_turns_2 0|1|session_id|0|BINARY|1
+chat_turns index sqlite_autoindex_chat_turns_2 1|2|seq|0|BINARY|1
+chat_turns index sqlite_autoindex_chat_turns_2 2|-1|NULL|0|BINARY|0
+chat_turns_fts column 0|user_content||0|NULL|0|0
+chat_turns_fts column 1|content||0|NULL|0|0
+chat_turns_fts column 2|chat_turns_fts||0|NULL|0|1
+chat_turns_fts column 3|rank||0|NULL|0|1
+chat_turns_fts_config column 0|k||1|NULL|1|0
+chat_turns_fts_config column 1|v||0|NULL|0|0
+chat_turns_fts_config index sqlite_autoindex_chat_turns_fts_config_1 1|pk|0
+chat_turns_fts_config index sqlite_autoindex_chat_turns_fts_config_1 0|0|k|0|BINARY|1
+chat_turns_fts_config index sqlite_autoindex_chat_turns_fts_config_1 1|1|v|0|BINARY|0
+chat_turns_fts_data column 0|id|INTEGER|0|NULL|1|0
+chat_turns_fts_data column 1|block|BLOB|0|NULL|0|0
+chat_turns_fts_docsize column 0|id|INTEGER|0|NULL|1|0
+chat_turns_fts_docsize column 1|sz|BLOB|0|NULL|0|0
+chat_turns_fts_idx column 0|segid||1|NULL|1|0
+chat_turns_fts_idx column 1|term||1|NULL|2|0
+chat_turns_fts_idx column 2|pgno||0|NULL|0|0
+chat_turns_fts_idx index sqlite_autoindex_chat_turns_fts_idx_1 1|pk|0
+chat_turns_fts_idx index sqlite_autoindex_chat_turns_fts_idx_1 0|0|segid|0|BINARY|1
+chat_turns_fts_idx index sqlite_autoindex_chat_turns_fts_idx_1 1|1|term|0|BINARY|1
+chat_turns_fts_idx index sqlite_autoindex_chat_turns_fts_idx_1 2|2|pgno|0|BINARY|0
+comfyui_jobs column 0|id|INTEGER|0|NULL|1|0
+comfyui_jobs column 1|prompt_id|TEXT|1|NULL|0|0
+comfyui_jobs column 2|session_id|TEXT|1|NULL|0|0
+comfyui_jobs column 3|turn_id|TEXT|1|NULL|0|0
+comfyui_jobs column 4|user_id|TEXT|1|NULL|0|0
+comfyui_jobs column 5|workflow_id|TEXT|1|NULL|0|0
+comfyui_jobs column 6|output_kind|TEXT|1|NULL|0|0
+comfyui_jobs column 7|output_node_id|TEXT|1|NULL|0|0
+comfyui_jobs column 8|filename_prefix|TEXT|1|''|0|0
+comfyui_jobs column 9|status|TEXT|1|'pending'|0|0
+comfyui_jobs column 10|error_message|TEXT|0|NULL|0|0
+comfyui_jobs column 11|output_filename|TEXT|0|NULL|0|0
+comfyui_jobs column 12|output_mime|TEXT|0|NULL|0|0
+comfyui_jobs column 13|created_at|TEXT|1|NULL|0|0
+comfyui_jobs column 14|completed_at|TEXT|0|NULL|0|0
+comfyui_jobs index comfyui_jobs_session 0|c|0
+comfyui_jobs index comfyui_jobs_session 0|2|session_id|0|BINARY|1
+comfyui_jobs index comfyui_jobs_session 1|-1|NULL|0|BINARY|0
+comfyui_jobs index comfyui_jobs_status 0|c|0
+comfyui_jobs index comfyui_jobs_status 0|9|status|0|BINARY|1
+comfyui_jobs index comfyui_jobs_status 1|-1|NULL|0|BINARY|0
+comfyui_jobs index comfyui_jobs_user 0|c|0
+comfyui_jobs index comfyui_jobs_user 0|4|user_id|0|BINARY|1
+comfyui_jobs index comfyui_jobs_user 1|-1|NULL|0|BINARY|0
+comfyui_jobs index sqlite_autoindex_comfyui_jobs_1 1|u|0
+comfyui_jobs index sqlite_autoindex_comfyui_jobs_1 0|1|prompt_id|0|BINARY|1
+comfyui_jobs index sqlite_autoindex_comfyui_jobs_1 1|-1|NULL|0|BINARY|0
+document_versions column 0|document_id|TEXT|1|NULL|1|0
+document_versions column 1|version|INTEGER|1|NULL|2|0
+document_versions column 2|content|TEXT|1|NULL|0|0
+document_versions column 3|summary|TEXT|0|NULL|0|0
+document_versions column 4|turn_id|TEXT|0|NULL|0|0
+document_versions column 5|created_at|TEXT|1|NULL|0|0
+document_versions column 6|author|TEXT|1|'assistant'|0|0
+document_versions fk 0|0|documents|document_id|id|NO ACTION|CASCADE|NONE
+document_versions index sqlite_autoindex_document_versions_1 1|pk|0
+document_versions index sqlite_autoindex_document_versions_1 0|0|document_id|0|BINARY|1
+document_versions index sqlite_autoindex_document_versions_1 1|1|version|0|BINARY|1
+document_versions index sqlite_autoindex_document_versions_1 2|-1|NULL|0|BINARY|0
+documents column 0|id|TEXT|1|NULL|1|0
+documents column 1|session_id|TEXT|1|NULL|0|0
+documents column 2|user_id|TEXT|1|NULL|0|0
+documents column 3|title|TEXT|1|NULL|0|0
+documents column 4|format|TEXT|1|NULL|0|0
+documents column 5|current_ver|INTEGER|1|NULL|0|0
+documents column 6|created_at|TEXT|1|NULL|0|0
+documents column 7|updated_at|TEXT|1|NULL|0|0
+documents column 8|deleted_at|TEXT|0|NULL|0|0
+documents fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+documents index idx_documents_session 0|c|0
+documents index idx_documents_session 0|1|session_id|0|BINARY|1
+documents index idx_documents_session 1|-1|NULL|0|BINARY|0
+documents index sqlite_autoindex_documents_1 1|pk|0
+documents index sqlite_autoindex_documents_1 0|0|id|0|BINARY|1
+documents index sqlite_autoindex_documents_1 1|-1|NULL|0|BINARY|0
+fallback_models column 0|kind|TEXT|1|NULL|1|0
+fallback_models column 1|model_id|TEXT|1|NULL|0|0
+fallback_models index sqlite_autoindex_fallback_models_1 1|pk|0
+fallback_models index sqlite_autoindex_fallback_models_1 0|0|kind|0|BINARY|1
+fallback_models index sqlite_autoindex_fallback_models_1 1|-1|NULL|0|BINARY|0
+gateway_groups column 0|name|TEXT|1|NULL|1|0
+gateway_groups column 1|description|TEXT|1|''|0|0
+gateway_groups column 2|is_admin|INTEGER|1|0|0|0
+gateway_groups column 3|is_default|INTEGER|1|0|0|0
+gateway_groups column 4|created_at|TEXT|1|NULL|0|0
+gateway_groups column 5|updated_at|TEXT|1|NULL|0|0
+gateway_groups column 6|can_manage_agents|INTEGER|1|0|0|0
+gateway_groups index sqlite_autoindex_gateway_groups_1 1|pk|0
+gateway_groups index sqlite_autoindex_gateway_groups_1 0|0|name|0|BINARY|1
+gateway_groups index sqlite_autoindex_gateway_groups_1 1|-1|NULL|0|BINARY|0
+group_tool_grants column 0|gateway_group|TEXT|1|NULL|1|0
+group_tool_grants column 1|tool_id|TEXT|1|NULL|2|0
+group_tool_grants fk 0|0|gateway_groups|gateway_group|name|NO ACTION|CASCADE|NONE
+group_tool_grants index sqlite_autoindex_group_tool_grants_1 1|pk|0
+group_tool_grants index sqlite_autoindex_group_tool_grants_1 0|0|gateway_group|0|BINARY|1
+group_tool_grants index sqlite_autoindex_group_tool_grants_1 1|1|tool_id|0|BINARY|1
+group_tool_grants index sqlite_autoindex_group_tool_grants_1 2|-1|NULL|0|BINARY|0
+impersonation_audit column 0|id|TEXT|1|NULL|1|0
+impersonation_audit column 1|actor_id|TEXT|1|NULL|0|0
+impersonation_audit column 2|actor_email|TEXT|1|NULL|0|0
+impersonation_audit column 3|target_id|TEXT|1|NULL|0|0
+impersonation_audit column 4|target_email|TEXT|1|NULL|0|0
+impersonation_audit column 5|action|TEXT|1|NULL|0|0
+impersonation_audit column 6|created_at|TEXT|1|NULL|0|0
+impersonation_audit index impersonation_audit_created_at 0|c|0
+impersonation_audit index impersonation_audit_created_at 0|6|created_at|0|BINARY|1
+impersonation_audit index impersonation_audit_created_at 1|-1|NULL|0|BINARY|0
+impersonation_audit index sqlite_autoindex_impersonation_audit_1 1|pk|0
+impersonation_audit index sqlite_autoindex_impersonation_audit_1 0|0|id|0|BINARY|1
+impersonation_audit index sqlite_autoindex_impersonation_audit_1 1|-1|NULL|0|BINARY|0
+limits column 0|id|TEXT|1|NULL|1|0
+limits column 1|subject_type|TEXT|1|NULL|0|0
+limits column 2|subject_id|TEXT|1|NULL|0|0
+limits column 3|model|TEXT|0|NULL|0|0
+limits column 4|dimension|TEXT|1|NULL|0|0
+limits column 5|window_kind|TEXT|1|NULL|0|0
+limits column 6|value|REAL|1|NULL|0|0
+limits column 7|created_at|TEXT|1|NULL|0|0
+limits column 8|updated_at|TEXT|1|NULL|0|0
+limits column 9|managed_by|TEXT|1|'admin'|0|0
+limits index limits_subject 0|c|0
+limits index limits_subject 0|1|subject_type|0|BINARY|1
+limits index limits_subject 1|2|subject_id|0|BINARY|1
+limits index limits_subject 2|-1|NULL|0|BINARY|0
+limits index limits_unique 1|c|0
+limits index limits_unique 0|1|subject_type|0|BINARY|1
+limits index limits_unique 1|2|subject_id|0|BINARY|1
+limits index limits_unique 2|-2|NULL|0|BINARY|1
+limits index limits_unique 3|4|dimension|0|BINARY|1
+limits index limits_unique 4|5|window_kind|0|BINARY|1
+limits index limits_unique 5|-1|NULL|0|BINARY|0
+limits index sqlite_autoindex_limits_1 1|pk|0
+limits index sqlite_autoindex_limits_1 0|0|id|0|BINARY|1
+limits index sqlite_autoindex_limits_1 1|-1|NULL|0|BINARY|0
+mcp_catalog_connectors column 0|key|TEXT|1|NULL|1|0
+mcp_catalog_connectors column 1|name|TEXT|1|NULL|0|0
+mcp_catalog_connectors column 2|description|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 3|icon|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 4|category|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 5|url|TEXT|1|NULL|0|0
+mcp_catalog_connectors column 6|auth|TEXT|1|'oauth2'|0|0
+mcp_catalog_connectors column 7|use_dcr|INTEGER|1|1|0|0
+mcp_catalog_connectors column 8|client_id|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 9|client_secret_ct|BLOB|0|NULL|0|0
+mcp_catalog_connectors column 10|client_secret_nonce|BLOB|0|NULL|0|0
+mcp_catalog_connectors column 11|authorize_url|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 12|token_url|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 13|registration_url|TEXT|0|NULL|0|0
+mcp_catalog_connectors column 14|scopes_json|TEXT|1|'[]'|0|0
+mcp_catalog_connectors column 15|enabled|INTEGER|1|0|0|0
+mcp_catalog_connectors column 16|seeded|INTEGER|1|0|0|0
+mcp_catalog_connectors column 17|created_at|TEXT|1|NULL|0|0
+mcp_catalog_connectors column 18|updated_at|TEXT|1|NULL|0|0
+mcp_catalog_connectors column 19|scope|TEXT|1|'per_user'|0|0
+mcp_catalog_connectors column 20|audit|INTEGER|1|0|0|0
+mcp_catalog_connectors column 21|allowed_groups|TEXT|1|'[]'|0|0
+mcp_catalog_connectors index sqlite_autoindex_mcp_catalog_connectors_1 1|pk|0
+mcp_catalog_connectors index sqlite_autoindex_mcp_catalog_connectors_1 0|0|key|0|BINARY|1
+mcp_catalog_connectors index sqlite_autoindex_mcp_catalog_connectors_1 1|-1|NULL|0|BINARY|0
+mcp_connector_tools column 0|connector_key|TEXT|1|NULL|1|0
+mcp_connector_tools column 1|tool_id|TEXT|1|NULL|2|0
+mcp_connector_tools column 2|description|TEXT|1|''|0|0
+mcp_connector_tools column 3|seen_at|TEXT|1|NULL|0|0
+mcp_connector_tools fk 0|0|mcp_catalog_connectors|connector_key|key|NO ACTION|CASCADE|NONE
+mcp_connector_tools index sqlite_autoindex_mcp_connector_tools_1 1|pk|0
+mcp_connector_tools index sqlite_autoindex_mcp_connector_tools_1 0|0|connector_key|0|BINARY|1
+mcp_connector_tools index sqlite_autoindex_mcp_connector_tools_1 1|1|tool_id|0|BINARY|1
+mcp_connector_tools index sqlite_autoindex_mcp_connector_tools_1 2|-1|NULL|0|BINARY|0
+mcp_tool_audit column 0|id|TEXT|1|NULL|1|0
+mcp_tool_audit column 1|user_id|TEXT|1|NULL|0|0
+mcp_tool_audit column 2|user_email|TEXT|1|NULL|0|0
+mcp_tool_audit column 3|connector_key|TEXT|1|NULL|0|0
+mcp_tool_audit column 4|tool_id|TEXT|1|NULL|0|0
+mcp_tool_audit column 5|arguments|TEXT|0|NULL|0|0
+mcp_tool_audit column 6|outcome|TEXT|1|NULL|0|0
+mcp_tool_audit column 7|error|TEXT|0|NULL|0|0
+mcp_tool_audit column 8|session_id|TEXT|0|NULL|0|0
+mcp_tool_audit column 9|created_at|TEXT|1|NULL|0|0
+mcp_tool_audit column 10|principal_kind|TEXT|1|'user'|0|0
+mcp_tool_audit column 11|chain|TEXT|0|NULL|0|0
+mcp_tool_audit index idx_mcp_tool_audit_connector 0|c|0
+mcp_tool_audit index idx_mcp_tool_audit_connector 0|3|connector_key|0|BINARY|1
+mcp_tool_audit index idx_mcp_tool_audit_connector 1|9|created_at|1|BINARY|1
+mcp_tool_audit index idx_mcp_tool_audit_connector 2|-1|NULL|0|BINARY|0
+mcp_tool_audit index idx_mcp_tool_audit_created 0|c|0
+mcp_tool_audit index idx_mcp_tool_audit_created 0|9|created_at|1|BINARY|1
+mcp_tool_audit index idx_mcp_tool_audit_created 1|-1|NULL|0|BINARY|0
+mcp_tool_audit index sqlite_autoindex_mcp_tool_audit_1 1|pk|0
+mcp_tool_audit index sqlite_autoindex_mcp_tool_audit_1 0|0|id|0|BINARY|1
+mcp_tool_audit index sqlite_autoindex_mcp_tool_audit_1 1|-1|NULL|0|BINARY|0
+model_defaults column 0|model_name|TEXT|1|NULL|1|0
+model_defaults column 1|defaults_toml|TEXT|1|NULL|0|0
+model_defaults column 2|updated_at|TEXT|1|NULL|0|0
+model_defaults column 3|reasoning_style|TEXT|0|NULL|0|0
+model_defaults column 4|thinking_budget_standard|INTEGER|0|NULL|0|0
+model_defaults column 5|thinking_budget_deep|INTEGER|0|NULL|0|0
+model_defaults column 6|thinking_budget_max|INTEGER|0|NULL|0|0
+model_defaults column 7|reasoning_effort_standard|TEXT|0|NULL|0|0
+model_defaults column 8|reasoning_effort_deep|TEXT|0|NULL|0|0
+model_defaults column 9|reasoning_effort_max|TEXT|0|NULL|0|0
+model_defaults column 10|context_window|INTEGER|0|NULL|0|0
+model_defaults column 11|input_price|REAL|0|NULL|0|0
+model_defaults column 12|output_price|REAL|0|NULL|0|0
+model_defaults column 13|cap_vision|INTEGER|0|NULL|0|0
+model_defaults column 14|cap_audio_input|INTEGER|0|NULL|0|0
+model_defaults column 15|cap_pdf_input|INTEGER|0|NULL|0|0
+model_defaults column 16|cap_tools|INTEGER|0|NULL|0|0
+model_defaults column 17|cap_parallel_tools|INTEGER|0|NULL|0|0
+model_defaults column 18|cap_structured_output|INTEGER|0|NULL|0|0
+model_defaults column 19|fallback_vision|TEXT|0|NULL|0|0
+model_defaults column 20|fallback_tools|TEXT|0|NULL|0|0
+model_defaults column 21|cap_updated_at|TEXT|0|NULL|0|0
+model_defaults column 22|pricing_unit|TEXT|1|'tokens'|0|0
+model_defaults index sqlite_autoindex_model_defaults_1 1|pk|0
+model_defaults index sqlite_autoindex_model_defaults_1 0|0|model_name|0|BINARY|1
+model_defaults index sqlite_autoindex_model_defaults_1 1|-1|NULL|0|BINARY|0
+ocr_derivatives column 0|doc_sha256|TEXT|1|NULL|1|0
+ocr_derivatives column 1|model|TEXT|1|NULL|2|0
+ocr_derivatives column 2|prompt_version|TEXT|1|NULL|3|0
+ocr_derivatives column 3|settings_key|TEXT|1|NULL|4|0
+ocr_derivatives column 4|filename|TEXT|1|NULL|0|0
+ocr_derivatives column 5|mime|TEXT|1|NULL|0|0
+ocr_derivatives column 6|doc_bytes|INTEGER|1|NULL|0|0
+ocr_derivatives column 7|status|TEXT|1|NULL|0|0
+ocr_derivatives column 8|markdown|TEXT|0|NULL|0|0
+ocr_derivatives column 9|pages_total|INTEGER|0|NULL|0|0
+ocr_derivatives column 10|pages_processed|INTEGER|0|NULL|0|0
+ocr_derivatives column 11|truncated|INTEGER|1|0|0|0
+ocr_derivatives column 12|error|TEXT|0|NULL|0|0
+ocr_derivatives column 13|created_at|TEXT|1|NULL|0|0
+ocr_derivatives column 14|updated_at|TEXT|1|NULL|0|0
+ocr_derivatives index idx_ocr_derivatives_updated 0|c|0
+ocr_derivatives index idx_ocr_derivatives_updated 0|14|updated_at|0|BINARY|1
+ocr_derivatives index idx_ocr_derivatives_updated 1|-1|NULL|0|BINARY|0
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 1|pk|0
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 0|0|doc_sha256|0|BINARY|1
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 1|1|model|0|BINARY|1
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 2|2|prompt_version|0|BINARY|1
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 3|3|settings_key|0|BINARY|1
+ocr_derivatives index sqlite_autoindex_ocr_derivatives_1 4|-1|NULL|0|BINARY|0
+oidc_group_mappings column 0|oidc_claim|TEXT|1|'groups'|0|0
+oidc_group_mappings column 1|oidc_value|TEXT|1|NULL|1|0
+oidc_group_mappings column 2|gateway_group|TEXT|1|NULL|2|0
+oidc_group_mappings fk 0|0|gateway_groups|gateway_group|name|NO ACTION|CASCADE|NONE
+oidc_group_mappings index sqlite_autoindex_oidc_group_mappings_1 1|pk|0
+oidc_group_mappings index sqlite_autoindex_oidc_group_mappings_1 0|1|oidc_value|0|BINARY|1
+oidc_group_mappings index sqlite_autoindex_oidc_group_mappings_1 1|2|gateway_group|0|BINARY|1
+oidc_group_mappings index sqlite_autoindex_oidc_group_mappings_1 2|-1|NULL|0|BINARY|0
+pending_logins column 0|state|TEXT|1|NULL|1|0
+pending_logins column 1|pkce_verifier|TEXT|1|NULL|0|0
+pending_logins column 2|nonce|TEXT|1|NULL|0|0
+pending_logins column 3|return_to|TEXT|0|NULL|0|0
+pending_logins column 4|created_at|TEXT|1|NULL|0|0
+pending_logins column 5|expires_at|TEXT|1|NULL|0|0
+pending_logins column 6|purpose|TEXT|1|'login'|0|0
+pending_logins index pending_logins_expires_at 0|c|0
+pending_logins index pending_logins_expires_at 0|5|expires_at|0|BINARY|1
+pending_logins index pending_logins_expires_at 1|-1|NULL|0|BINARY|0
+pending_logins index sqlite_autoindex_pending_logins_1 1|pk|0
+pending_logins index sqlite_autoindex_pending_logins_1 0|0|state|0|BINARY|1
+pending_logins index sqlite_autoindex_pending_logins_1 1|-1|NULL|0|BINARY|0
+pending_mcp_oauth column 0|state|TEXT|1|NULL|1|0
+pending_mcp_oauth column 1|user_id|TEXT|1|NULL|0|0
+pending_mcp_oauth column 2|connector_key|TEXT|1|NULL|0|0
+pending_mcp_oauth column 3|pkce_verifier|TEXT|1|NULL|0|0
+pending_mcp_oauth column 4|redirect_uri|TEXT|1|NULL|0|0
+pending_mcp_oauth column 5|token_url|TEXT|1|NULL|0|0
+pending_mcp_oauth column 6|resource|TEXT|0|NULL|0|0
+pending_mcp_oauth column 7|dcr_client_id|TEXT|0|NULL|0|0
+pending_mcp_oauth column 8|dcr_client_secret_ct|BLOB|0|NULL|0|0
+pending_mcp_oauth column 9|dcr_client_secret_nonce|BLOB|0|NULL|0|0
+pending_mcp_oauth column 10|return_to|TEXT|0|NULL|0|0
+pending_mcp_oauth column 11|created_at|TEXT|1|NULL|0|0
+pending_mcp_oauth column 12|expires_at|TEXT|1|NULL|0|0
+pending_mcp_oauth index idx_pending_mcp_oauth_expires 0|c|0
+pending_mcp_oauth index idx_pending_mcp_oauth_expires 0|12|expires_at|0|BINARY|1
+pending_mcp_oauth index idx_pending_mcp_oauth_expires 1|-1|NULL|0|BINARY|0
+pending_mcp_oauth index sqlite_autoindex_pending_mcp_oauth_1 1|pk|0
+pending_mcp_oauth index sqlite_autoindex_pending_mcp_oauth_1 0|0|state|0|BINARY|1
+pending_mcp_oauth index sqlite_autoindex_pending_mcp_oauth_1 1|-1|NULL|0|BINARY|0
+pending_rag_oauth column 0|state|TEXT|1|NULL|1|0
+pending_rag_oauth column 1|collection_id|INTEGER|1|NULL|0|0
+pending_rag_oauth column 2|source_kind|TEXT|1|NULL|0|0
+pending_rag_oauth column 3|pkce_verifier|TEXT|1|NULL|0|0
+pending_rag_oauth column 4|redirect_uri|TEXT|1|NULL|0|0
+pending_rag_oauth column 5|token_url|TEXT|1|NULL|0|0
+pending_rag_oauth column 6|admin_user_id|TEXT|1|NULL|0|0
+pending_rag_oauth column 7|created_at|TEXT|1|NULL|0|0
+pending_rag_oauth column 8|expires_at|TEXT|1|NULL|0|0
+pending_rag_oauth fk 0|0|rag_collections|collection_id|id|NO ACTION|CASCADE|NONE
+pending_rag_oauth index idx_pending_rag_oauth_expires 0|c|0
+pending_rag_oauth index idx_pending_rag_oauth_expires 0|8|expires_at|0|BINARY|1
+pending_rag_oauth index idx_pending_rag_oauth_expires 1|-1|NULL|0|BINARY|0
+pending_rag_oauth index sqlite_autoindex_pending_rag_oauth_1 1|pk|0
+pending_rag_oauth index sqlite_autoindex_pending_rag_oauth_1 0|0|state|0|BINARY|1
+pending_rag_oauth index sqlite_autoindex_pending_rag_oauth_1 1|-1|NULL|0|BINARY|0
+pool_backends column 0|pool_id|INTEGER|1|NULL|1|0
+pool_backends column 1|backend_id|INTEGER|1|NULL|2|0
+pool_backends column 2|sort_order|INTEGER|1|0|0|0
+pool_backends fk 0|0|backends|backend_id|id|NO ACTION|CASCADE|NONE
+pool_backends fk 1|0|pools|pool_id|id|NO ACTION|CASCADE|NONE
+pool_backends index sqlite_autoindex_pool_backends_1 1|pk|0
+pool_backends index sqlite_autoindex_pool_backends_1 0|0|pool_id|0|BINARY|1
+pool_backends index sqlite_autoindex_pool_backends_1 1|1|backend_id|0|BINARY|1
+pool_backends index sqlite_autoindex_pool_backends_1 2|-1|NULL|0|BINARY|0
+pool_models column 0|pool_id|INTEGER|1|NULL|1|0
+pool_models column 1|model_id|TEXT|1|NULL|2|0
+pool_models column 2|sort_order|INTEGER|1|0|0|0
+pool_models fk 0|0|pools|pool_id|id|NO ACTION|CASCADE|NONE
+pool_models index sqlite_autoindex_pool_models_1 1|pk|0
+pool_models index sqlite_autoindex_pool_models_1 0|0|pool_id|0|BINARY|1
+pool_models index sqlite_autoindex_pool_models_1 1|1|model_id|0|BINARY|1
+pool_models index sqlite_autoindex_pool_models_1 2|-1|NULL|0|BINARY|0
+pool_offer_voices column 0|pool_id|INTEGER|1|NULL|1|0
+pool_offer_voices column 1|voice_id|TEXT|1|NULL|2|0
+pool_offer_voices column 2|sort_order|INTEGER|1|0|0|0
+pool_offer_voices fk 0|0|pools|pool_id|id|NO ACTION|CASCADE|NONE
+pool_offer_voices index sqlite_autoindex_pool_offer_voices_1 1|pk|0
+pool_offer_voices index sqlite_autoindex_pool_offer_voices_1 0|0|pool_id|0|BINARY|1
+pool_offer_voices index sqlite_autoindex_pool_offer_voices_1 1|1|voice_id|0|BINARY|1
+pool_offer_voices index sqlite_autoindex_pool_offer_voices_1 2|-1|NULL|0|BINARY|0
+pool_voices column 0|pool_id|INTEGER|1|NULL|1|0
+pool_voices column 1|lang_code|TEXT|1|NULL|2|0
+pool_voices column 2|voice_id|TEXT|1|NULL|0|0
+pool_voices fk 0|0|pools|pool_id|id|NO ACTION|CASCADE|NONE
+pool_voices index sqlite_autoindex_pool_voices_1 1|pk|0
+pool_voices index sqlite_autoindex_pool_voices_1 0|0|pool_id|0|BINARY|1
+pool_voices index sqlite_autoindex_pool_voices_1 1|1|lang_code|0|BINARY|1
+pool_voices index sqlite_autoindex_pool_voices_1 2|-1|NULL|0|BINARY|0
+pools column 0|id|INTEGER|0|NULL|1|0
+pools column 1|name|TEXT|1|NULL|0|0
+pools column 2|kind|TEXT|1|NULL|0|0
+pools column 3|strategy|TEXT|1|'least_inflight'|0|0
+pools column 4|fallback_offline|TEXT|0|NULL|0|0
+pools column 5|compliance_gdpr|INTEGER|1|1|0|0
+pools column 6|compliance_nda|INTEGER|1|1|0|0
+pools column 7|enforce_limits|INTEGER|1|1|0|0
+pools column 8|allowed_groups|TEXT|1|'[]'|0|0
+pools column 9|sort_order|INTEGER|1|0|0|0
+pools column 10|created_at|TEXT|1|NULL|0|0
+pools column 11|updated_at|TEXT|1|NULL|0|0
+pools index sqlite_autoindex_pools_1 1|u|0
+pools index sqlite_autoindex_pools_1 0|1|name|0|BINARY|1
+pools index sqlite_autoindex_pools_1 1|-1|NULL|0|BINARY|0
+principal_grants column 0|principal_id|TEXT|1|NULL|1|0
+principal_grants column 1|kind|TEXT|1|NULL|2|0
+principal_grants column 2|ref|TEXT|1|NULL|3|0
+principal_grants column 3|granted_by|TEXT|1|NULL|0|0
+principal_grants column 4|granted_at|TEXT|1|NULL|0|0
+principal_grants fk 0|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+principal_grants index sqlite_autoindex_principal_grants_1 1|pk|0
+principal_grants index sqlite_autoindex_principal_grants_1 0|0|principal_id|0|BINARY|1
+principal_grants index sqlite_autoindex_principal_grants_1 1|1|kind|0|BINARY|1
+principal_grants index sqlite_autoindex_principal_grants_1 2|2|ref|0|BINARY|1
+principal_grants index sqlite_autoindex_principal_grants_1 3|-1|NULL|0|BINARY|0
+push_subscriptions column 0|id|TEXT|1|NULL|1|0
+push_subscriptions column 1|user_id|TEXT|1|NULL|0|0
+push_subscriptions column 2|endpoint|TEXT|1|NULL|0|0
+push_subscriptions column 3|p256dh|TEXT|1|NULL|0|0
+push_subscriptions column 4|auth|TEXT|1|NULL|0|0
+push_subscriptions column 5|lang|TEXT|0|NULL|0|0
+push_subscriptions column 6|user_agent|TEXT|0|NULL|0|0
+push_subscriptions column 7|created_at|TEXT|1|NULL|0|0
+push_subscriptions column 8|updated_at|TEXT|1|NULL|0|0
+push_subscriptions fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+push_subscriptions index push_subscriptions_endpoint 1|c|0
+push_subscriptions index push_subscriptions_endpoint 0|2|endpoint|0|BINARY|1
+push_subscriptions index push_subscriptions_endpoint 1|-1|NULL|0|BINARY|0
+push_subscriptions index push_subscriptions_user 0|c|0
+push_subscriptions index push_subscriptions_user 0|1|user_id|0|BINARY|1
+push_subscriptions index push_subscriptions_user 1|-1|NULL|0|BINARY|0
+push_subscriptions index sqlite_autoindex_push_subscriptions_1 1|pk|0
+push_subscriptions index sqlite_autoindex_push_subscriptions_1 0|0|id|0|BINARY|1
+push_subscriptions index sqlite_autoindex_push_subscriptions_1 1|-1|NULL|0|BINARY|0
+rag_collection_refs column 0|id|INTEGER|0|NULL|1|0
+rag_collection_refs column 1|collection_id|INTEGER|1|NULL|0|0
+rag_collection_refs column 2|git_ref|TEXT|1|NULL|0|0
+rag_collection_refs column 3|git_url|TEXT|0|NULL|0|0
+rag_collection_refs column 4|is_primary|INTEGER|1|0|0|0
+rag_collection_refs column 5|data_uuid|TEXT|1|NULL|0|0
+rag_collection_refs column 6|status|TEXT|1|'pending'|0|0
+rag_collection_refs column 7|last_indexed_at|TEXT|0|NULL|0|0
+rag_collection_refs column 8|last_indexed_commit|TEXT|0|NULL|0|0
+rag_collection_refs column 9|last_error|TEXT|0|NULL|0|0
+rag_collection_refs column 10|created_at|TEXT|1|NULL|0|0
+rag_collection_refs column 11|updated_at|TEXT|1|NULL|0|0
+rag_collection_refs column 12|dir_versions_json|TEXT|1|'{}'|0|0
+rag_collection_refs column 13|force_full_rebuild|INTEGER|1|0|0|0
+rag_collection_refs column 14|extractor_fingerprint|TEXT|0|NULL|0|0
+rag_collection_refs fk 0|0|rag_collections|collection_id|id|NO ACTION|CASCADE|NONE
+rag_collection_refs index idx_rag_refs_collection 0|c|0
+rag_collection_refs index idx_rag_refs_collection 0|1|collection_id|0|BINARY|1
+rag_collection_refs index idx_rag_refs_collection 1|-1|NULL|0|BINARY|0
+rag_collection_refs index idx_rag_refs_one_primary 1|c|1
+rag_collection_refs index idx_rag_refs_one_primary 0|1|collection_id|0|BINARY|1
+rag_collection_refs index idx_rag_refs_one_primary 1|-1|NULL|0|BINARY|0
+rag_collection_refs index idx_rag_refs_unique_source 1|c|0
+rag_collection_refs index idx_rag_refs_unique_source 0|1|collection_id|0|BINARY|1
+rag_collection_refs index idx_rag_refs_unique_source 1|-2|NULL|0|BINARY|1
+rag_collection_refs index idx_rag_refs_unique_source 2|2|git_ref|0|BINARY|1
+rag_collection_refs index idx_rag_refs_unique_source 3|-1|NULL|0|BINARY|0
+rag_collections column 0|id|INTEGER|0|NULL|1|0
+rag_collections column 1|name|TEXT|1|NULL|0|0
+rag_collections column 2|description|TEXT|0|NULL|0|0
+rag_collections column 3|git_url|TEXT|1|NULL|0|0
+rag_collections column 4|git_ref|TEXT|1|'main'|0|0
+rag_collections column 5|pat|TEXT|0|NULL|0|0
+rag_collections column 6|embedding_model|TEXT|1|NULL|0|0
+rag_collections column 7|include_globs_json|TEXT|1|'[]'|0|0
+rag_collections column 8|exclude_globs_json|TEXT|1|'[]'|0|0
+rag_collections column 9|chunk_size|INTEGER|1|800|0|0
+rag_collections column 10|chunk_overlap|INTEGER|1|100|0|0
+rag_collections column 11|created_at|TEXT|1|NULL|0|0
+rag_collections column 12|updated_at|TEXT|1|NULL|0|0
+rag_collections column 13|data_uuid|TEXT|0|NULL|0|0
+rag_collections column 14|search_mode|TEXT|1|'versioned'|0|0
+rag_collections column 15|allowed_groups|TEXT|1|'[]'|0|0
+rag_collections column 16|source_kind|TEXT|1|'git'|0|0
+rag_collections column 17|source_config_json|TEXT|1|'{}'|0|0
+rag_collections column 18|source_secrets_ct|BLOB|0|NULL|0|0
+rag_collections column 19|source_secrets_nonce|BLOB|0|NULL|0|0
+rag_collections column 20|profile_id|INTEGER|0|NULL|0|0
+rag_collections column 21|extraction_model|TEXT|0|NULL|0|0
+rag_collections column 22|sync_token_hash|TEXT|0|NULL|0|0
+rag_collections column 23|connected_account|TEXT|0|NULL|0|0
+rag_collections column 24|connected_by|TEXT|0|NULL|0|0
+rag_collections column 25|connected_at|TEXT|0|NULL|0|0
+rag_collections column 26|refresh_interval_mins|INTEGER|1|0|0|0
+rag_collections index idx_rag_collections_sync_token 1|c|1
+rag_collections index idx_rag_collections_sync_token 0|22|sync_token_hash|0|BINARY|1
+rag_collections index idx_rag_collections_sync_token 1|-1|NULL|0|BINARY|0
+rag_collections index sqlite_autoindex_rag_collections_1 1|u|0
+rag_collections index sqlite_autoindex_rag_collections_1 0|1|name|0|BINARY|1
+rag_collections index sqlite_autoindex_rag_collections_1 1|-1|NULL|0|BINARY|0
+rag_document_profiles column 0|id|INTEGER|0|NULL|1|0
+rag_document_profiles column 1|name|TEXT|1|NULL|0|0
+rag_document_profiles column 2|description|TEXT|0|NULL|0|0
+rag_document_profiles column 3|prompt|TEXT|1|NULL|0|0
+rag_document_profiles column 4|fields_json|TEXT|1|NULL|0|0
+rag_document_profiles column 5|version|INTEGER|1|1|0|0
+rag_document_profiles column 6|builtin|INTEGER|1|0|0|0
+rag_document_profiles column 7|created_at|TEXT|1|NULL|0|0
+rag_document_profiles column 8|updated_at|TEXT|1|NULL|0|0
+rag_document_profiles index sqlite_autoindex_rag_document_profiles_1 1|u|0
+rag_document_profiles index sqlite_autoindex_rag_document_profiles_1 0|1|name|0|BINARY|1
+rag_document_profiles index sqlite_autoindex_rag_document_profiles_1 1|-1|NULL|0|BINARY|0
+rag_extractions column 0|doc_sha256|TEXT|1|NULL|1|0
+rag_extractions column 1|profile_id|INTEGER|1|NULL|2|0
+rag_extractions column 2|profile_version|INTEGER|1|NULL|3|0
+rag_extractions column 3|model|TEXT|1|NULL|4|0
+rag_extractions column 4|fields_json|TEXT|0|NULL|0|0
+rag_extractions column 5|summary|TEXT|0|NULL|0|0
+rag_extractions column 6|error|TEXT|0|NULL|0|0
+rag_extractions column 7|created_at|TEXT|1|NULL|0|0
+rag_extractions index sqlite_autoindex_rag_extractions_1 1|pk|0
+rag_extractions index sqlite_autoindex_rag_extractions_1 0|0|doc_sha256|0|BINARY|1
+rag_extractions index sqlite_autoindex_rag_extractions_1 1|1|profile_id|0|BINARY|1
+rag_extractions index sqlite_autoindex_rag_extractions_1 2|2|profile_version|0|BINARY|1
+rag_extractions index sqlite_autoindex_rag_extractions_1 3|3|model|0|BINARY|1
+rag_extractions index sqlite_autoindex_rag_extractions_1 4|-1|NULL|0|BINARY|0
+rag_index_log column 0|id|INTEGER|0|NULL|1|0
+rag_index_log column 1|ref_id|INTEGER|1|NULL|0|0
+rag_index_log column 2|collection_id|INTEGER|1|NULL|0|0
+rag_index_log column 3|created_at|TEXT|1|NULL|0|0
+rag_index_log column 4|level|TEXT|1|NULL|0|0
+rag_index_log column 5|phase|TEXT|1|NULL|0|0
+rag_index_log column 6|message|TEXT|1|NULL|0|0
+rag_index_log column 7|commit_sha|TEXT|0|NULL|0|0
+rag_index_log column 8|files|INTEGER|0|NULL|0|0
+rag_index_log column 9|chunks|INTEGER|0|NULL|0|0
+rag_index_log column 10|duration_ms|INTEGER|0|NULL|0|0
+rag_index_log fk 0|0|rag_collections|collection_id|id|NO ACTION|CASCADE|NONE
+rag_index_log fk 1|0|rag_collection_refs|ref_id|id|NO ACTION|CASCADE|NONE
+rag_index_log index idx_rag_log_ref 0|c|0
+rag_index_log index idx_rag_log_ref 0|1|ref_id|0|BINARY|1
+rag_index_log index idx_rag_log_ref 1|0|id|1|BINARY|1
+rag_index_log index idx_rag_log_ref 2|-1|NULL|0|BINARY|0
+rate_events column 0|principal_id|TEXT|1|NULL|0|0
+rate_events column 1|counter|TEXT|1|NULL|0|0
+rate_events column 2|created_at|TEXT|1|NULL|0|0
+rate_events column 3|expires_at|TEXT|1|NULL|0|0
+rate_events fk 0|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+rate_events index rate_events_by_counter 0|c|0
+rate_events index rate_events_by_counter 0|0|principal_id|0|BINARY|1
+rate_events index rate_events_by_counter 1|1|counter|0|BINARY|1
+rate_events index rate_events_by_counter 2|2|created_at|0|BINARY|1
+rate_events index rate_events_by_counter 3|-1|NULL|0|BINARY|0
+rate_events index rate_events_by_expiry 0|c|0
+rate_events index rate_events_by_expiry 0|0|principal_id|0|BINARY|1
+rate_events index rate_events_by_expiry 1|3|expires_at|0|BINARY|1
+rate_events index rate_events_by_expiry 2|-1|NULL|0|BINARY|0
+scheduled_actions column 0|id|TEXT|1|NULL|1|0
+scheduled_actions column 1|user_id|TEXT|1|NULL|0|0
+scheduled_actions column 2|name|TEXT|1|NULL|0|0
+scheduled_actions column 3|prompt|TEXT|1|NULL|0|0
+scheduled_actions column 4|model|TEXT|1|NULL|0|0
+scheduled_actions column 5|cron|TEXT|1|NULL|0|0
+scheduled_actions column 6|timezone|TEXT|1|NULL|0|0
+scheduled_actions column 7|tools_enabled|INTEGER|1|1|0|0
+scheduled_actions column 8|enabled|INTEGER|1|1|0|0
+scheduled_actions column 9|next_run_at|TEXT|0|NULL|0|0
+scheduled_actions column 10|last_run_at|TEXT|0|NULL|0|0
+scheduled_actions column 11|last_status|TEXT|0|NULL|0|0
+scheduled_actions column 12|last_session_id|TEXT|0|NULL|0|0
+scheduled_actions column 13|last_error|TEXT|0|NULL|0|0
+scheduled_actions column 14|created_at|TEXT|1|NULL|0|0
+scheduled_actions column 15|updated_at|TEXT|1|NULL|0|0
+scheduled_actions column 16|reuse_conversation|INTEGER|1|0|0|0
+scheduled_actions column 17|reuse_rounds|INTEGER|1|5|0|0
+scheduled_actions fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+scheduled_actions index scheduled_actions_due 0|c|0
+scheduled_actions index scheduled_actions_due 0|8|enabled|0|BINARY|1
+scheduled_actions index scheduled_actions_due 1|9|next_run_at|0|BINARY|1
+scheduled_actions index scheduled_actions_due 2|-1|NULL|0|BINARY|0
+scheduled_actions index scheduled_actions_user 0|c|0
+scheduled_actions index scheduled_actions_user 0|1|user_id|0|BINARY|1
+scheduled_actions index scheduled_actions_user 1|14|created_at|1|BINARY|1
+scheduled_actions index scheduled_actions_user 2|-1|NULL|0|BINARY|0
+scheduled_actions index sqlite_autoindex_scheduled_actions_1 1|pk|0
+scheduled_actions index sqlite_autoindex_scheduled_actions_1 0|0|id|0|BINARY|1
+scheduled_actions index sqlite_autoindex_scheduled_actions_1 1|-1|NULL|0|BINARY|0
+scheduled_runs column 0|id|TEXT|1|NULL|1|0
+scheduled_runs column 1|action_id|TEXT|1|NULL|0|0
+scheduled_runs column 2|fired_at|TEXT|1|NULL|0|0
+scheduled_runs column 3|status|TEXT|0|NULL|0|0
+scheduled_runs column 4|session_id|TEXT|0|NULL|0|0
+scheduled_runs column 5|error|TEXT|0|NULL|0|0
+scheduled_runs column 6|created_at|TEXT|1|NULL|0|0
+scheduled_runs fk 0|0|scheduled_actions|action_id|id|NO ACTION|CASCADE|NONE
+scheduled_runs index scheduled_runs_by_action 0|c|0
+scheduled_runs index scheduled_runs_by_action 0|1|action_id|0|BINARY|1
+scheduled_runs index scheduled_runs_by_action 1|2|fired_at|1|BINARY|1
+scheduled_runs index scheduled_runs_by_action 2|-1|NULL|0|BINARY|0
+scheduled_runs index sqlite_autoindex_scheduled_runs_1 1|pk|0
+scheduled_runs index sqlite_autoindex_scheduled_runs_1 0|0|id|0|BINARY|1
+scheduled_runs index sqlite_autoindex_scheduled_runs_1 1|-1|NULL|0|BINARY|0
+sessions column 0|id|TEXT|1|NULL|1|0
+sessions column 1|user_id|TEXT|1|NULL|0|0
+sessions column 2|created_at|TEXT|1|NULL|0|0
+sessions column 3|expires_at|TEXT|1|NULL|0|0
+sessions column 4|timezone|TEXT|0|NULL|0|0
+sessions column 5|impersonator_id|TEXT|0|NULL|0|0
+sessions fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+sessions index sessions_expires_at 0|c|0
+sessions index sessions_expires_at 0|3|expires_at|0|BINARY|1
+sessions index sessions_expires_at 1|-1|NULL|0|BINARY|0
+sessions index sessions_user_id 0|c|0
+sessions index sessions_user_id 0|1|user_id|0|BINARY|1
+sessions index sessions_user_id 1|-1|NULL|0|BINARY|0
+sessions index sqlite_autoindex_sessions_1 1|pk|0
+sessions index sqlite_autoindex_sessions_1 0|0|id|0|BINARY|1
+sessions index sqlite_autoindex_sessions_1 1|-1|NULL|0|BINARY|0
+skill_role_grants column 0|skill_name|TEXT|1|NULL|1|0
+skill_role_grants column 1|role_id|TEXT|1|NULL|2|0
+skill_role_grants column 2|granted_at|TEXT|1|NULL|0|0
+skill_role_grants index sqlite_autoindex_skill_role_grants_1 1|pk|0
+skill_role_grants index sqlite_autoindex_skill_role_grants_1 0|0|skill_name|0|BINARY|1
+skill_role_grants index sqlite_autoindex_skill_role_grants_1 1|1|role_id|0|BINARY|1
+skill_role_grants index sqlite_autoindex_skill_role_grants_1 2|-1|NULL|0|BINARY|0
+sqlite_sequence column 0|name||0|NULL|0|0
+sqlite_sequence column 1|seq||0|NULL|0|0
+system_principals column 0|id|TEXT|1|NULL|1|0
+system_principals column 1|name|TEXT|1|NULL|0|0
+system_principals column 2|display|TEXT|1|NULL|0|0
+system_principals column 3|description|TEXT|1|''|0|0
+system_principals column 4|created_by|TEXT|1|NULL|0|0
+system_principals column 5|created_at|TEXT|1|NULL|0|0
+system_principals column 6|disabled_at|TEXT|0|NULL|0|0
+system_principals index sqlite_autoindex_system_principals_1 1|pk|0
+system_principals index sqlite_autoindex_system_principals_1 0|0|id|0|BINARY|1
+system_principals index sqlite_autoindex_system_principals_1 1|-1|NULL|0|BINARY|0
+system_principals index sqlite_autoindex_system_principals_2 1|u|0
+system_principals index sqlite_autoindex_system_principals_2 0|1|name|0|BINARY|1
+system_principals index sqlite_autoindex_system_principals_2 1|-1|NULL|0|BINARY|0
+system_tokens column 0|id|TEXT|1|NULL|1|0
+system_tokens column 1|principal_id|TEXT|1|NULL|0|0
+system_tokens column 2|name|TEXT|1|NULL|0|0
+system_tokens column 3|hash|TEXT|1|NULL|0|0
+system_tokens column 4|created_by|TEXT|1|NULL|0|0
+system_tokens column 5|created_at|TEXT|1|NULL|0|0
+system_tokens column 6|last_used_at|TEXT|0|NULL|0|0
+system_tokens column 7|expires_at|TEXT|1|NULL|0|0
+system_tokens column 8|revoked_at|TEXT|0|NULL|0|0
+system_tokens fk 0|0|system_principals|principal_id|id|NO ACTION|CASCADE|NONE
+system_tokens index idx_system_tokens_principal 0|c|0
+system_tokens index idx_system_tokens_principal 0|1|principal_id|0|BINARY|1
+system_tokens index idx_system_tokens_principal 1|-1|NULL|0|BINARY|0
+system_tokens index sqlite_autoindex_system_tokens_1 1|pk|0
+system_tokens index sqlite_autoindex_system_tokens_1 0|0|id|0|BINARY|1
+system_tokens index sqlite_autoindex_system_tokens_1 1|-1|NULL|0|BINARY|0
+system_tokens index sqlite_autoindex_system_tokens_2 1|u|0
+system_tokens index sqlite_autoindex_system_tokens_2 0|3|hash|0|BINARY|1
+system_tokens index sqlite_autoindex_system_tokens_2 1|-1|NULL|0|BINARY|0
+token_mcp_policy column 0|token_id|TEXT|1|NULL|1|0
+token_mcp_policy column 1|connector_key|TEXT|1|NULL|2|0
+token_mcp_policy column 2|ask_over_api|TEXT|1|NULL|0|0
+token_mcp_policy column 3|updated_at|TEXT|1|NULL|0|0
+token_mcp_policy fk 0|0|tokens|token_id|id|NO ACTION|CASCADE|NONE
+token_mcp_policy index sqlite_autoindex_token_mcp_policy_1 1|pk|0
+token_mcp_policy index sqlite_autoindex_token_mcp_policy_1 0|0|token_id|0|BINARY|1
+token_mcp_policy index sqlite_autoindex_token_mcp_policy_1 1|1|connector_key|0|BINARY|1
+token_mcp_policy index sqlite_autoindex_token_mcp_policy_1 2|-1|NULL|0|BINARY|0
+token_models column 0|token_id|TEXT|1|NULL|1|0
+token_models column 1|model|TEXT|1|NULL|3|0
+token_models column 2|managed_by|TEXT|1|'owner'|2|0
+token_models column 3|created_at|TEXT|1|NULL|0|0
+token_models fk 0|0|tokens|token_id|id|NO ACTION|CASCADE|NONE
+token_models index sqlite_autoindex_token_models_1 1|pk|0
+token_models index sqlite_autoindex_token_models_1 0|0|token_id|0|BINARY|1
+token_models index sqlite_autoindex_token_models_1 1|2|managed_by|0|BINARY|1
+token_models index sqlite_autoindex_token_models_1 2|1|model|0|BINARY|1
+token_models index sqlite_autoindex_token_models_1 3|-1|NULL|0|BINARY|0
+token_models index token_models_token 0|c|0
+token_models index token_models_token 0|0|token_id|0|BINARY|1
+token_models index token_models_token 1|-1|NULL|0|BINARY|0
+token_tool_prefs column 0|token_id|TEXT|1|NULL|1|0
+token_tool_prefs column 1|tool_key|TEXT|1|NULL|2|0
+token_tool_prefs column 2|enabled|INTEGER|1|NULL|0|0
+token_tool_prefs column 3|updated_at|TEXT|1|NULL|0|0
+token_tool_prefs fk 0|0|tokens|token_id|id|NO ACTION|CASCADE|NONE
+token_tool_prefs index sqlite_autoindex_token_tool_prefs_1 1|pk|0
+token_tool_prefs index sqlite_autoindex_token_tool_prefs_1 0|0|token_id|0|BINARY|1
+token_tool_prefs index sqlite_autoindex_token_tool_prefs_1 1|1|tool_key|0|BINARY|1
+token_tool_prefs index sqlite_autoindex_token_tool_prefs_1 2|-1|NULL|0|BINARY|0
+tokens column 0|id|TEXT|1|NULL|1|0
+tokens column 1|user_id|TEXT|1|NULL|0|0
+tokens column 2|name|TEXT|1|NULL|0|0
+tokens column 3|hash|TEXT|1|NULL|0|0
+tokens column 4|created_at|TEXT|1|NULL|0|0
+tokens column 5|last_used_at|TEXT|0|NULL|0|0
+tokens column 6|expires_at|TEXT|1|NULL|0|0
+tokens column 7|revoked_at|TEXT|0|NULL|0|0
+tokens column 8|tools_enabled|INTEGER|1|0|0|0
+tokens fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+tokens index sqlite_autoindex_tokens_1 1|pk|0
+tokens index sqlite_autoindex_tokens_1 0|0|id|0|BINARY|1
+tokens index sqlite_autoindex_tokens_1 1|-1|NULL|0|BINARY|0
+tokens index sqlite_autoindex_tokens_2 1|u|0
+tokens index sqlite_autoindex_tokens_2 0|3|hash|0|BINARY|1
+tokens index sqlite_autoindex_tokens_2 1|-1|NULL|0|BINARY|0
+tokens index tokens_user_id 0|c|0
+tokens index tokens_user_id 0|1|user_id|0|BINARY|1
+tokens index tokens_user_id 1|-1|NULL|0|BINARY|0
+usage_daily column 0|day|TEXT|1|NULL|1|0
+usage_daily column 1|user_id|TEXT|1|NULL|2|0
+usage_daily column 2|user_email|TEXT|0|NULL|0|0
+usage_daily column 3|token_id|TEXT|1|''|3|0
+usage_daily column 4|token_name|TEXT|0|NULL|0|0
+usage_daily column 5|source|TEXT|1|NULL|4|0
+usage_daily column 6|kind|TEXT|1|NULL|5|0
+usage_daily column 7|backend|TEXT|1|NULL|6|0
+usage_daily column 8|model|TEXT|1|NULL|7|0
+usage_daily column 9|req_count|INTEGER|1|0|0|0
+usage_daily column 10|error_count|INTEGER|1|0|0|0
+usage_daily column 11|prompt_tokens|INTEGER|1|0|0|0
+usage_daily column 12|completion_tokens|INTEGER|1|0|0|0
+usage_daily column 13|total_tokens|INTEGER|1|0|0|0
+usage_daily column 14|input_units|REAL|1|0|0|0
+usage_daily column 15|output_units|REAL|1|0|0|0
+usage_daily column 16|cost|REAL|1|0|0|0
+usage_daily index sqlite_autoindex_usage_daily_1 1|pk|0
+usage_daily index sqlite_autoindex_usage_daily_1 0|0|day|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 1|1|user_id|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 2|3|token_id|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 3|5|source|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 4|6|kind|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 5|7|backend|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 6|8|model|0|BINARY|1
+usage_daily index sqlite_autoindex_usage_daily_1 7|-1|NULL|0|BINARY|0
+usage_daily index usage_daily_day 0|c|0
+usage_daily index usage_daily_day 0|0|day|0|BINARY|1
+usage_daily index usage_daily_day 1|-1|NULL|0|BINARY|0
+usage_daily index usage_daily_token 0|c|0
+usage_daily index usage_daily_token 0|3|token_id|0|BINARY|1
+usage_daily index usage_daily_token 1|0|day|0|BINARY|1
+usage_daily index usage_daily_token 2|-1|NULL|0|BINARY|0
+usage_daily index usage_daily_user 0|c|0
+usage_daily index usage_daily_user 0|1|user_id|0|BINARY|1
+usage_daily index usage_daily_user 1|0|day|0|BINARY|1
+usage_daily index usage_daily_user 2|-1|NULL|0|BINARY|0
+usage_events column 0|id|TEXT|1|NULL|1|0
+usage_events column 1|created_at|TEXT|1|NULL|0|0
+usage_events column 2|user_id|TEXT|1|NULL|0|0
+usage_events column 3|user_email|TEXT|0|NULL|0|0
+usage_events column 4|token_id|TEXT|0|NULL|0|0
+usage_events column 5|token_name|TEXT|0|NULL|0|0
+usage_events column 6|source|TEXT|1|NULL|0|0
+usage_events column 7|kind|TEXT|1|NULL|0|0
+usage_events column 8|backend|TEXT|1|NULL|0|0
+usage_events column 9|model|TEXT|1|NULL|0|0
+usage_events column 10|status|INTEGER|1|NULL|0|0
+usage_events column 11|duration_ms|INTEGER|1|NULL|0|0
+usage_events column 12|prompt_tokens|INTEGER|0|NULL|0|0
+usage_events column 13|completion_tokens|INTEGER|0|NULL|0|0
+usage_events column 14|total_tokens|INTEGER|0|NULL|0|0
+usage_events column 15|cost|REAL|1|0|0|0
+usage_events column 16|enforce_limits|INTEGER|1|1|0|0
+usage_events column 17|input_units|REAL|1|0|0|0
+usage_events column 18|output_units|REAL|1|0|0|0
+usage_events column 19|principal_kind|TEXT|1|'user'|0|0
+usage_events column 20|agent_id|TEXT|0|NULL|0|0
+usage_events column 21|chain|TEXT|0|NULL|0|0
+usage_events index sqlite_autoindex_usage_events_1 1|pk|0
+usage_events index sqlite_autoindex_usage_events_1 0|0|id|0|BINARY|1
+usage_events index sqlite_autoindex_usage_events_1 1|-1|NULL|0|BINARY|0
+usage_events index usage_events_agent 0|c|1
+usage_events index usage_events_agent 0|20|agent_id|0|BINARY|1
+usage_events index usage_events_agent 1|1|created_at|0|BINARY|1
+usage_events index usage_events_agent 2|-1|NULL|0|BINARY|0
+usage_events index usage_events_backend_created 0|c|0
+usage_events index usage_events_backend_created 0|8|backend|0|BINARY|1
+usage_events index usage_events_backend_created 1|1|created_at|0|BINARY|1
+usage_events index usage_events_backend_created 2|-1|NULL|0|BINARY|0
+usage_events index usage_events_created_at 0|c|0
+usage_events index usage_events_created_at 0|1|created_at|0|BINARY|1
+usage_events index usage_events_created_at 1|-1|NULL|0|BINARY|0
+usage_events index usage_events_token_created 0|c|0
+usage_events index usage_events_token_created 0|4|token_id|0|BINARY|1
+usage_events index usage_events_token_created 1|1|created_at|0|BINARY|1
+usage_events index usage_events_token_created 2|-1|NULL|0|BINARY|0
+usage_events index usage_events_user_created 0|c|0
+usage_events index usage_events_user_created 0|2|user_id|0|BINARY|1
+usage_events index usage_events_user_created 1|1|created_at|0|BINARY|1
+usage_events index usage_events_user_created 2|-1|NULL|0|BINARY|0
+user_mcp_connections column 0|id|TEXT|1|NULL|1|0
+user_mcp_connections column 1|user_id|TEXT|1|NULL|0|0
+user_mcp_connections column 2|connector_key|TEXT|1|NULL|0|0
+user_mcp_connections column 3|status|TEXT|1|NULL|0|0
+user_mcp_connections column 4|access_token_ct|BLOB|0|NULL|0|0
+user_mcp_connections column 5|access_token_nonce|BLOB|0|NULL|0|0
+user_mcp_connections column 6|refresh_token_ct|BLOB|0|NULL|0|0
+user_mcp_connections column 7|refresh_token_nonce|BLOB|0|NULL|0|0
+user_mcp_connections column 8|token_expires_at|TEXT|0|NULL|0|0
+user_mcp_connections column 9|token_url|TEXT|0|NULL|0|0
+user_mcp_connections column 10|scopes_json|TEXT|1|'[]'|0|0
+user_mcp_connections column 11|dcr_client_id|TEXT|0|NULL|0|0
+user_mcp_connections column 12|dcr_client_secret_ct|BLOB|0|NULL|0|0
+user_mcp_connections column 13|dcr_client_secret_nonce|BLOB|0|NULL|0|0
+user_mcp_connections column 14|last_error|TEXT|0|NULL|0|0
+user_mcp_connections column 15|created_at|TEXT|1|NULL|0|0
+user_mcp_connections column 16|updated_at|TEXT|1|NULL|0|0
+user_mcp_connections fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+user_mcp_connections index idx_user_mcp_connections_user 0|c|0
+user_mcp_connections index idx_user_mcp_connections_user 0|1|user_id|0|BINARY|1
+user_mcp_connections index idx_user_mcp_connections_user 1|-1|NULL|0|BINARY|0
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_1 1|pk|0
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_1 0|0|id|0|BINARY|1
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_1 1|-1|NULL|0|BINARY|0
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_2 1|u|0
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_2 0|1|user_id|0|BINARY|1
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_2 1|2|connector_key|0|BINARY|1
+user_mcp_connections index sqlite_autoindex_user_mcp_connections_2 2|-1|NULL|0|BINARY|0
+user_mcp_tool_prefs column 0|user_id|TEXT|1|NULL|1|0
+user_mcp_tool_prefs column 1|connector_key|TEXT|1|NULL|2|0
+user_mcp_tool_prefs column 2|tool_name|TEXT|1|NULL|3|0
+user_mcp_tool_prefs column 3|mode|TEXT|1|NULL|0|0
+user_mcp_tool_prefs column 4|updated_at|TEXT|1|NULL|0|0
+user_mcp_tool_prefs fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+user_mcp_tool_prefs index sqlite_autoindex_user_mcp_tool_prefs_1 1|pk|0
+user_mcp_tool_prefs index sqlite_autoindex_user_mcp_tool_prefs_1 0|0|user_id|0|BINARY|1
+user_mcp_tool_prefs index sqlite_autoindex_user_mcp_tool_prefs_1 1|1|connector_key|0|BINARY|1
+user_mcp_tool_prefs index sqlite_autoindex_user_mcp_tool_prefs_1 2|2|tool_name|0|BINARY|1
+user_mcp_tool_prefs index sqlite_autoindex_user_mcp_tool_prefs_1 3|-1|NULL|0|BINARY|0
+user_memories column 0|id|TEXT|1|NULL|1|0
+user_memories column 1|user_id|TEXT|1|NULL|0|0
+user_memories column 2|content|TEXT|1|NULL|0|0
+user_memories column 3|created_at|TEXT|1|NULL|0|0
+user_memories column 4|updated_at|TEXT|1|NULL|0|0
+user_memories column 5|kind|TEXT|1|'fact'|0|0
+user_memories index idx_user_memories_user_created 0|c|0
+user_memories index idx_user_memories_user_created 0|1|user_id|0|BINARY|1
+user_memories index idx_user_memories_user_created 1|3|created_at|1|BINARY|1
+user_memories index idx_user_memories_user_created 2|-1|NULL|0|BINARY|0
+user_memories index sqlite_autoindex_user_memories_1 1|pk|0
+user_memories index sqlite_autoindex_user_memories_1 0|0|id|0|BINARY|1
+user_memories index sqlite_autoindex_user_memories_1 1|-1|NULL|0|BINARY|0
+user_tool_prefs column 0|user_id|TEXT|1|NULL|1|0
+user_tool_prefs column 1|tool_key|TEXT|1|NULL|2|0
+user_tool_prefs column 2|enabled|INTEGER|1|NULL|0|0
+user_tool_prefs column 3|updated_at|TEXT|1|NULL|0|0
+user_tool_prefs index sqlite_autoindex_user_tool_prefs_1 1|pk|0
+user_tool_prefs index sqlite_autoindex_user_tool_prefs_1 0|0|user_id|0|BINARY|1
+user_tool_prefs index sqlite_autoindex_user_tool_prefs_1 1|1|tool_key|0|BINARY|1
+user_tool_prefs index sqlite_autoindex_user_tool_prefs_1 2|-1|NULL|0|BINARY|0
+users column 0|id|TEXT|1|NULL|1|0
+users column 1|email|TEXT|1|NULL|0|0
+users column 2|name|TEXT|0|NULL|0|0
+users column 3|roles_json|TEXT|1|'[]'|0|0
+users column 4|created_at|TEXT|1|NULL|0|0
+users column 5|updated_at|TEXT|1|NULL|0|0
+users column 6|timezone|TEXT|0|NULL|0|0
+users column 7|loc_lat|REAL|0|NULL|0|0
+users column 8|loc_lon|REAL|0|NULL|0|0
+users column 9|loc_accuracy|REAL|0|NULL|0|0
+users column 10|loc_updated_at|TEXT|0|NULL|0|0
+users column 11|speech_voice|TEXT|0|NULL|0|0
+users index sqlite_autoindex_users_1 1|pk|0
+users index sqlite_autoindex_users_1 0|0|id|0|BINARY|1
+users index sqlite_autoindex_users_1 1|-1|NULL|0|BINARY|0
+users index users_email 0|c|0
+users index users_email 0|1|email|0|BINARY|1
+users index users_email 1|-1|NULL|0|BINARY|0
+visitor_sessions column 0|id|TEXT|1|NULL|1|0
+visitor_sessions column 1|principal_id|TEXT|1|NULL|0|0
+visitor_sessions column 2|embed_key_id|TEXT|1|NULL|0|0
+visitor_sessions column 3|token_hash|TEXT|1|NULL|0|0
+visitor_sessions column 4|session_id|TEXT|1|NULL|0|0
+visitor_sessions column 5|client_ip|TEXT|0|NULL|0|0
+visitor_sessions column 6|idle_ttl_secs|INTEGER|1|NULL|0|0
+visitor_sessions column 7|created_at|TEXT|1|NULL|0|0
+visitor_sessions column 8|last_seen_at|TEXT|1|NULL|0|0
+visitor_sessions column 9|expires_at|TEXT|1|NULL|0|0
+visitor_sessions column 10|max_expires_at|TEXT|1|NULL|0|0
+visitor_sessions fk 0|0|chat_sessions|session_id|id|NO ACTION|CASCADE|NONE
+visitor_sessions fk 1|0|agent_embed_keys|embed_key_id|id|NO ACTION|CASCADE|NONE
+visitor_sessions fk 2|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
+visitor_sessions index sqlite_autoindex_visitor_sessions_1 1|pk|0
+visitor_sessions index sqlite_autoindex_visitor_sessions_1 0|0|id|0|BINARY|1
+visitor_sessions index sqlite_autoindex_visitor_sessions_1 1|-1|NULL|0|BINARY|0
+visitor_sessions index sqlite_autoindex_visitor_sessions_2 1|u|0
+visitor_sessions index sqlite_autoindex_visitor_sessions_2 0|3|token_hash|0|BINARY|1
+visitor_sessions index sqlite_autoindex_visitor_sessions_2 1|-1|NULL|0|BINARY|0
+visitor_sessions index visitor_sessions_ip 0|c|0
+visitor_sessions index visitor_sessions_ip 0|1|principal_id|0|BINARY|1
+visitor_sessions index visitor_sessions_ip 1|5|client_ip|0|BINARY|1
+visitor_sessions index visitor_sessions_ip 2|-1|NULL|0|BINARY|0
+visitor_sessions index visitor_sessions_principal 0|c|0
+visitor_sessions index visitor_sessions_principal 0|1|principal_id|0|BINARY|1
+visitor_sessions index visitor_sessions_principal 1|-1|NULL|0|BINARY|0
+visitor_sessions index visitor_sessions_session 0|c|0
+visitor_sessions index visitor_sessions_session 0|4|session_id|0|BINARY|1
+visitor_sessions index visitor_sessions_session 1|-1|NULL|0|BINARY|0
+webhook_runs column 0|id|TEXT|1|NULL|1|0
+webhook_runs column 1|webhook_id|TEXT|1|NULL|0|0
+webhook_runs column 2|fired_at|TEXT|1|NULL|0|0
+webhook_runs column 3|status|TEXT|0|NULL|0|0
+webhook_runs column 4|session_id|TEXT|0|NULL|0|0
+webhook_runs column 5|error|TEXT|0|NULL|0|0
+webhook_runs column 6|prompt|TEXT|1|NULL|0|0
+webhook_runs column 7|payload|TEXT|1|NULL|0|0
+webhook_runs column 8|source|TEXT|1|NULL|0|0
+webhook_runs column 9|created_at|TEXT|1|NULL|0|0
+webhook_runs fk 0|0|webhooks|webhook_id|id|NO ACTION|CASCADE|NONE
+webhook_runs index sqlite_autoindex_webhook_runs_1 1|pk|0
+webhook_runs index sqlite_autoindex_webhook_runs_1 0|0|id|0|BINARY|1
+webhook_runs index sqlite_autoindex_webhook_runs_1 1|-1|NULL|0|BINARY|0
+webhook_runs index webhook_runs_by_hook 0|c|0
+webhook_runs index webhook_runs_by_hook 0|1|webhook_id|0|BINARY|1
+webhook_runs index webhook_runs_by_hook 1|2|fired_at|1|BINARY|1
+webhook_runs index webhook_runs_by_hook 2|-1|NULL|0|BINARY|0
+webhooks column 0|id|TEXT|1|NULL|1|0
+webhooks column 1|user_id|TEXT|1|NULL|0|0
+webhooks column 2|name|TEXT|1|NULL|0|0
+webhooks column 3|prompt|TEXT|1|NULL|0|0
+webhooks column 4|model|TEXT|1|NULL|0|0
+webhooks column 5|tools_enabled|INTEGER|1|0|0|0
+webhooks column 6|synchronous|INTEGER|1|0|0|0
+webhooks column 7|secret_hash|TEXT|1|NULL|0|0
+webhooks column 8|enabled|INTEGER|1|1|0|0
+webhooks column 9|last_fired_at|TEXT|0|NULL|0|0
+webhooks column 10|last_status|TEXT|0|NULL|0|0
+webhooks column 11|last_session_id|TEXT|0|NULL|0|0
+webhooks column 12|last_error|TEXT|0|NULL|0|0
+webhooks column 13|last_payload|TEXT|0|NULL|0|0
+webhooks column 14|created_at|TEXT|1|NULL|0|0
+webhooks column 15|updated_at|TEXT|1|NULL|0|0
+webhooks column 16|reuse_conversation|INTEGER|1|0|0|0
+webhooks column 17|reuse_rounds|INTEGER|1|5|0|0
+webhooks fk 0|0|users|user_id|id|NO ACTION|CASCADE|NONE
+webhooks index sqlite_autoindex_webhooks_1 1|pk|0
+webhooks index sqlite_autoindex_webhooks_1 0|0|id|0|BINARY|1
+webhooks index sqlite_autoindex_webhooks_1 1|-1|NULL|0|BINARY|0
+webhooks index webhooks_secret 1|c|0
+webhooks index webhooks_secret 0|7|secret_hash|0|BINARY|1
+webhooks index webhooks_secret 1|-1|NULL|0|BINARY|0
+webhooks index webhooks_user 0|c|0
+webhooks index webhooks_user 0|1|user_id|0|BINARY|1
+webhooks index webhooks_user 1|14|created_at|1|BINARY|1
+webhooks index webhooks_user 2|-1|NULL|0|BINARY|0

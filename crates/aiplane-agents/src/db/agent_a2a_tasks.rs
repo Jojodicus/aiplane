@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! A remote A2A task waiting for the visitor's input
-//! (`migrations/0091_a2a_routes.sql`, `docs/agents.md` "What #101 built").
+//! (`migrations/0077_agent_builder.sql`, `docs/agents.md` "What #101 built").
 //!
 //! Storage only. A route's call that paused on a remote `input-required`
 //! records the remote task here; the resumed call takes it back out, once.

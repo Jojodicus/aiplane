@@ -136,7 +136,7 @@ ALTER TABLE gateway_groups ADD COLUMN can_manage_agents INTEGER NOT NULL DEFAULT
   (`403 token_exceeds_manager`), because the token hands them all out. See
   [`auth.md`](auth.md#management-api).
 - **Every grant change is audited** in `agent_audit` (§3). The table landed with
-  #77 (migration `0077`), with one column more than §3 lists: `actor_id`, the
+  #77 (migration `0077_agent_builder.sql`), with one column more than §3 lists: `actor_id`, the
   user who made a management change, so "who" is queryable rather than buried in
   `detail`. `chain` is `NULL` on those rows.
 
@@ -393,8 +393,8 @@ part above — `profile`, `main` (with `tool_resources`, their `bind`,
 
 ### What #84 built
 
-- **Migration `0080_agents.sql`** creates the three tables above as written
-  (`0078`/`0079` were left to concurrent branches). Rows live in
+- **Migration `0077_agent_builder.sql`** creates the three tables above as written.
+  Rows live in
   `aiplane-agents::db::agents`; every mutation writes an `agent_audit` row
   in the same transaction (`agent_created`, `agent_draft_updated`,
   `agent_published`, `agent_live_version_set`, `agent_share_set`,
@@ -529,9 +529,9 @@ chat_sessions:
 - **Sub-agent runs** are child sessions owned by the sub-agent's principal and
   linked through `parent_turn_id`. They are not chats of the owner, as decided.
 
-**As built (#83, migration `0081`).** The rebuild is as above without
-`visitor_id`: `visitor_sessions` did not exist yet, so #91 added that column
-together with its table (migration `0083`, [§5](#what-91-built)). A second CHECK, `principal_id IS NULL OR shared = 0`,
+**As built (#83, the `chat_sessions` rebuild in migration `0077_agent_builder.sql`).** The
+rebuild is as above, with `visitor_id` pointing at #91's `visitor_sessions`
+([§5](#what-91-built)). A second CHECK, `principal_id IS NULL OR shared = 0`,
 keeps an agent conversation out of the "anyone with the link" read path.
 `parent_turn_id` has no foreign key: the child run stays an auditable record
 when the parent turn is gone. `SessionOwner`, `create_principal_session`
@@ -605,10 +605,10 @@ agent run every tool is `Concurrent`, so chat and `/v1` are unchanged.
 
 ### What #85 built
 
-- **Migration `0082_agent_state.sql`** creates `agent_state` as above, plus a
+- **Migration `0077_agent_builder.sql`** creates `agent_state` as above, plus a
   `CHECK` that `provenance` is `llm`, `host` or `verifier:<id>`. It references
   `chat_sessions(id)` only, so it holds for a user-owned and a principal-owned
-  session alike and does not depend on #83's rebuild (`0081`). Storage is
+  session alike and does not depend on #83's `chat_sessions` rebuild. Storage is
   `aiplane-agents::db::agent_state` (`put`, `for_session`); it knows
   neither types nor writers and has one caller.
 - **Typed slots** (`aiplane-runtime::agents::state`). `StateSchema::from_spec`
@@ -712,7 +712,7 @@ that is already in the chain (`EnterError::Cycle`).
 - Run events share one writer, `agent_audit::record_run_event(principal,
   chain, detail)`: tool-call decisions and #93's `injection_detected`
   findings both carry the chain when the call is inside an agent run.
-- `mcp_tool_audit` has a `chain` column (migration `0081`), set on every MCP
+- `mcp_tool_audit` has a `chain` column (migration `0077_agent_builder.sql`), set on every MCP
   call inside an agent run. Since #92 usage rows carry it too, plus the
   main agent as `agent_id` ([§5](#what-92-built)).
 - An agent run gets none of its owner's identity, memory, private skills or
@@ -1090,7 +1090,7 @@ agent runs pause and resume durably, sub-agent runs included.
 - **Nested propagation.** A tool inside a sub-agent run pauses the child turn
   as usual. `forward_request` sees the child's row once its drive returns,
   records the dispatch's `run_context` on it (`{route, route_binds}`, migration
-  `0085`: the bound values exist nowhere else) and answers with a suspend
+  `0077_agent_builder.sql`: the bound values exist nowhere else) and answers with a suspend
   envelope whose `child` names the child turn and its `expires_at`. The
   parent's driver checks that the child is a paused run of *this* turn
   (`parent_turn_id`), then pauses the parent with the child's kind, message and
@@ -1121,15 +1121,14 @@ agent runs pause and resume durably, sub-agent runs included.
   from the inbox in their own, and the timeout sweeper has none. Every new
   turn (`drive_opened`, so `run_turn`, the embed and A2A runners and a
   queued message alike) records `OpenedTurn.lang` as `chat_sessions.lang`
-  (migration `0093`) when the caller sets one: the public endpoint and an A2A
+  (migration `0077_agent_builder.sql`) when the caller sets one: the public endpoint and an A2A
   task from the request, `run_turn` from `AgentTurn.lang`. That column is the
   only source of the run's language: the output filter's fallback texts, a
   timed-out handoff's `agent-human-no-answer`, the `lang` a handoff records,
   a verifier's and the A2A client's prompts all read it
   (`ToolContext::conversation_lang`, through the chain's root conversation, so
   a routed sub-agent speaks its caller's). A resume passes none, and a
-  conversation that recorded none (one whose last turn started before `0093`)
-  is English.
+  conversation that recorded none is English.
 - **Secure values.** A `value` goes to the requesting tool through
   `ToolContext.suspend = Decided(Decision::Value)` and nowhere else.
   `Decision`'s `Debug` prints `<redacted>`; the audit rows carry the decision's
@@ -1202,7 +1201,7 @@ agent runs pause and resume durably, sub-agent runs included.
 Human in the loop on top of the agent-run suspend: per-tool approval, a
 handoff to a person, an inbox where both are answered, notifications when a
 turn starts waiting, and a resume path for a person's scheduled and webhook
-runs. Migration `0087_human_in_the_loop.sql`.
+runs. Migration `0077_agent_builder.sql`.
 
 - **Per-tool approval** (`agents::approval`). `tool_resources.<tool>.permission`
   decides whether a call pauses for staff: `always_ask` wraps the tool in
@@ -1515,7 +1514,7 @@ untrusted audiences.
 
 ### What #91 built
 
-- **Migration `0083_visitor_sessions.sql`** creates both tables, with three
+- **Migration `0077_agent_builder.sql`** creates both tables, with three
   changes from the sketch above:
   - `agent_embed_keys.key` is **`key_hash`**, the SHA-256 of the `gwe_` key,
     like every other credential. The key is public anyway, but storing it in
@@ -1670,7 +1669,7 @@ untrusted audiences.
 Limits that make an embedded agent safe to leave running, an owner budget, the
 pool rule, and retention.
 
-- **Migration `0084_agent_limits.sql`.** `usage_events` gains `agent_id` (the
+- **Migration `0077_agent_builder.sql`.** `usage_events` gains `agent_id` (the
   main agent at the root of the run's call chain, `NULL` outside a run) and
   `chain` (the serialized `RunChain`), with an index on `(agent_id,
   created_at)`; `visitor_sessions` gains an index on `(principal_id,
@@ -1705,7 +1704,7 @@ pool rule, and retention.
   A2A context); the per-IP bucket counts every admission from that IP to the
   agent on every channel (`Counter::ip`), so opening a fresh conversation per
   message does not dodge the per-visitor limit. The events are rows of
-  `rate_events` (`migrations/0098_rate_events.sql`), one per window, each
+  `rate_events` (`migrations/0077_agent_builder.sql`), one per window, each
   expiring a window after it was written. A refused request writes nothing,
   so it never counts; the owner budget is checked first for the same
   reason. Gated: `POST /api/v0/embed/sessions`, `…/messages` and `…/resume`;
@@ -1782,7 +1781,7 @@ Three verifier kinds under `verifiers.<id>`, the only writers besides the
 host of a slot the model cannot write. Code in
 `aiplane-runtime::agents::verifier` (runtime) and `agents/spec/verifiers.rs`
 (validation); rows in `aiplane-agents::db::agent_verifiers`
-(migration `0088`).
+(migration `0077_agent_builder.sql`).
 
 ```yaml
 verifiers:
@@ -1931,9 +1930,8 @@ verifiers:
 Analytics for a manager: what an agent did over a period, derived from rows
 that already exist. No second event store.
 
-- **Migration `0086_agent_analytics.sql`**: one index,
-  `agent_audit (principal_id, kind, created_at)`. `0085` is left free on
-  purpose, because a concurrent branch may claim it.
+- **Migration `0077_agent_builder.sql`**: one index,
+  `agent_audit (principal_id, kind, created_at)`.
 - **`GET /api/v0/agents/{id}/analytics?from=&to=&version=`** (`read` share,
   admins always; same 403/404 rules as the other agent routes). `from` and `to`
   are RFC 3339 instants or `YYYY-MM-DD` UTC days; a day as `to` includes that
@@ -2002,10 +2000,8 @@ that already exist. No second event store.
 Evaluation: stored test cases per agent, run against the draft or a published
 version and judged on more than the final answer.
 
-- **Migration `0089_agent_tests.sql`**: `agent_test_cases`, `agent_test_runs`,
-  `agent_test_results`. `0087` and `0088` are claimed by the concurrent
-  branches (#96, #95); renumber if either lands under another number, and the pinned line in
-  `aiplane-core/tests/migration-checksums.txt` with it. Rows live
+- **Migration `0077_agent_builder.sql`**: `agent_test_cases`, `agent_test_runs`,
+  `agent_test_results`. Rows live
   in `aiplane-agents::db::agent_tests`; the logic in
   `aiplane-runtime::agents::eval` (and `eval_judge` for the rubric).
 - **Case.** `{name, script, expect, rubric?}`; the name is unique per agent. A
@@ -2110,7 +2106,7 @@ version and judged on more than the final answer.
 A published agent served to other agent platforms over **A2A**, following
 the Linux Foundation's *Agent2Agent (A2A) Protocol Specification v1.0.0*
 (`a2a-protocol.org`, `specification/a2a.proto`, package `lf.a2a.v1`), JSON-RPC
-binding (§9). Migration `0090_a2a.sql`. The handlers are
+binding (§9). Migration `0077_agent_builder.sql`. The handlers are
 `aiplane-api::pages::a2a`; the spec section, the card and the state mapping
 are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
 
@@ -2261,8 +2257,8 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   tests: `agents/a2a.rs` (opt-in, card, derived skills, state mapping),
   `agents/spec/a2a.rs` (validation), `pages/a2a/` (parts, configuration,
   versions, error shape), `aiplane-agents`' `db/a2a_contexts.rs`, `run_chain.rs`,
-  `agents/embed.rs` (stop flags) and `tests/migration_0090.rs` (the
-  `principal_grants` rebuild keeps every grant).
+  `agents/embed.rs` (stop flags) and `aiplane-core/tests/migration_0077.rs`
+  (the `principal_grants` kinds).
 
 ### What #101 built
 
@@ -2271,7 +2267,7 @@ to another platform's agent that speaks A2A v1.0 (the JSON-RPC binding the
 gateway's own server speaks, [#102](#what-102-built)). Code in
 `aiplane-runtime::agents::a2a_client` (`guard`, `card`, the exchange) and
 `agents/spec/route_kinds.rs` (validation); the waiting task in
-`aiplane-agents::db::agent_a2a_tasks` (migration `0091`).
+`aiplane-agents::db::agent_a2a_tasks` (migration `0077_agent_builder.sql`).
 
 ```yaml
 routes:
@@ -2324,9 +2320,8 @@ routes:
   Not built: OpenID Connect, mTLS, authorization-code flows — each needs a
   person or a client certificate the principal does not have.
 - **The grant.** *Chosen:* a new grant kind, `a2a_agent`, whose `ref` is the
-  exact card URL (migration `0091` rebuilds `principal_grants` once more, its
-  CHECK now `… 'a2a_caller', 'a2a_agent'`; `tests/migration_0091.rs` boots a
-  0090 database and checks every grant survives). Reusing connector grants
+  exact card URL (the `principal_grants` CHECK in migration `0077_agent_builder.sql`
+  admits `… 'a2a_caller', 'a2a_agent'`). Reusing connector grants
   would mean an `mcp_catalog` row the MCP manager would try to connect to.
   The validator requires the grant (`routes.<r>.a2a.card_url`, with the
   `POST …/grants {"kind": "a2a_agent", "ref": …}` to make), and the dispatch
@@ -2510,8 +2505,7 @@ routes:
 
 A complete, tamper-evident activity log: everything an agent does, enough to
 reconstruct any conversation, decision and model exchange afterwards, with
-no secret in it. Migrations `0096_agent_activity_log.sql` and
-`0097_activity_blobs.sql`; the log is
+no secret in it. Migration `0077_agent_builder.sql`; the log is
 `aiplane-agents::db::agent_audit`, the runtime's door to it
 `aiplane-runtime::agents::audit`.
 
@@ -2562,9 +2556,7 @@ hash of the one before (`prev_hash`) and its own `hash` = HMAC-SHA256 over
 its canonical JSON — every column except `hash` and the rowid, keys sorted,
 no whitespace, `chain` and `detail` as the exact stored text — under the
 log key its `key_id` names. A unique index on `(chain_key, seq)` refuses a
-fork. Every event has a chain: the rows written before chains existed were
-never released and migration `0099_drop_unchained_activity.sql` deletes them,
-so `verify` reports an event outside every chain as inserted outside the
+fork. Every event has a chain, so `verify` reports an event outside every chain as inserted outside the
 gateway.
 
 **The log key.** No new secret: the key is derived from the gateway's
@@ -2615,7 +2607,7 @@ anchor) and the agent chain's `head` (`seq`, `hash`). The anchored event is
 read by its `(chain_key, seq)` index, not found by walking.
 
 **Verification watermarks** (`agent_audit::verification`, migration
-`0100_activity_verified.sql`). *Chosen over re-walking every time:* a
+`0077_agent_builder.sql`). *Chosen over re-walking every time:* a
 chain that checked out is remembered in `activity_verified` — its `seq`
 and `hash` and, for the agent's own chain, the anchors and sweep markers
 read so far — signed under the log key like an event (`key_id`, `mac`).
