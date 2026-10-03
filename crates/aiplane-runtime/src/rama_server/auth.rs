@@ -112,9 +112,11 @@ pub async fn require_bearer(
 }
 
 /// A `gws_` bearer: looked up in `system_tokens` only, so it can never
-/// resolve to a person. The principal's grants are loaded here, once per
-/// request, and capped at what the token's minter holds now unless the
-/// minter is an admin ([`capped_to_minter`](crate::server::grant_holding::capped_to_minter)):
+/// resolve to a person. The token and the principal's grants are read here,
+/// once per request, so a revocation, a disable or a removed grant takes
+/// effect on the next one; the cap at what the token's minter holds unless
+/// the minter is an admin is reused for a short while
+/// ([`capped_for_token`](crate::server::grant_holding::capped_for_token)):
 /// what it may use is exactly what is left.
 async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCtx, AuthRefusal> {
     let hash = token::hash_system_bearer(bearer).ok_or_else(unauthorized)?;
@@ -134,8 +136,9 @@ async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCt
                 internal_error("system principal lookup failed")
             })?
             .ok_or_else(unauthorized)?;
-    let principal = crate::server::grant_holding::capped_to_minter(
+    let principal = crate::server::grant_holding::capped_for_token(
         state,
+        &token_row.id,
         principal,
         &token_row.created_by,
     )
@@ -145,14 +148,17 @@ async fn require_system_bearer(state: &RamaState, bearer: &str) -> Result<UserCt
         internal_error("system token minter lookup failed")
     })?;
 
-    let pool = state.db.clone();
-    let token_id = token_row.id.clone();
-    tokio::spawn(async move {
-        if let Err(err) = aiplane_agents::db::system_principals::touch_token(&pool, &token_id).await
-        {
-            tracing::warn!(error = %err, token_id, "failed to bump system token last_used_at");
-        }
-    });
+    if state.grant_caps.touch_due(&token_row.id) {
+        let pool = state.db.clone();
+        let token_id = token_row.id.clone();
+        tokio::spawn(async move {
+            if let Err(err) =
+                aiplane_agents::db::system_principals::touch_token(&pool, &token_id).await
+            {
+                tracing::warn!(error = %err, token_id, "failed to bump system token last_used_at");
+            }
+        });
+    }
 
     Ok(UserCtx {
         user_email: principal.name.clone(),

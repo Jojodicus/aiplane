@@ -226,6 +226,9 @@ pub async fn callback(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         tracing::warn!(error = %err, "user upsert");
         return error_html(StatusCode::INTERNAL_SERVER_ERROR, "could not persist user");
     }
+    // The login may have changed the roles a system token's cap is taken
+    // from.
+    state.grant_caps.invalidate();
 
     // Browser flow: mint a session, set the signed cookie, redirect.
     let session = match state.sessions.create(&claims.subject).await {

@@ -671,7 +671,7 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         _ => return bad_request("a share needs `access`: `read` or `write`"),
     };
     or_return!(require_manager_subject(&state, kind, subject).await);
-    match agents_db::set_share(
+    let changed = agents_db::set_share(
         &state.db,
         &agent.principal.id,
         kind,
@@ -679,8 +679,9 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         access,
         &user.id,
     )
-    .await
-    {
+    .await;
+    state.grant_caps.invalidate();
+    match changed {
         Ok(ShareChange::LastWriter) => last_writer(),
         Ok(change) => json_ok(
             if change == ShareChange::Changed {
@@ -700,7 +701,10 @@ pub async fn revoke_share(State(state): State<Arc<RamaState>>, req: Request) -> 
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
     let body: ShareBody = or_return!(super::read_json(req.into_body(), "the share body").await);
     let (kind, subject) = or_return!(parse_subject(&body));
-    match agents_db::remove_share(&state.db, &agent.principal.id, kind, subject, &user.id).await {
+    let removed =
+        agents_db::remove_share(&state.db, &agent.principal.id, kind, subject, &user.id).await;
+    state.grant_caps.invalidate();
+    match removed {
         Ok(ShareChange::LastWriter) => last_writer(),
         Ok(ShareChange::NotFound) => not_found(format!(
             "`{}` is not shared with {} `{subject}`",

@@ -139,7 +139,7 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   up only in `system_tokens` (joined to a principal that is not disabled),
   `gwk_` only in `tokens`. A forged prefix swap never authenticates.
 - **What it resolves to.** `UserCtx.principal = Principal::System` with the
-  grants loaded once per request and capped at the token's minter (below). `tools_enabled` is always on — the grants are
+  grants loaded once per request and capped at the token's minter (below, reused for at most 30 s). `tools_enabled` is always on — the grants are
   the policy — and there is no model allowlist; pools are its `pool` grants.
 - **Default deny.** A new principal has no rights at all, not even a pool:
   until one is granted, `/v1/chat/completions` answers 404 for every model. See
@@ -210,6 +210,23 @@ never become a way to use what that manager could not hand out. The
 principal's grants themselves still survive the granting manager losing
 rights; use an admin-minted token for a principal meant to outlive its
 manager.
+
+**The cap is reused, never past a change.** Working the cap out costs a
+lookup per grant (a connector, a RAG collection, an agent share), so
+`grant_holding::capped_for_token` keeps it per token in
+`AppState::grant_caps` for at most `CAP_TTL` (30 s). The token row and the
+principal with its grants are still read on every request, so revoking the
+token, disabling the principal or removing a grant takes effect on the next
+request: the cached cap is only used while the principal's grants and the
+minter are the ones it was worked out from. Everything that can change what
+a minter holds calls `GrantCaps::invalidate` — an OIDC login (the minter's
+roles), `reload_rbac` (groups, mappings, tool and skill grants),
+`reload_settings` (pools, features), a connector's create, edit, toggle,
+delete or re-seed, a RAG collection's groups and an agent share — and a cap
+worked out while an invalidation ran is not stored. `CAP_TTL` bounds only
+what this process cannot see: a skill directory edited on disk, a second
+gateway writing the same database. The token's `last_used_at` is written at
+most once a minute per token (`TOUCH_EVERY`).
 
 There is no SPA screen for this yet; it is API-only.
 
