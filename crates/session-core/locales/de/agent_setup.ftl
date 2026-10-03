@@ -277,3 +277,21 @@ agents-setup-voice-speech-pool = Sprachausgabe
 agents-setup-voice-voice = Stimme (optional)
 agents-setup-voice-voice-hint = Leer lassen für die Standardstimme der Sprache des Besuchers.
 agents-setup-voice-no-pool = Sie haben keinen Pool dieser Art. Eine Administratorin oder ein Administrator kann einen einrichten.
+
+# The agent architect (#118): a centred chat window that plans an agent.
+architect-open = Mit dem Architekten planen
+architect-title = Agent-Architekt
+architect-intro = Plant mit Ihnen den Agenten und legt den Entwurf an. Veröffentlichen entscheiden Sie.
+architect-conversation-title = Agent-Architekt: { $name }
+architect-conversation-new = Agent-Architekt: neuer Agent
+architect-placeholder = Beschreiben Sie, was Ihr Agent tun soll …
+architect-send = Senden
+architect-new-conversation = Neues Gespräch
+architect-undo = Rückgängig
+architect-undone = Rückgängig gemacht
+architect-open-setup = Einrichtung öffnen
+architect-starting = Der Architekt startet …
+architect-empty = Sagen Sie dem Architekten, was Ihr Agent tun soll, per Tastatur oder Mikrofon. Jede Änderung erscheint hier und lässt sich rückgängig machen.
+architect-working = Der Architekt arbeitet …
+architect-create-option = Oder im Gespräch mit dem Architekten planen
+architect-message-label = Nachricht an den Architekten

@@ -293,6 +293,15 @@ export const agentsApi = {
 	get: (id: string) => call<{ agent: AgentDetail }>(`/api/v0/agents/${id}`).then((r) => r.agent),
 	saveDraft: (id: string, spec: Spec) =>
 		call<{ draft_spec: Spec; live_version: number | null }>(`/api/v0/agents/${id}/draft`, json('PUT', { spec })),
+	/** Make a kept earlier draft the draft again (the architect's Undo). */
+	restoreDraft: (id: string, revision: number) =>
+		call<{ draft_spec: Spec; revision: number | null }>(`/api/v0/agents/${id}/draft/restore`, json('POST', { revision })),
+	/** The person's architect conversation about `agent_id` (or a new agent). */
+	startArchitect: (body: { agent_id?: string; title: string; fresh?: boolean }) =>
+		call<{ session_id: string; model: string; agent_id: string | null; resumed: boolean }>(
+			'/api/v0/agent-architect',
+			json('POST', body)
+		),
 	publish: (id: string) =>
 		call<{ version: number; live_version: number }>(`/api/v0/agents/${id}/publish`, json('POST', {})),
 	versions: (id: string) =>

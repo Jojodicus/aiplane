@@ -32,20 +32,14 @@
 	writeOnChange(() => $state.snapshot(voice), (v) => writeVoice(spec, v));
 	const missing = $derived(voiceMissing(voice));
 	const offered = $derived(ws.resources?.voice_pools ?? { speech: [], transcription: [] });
-	let voiceError = $state<string | null>(null);
 
-	/** Grant the chosen pool to the agent first, then name it; the previous one is released if nothing live uses it. */
-	async function choosePool(field: 'transcriptionPool' | 'speechPool', pool: string) {
-		voiceError = null;
+	/** Stage the chosen pool's grant and name it; the previous one is staged for revoking unless something still uses it. Both are made on save. */
+	function choosePool(field: 'transcriptionPool' | 'speechPool', pool: string) {
 		const previous = voice[field];
 		if (pool === previous) return;
-		try {
-			if (pool) await ws.ensureGrant('pool', pool);
-			voice[field] = pool;
-			if (previous && previous !== spec.main?.pool && !Object.values(voice).includes(previous)) await ws.releaseGrant('pool', previous);
-		} catch (err) {
-			voiceError = t('agents-setup-grant-failed', { reason: (err as AgentError).message });
-		}
+		if (pool) ws.stageGrant('pool', pool);
+		voice[field] = pool;
+		if (previous && previous !== spec.main?.pool && !Object.values(voice).includes(previous)) ws.stageRevoke('pool', previous);
 	}
 
 	let keys = $state<EmbedKey[]>([]);
@@ -140,7 +134,6 @@
 				<span class="text-xs text-base-content/60">{t('agents-setup-voice-voice-hint')}</span>
 			</label>
 		{/if}
-		{#if voiceError}<div class="alert alert-error text-sm" role="alert"><span>{voiceError}</span></div>{/if}
 	</fieldset>
 
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-start">
