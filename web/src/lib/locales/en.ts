@@ -749,7 +749,6 @@ export const en: Catalog = {
  "agents-setup-strict-hint": "Before every answer a small model checks whether the question fits the topics. If it does not, the visitor gets the standard answer and the main model is never asked.",
  "agents-setup-strict-needs": "A strict topic guard needs at least one topic and an answer for other topics.",
  "agents-setup-suggest-dismiss": "Dismiss",
- "agents-setup-suggest-failed": "The assistant could not make a suggestion: {reason}",
  "agents-setup-suggest-task": "Proposed task",
  "agents-setup-suggest-tests": "Proposed test conversations",
  "agents-setup-suggest-tone": "Proposed tone",

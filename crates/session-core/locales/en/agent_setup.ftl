@@ -252,7 +252,6 @@ agents-setup-todo-site = Name the website the agent appears on, so no other site
 agents-setup-proposal-ready = A proposal is ready. Each step now shows its part — apply what fits, dismiss the rest.
 agents-setup-dropped = Left out:
 agents-setup-suggest-dismiss = Dismiss
-agents-setup-suggest-failed = The assistant could not make a suggestion: { $reason }
 agents-error-network = The server could not be reached. Check your connection and try again.
 agents-error-rate = Too many requests right now. Wait a moment and try again.
 agents-error-rate-retry = Too many requests right now. Try again in { $seconds } seconds.

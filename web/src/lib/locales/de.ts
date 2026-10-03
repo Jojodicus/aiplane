@@ -749,7 +749,6 @@ export const de: Catalog = {
  "agents-setup-strict-hint": "Vor jeder Antwort prüft ein kleines Modell, ob die Frage zu den Themen passt. Wenn nicht, bekommt der Besucher die Standardantwort und das Hauptmodell wird nicht gefragt.",
  "agents-setup-strict-needs": "Ein strenger Themen-Wächter braucht mindestens ein Thema und eine Antwort für andere Themen.",
  "agents-setup-suggest-dismiss": "Verwerfen",
- "agents-setup-suggest-failed": "Der Assistent konnte keinen Vorschlag machen: {reason}",
  "agents-setup-suggest-task": "Vorgeschlagene Aufgabe",
  "agents-setup-suggest-tests": "Vorgeschlagene Testgespräche",
  "agents-setup-suggest-tone": "Vorgeschlagener Ton",

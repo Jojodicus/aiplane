@@ -267,7 +267,6 @@ agents-setup-todo-site = Укажите сайт, на котором появл
 agents-setup-proposal-ready = Предложение готово. Каждый шаг теперь показывает свою часть — примените подходящее, остальное отклоните.
 agents-setup-dropped = Не вошло:
 agents-setup-suggest-dismiss = Отклонить
-agents-setup-suggest-failed = Помощник не смог сделать предложение: { $reason }
 agents-error-network = Не удалось связаться с сервером. Проверьте подключение и попробуйте ещё раз.
 agents-error-rate = Сейчас слишком много запросов. Подождите немного и попробуйте ещё раз.
 agents-error-rate-retry = Сейчас слишком много запросов. Попробуйте ещё раз через { $seconds } с.

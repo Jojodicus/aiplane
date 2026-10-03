@@ -742,7 +742,6 @@ export const zh: Catalog = {
  "agents-setup-strict-hint": "每次回答前，一个小模型会检查问题是否属于这些主题。如果不属于，访客会收到标准回复，主模型不会被调用。",
  "agents-setup-strict-needs": "严格的主题守卫至少需要一个主题和一条针对其他主题的回复。",
  "agents-setup-suggest-dismiss": "忽略",
- "agents-setup-suggest-failed": "助手无法给出建议：{reason}",
  "agents-setup-suggest-task": "建议的任务",
  "agents-setup-suggest-tests": "建议的测试对话",
  "agents-setup-suggest-tone": "建议的语气",

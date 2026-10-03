@@ -763,7 +763,6 @@ export const ru: Catalog = {
  "agents-setup-strict-hint": "Перед каждым ответом небольшая модель проверяет, относится ли вопрос к темам. Если нет, посетитель получает стандартный ответ, а основная модель не вызывается.",
  "agents-setup-strict-needs": "Строгому стражу тем нужны хотя бы одна тема и ответ на другие темы.",
  "agents-setup-suggest-dismiss": "Отклонить",
- "agents-setup-suggest-failed": "Помощник не смог сделать предложение: {reason}",
  "agents-setup-suggest-task": "Предложенная задача",
  "agents-setup-suggest-tests": "Предложенные тестовые разговоры",
  "agents-setup-suggest-tone": "Предложенный тон",

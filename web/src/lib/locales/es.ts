@@ -749,7 +749,6 @@ export const es: Catalog = {
  "agents-setup-strict-hint": "Antes de cada respuesta, un modelo pequeño comprueba si la pregunta encaja en los temas. Si no, el visitante recibe la respuesta estándar y nunca se consulta al modelo principal.",
  "agents-setup-strict-needs": "Un guardián estricto necesita al menos un tema y una respuesta para otros temas.",
  "agents-setup-suggest-dismiss": "Descartar",
- "agents-setup-suggest-failed": "El asistente no pudo hacer una propuesta: {reason}",
  "agents-setup-suggest-task": "Tarea propuesta",
  "agents-setup-suggest-tests": "Conversaciones de prueba propuestas",
  "agents-setup-suggest-tone": "Tono propuesto",

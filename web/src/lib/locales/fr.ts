@@ -749,7 +749,6 @@ export const fr: Catalog = {
  "agents-setup-strict-hint": "Avant chaque réponse, un petit modèle vérifie si la question correspond aux sujets. Sinon, le visiteur reçoit la réponse standard et le modèle principal n’est jamais sollicité.",
  "agents-setup-strict-needs": "Une garde stricte des sujets nécessite au moins un sujet et une réponse pour les autres sujets.",
  "agents-setup-suggest-dismiss": "Écarter",
- "agents-setup-suggest-failed": "L’assistant n’a pas pu faire de proposition : {reason}",
  "agents-setup-suggest-task": "Mission proposée",
  "agents-setup-suggest-tests": "Conversations de test proposées",
  "agents-setup-suggest-tone": "Ton proposé",
