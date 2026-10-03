@@ -9,7 +9,8 @@
 //! the database. Then the log under parallel turns, and a run whose log
 //! cannot be written.
 
-use aiplane_agents::db::agent_audit::{ActivityQuery, Order, StoredEvent};
+use aiplane_agents::db::agent_audit::{ActivityQuery, AuditKind, Order, StoredEvent};
+use aiplane_agents::db::system_principals as sp;
 use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
 
@@ -235,6 +236,25 @@ async fn a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret(
         .await
         .unwrap();
     assert!(verified.ok(), "{verified:?}");
+    assert_eq!(
+        verified.unanchored, 0,
+        "every turn's end anchored the conversation"
+    );
+    let head = verified.head.expect("the agent chain's head is reported");
+    assert_eq!(head.chain_key, format!("agent:{}", run.support));
+    let anchors: Vec<Value> = agent_audit::for_principal(run.world.db(), &run.support)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "chain_anchored")
+        .map(|e| e.detail)
+        .collect();
+    assert_eq!(anchors.len(), 3, "one per turn: two pauses and the answer");
+    assert!(
+        anchors
+            .iter()
+            .all(|a| a["chain_key"] == format!("conversation:{}", run.session))
+    );
     let seqs: Vec<i64> = events.iter().map(|e| e.seq.unwrap()).collect();
     assert_eq!(
         seqs,
@@ -413,6 +433,283 @@ async fn a_changed_event_breaks_the_chain_at_that_event() {
         .expect("the change is found");
     assert_eq!(broken.event_id.as_deref(), Some(tampered.id.as_str()));
     assert_eq!(Some(broken.seq), tampered.seq);
+}
+
+#[tokio::test]
+async fn a_conversation_whose_last_turn_was_cut_from_the_log_fails_verification() {
+    let run = the_story().await;
+    let last = conversation(&run).await.last().unwrap().seq.unwrap();
+    sqlx::query("DELETE FROM agent_audit WHERE conversation_id = ? AND seq > ?")
+        .bind(&run.session)
+        .bind(last - 3)
+        .execute(run.world.db())
+        .await
+        .unwrap();
+    let broken = agent_audit::verify(run.world.db(), &run.support)
+        .await
+        .unwrap()
+        .broken
+        .expect("the cut tail is found");
+    assert_eq!(broken.chain_key, format!("conversation:{}", run.session));
+    assert!(
+        broken.reason.contains("newest events were removed"),
+        "{broken:?}"
+    );
+}
+
+/// A pool upstream answering a streamed round with `round` and a plain
+/// (non-streamed) call with `answer` as its message content.
+async fn rounds_and_calls(round: Value, answer: &str) -> MockServer {
+    let answer = answer.to_string();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            if body["stream"] == true {
+                let sse = format!(
+                    "data: {}\n\ndata: [DONE]\n\n",
+                    json!({"choices": [{"index": 0, "delta": round}]})
+                );
+                ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "choices": [{ "message": { "role": "assistant", "content": answer } }]
+                }))
+            }
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn exchanges_of(world: &World, agent: &str, purpose: &str) -> Vec<StoredEvent> {
+    agent_audit::page(
+        world.db(),
+        &ActivityQuery {
+            agent_id: agent.to_string(),
+            kinds: vec![AuditKind::LlmExchange],
+            order: Order::Asc,
+            limit: 1_000,
+            max_bytes: usize::MAX,
+            ..ActivityQuery::default()
+        },
+    )
+    .await
+    .unwrap()
+    .events
+    .into_iter()
+    .filter(|e| detail(e)["purpose"] == purpose)
+    .collect()
+}
+
+async fn plain_agent(world: &World, extra: &[(GrantKind, &str)], tools: &[&str]) -> String {
+    let mut grants = vec![(GrantKind::Pool, "support-pool")];
+    grants.extend_from_slice(extra);
+    let agent = world.agent("support", &grants).await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": {
+                "pool": "support-pool",
+                "instructions": { "orchestration": "Answer." },
+                "tools": tools,
+                "budget": { "rounds": 4 }
+            } }),
+        )
+        .await;
+    agent
+}
+
+#[tokio::test]
+async fn an_agent_conversations_compaction_summary_is_an_exchange_of_its_log() {
+    let main = rounds_and_calls(text("noted"), "The visitor asked five things.").await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    let agent = plain_agent(&world, &[], &[]).await;
+    let first = visitor_says(&world, &agent, "question 0").await;
+    for n in 1..5 {
+        run_turn(
+            &world.state,
+            AgentTurn {
+                agent_id: &agent,
+                session_id: Some(&first.session_id),
+                message: &format!("question {n}"),
+                visitor_id: None,
+                lang: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::query("UPDATE chat_turns SET context_tokens = 30000 WHERE session_id = ?")
+        .bind(&first.session_id)
+        .execute(world.db())
+        .await
+        .unwrap();
+    let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
+    let access =
+        aiplane_core::server::upstreams::PoolAccess::for_system_pools(&principal, ["support-pool"]);
+
+    crate::server::compaction::maybe_autocompact(
+        &world.state,
+        &first.session_id,
+        "support-model",
+        &access,
+        None,
+    )
+    .await;
+    assert!(
+        exchanges_of(&world, &agent, "compaction_summary")
+            .await
+            .is_empty(),
+        "without a run nothing is recorded — a person's chat"
+    );
+    sqlx::query("DELETE FROM chat_compactions")
+        .execute(world.db())
+        .await
+        .unwrap();
+
+    let log = crate::agents::audit::RunLog::conversation(&principal, 1, &first.session_id);
+    crate::server::compaction::maybe_autocompact(
+        &world.state,
+        &first.session_id,
+        "support-model",
+        &access,
+        Some(log),
+    )
+    .await;
+    let summaries = exchanges_of(&world, &agent, "compaction_summary").await;
+    assert_eq!(summaries.len(), 1);
+    let d = detail(&summaries[0]);
+    assert!(
+        d["request"]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("question 0")
+    );
+    assert_eq!(
+        d["response"]["body"]["choices"][0]["message"]["content"],
+        "The visitor asked five things."
+    );
+    assert_eq!(
+        summaries[0].conversation_id.as_deref(),
+        Some(first.session_id.as_str())
+    );
+    assert!(agent_audit::verify(world.db(), &agent).await.unwrap().ok());
+}
+
+#[tokio::test]
+async fn the_rubric_judges_exchange_is_logged_in_the_case_conversation() {
+    let main = rounds_and_calls(text("hi"), r#"{"passed": true, "reason": "it greeted"}"#).await;
+    let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    let agent = plain_agent(&world, &[], &[]).await;
+    let spec = crate::agents::spec::AgentSpec::from_value(&json!({ "main": {
+        "pool": "support-pool", "instructions": { "orchestration": "Answer." }
+    } }))
+    .unwrap();
+    let judge = crate::agents::eval_judge::PoolJudge::for_agent(world.state.clone(), &agent, &spec)
+        .await
+        .expect("a judge on the agent's pool");
+    let verdict = crate::agents::eval::RubricJudge::judge(
+        &judge,
+        "greets",
+        &[crate::agents::eval::Exchange {
+            visitor: "hello".into(),
+            agent: Some("hi".into()),
+        }],
+        "case-conversation",
+    )
+    .await
+    .unwrap();
+    assert!(verdict.passed);
+    let judged = exchanges_of(&world, &agent, "rubric_judge").await;
+    assert_eq!(judged.len(), 1);
+    assert_eq!(
+        judged[0].conversation_id.as_deref(),
+        Some("case-conversation")
+    );
+    assert_eq!(judged[0].version, Some(0), "the evaluation's draft run");
+    assert!(detail(&judged[0])["request"].to_string().contains("greets"));
+}
+
+/// A tool that returns an image for the model to see.
+struct Snapshot;
+
+const IMAGE: &str = "data:image/png;base64,iVBORw0KGgo=";
+
+impl crate::server::tools::Tool for Snapshot {
+    fn id(&self) -> &str {
+        "snapshot"
+    }
+
+    fn schema(&self) -> shared::api::ToolDef {
+        shared::api::ToolDef::function(
+            "snapshot",
+            "Take a snapshot.",
+            json!({ "type": "object", "properties": {} }),
+        )
+    }
+
+    fn run<'a>(
+        &'a self,
+        _ctx: crate::server::tools::ToolContext,
+        _args: Value,
+    ) -> crate::server::tools::ToolFuture<'a> {
+        Box::pin(async move {
+            Ok(crate::server::tools::tool_content_parts(vec![json!({
+                "type": "image_url", "image_url": { "url": IMAGE }
+            })]))
+        })
+    }
+}
+
+#[tokio::test]
+async fn the_vision_fallbacks_description_is_an_exchange_of_the_tool_call() {
+    let main = llm(vec![
+        call("p1", "snapshot", json!({})),
+        text("A red square."),
+    ])
+    .await;
+    let vision = rounds_and_calls(text("unused"), "a red square").await;
+    let world = World::build(
+        &[
+            ("support-pool", "support-model", &main),
+            ("vision-pool", "vision-model", &vision),
+        ],
+        None,
+        false,
+        base_tools().with(Snapshot),
+        None,
+    )
+    .await;
+    aiplane_core::server::db::model_defaults::set_capabilities(
+        world.db(),
+        "support-model",
+        &aiplane_core::server::db::model_defaults::ModelCapabilities {
+            vision: Some(false),
+            fallback_vision: Some("vision-model".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent = plain_agent(&world, &[(GrantKind::Tool, "snapshot")], &["snapshot"]).await;
+
+    let reply = visitor_says(&world, &agent, "What do you see?").await;
+    assert_eq!(reply.answer.as_deref(), Some("A red square."));
+    let described = exchanges_of(&world, &agent, "vision_fallback").await;
+    assert_eq!(described.len(), 1);
+    assert_eq!(described[0].call_id.as_deref(), Some("p1"));
+    let d = detail(&described[0]);
+    assert!(
+        d["request"].to_string().contains(IMAGE),
+        "the image as sent"
+    );
+    assert_eq!(
+        d["response"]["body"]["choices"][0]["message"]["content"],
+        "a red square"
+    );
+    assert!(agent_audit::verify(world.db(), &agent).await.unwrap().ok());
 }
 
 /// Answers a round that has a tool result with text, any other with a call

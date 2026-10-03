@@ -102,6 +102,43 @@ pub(crate) const RETIRED_LABELS: &[&[u8]] = &[
     b"croit-llm-gateway/mcp-token-encryption/v1",
 ];
 
+/// Domain-separation label for the agent activity log's chain key, derived
+/// from the at-rest key (and from each retired one, for the ring).
+pub(crate) const ACTIVITY_LABEL: &[u8] = b"croit-aiplane/activity-log-chain/v1";
+
+/// One key the agent activity log signs its hash chains with. `id` is a
+/// fingerprint stored beside every event, so verification picks the key the
+/// event was written under; it reveals nothing about the key.
+#[derive(Clone)]
+pub struct ActivityKey {
+    pub id: String,
+    key: [u8; 32],
+}
+
+impl std::fmt::Debug for ActivityKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ActivityKey({})", self.id)
+    }
+}
+
+impl ActivityKey {
+    fn derived_from(at_rest: &[u8; 32]) -> Self {
+        let key = derive(at_rest, ACTIVITY_LABEL);
+        Self {
+            id: sha256_hex(&key)[..16].to_string(),
+            key,
+        }
+    }
+
+    /// Lowercase-hex HMAC-SHA256 of `message` under this key.
+    pub fn sign(&self, message: &[u8]) -> String {
+        let mut mac =
+            <Hmac<Sha256>>::new_from_slice(&self.key).expect("HMAC accepts any key length");
+        mac.update(message);
+        hex_encode(&mac.finalize().into_bytes())
+    }
+}
+
 /// HKDF-lite: HMAC-SHA256(session_secret, label).
 pub(crate) fn derive(session_secret: &[u8; 32], label: &[u8]) -> [u8; 32] {
     let mut mac =
@@ -181,6 +218,16 @@ impl Crypto {
                 .map(|label| derive(session_secret, label))
                 .collect(),
         }
+    }
+
+    /// The activity log's key ring: the key derived from the current at-rest
+    /// key first (what new events are signed with), then one per retired
+    /// at-rest key, so a label rotation leaves every older event verifiable.
+    pub fn activity_keys(&self) -> Vec<ActivityKey> {
+        std::iter::once(&self.key)
+            .chain(&self.legacy)
+            .map(ActivityKey::derived_from)
+            .collect()
     }
 
     /// Encrypt `plaintext` under a fresh random nonce.
@@ -326,6 +373,45 @@ pub fn random_hex(n: usize) -> String {
         .try_fill_bytes(&mut bytes)
         .expect("OS RNG must succeed");
     hex_encode(&bytes)
+}
+
+#[cfg(test)]
+mod activity_key_tests {
+    use super::*;
+
+    #[test]
+    fn the_activity_key_is_hmac_sha256_under_a_key_derived_from_the_at_rest_key() {
+        let crypto = Crypto::from_key([7u8; 32]);
+        let ring = crypto.activity_keys();
+        assert_eq!(ring.len(), 1);
+        let key = &ring[0];
+        assert_eq!(key.id.len(), 16);
+        let expected = {
+            let mut mac =
+                <Hmac<Sha256>>::new_from_slice(&derive(&[7u8; 32], ACTIVITY_LABEL)).unwrap();
+            mac.update(b"event");
+            hex_encode(&mac.finalize().into_bytes())
+        };
+        assert_eq!(key.sign(b"event"), expected);
+        assert_ne!(key.sign(b"event"), sha256_hex(b"event"));
+        assert_ne!(
+            Crypto::from_key([8u8; 32]).activity_keys()[0].sign(b"event"),
+            key.sign(b"event"),
+            "another gateway's key signs differently"
+        );
+    }
+
+    #[test]
+    fn a_rotated_label_keeps_the_older_activity_keys_in_the_ring() {
+        let ring = Crypto::from_session(&[3u8; 32]).activity_keys();
+        assert_eq!(ring.len(), 1 + RETIRED_LABELS.len());
+        assert_eq!(
+            ring[1].id,
+            ActivityKey::derived_from(&derive(&[3u8; 32], RETIRED_LABELS[0])).id
+        );
+        let ids: std::collections::BTreeSet<&str> = ring.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(ids.len(), ring.len(), "every key has its own id");
+    }
 }
 
 #[cfg(test)]

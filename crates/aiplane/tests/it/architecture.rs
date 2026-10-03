@@ -899,7 +899,12 @@ fn activity_events_are_written_only_through_the_activity_log() {
         &sql,
     );
     let writers = scan(
-        &["agent_audit::append", "append_now", "agent_audit::record("],
+        &[
+            "agent_audit::append",
+            "append_now",
+            "agent_audit::record(",
+            "agent_audit::anchor",
+        ],
         |s| s.code.as_str(),
     );
     assert_within(

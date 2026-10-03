@@ -680,9 +680,16 @@ impl SessionDriver for OpenAiDriver {
                 )
                 .unwrap_or(routing_model);
             let access = policy.compaction_pools();
+            let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
             tokio::spawn(async move {
-                crate::server::compaction::maybe_autocompact(&state, &session_id, &model, &access)
-                    .await;
+                crate::server::compaction::maybe_autocompact(
+                    &state,
+                    &session_id,
+                    &model,
+                    &access,
+                    log,
+                )
+                .await;
             });
         }
         result
@@ -2069,15 +2076,16 @@ async fn run_one_turn(
                 // the model, and slicing a base64 image in half produces a
                 // corrupt attachment rather than a shorter one.
                 Some(parts) => {
-                    let (replaced, notification) =
-                        aiplane_core::server::capabilities::maybe_replace_image_content(
-                            parts,
-                            &real_model,
-                            &d.state.db,
-                            &d.state.http,
-                            d.state.upstreams.as_ref(),
-                        )
-                        .await;
+                    let replaced = aiplane_core::server::capabilities::maybe_replace_image_content(
+                        parts,
+                        &real_model,
+                        &d.state.db,
+                        &d.state.http,
+                        d.state.upstreams.as_ref(),
+                    )
+                    .await;
+                    exchange::record_vision_fallback(d, &tool_ctx, &call.id, &replaced.calls).await;
+                    let (replaced, notification) = (replaced.parts, replaced.notification);
                     if let Some(msg) = notification {
                         tracing::info!(model = %real_model, "vision fallback activated");
                         let _ = ctx.broadcast.send(TurnUpdate::InfoMessage(msg));

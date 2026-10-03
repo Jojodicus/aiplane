@@ -93,7 +93,15 @@ async fn a_sub_agents_event_lands_in_the_conversations_chain_with_every_correlat
     assert_eq!(row.call_id.as_deref(), Some("call-1"));
     assert_eq!(row.seq, Some(1));
     assert_eq!(row.prev_hash, None);
-    assert_eq!(row.hash.as_deref(), Some(row.computed_hash().as_str()));
+    assert_eq!(
+        row.hash.as_deref(),
+        row.expected_hash(&key_ring()).as_deref()
+    );
+    assert_eq!(
+        row.key_id.as_deref(),
+        Some(UNKEYED),
+        "no ring in this process"
+    );
     assert!(for_principal(&pool, "p-main").await.unwrap().is_empty());
     let events = for_principal(&pool, "p-bill").await.unwrap();
     assert_eq!(events[0].chain, Some(chain.to_json()));
@@ -406,11 +414,16 @@ async fn the_sweep_takes_whole_chains_of_gone_conversations_only() {
         3,
         "a conversation that still exists keeps its log"
     );
+    let own = chain_rows(&pool, &agent_chain(&agent.id)).await;
     assert_eq!(
-        chain_rows(&pool, &agent_chain(&agent.id)).await.len(),
-        agent_events,
-        "the agent's own chain is never swept"
+        own.len(),
+        agent_events + 1,
+        "the agent's own chain is never swept, and gains the sweep's marker"
     );
+    let marker: Value = serde_json::from_str(&own.last().unwrap().detail).unwrap();
+    assert_eq!(own.last().unwrap().kind, "activity_swept");
+    assert_eq!(marker["chain_key"], "conversation:s-gone");
+    assert_eq!(marker["events"], 3);
     assert!(verify(&pool, &agent.id).await.unwrap().ok());
 }
 
@@ -430,6 +443,194 @@ async fn the_head_and_the_sweep_never_read_a_row_behind_its_payload() {
             "{sql}\n{plan:?}"
         );
     }
+}
+
+fn keyed(seed: u8) -> Vec<ActivityKey> {
+    aiplane_core::server::crypto::Crypto::from_key([seed; 32]).activity_keys()
+}
+
+async fn row_of(pool: &Pool, key: &str, seq: i64) -> StoredEvent {
+    let sql = format!("SELECT {COLUMNS} FROM agent_audit WHERE chain_key = ? AND seq = ?");
+    stored(
+        &sqlx::query(&sql)
+            .bind(key)
+            .bind(seq)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+/// Rewrite event `seq` of chain `key` with `detail`, re-hashing it — and
+/// every event after it, so the links stay whole — under `keys` (an
+/// attacker's own key, or none), the way someone with only the database
+/// would forge a consistent chain.
+async fn forge(pool: &Pool, key: &str, seq: i64, detail: &str, keys: &[ActivityKey]) {
+    let last: i64 = sqlx::query_scalar("SELECT MAX(seq) FROM agent_audit WHERE chain_key = ?")
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let mut prev = if seq > 1 {
+        row_of(pool, key, seq - 1).await.hash
+    } else {
+        None
+    };
+    for n in seq..=last {
+        let mut row = row_of(pool, key, n).await;
+        if n == seq {
+            row.detail = detail.to_string();
+        }
+        row.prev_hash = prev.clone();
+        row.key_id = Some(keys.first().map_or(UNKEYED, |k| k.id.as_str()).to_string());
+        let hash = row.expected_hash(keys).unwrap();
+        sqlx::query(
+            "UPDATE agent_audit SET detail = ?, prev_hash = ?, key_id = ?, hash = ? WHERE id = ?",
+        )
+        .bind(&row.detail)
+        .bind(&row.prev_hash)
+        .bind(&row.key_id)
+        .bind(&hash)
+        .bind(&row.id)
+        .execute(pool)
+        .await
+        .unwrap();
+        prev = Some(hash);
+    }
+}
+
+#[tokio::test]
+async fn a_keyed_chain_cannot_be_reforged_from_the_database_alone() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    let chain = main_chain("s1");
+    for n in 0..3 {
+        run_event(&pool, &chain, AuditKind::ToolResult, json!({"n": n})).await;
+    }
+    let first = row_of(&pool, "conversation:s1", 1).await;
+    assert_eq!(first.key_id.as_deref(), Some(keyed(1)[0].id.as_str()));
+    assert_ne!(
+        first.hash,
+        Some(sha256_hex(first.canonical().as_bytes())),
+        "an HMAC, not a plain digest"
+    );
+    assert!(verify(&pool, "p-main").await.unwrap().ok());
+
+    forge(&pool, "conversation:s1", 2, r#"{"n":99}"#, &[]).await;
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.seq, 2);
+    assert!(broken.reason.contains("not signed"), "{broken:?}");
+
+    forge(&pool, "conversation:s1", 2, r#"{"n":98}"#, &keyed(9)).await;
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.seq, 2);
+    assert!(broken.reason.contains("does not hold"), "{broken:?}");
+}
+
+#[tokio::test]
+async fn events_signed_before_a_label_rotation_still_verify() {
+    let pool = memory().await;
+    let session = [5u8; 32];
+    let before = aiplane_core::server::crypto::Crypto::from_session(&session).activity_keys();
+    install_key_ring(vec![before[1].clone()]);
+    run_event(&pool, &main_chain("s1"), AuditKind::ToolCall, json!({})).await;
+    install_key_ring(before.clone());
+    run_event(&pool, &main_chain("s1"), AuditKind::ToolCall, json!({})).await;
+    let v = verify(&pool, "p-main").await.unwrap();
+    assert!(v.ok(), "{v:?}");
+    assert_ne!(
+        row_of(&pool, "conversation:s1", 1).await.key_id,
+        row_of(&pool, "conversation:s1", 2).await.key_id
+    );
+}
+
+#[tokio::test]
+async fn an_anchor_catches_a_cut_tail_and_a_deleted_conversation_chain() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    for conversation in ["s-cut", "s-gone", "s-later"] {
+        for n in 0..3 {
+            run_event(
+                &pool,
+                &main_chain(conversation),
+                AuditKind::ToolCall,
+                json!({"n": n}),
+            )
+            .await;
+        }
+        anchor_conversation(&pool, "p-main", conversation)
+            .await
+            .unwrap()
+            .expect("an anchor");
+    }
+    run_event(
+        &pool,
+        &main_chain("s-later"),
+        AuditKind::ToolCall,
+        json!({}),
+    )
+    .await;
+    assert!(
+        anchor_conversation(&pool, "p-main", "s-empty")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let v = verify(&pool, "p-main").await.unwrap();
+    assert!(v.ok(), "{v:?}");
+    assert_eq!(v.unanchored, 1, "s-later's event after its anchor");
+    let head = v.head.expect("the agent chain's head");
+    assert_eq!((head.chain_key.as_str(), head.seq), ("agent:p-main", 3));
+    assert_eq!(head.hash, row_of(&pool, "agent:p-main", 3).await.hash);
+
+    sqlx::query("DELETE FROM agent_audit WHERE chain_key = 'conversation:s-cut' AND seq = 3")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.chain_key, "conversation:s-cut");
+    assert!(
+        broken.reason.contains("newest events were removed"),
+        "{broken:?}"
+    );
+
+    sqlx::query("DELETE FROM agent_audit WHERE chain_key = 'conversation:s-cut'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM agent_audit WHERE chain_key = 'conversation:s-gone'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let broken = verify(&pool, "p-main").await.unwrap().broken.unwrap();
+    assert_eq!(broken.chain_key, "conversation:s-cut");
+    assert!(broken.reason.contains("is gone"), "{broken:?}");
+}
+
+#[tokio::test]
+async fn a_chain_the_sweep_removed_is_let_go_by_its_anchor() {
+    let pool = memory().await;
+    install_key_ring(keyed(1));
+    run_event(&pool, &main_chain("s-old"), AuditKind::ToolCall, json!({})).await;
+    anchor_conversation(&pool, "p-main", "s-old").await.unwrap();
+    let swept = sweep_conversation_chains(
+        &pool,
+        "p-main",
+        Timestamp::now() + jiff::SignedDuration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(swept.chains, 1);
+    let v = verify(&pool, "p-main").await.unwrap();
+    assert!(v.ok(), "{v:?}");
+    let kinds: Vec<String> = for_principal(&pool, "p-main")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, ["activity_swept", "chain_anchored"]);
 }
 
 #[test]

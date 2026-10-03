@@ -81,8 +81,8 @@ fn days_before(now: Timestamp, days: i64) -> Timestamp {
 }
 
 /// Delete the activity log's chains of `agent_id`'s conversations that are
-/// gone and quiet since `before`, and mark the sweep on the agent's own
-/// chain with what it removed.
+/// gone and quiet since `before`; each removal is marked on the agent's own
+/// chain in the same transaction (`agent_audit::sweep_conversation_chains`).
 async fn sweep_activity(
     pool: &Pool,
     agent_id: &str,
@@ -90,23 +90,15 @@ async fn sweep_activity(
     before: Timestamp,
 ) -> Result<(), DbError> {
     let swept = agent_audit::sweep_conversation_chains(pool, agent_id, before).await?;
-    if swept.events == 0 {
-        return Ok(());
+    if swept.chains > 0 {
+        tracing::info!(
+            agent = agent_id,
+            audit_retention_days = days,
+            chains = swept.chains,
+            events = swept.events,
+            "agents: deleted activity log chains past their retention period"
+        );
     }
-    super::audit::record(
-        pool,
-        AuditKind::ActivitySwept,
-        agent_id,
-        None,
-        None,
-        json!({
-            "audit_retention_days": days,
-            "before": before,
-            "chains": swept.chains,
-            "events": swept.events,
-        }),
-    )
-    .await;
     Ok(())
 }
 
@@ -241,9 +233,11 @@ mod tests {
             .into_iter()
             .find(|e| e.kind == "activity_swept")
             .expect("the sweep leaves a marker on the agent's own chain");
-        assert_eq!(marker.detail["chains"], 1);
+        assert_eq!(
+            marker.detail["chain_key"],
+            format!("conversation:{session}")
+        );
         assert_eq!(marker.detail["events"], 3);
-        assert_eq!(marker.detail["audit_retention_days"], 2);
         assert!(agent_audit::verify(&pool, &agent).await.unwrap().ok());
     }
 

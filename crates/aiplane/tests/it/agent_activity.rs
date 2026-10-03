@@ -200,6 +200,12 @@ async fn verify_reports_an_intact_log_and_then_the_link_that_was_changed() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], true);
     assert_eq!(body["chains"], 3, "two conversations and the agent's own");
+    assert_eq!(body["head"]["chain_key"], format!("agent:{agent}"));
+    assert_eq!(body["head"]["seq"], 2);
+    assert_eq!(
+        body["unanchored"], 6,
+        "no turn ended, so nothing is anchored"
+    );
     assert_eq!(body["events"], 8);
 
     sqlx::query(

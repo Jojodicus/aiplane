@@ -275,6 +275,7 @@ impl AppState {
         rbac: Arc<Resolver>,
     ) -> Self {
         let crypto = Arc::new(Crypto::ephemeral());
+        aiplane_agents::db::agent_audit::install_key_ring(crypto.activity_keys());
         let mcp = crate::server::tools::mcp::manager::McpConnectionManager::new(
             db.clone(),
             crypto.clone(),
@@ -947,8 +948,10 @@ impl AppState {
     }
 
     /// Install the production at-rest encryption key, rebuilding the MCP
-    /// connection manager so it seals/opens its tokens under the same key.
+    /// connection manager so it seals/opens its tokens under the same key,
+    /// and handing the activity log the chain keys derived from it.
     pub fn with_crypto(mut self, crypto: Arc<Crypto>) -> Self {
+        aiplane_agents::db::agent_audit::install_key_ring(crypto.activity_keys());
         self.mcp = crate::server::tools::mcp::manager::McpConnectionManager::new(
             self.db.clone(),
             crypto.clone(),

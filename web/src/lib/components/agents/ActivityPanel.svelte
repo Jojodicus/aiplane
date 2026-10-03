@@ -122,8 +122,15 @@
 				<span>
 					{t('agents-act-verified', { events: verification.events, chains: verification.chains })}
 					{#if verification.unchained}{t('agents-act-unchained', { count: verification.unchained })}{/if}
+					{#if verification.unanchored}{t('agents-act-unanchored', { count: verification.unanchored })}{/if}
 				</span>
 			</div>
+			{#if verification.head}
+				<p class="text-xs text-base-content/70">
+					{t('agents-act-head')}
+					<code class="block break-all">{verification.head.chain_key} #{verification.head.seq} {verification.head.hash ?? ''}</code>
+				</p>
+			{/if}
 		{:else if verification.broken}
 			<div class="alert alert-error text-sm" role="alert">
 				<span>{t('agents-act-broken', { chain: verification.broken.chain_key, seq: verification.broken.seq, reason: verification.broken.reason })}</span>

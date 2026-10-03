@@ -199,7 +199,9 @@ pub async fn export(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 }
 
 /// GET /api/v0/agents/{id}/activity/verify — walk every hash chain of the
-/// agent and report the first link that does not hold.
+/// agent, check each conversation against its latest anchor, and report the
+/// first thing that does not hold, with the agent chain's head for an
+/// operator to keep outside the gateway.
 pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Read).await);
@@ -211,6 +213,8 @@ pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Respon
                 "chains": v.chains,
                 "events": v.events,
                 "unchained": v.unchained,
+                "unanchored": v.unanchored,
+                "head": v.head,
                 "broken": v.broken,
             }),
         ),

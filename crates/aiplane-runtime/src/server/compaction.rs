@@ -26,6 +26,7 @@
 //! never deleted — they stay in `chat_turns` and remain visible in the
 //! transcript; they are simply not sent upstream.
 
+use crate::agents::audit::{RunLog, SideExchange};
 use aiplane_core::server::capped_read;
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 
@@ -63,12 +64,15 @@ summary\" — output only the summary itself.\n\
 /// is the **resolved real model** (the driver maps any alias first) — used both
 /// to resolve the context window and to route the summariser call, over the
 /// pools `access` reaches: the summary carries the conversation, so an agent's
-/// may only go to the pools its own turns may.
+/// may only go to the pools its own turns may. `log` is the agent run the
+/// conversation belongs to, whose activity log records the summariser's
+/// exchange; `None` for a person's chat.
 pub async fn maybe_autocompact(
     state: &RamaState,
     session_id: &str,
     model: &str,
     access: &PoolAccess,
+    log: Option<RunLog>,
 ) {
     let cfg = &state.config().chat.compaction;
     if !cfg.enabled {
@@ -102,7 +106,7 @@ pub async fn maybe_autocompact(
         %session_id, %model, current, threshold, window,
         "compaction: context over threshold, summarising"
     );
-    match run_compaction(state, session_id, model, access, Some(current)).await {
+    match run_compaction(state, session_id, model, access, Some(current), log).await {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(%session_id, "compaction: nothing to fold (guarded)");
@@ -146,6 +150,7 @@ async fn run_compaction(
     model: &str,
     access: &PoolAccess,
     tokens_before: Option<i64>,
+    log: Option<RunLog>,
 ) -> Result<bool, String> {
     let turns = chat::list_turns(&state.db, session_id)
         .await
@@ -159,6 +164,7 @@ async fn run_compaction(
         return Ok(false);
     };
 
+    let mut exchange = SideExchange::new("compaction_summary");
     let raw = tokio::time::timeout(
         std::time::Duration::from_secs(TIMEOUT_SECS),
         call_summarizer(
@@ -167,10 +173,17 @@ async fn run_compaction(
             access,
             &plan.input_text,
             cfg.summary_max_tokens,
+            &mut exchange,
         ),
     )
     .await
-    .map_err(|_| "summariser timed out".to_string())??;
+    .map_err(|_| "summariser timed out".to_string())
+    .and_then(|r| r);
+    if let Some(log) = &log {
+        exchange.error = raw.as_ref().err().cloned();
+        log.record(&state.db, exchange).await;
+    }
+    let raw = raw?;
 
     let summary = clean_summary(&raw);
     if summary.is_empty() {
@@ -332,13 +345,16 @@ async fn call_summarizer(
     access: &PoolAccess,
     input: &str,
     max_tokens: i64,
+    exchange: &mut SideExchange,
 ) -> Result<String, String> {
+    exchange.model = Some(model.to_string());
     let acquired = state
         .upstreams
         .route_access(model, PoolKind::Chat, access)
         .map_err(|e| e.to_string())?;
     let real_model = acquired.resolved_model().to_string();
     let backend = acquired.backend();
+    exchange.backend = Some(backend.name.clone());
     let url = format!("{}/chat/completions", backend.base_url);
     let user_with_directive = format!("{input}\n\n/no_think");
     let body = serde_json::json!({
@@ -352,6 +368,7 @@ async fn call_summarizer(
         "max_tokens": max_tokens,
         "chat_template_kwargs": { "enable_thinking": false },
     });
+    exchange.request = body.clone();
     let serialized = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     let mut req = state
         .http
@@ -367,6 +384,7 @@ async fn call_summarizer(
         .await
         .map_err(|e| e.to_string())?;
     drop(acquired);
+    exchange.answered(status.as_u16(), &bytes);
     if !status.is_success() {
         return Err(format!(
             "upstream {status}: {}",

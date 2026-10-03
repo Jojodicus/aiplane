@@ -6,19 +6,24 @@
 //!
 //! It reads the visitor's messages and the agent's answers and nothing else:
 //! no slot values, no tool results. Its verdict is reported next to a case's
-//! deterministic result and never changes it.
+//! deterministic result and never changes it. Its exchange is an
+//! `llm_exchange` (`purpose: rubric_judge`) in the activity log of the case's
+//! test conversation.
 
 use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aiplane_agents::db::system_principals as sp;
+use aiplane_core::server::principal::SystemPrincipal;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use super::audit::{RunLog, SideExchange};
 use super::eval::{Exchange, RubricJudge, RubricVerdict};
 use super::profile::pool_model;
+use super::run::draft::DRAFT_VERSION;
 use super::spec::AgentSpec;
 use crate::rama_server::state::RamaState;
 
@@ -28,6 +33,7 @@ pub struct PoolJudge {
     state: Arc<RamaState>,
     pool: String,
     access: PoolAccess,
+    principal: SystemPrincipal,
 }
 
 impl PoolJudge {
@@ -45,13 +51,36 @@ impl PoolJudge {
             state,
             pool,
             access,
+            principal,
         })
     }
 }
 
 #[async_trait]
 impl RubricJudge for PoolJudge {
-    async fn judge(&self, rubric: &str, exchanges: &[Exchange]) -> Result<RubricVerdict, String> {
+    async fn judge(
+        &self,
+        rubric: &str,
+        exchanges: &[Exchange],
+        conversation: &str,
+    ) -> Result<RubricVerdict, String> {
+        let mut exchange = SideExchange::new("rubric_judge");
+        let verdict = self.ask(rubric, exchanges, &mut exchange).await;
+        exchange.error = verdict.as_ref().err().cloned();
+        RunLog::conversation(&self.principal, DRAFT_VERSION, conversation)
+            .record(&self.state.db, exchange)
+            .await;
+        verdict
+    }
+}
+
+impl PoolJudge {
+    async fn ask(
+        &self,
+        rubric: &str,
+        exchanges: &[Exchange],
+        exchange: &mut SideExchange,
+    ) -> Result<RubricVerdict, String> {
         let model = pool_model(&self.state, &self.pool, &self.access)
             .ok_or_else(|| format!("pool `{}` serves no model the agent may use", self.pool))?;
         let acquired = self
@@ -60,6 +89,8 @@ impl RubricJudge for PoolJudge {
             .route_access(&model, PoolKind::Chat, &self.access)
             .map_err(|e| e.to_string())?;
         let backend = acquired.backend();
+        exchange.model = Some(model.clone());
+        exchange.backend = Some(backend.name.clone());
         let body = json!({
             "model": acquired.resolved_model(),
             "messages": [
@@ -91,6 +122,7 @@ impl RubricJudge for PoolJudge {
                 },
             },
         });
+        exchange.request = body.clone();
         let mut req = self
             .state
             .http
@@ -101,13 +133,17 @@ impl RubricJudge for PoolJudge {
             req = req.bearer_auth(key);
         }
         let resp = req.send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("the judge's upstream answered {}", resp.status()));
-        }
-        let parsed: Value = capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
+        let status = resp.status();
+        let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
             .await
             .map_err(|e| e.to_string())?;
         drop(acquired);
+        exchange.answered(status.as_u16(), &bytes);
+        if !status.is_success() {
+            return Err(format!("the judge's upstream answered {status}"));
+        }
+        let parsed: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("the judge's answer is not JSON ({e})"))?;
         let content = parsed
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)

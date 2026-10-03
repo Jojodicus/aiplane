@@ -42,6 +42,8 @@ export interface Verification {
 	chains: number;
 	events: number;
 	unchained: number;
+	unanchored: number;
+	head: { chain_key: string; seq: number; hash: string | null } | null;
 	broken: { chain_key: string; seq: number; event_id: string | null; reason: string } | null;
 }
 
@@ -75,7 +77,8 @@ export const KIND_GROUPS = {
 		'channel_created',
 		'channel_deleted',
 		'conversations_swept',
-		'activity_swept'
+		'activity_swept',
+		'chain_anchored'
 	]
 } as const satisfies Record<string, readonly string[]>;
 

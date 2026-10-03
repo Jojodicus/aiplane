@@ -50,6 +50,38 @@ impl Answer {
     }
 }
 
+/// Record the vision fallback's calls for the result of tool call
+/// `call_id`, in an agent run only.
+pub(super) async fn record_vision_fallback(
+    d: &OpenAiDriver,
+    tool_ctx: &ToolContext,
+    call_id: &str,
+    calls: &[aiplane_core::server::capabilities::DescribeCall],
+) {
+    if d.agent().is_none() || calls.is_empty() {
+        return;
+    }
+    let ctx = ToolContext {
+        call_id: Some(call_id.to_string()),
+        ..tool_ctx.clone()
+    };
+    for call in calls {
+        let mut detail = json!({
+            "purpose": "vision_fallback",
+            "model": call.model,
+            "backend": call.backend,
+            "request": call.request,
+            "response": { "status": call.status, "body": call.response },
+            "latency_ms": call.latency_ms,
+        });
+        if let Some(error) = &call.error {
+            detail["error"] = json!(error);
+        }
+        ctx.audit_event(AuditKind::LlmExchange, Some(call.latency_ms), detail)
+            .await;
+    }
+}
+
 /// Record one round. `request` is the body that went (or would have gone)
 /// upstream; `started` is when it was sent.
 pub(super) async fn record(

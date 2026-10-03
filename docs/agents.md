@@ -2529,21 +2529,66 @@ changes, refused visitors, sweeps). Per conversation rather than per agent
 because retention removes conversations, and a chain must go whole or not
 at all; and because parallel conversations then never contend for one
 chain head. Within a chain events count up from 1 (`seq`); each stores the
-hash of the one before (`prev_hash`) and its own `hash` = SHA-256 over its
-canonical JSON — every column except `hash` and the rowid, keys sorted, no
-whitespace, `chain` and `detail` as the exact stored text. A unique index
-on `(chain_key, seq)` refuses a fork. Rows from before #111 have no chain;
-`verify` counts them as `unchained`.
+hash of the one before (`prev_hash`) and its own `hash` = HMAC-SHA256 over
+its canonical JSON — every column except `hash` and the rowid, keys sorted,
+no whitespace, `chain` and `detail` as the exact stored text — under the
+log key its `key_id` names. A unique index on `(chain_key, seq)` refuses a
+fork. Rows from before #111 have no chain; `verify` counts them as
+`unchained`.
 
-`agent_audit::verify(agent)` walks every chain of the agent in batches of
-256 and reports the first link that does not hold: a `seq` gap (an event
-removed from the middle), a `prev_hash` that is not the previous hash (an
-event inserted or relinked), or a `hash` that does not match the content
-(an event changed). *Limits:* a chain cannot show that its newest events,
-or a whole chain, were deleted, and the hash is unkeyed, so someone who can
-write the database can rebuild a consistent chain. The log is tamper-*evident*
-against edits in place; for more, export it regularly and keep the newest
-`hash` of each chain outside the gateway.
+**The log key.** No new secret: the key is derived from the gateway's
+at-rest key (`Crypto`, `$AIPLANE_ENCRYPTION_KEY` or the session secret) as
+HMAC-SHA256(at-rest key, `croit-aiplane/activity-log-chain/v1`), and
+`Crypto::activity_keys` returns the ring — the current key first, then one
+per retired at-rest label. Each event stores the `key_id` (the first 16 hex
+digits of the key's SHA-256: a fingerprint, not the key) it was signed
+with, and `verify` picks that key from the ring, so a label rotation (the
+supported way to rotate the at-rest key, `crypto.rs` → `RETIRED_LABELS`)
+leaves every older event verifiable. Replacing `$AIPLANE_ENCRYPTION_KEY`
+outright keeps no old key — sealed secrets stop opening too — and `verify`
+then reports the older events as signed with a key the gateway does not
+hold. The ring is installed process-wide when the gateway's state is built
+(`AppState::new`, `with_crypto`), because every writer, the management
+changes in `aiplane-agents` included, extends the same chains. An event
+written by a process without a ring (a unit test, a CLI) carries `key_id =
+unkeyed` and a plain SHA-256; where a ring is installed, `verify` refuses
+it, so rewriting a chain "unkeyed" does not pass either.
+
+**Anchors.** When a turn of a conversation ends — paused or answered, at
+the end of `drive_opened_from`, after the output filter — the conversation
+chain's head (`seq`, `hash`) is written into the agent's own chain as a
+`chain_anchored` event, read and written in one write transaction
+(`agent_audit::anchor_conversation`, through `agents::audit::anchor`,
+bounded like any event; a failure is logged and the conversation's newest
+events stay unanchored until the next turn). The retention sweep deletes a
+chain and writes `activity_swept {chain_key, events, before}` into the
+agent chain in the same transaction, so the removal is recorded with it.
+
+`agent_audit::verify(agent)` walks the agent's own chain first, collecting
+the latest anchor per conversation and the sweep markers, then every
+conversation chain, in batches of 256, and reports the first thing that
+does not hold: a `seq` gap (an event removed from the middle), a
+`prev_hash` that is not the previous hash (an event inserted or relinked),
+a `hash` that does not match the content under its key (an event changed,
+or re-hashed without the key), an unkeyed or unknown-key event, a
+conversation chain that ends before its anchored `seq` or whose event at
+that `seq` is not the anchored one (its tail was cut or rewritten), and an
+anchored chain that is gone without a sweep marker (a conversation's log
+deleted inside its retention). It also reports `unanchored` (conversation
+events newer than their chain's latest anchor) and the agent chain's
+`head` (`seq`, `hash`).
+
+*Residual limits.* Someone holding the at-rest key (or the session secret
+it is derived from) can forge anything — the key protects against a
+database-only attacker, not against the gateway's operator. A database-only
+attacker can still cut the agent chain's own tail together with the
+conversation events those last anchors covered, and delete events written
+after the last anchor (`unanchored`); both show only against a copy of the
+`head` kept outside the gateway, which is why `verify` returns it — an
+operator who exports the log or pins the head regularly (cron, SIEM)
+bounds what can disappear unnoticed to what was written since. Deleting a
+whole agent's rows, chain and anchors alike, leaves nothing to compare
+against except that pinned head.
 
 **Writing: synchronous, bounded, fail closed.** *Chosen over a bounded
 queue:* every event is written before the run moves on, in a write
@@ -2579,7 +2624,9 @@ logged and the request goes on as it would have.
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
 | `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
 | management kinds | the agent DB modules, on the change's transaction | as before |
-| `activity_swept` | the retention sweep | `audit_retention_days`, `before`, `chains`, `events` |
+| `activity_swept` | the retention sweep, on the deletion's transaction | `chain_key`, `events`, `before` |
+| `chain_anchored` | the end of every turn (`drive_opened_from`) | `chain_key`, `seq`, `hash` of the conversation chain's head |
+| `llm_exchange` | compaction, the rubric judge, the vision fallback | see below |
 
 `for_principal` — the decision trail the agent's GET, the test-chat debug
 view and the evaluation read — leaves out the content kinds
@@ -2600,17 +2647,30 @@ gate, an OTP verifier fed a known code, a sub-agent, an external A2A agent
 with a sealed bearer token and a handoff to a person, then greps every text
 column of every table for the code and the token.
 
-**What is not recorded.** The compaction summary call and the evaluation
-judge (neither is part of a conversation's run; the judge's verdict is in
-the test result), and the vision fallback that describes an image a tool
-returned for a model that cannot see. A person's chat records nothing here;
-its logging is unchanged.
+**Model calls outside the round loop** go through the same door as an
+`llm_exchange` with their own `purpose` (`agents::audit::SideExchange`,
+recorded for an agent's run only — `RunLog::of` is `None` for a person's
+turn, so a person's chat records nothing here and its logging is
+unchanged):
+- `compaction_summary` — the conversation's compaction summary, when the
+  compacted conversation is an agent's (`maybe_autocompact` gets the run's
+  `RunLog`), in that conversation's chain;
+- `rubric_judge` — the evaluation's rubric judge (#99), in the case's test
+  conversation (version 0);
+- `vision_fallback` — each call to the fallback vision model that
+  describes an image a tool returned for a model that cannot see
+  (`capabilities::maybe_replace_image_content` now returns its calls), with
+  the tool call's `call_id`.
+
+Each records `model`, `backend`, the `request` exactly as sent (the image
+included), `response` (`status`, `body`), `latency_ms` and `error`.
 
 **Retention.** `publish.audit_retention_days` (typed, default **365**,
 read from the live version like `retention_days`): the hourly sweep deletes
 the *whole* chain of a conversation that no longer exists and whose newest
 event is older than that, never part of a chain, and appends an
-`activity_swept` marker to the agent's own chain. The validator refuses a
+`activity_swept` marker per chain to the agent's own chain, in the same
+transaction. The validator refuses a
 value below `publish.retention_days` (default 30), so a conversation's log
 always outlives the conversation. The agent's own chain is never swept;
 events from before #111 go by their age.
@@ -2624,7 +2684,7 @@ handoffs without a share, cannot read it (`403`).
 |---|---|---|
 | GET | `/api/v0/agents/{id}/activity?conversation=&kind=&from=&to=&cursor=&order=&limit=` | A page of events (`limit` 1–500, default 100, and at most ~4 MiB of detail), newest first or `order=asc`; `kind` is a comma list; `from`/`to` RFC 3339 or `YYYY-MM-DD`; `{events, next_cursor, order}`. A conversation's events include its sub-agent runs |
 | GET | `/api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=` | Every matching event, oldest first, one JSON object per line (`application/x-ndjson`), streamed a ~1 MiB batch at a time with backpressure |
-| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unchained, broken: {chain_key, seq, event_id, reason} \| null}` |
+| GET | `/api/v0/agents/{id}/activity/verify` | `{ok, chains, events, unchained, unanchored, head: {chain_key, seq, hash} \| null, broken: {chain_key, seq, event_id, reason} \| null}` — keep `head` outside the gateway to detect a log cut back to an earlier one |
 
 An event reads `{cursor, id, kind, ts, principal_id, actor_id, agent_id,
 version, conversation_id, session_id, turn_id, round, call_id, visitor_id,

@@ -19,11 +19,13 @@
 //! change's own transaction instead; a refused visitor; a sweep) the failure
 //! is logged at `error` with the event's correlation ids.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agent_audit::{self, AuditKind, Correlation, NewEvent};
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::run_chain::RunChain;
+use aiplane_core::server::principal::SystemPrincipal;
+use aiplane_core::server::run_chain::{Frame, RunChain};
 use serde_json::{Value, json};
 
 use crate::agent_run::AgentRun;
@@ -106,6 +108,127 @@ pub(crate) async fn record_for_run(db: &Pool, run: Option<&AgentRun>, event: New
         && let Some(run) = run
     {
         run.mark_log_failed();
+    }
+}
+
+/// Anchor conversation `conversation_id`'s chain head in agent `agent_id`'s
+/// own chain, bounded like any event. Called when a turn of the conversation
+/// ends; a failure is logged, and the conversation's newest events stay
+/// unanchored until the next turn's anchor.
+pub async fn anchor(db: &Pool, agent_id: &str, conversation_id: &str) {
+    let anchored = tokio::time::timeout(
+        WRITE_BOUND,
+        agent_audit::anchor_conversation(db, agent_id, conversation_id),
+    )
+    .await;
+    let error = match anchored {
+        Ok(Ok(_)) => return,
+        Ok(Err(err)) => LogError::Db(err),
+        Err(_) => LogError::TimedOut,
+    };
+    tracing::error!(
+        error = %error,
+        agent = agent_id,
+        conversation = conversation_id,
+        "a conversation's activity chain could not be anchored"
+    );
+}
+
+/// A model call made on an agent's behalf outside the round loop — the
+/// conversation's compaction summary, the evaluation's rubric judge, the
+/// vision fallback that describes an image — recorded as an `llm_exchange`
+/// of the run it belongs to, `purpose` saying which.
+pub struct SideExchange {
+    pub purpose: &'static str,
+    pub model: Option<String>,
+    pub backend: Option<String>,
+    /// The body exactly as sent.
+    pub request: Value,
+    pub status: Option<u16>,
+    /// The answer as it came back, parsed when it was JSON.
+    pub response: Value,
+    pub error: Option<String>,
+    started: Instant,
+}
+
+impl SideExchange {
+    pub fn new(purpose: &'static str) -> Self {
+        Self {
+            purpose,
+            model: None,
+            backend: None,
+            request: Value::Null,
+            status: None,
+            response: Value::Null,
+            error: None,
+            started: Instant::now(),
+        }
+    }
+
+    /// The answer's raw bytes, as JSON when they parse and as text otherwise.
+    pub fn answered(&mut self, status: u16, body: &[u8]) {
+        self.status = Some(status);
+        self.response = serde_json::from_slice(body)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(body).into_owned()));
+    }
+}
+
+/// The run a [`SideExchange`] is recorded in: its principal, call chain and
+/// where in it the call happened. Only an agent's run has one, so a
+/// person's compaction or vision fallback records nothing.
+#[derive(Clone)]
+pub struct RunLog {
+    principal_id: String,
+    chain: Arc<RunChain>,
+    at: Correlation,
+}
+
+impl RunLog {
+    /// The run of the call `ctx` belongs to; `None` for a person's turn.
+    pub fn of(ctx: &ToolContext) -> Option<Self> {
+        let run = ctx.agent.as_deref()?;
+        Some(Self {
+            principal_id: run.system_principal().id.clone(),
+            chain: run.chain().clone(),
+            at: ctx.correlation(),
+        })
+    }
+
+    /// A conversation of `principal` at `version` that no run is driving
+    /// right now — an evaluation case's, once its script ran.
+    pub fn conversation(principal: &SystemPrincipal, version: i64, conversation: &str) -> Self {
+        Self {
+            principal_id: principal.id.clone(),
+            chain: Arc::new(RunChain::root(
+                conversation,
+                None,
+                Frame::for_principal(principal, Some(version)),
+            )),
+            at: Correlation {
+                session_id: Some(conversation.to_string()),
+                ..Correlation::default()
+            },
+        }
+    }
+
+    pub async fn record(&self, db: &Pool, exchange: SideExchange) {
+        let latency = u64::try_from(exchange.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut detail = json!({
+            "purpose": exchange.purpose,
+            "model": exchange.model,
+            "backend": exchange.backend,
+            "request": exchange.request,
+            "response": { "status": exchange.status, "body": exchange.response },
+            "latency_ms": latency,
+        });
+        if let Some(error) = exchange.error {
+            detail["error"] = json!(error);
+        }
+        let mut event = NewEvent::new(AuditKind::LlmExchange, &self.principal_id, detail)
+            .in_run(Some(&self.chain))
+            .at(self.at.clone());
+        event.duration_ms = Some(latency);
+        let _ = record_event(db, event).await;
     }
 }
 

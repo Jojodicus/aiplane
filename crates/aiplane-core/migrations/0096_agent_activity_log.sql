@@ -2,8 +2,8 @@
 -- correlation ids as columns and a place in a hash chain: one chain per
 -- conversation (`conversation:<root session id>`, sub-agent runs included)
 -- and one per agent for everything outside a conversation
--- (`agent:<principal id>`). `hash` is SHA-256 over the event's canonical
--- JSON, which includes `prev_hash`. Rows written before this migration keep
+-- (`agent:<principal id>`). `hash` is HMAC-SHA256 over the event's canonical
+-- JSON, which includes `prev_hash`, under the log key `key_id` names. Rows written before this migration keep
 -- NULL chain columns: they were never chained, and verify reports them as
 -- unchained instead of inventing a history for them.
 ALTER TABLE agent_audit ADD COLUMN chain_key TEXT;
@@ -20,6 +20,7 @@ ALTER TABLE agent_audit ADD COLUMN call_id TEXT;
 ALTER TABLE agent_audit ADD COLUMN visitor_id TEXT;
 ALTER TABLE agent_audit ADD COLUMN caller_id TEXT;
 ALTER TABLE agent_audit ADD COLUMN duration_ms INTEGER;
+ALTER TABLE agent_audit ADD COLUMN key_id TEXT;
 
 UPDATE agent_audit
    SET agent_id = COALESCE(json_extract(chain, '$.frames[0].principal_id'), principal_id),

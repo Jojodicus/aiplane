@@ -18,14 +18,21 @@
 //! in (`conversation:<root session>`, sub-agent runs below it included), or,
 //! outside any conversation, its agent (`agent:<principal>`). Within a chain
 //! events are numbered from 1 (`seq`), and each stores the hash of the one
-//! before it (`prev_hash`) and its own `hash`: SHA-256 over its canonical
-//! JSON ([`StoredEvent::canonical`]), which covers every column. [`verify`]
-//! walks the chains and reports the first link that does not hold. Rows
-//! written before #111 have no chain and are reported as unchained.
+//! before it (`prev_hash`) and its own `hash`: HMAC-SHA256 over its canonical
+//! JSON ([`StoredEvent::canonical`]), which covers every column, under a key
+//! derived from the gateway's at-rest key ([`install_key_ring`]), so the
+//! database alone cannot forge a consistent chain. Each turn's end anchors
+//! its conversation's head in the agent's own chain ([`anchor_conversation`]),
+//! so a cut tail or a deleted conversation chain shows too. [`verify`] walks
+//! the chains and reports the first link that does not hold. Rows written
+//! before #111 have no chain and are reported as unchained.
 //!
 //! **No foreign keys** (`migrations/0077_system_principals.sql`): the log
 //! outlives the principal, the acting user and the conversation, until the
 //! retention sweep removes whole conversation chains ([`sweep_conversation_chains`]).
+
+use std::collections::{HashMap, HashSet};
+use std::sync::RwLock;
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -34,7 +41,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::{DbError, Pool};
-use aiplane_core::server::crypto::sha256_hex;
+use aiplane_core::server::crypto::{ActivityKey, sha256_hex};
 use aiplane_core::server::run_chain::RunChain;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,8 +118,11 @@ pub enum AuditKind {
     /// A slot of the conversation's state was written: old and new value,
     /// provenance, writer.
     StateWritten,
-    /// The retention sweeper deleted whole conversation chains of the log.
+    /// The retention sweeper deleted a whole conversation chain of the log.
     ActivitySwept,
+    /// A conversation chain's head (`seq`, `hash`) at the end of a turn,
+    /// kept in the agent's own chain.
+    ChainAnchored,
 }
 
 impl AuditKind {
@@ -158,6 +168,7 @@ impl AuditKind {
         Self::TurnFinished,
         Self::StateWritten,
         Self::ActivitySwept,
+        Self::ChainAnchored,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -203,6 +214,7 @@ impl AuditKind {
             Self::TurnFinished => "turn_finished",
             Self::StateWritten => "state_written",
             Self::ActivitySwept => "activity_swept",
+            Self::ChainAnchored => "chain_anchored",
         }
     }
 
@@ -293,6 +305,25 @@ impl<'a> NewEvent<'a> {
     }
 }
 
+/// The `key_id` of an event written with no key ring installed — only by a
+/// process that never built the gateway's state (a unit test, a CLI). Where
+/// a ring is installed, [`verify`] refuses such an event.
+pub const UNKEYED: &str = "unkeyed";
+
+static KEY_RING: RwLock<Vec<ActivityKey>> = RwLock::new(Vec::new());
+
+/// The keys the log signs with (the first) and verifies with (any, by
+/// `key_id`). Installed by the gateway's state from its at-rest key
+/// (`Crypto::activity_keys`): process-wide, because every writer — the
+/// management changes in this crate included — writes into the same chains.
+pub fn install_key_ring(keys: Vec<ActivityKey>) {
+    *KEY_RING.write().unwrap_or_else(|p| p.into_inner()) = keys;
+}
+
+fn key_ring() -> Vec<ActivityKey> {
+    KEY_RING.read().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
 /// The chain key of a conversation.
 pub fn conversation_chain(conversation_id: &str) -> String {
     format!("conversation:{conversation_id}")
@@ -331,6 +362,8 @@ pub struct StoredEvent {
     pub seq: Option<i64>,
     pub prev_hash: Option<String>,
     pub hash: Option<String>,
+    /// Which key of the ring signed `hash`, or [`UNKEYED`].
+    pub key_id: Option<String>,
 }
 
 impl StoredEvent {
@@ -351,6 +384,7 @@ impl StoredEvent {
             "detail": self.detail,
             "duration_ms": self.duration_ms,
             "id": self.id,
+            "key_id": self.key_id,
             "kind": self.kind,
             "prev_hash": self.prev_hash,
             "principal_id": self.principal_id,
@@ -364,8 +398,18 @@ impl StoredEvent {
         canonical_json(&fields)
     }
 
-    pub fn computed_hash(&self) -> String {
-        sha256_hex(self.canonical().as_bytes())
+    /// The hash this event must carry: HMAC-SHA256 under the ring key its
+    /// `key_id` names, or plain SHA-256 for an unkeyed one. `None` when the
+    /// ring does not hold that key.
+    pub fn expected_hash(&self, ring: &[ActivityKey]) -> Option<String> {
+        let canonical = self.canonical();
+        match self.key_id.as_deref() {
+            None | Some(UNKEYED) => Some(sha256_hex(canonical.as_bytes())),
+            Some(id) => ring
+                .iter()
+                .find(|k| k.id == id)
+                .map(|k| k.sign(canonical.as_bytes())),
+        }
     }
 
     /// The event as the API and the export show it: the stored JSON parsed.
@@ -394,6 +438,7 @@ impl StoredEvent {
             "seq": self.seq,
             "prev_hash": self.prev_hash,
             "hash": self.hash,
+            "key_id": self.key_id,
         })
     }
 }
@@ -513,15 +558,20 @@ pub async fn append(
         seq: Some(seq),
         prev_hash,
         hash: None,
+        key_id: None,
     };
-    let hash = row.computed_hash();
+    let ring = key_ring();
+    row.key_id = Some(ring.first().map_or(UNKEYED, |k| k.id.as_str()).to_string());
+    let hash = row
+        .expected_hash(&ring)
+        .expect("the signing key is the ring's own");
     row.hash = Some(hash.clone());
     sqlx::query(
         "INSERT INTO agent_audit (id, kind, principal_id, actor_id, chain, detail, created_at,
                                   chain_key, seq, prev_hash, hash, agent_id, version,
                                   conversation_id, session_id, turn_id, round, call_id,
-                                  visitor_id, caller_id, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                  visitor_id, caller_id, duration_ms, key_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.id)
     .bind(&row.kind)
@@ -544,6 +594,7 @@ pub async fn append(
     .bind(&row.visitor_id)
     .bind(&row.caller_id)
     .bind(row.duration_ms)
+    .bind(&row.key_id)
     .execute(&mut *conn)
     .await?;
     Ok(Appended {
@@ -565,10 +616,41 @@ pub async fn append_now(pool: &Pool, event: NewEvent<'_>) -> Result<Appended, Db
     Ok(appended)
 }
 
+/// Anchor conversation `conversation_id`'s chain in agent `agent_id`'s own
+/// chain: a `chain_anchored` event with the head's `seq` and `hash`, read
+/// and written in one write transaction so the head cannot move in between.
+/// `Ok(None)` when the conversation has no events.
+pub async fn anchor_conversation(
+    pool: &Pool,
+    agent_id: &str,
+    conversation_id: &str,
+) -> Result<Option<Appended>, DbError> {
+    let key = conversation_chain(conversation_id);
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let head: Option<(i64, Option<String>)> = sqlx::query_as(HEAD_SQL)
+        .bind(&key)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some((seq, hash)) = head else {
+        return Ok(None);
+    };
+    let appended = append(
+        &mut tx,
+        NewEvent::new(
+            AuditKind::ChainAnchored,
+            agent_id,
+            json!({ "chain_key": key, "seq": seq, "hash": hash }),
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some(appended))
+}
+
 const COLUMNS: &str = "rowid, id, kind, principal_id, actor_id, agent_id, version, \
                        conversation_id, session_id, turn_id, round, call_id, visitor_id, \
                        caller_id, duration_ms, chain, detail, created_at, chain_key, seq, \
-                       prev_hash, hash";
+                       prev_hash, hash, key_id";
 
 fn stored(row: &sqlx::sqlite::SqliteRow) -> Result<StoredEvent, DbError> {
     Ok(StoredEvent {
@@ -594,6 +676,7 @@ fn stored(row: &sqlx::sqlite::SqliteRow) -> Result<StoredEvent, DbError> {
         seq: row.try_get("seq")?,
         prev_hash: row.try_get("prev_hash")?,
         hash: row.try_get("hash")?,
+        key_id: row.try_get("key_id")?,
     })
 }
 
@@ -773,6 +856,14 @@ pub struct BrokenLink {
     pub reason: String,
 }
 
+/// A chain's newest event, for an operator to keep outside the gateway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChainHead {
+    pub chain_key: String,
+    pub seq: i64,
+    pub hash: Option<String>,
+}
+
 /// What [`verify`] found for one agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Verification {
@@ -780,6 +871,13 @@ pub struct Verification {
     pub events: u64,
     /// Events recorded before #111, which belong to no chain.
     pub unchained: u64,
+    /// Conversation events newer than their chain's latest anchor: written
+    /// after the last turn ended (or by a turn whose anchor failed), so a
+    /// removal of them would not show yet.
+    pub unanchored: u64,
+    /// The agent's own chain's newest event. Its `seq` and `hash` pin every
+    /// anchor, so keeping them outside the gateway pins the whole log.
+    pub head: Option<ChainHead>,
     pub broken: Option<BrokenLink>,
 }
 
@@ -793,91 +891,234 @@ impl Verification {
 /// bounded memory.
 const VERIFY_BATCH: i64 = 256;
 
-/// Walk every chain of `agent_id` — its conversations and its own — and
-/// check each link: `seq` counts up from 1 without a gap, `prev_hash` is the
-/// hash of the event before, and `hash` is the hash of the event as stored.
-/// Stops at the first link that does not hold.
-///
-/// A chain detects an event changed, removed from its middle, or inserted
-/// into it. It cannot tell that its newest events were removed, or that a
-/// whole chain was; export the log and keep the newest hashes elsewhere for
-/// that (`docs/agents.md`).
-pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError> {
-    let mut out = Verification::default();
-    let mut keys: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT chain_key FROM agent_audit
-          WHERE agent_id = ? AND chain_key IS NOT NULL",
-    )
-    .bind(agent_id)
-    .fetch_all(pool)
-    .await?;
-    keys.sort();
-    out.unchained = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM agent_audit WHERE agent_id = ? AND chain_key IS NULL",
-    )
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?
-    .max(0) as u64;
-    for key in keys {
-        out.chains += 1;
-        let mut expected = 1i64;
-        let mut prev: Option<String> = None;
-        loop {
-            let sql = format!(
-                "SELECT {COLUMNS} FROM agent_audit WHERE chain_key = ? AND seq >= ?
-                  ORDER BY seq LIMIT ?"
-            );
-            let rows = sqlx::query(&sql)
-                .bind(&key)
-                .bind(expected)
-                .bind(VERIFY_BATCH)
-                .fetch_all(pool)
-                .await?;
-            let done = (rows.len() as i64) < VERIFY_BATCH;
-            for row in &rows {
-                let event = stored(row)?;
-                out.events += 1;
-                let broken = |reason: String| BrokenLink {
-                    chain_key: key.clone(),
+/// Where a walk of one chain ended.
+struct Walked {
+    last_seq: i64,
+    last_hash: Option<String>,
+}
+
+/// Walk chain `key` link by link, handing every event to `on`. `None` when a
+/// link does not hold; `out.broken` then says which.
+async fn walk(
+    pool: &Pool,
+    key: &str,
+    ring: &[ActivityKey],
+    out: &mut Verification,
+    mut on: impl FnMut(&StoredEvent),
+) -> Result<Option<Walked>, DbError> {
+    out.chains += 1;
+    let mut expected = 1i64;
+    let mut prev: Option<String> = None;
+    loop {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM agent_audit WHERE chain_key = ? AND seq >= ?
+              ORDER BY seq LIMIT ?"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(key)
+            .bind(expected)
+            .bind(VERIFY_BATCH)
+            .fetch_all(pool)
+            .await?;
+        let done = (rows.len() as i64) < VERIFY_BATCH;
+        for row in &rows {
+            let event = stored(row)?;
+            out.events += 1;
+            let mut broken = |reason: String| {
+                out.broken = Some(BrokenLink {
+                    chain_key: key.to_string(),
                     seq: expected,
                     event_id: Some(event.id.clone()),
                     reason,
-                };
-                if event.seq != Some(expected) {
-                    out.broken = Some(broken(format!(
-                        "event {expected} of the chain is missing: the next one stored is {}",
-                        event.seq.unwrap_or_default()
-                    )));
-                    return Ok(out);
-                }
-                if event.prev_hash != prev {
-                    out.broken = Some(broken(
-                        "its prev_hash is not the hash of the event before it".into(),
-                    ));
-                    return Ok(out);
-                }
-                if event.hash.as_deref() != Some(event.computed_hash().as_str()) {
-                    out.broken = Some(broken(
+                });
+            };
+            if event.seq != Some(expected) {
+                broken(format!(
+                    "event {expected} of the chain is missing: the next one stored is {}",
+                    event.seq.unwrap_or_default()
+                ));
+                return Ok(None);
+            }
+            if event.prev_hash != prev {
+                broken("its prev_hash is not the hash of the event before it".into());
+                return Ok(None);
+            }
+            let unkeyed = matches!(event.key_id.as_deref(), None | Some(UNKEYED));
+            if unkeyed && !ring.is_empty() {
+                broken(
+                    "it is not signed with the gateway's log key: it was written or rewritten \
+                     outside the gateway"
+                        .into(),
+                );
+                return Ok(None);
+            }
+            match event.expected_hash(ring) {
+                Some(hash) if event.hash.as_deref() == Some(hash.as_str()) => {}
+                Some(_) => {
+                    broken(
                         "its content does not match its hash: it was changed after it was \
                          written"
                             .into(),
-                    ));
-                    return Ok(out);
+                    );
+                    return Ok(None);
                 }
-                prev = event.hash.clone();
-                expected += 1;
+                None => {
+                    broken(format!(
+                        "it is signed with log key {}, which this gateway does not hold: the \
+                         at-rest key was replaced without keeping the old one, or the event \
+                         was forged",
+                        event.key_id.as_deref().unwrap_or_default()
+                    ));
+                    return Ok(None);
+                }
             }
-            if done {
-                break;
+            on(&event);
+            prev = event.hash.clone();
+            expected += 1;
+        }
+        if done {
+            break;
+        }
+    }
+    Ok(Some(Walked {
+        last_seq: expected - 1,
+        last_hash: prev,
+    }))
+}
+
+/// Walk every chain of `agent_id` — its own first, then each conversation —
+/// and check each link: `seq` counts up from 1 without a gap, `prev_hash` is
+/// the hash of the event before, and `hash` is the HMAC of the event as
+/// stored under the key it names. Then check each conversation chain
+/// against its latest anchor in the agent's chain: it must still reach the
+/// anchored `seq` with the anchored `hash`, and an anchored chain must exist
+/// unless the retention sweep recorded removing it. Stops at the first
+/// thing that does not hold.
+///
+/// What it cannot show: events removed from the tail of the agent's own
+/// chain together with the conversation tails they anchored — compare
+/// [`Verification::head`] with a copy kept elsewhere for that — nor
+/// anything forged by someone holding the gateway's at-rest key.
+pub async fn verify(pool: &Pool, agent_id: &str) -> Result<Verification, DbError> {
+    let ring = key_ring();
+    let mut out = Verification {
+        unchained: sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM agent_audit WHERE agent_id = ? AND chain_key IS NULL",
+        )
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await?
+        .max(0) as u64,
+        ..Verification::default()
+    };
+    let own = agent_chain(agent_id);
+    let mut anchors: HashMap<String, (i64, Option<String>)> = HashMap::new();
+    let mut swept: HashSet<String> = HashSet::new();
+    let walked = walk(pool, &own, &ring, &mut out, |e| {
+        let detail: Value = serde_json::from_str(&e.detail).unwrap_or(Value::Null);
+        let Some(chain) = detail["chain_key"].as_str() else {
+            return;
+        };
+        match e.kind.as_str() {
+            "chain_anchored" => {
+                anchors.insert(
+                    chain.to_string(),
+                    (
+                        detail["seq"].as_i64().unwrap_or(0),
+                        detail["hash"].as_str().map(str::to_string),
+                    ),
+                );
+            }
+            "activity_swept" => {
+                swept.insert(chain.to_string());
+            }
+            _ => {}
+        }
+    })
+    .await?;
+    let Some(walked) = walked else {
+        return Ok(out);
+    };
+    if walked.last_seq == 0 {
+        out.chains -= 1;
+    } else {
+        out.head = Some(ChainHead {
+            chain_key: own.clone(),
+            seq: walked.last_seq,
+            hash: walked.last_hash,
+        });
+    }
+    let mut keys: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT chain_key FROM agent_audit
+          WHERE agent_id = ? AND chain_key IS NOT NULL AND chain_key != ?",
+    )
+    .bind(agent_id)
+    .bind(&own)
+    .fetch_all(pool)
+    .await?;
+    keys.sort();
+    for key in &keys {
+        let anchor = anchors.remove(key).filter(|_| !swept.contains(key));
+        let mut at_anchor: Option<Option<String>> = None;
+        let anchored_seq = anchor.as_ref().map_or(0, |(seq, _)| *seq);
+        let Some(walked) = walk(pool, key, &ring, &mut out, |e| {
+            if e.seq == Some(anchored_seq) {
+                at_anchor = Some(e.hash.clone());
+            }
+        })
+        .await?
+        else {
+            return Ok(out);
+        };
+        out.unanchored += (walked.last_seq - anchored_seq).max(0) as u64;
+        if let Some((seq, hash)) = anchor {
+            let problem = if walked.last_seq < seq {
+                Some(format!(
+                    "the chain ends at event {} but was anchored at event {seq}: its newest \
+                     events were removed",
+                    walked.last_seq
+                ))
+            } else if at_anchor != Some(hash) {
+                Some(format!(
+                    "event {seq} is not the event that was anchored: the chain was rewritten \
+                     from there"
+                ))
+            } else {
+                None
+            };
+            if let Some(reason) = problem {
+                out.broken = Some(BrokenLink {
+                    chain_key: key.clone(),
+                    seq,
+                    event_id: None,
+                    reason,
+                });
+                return Ok(out);
             }
         }
+    }
+    let mut missing: Vec<(String, i64)> = anchors
+        .into_iter()
+        .filter(|(key, _)| !swept.contains(key))
+        .map(|(key, (seq, _))| (key, seq))
+        .collect();
+    missing.sort();
+    if let Some((key, seq)) = missing.into_iter().next() {
+        out.broken = Some(BrokenLink {
+            chain_key: key,
+            seq,
+            event_id: None,
+            reason: format!(
+                "the chain is gone, though it was anchored at event {seq} and no retention sweep \
+                 removed it"
+            ),
+        });
     }
     Ok(out)
 }
 
 /// What one sweep of one agent's log removed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweptChains {
     pub chains: u64,
     pub events: u64,
@@ -887,7 +1128,9 @@ pub struct SweptChains {
 /// than `before` and whose conversation no longer exists — whole chains
 /// only, so no chain is ever left with a hole — and the agent's events from
 /// before #111 (unchained) older than `before`. The agent's own chain is
-/// never swept. Each chain goes in its own transaction.
+/// never swept. Each chain goes in its own transaction, together with an
+/// `activity_swept` event in the agent's chain that names it, so
+/// [`verify`] knows its anchors were let go on purpose.
 pub async fn sweep_conversation_chains(
     pool: &Pool,
     agent_id: &str,
@@ -917,6 +1160,15 @@ pub async fn sweep_conversation_chains(
             .execute(&mut *tx)
             .await?
             .rows_affected();
+        append(
+            &mut tx,
+            NewEvent::new(
+                AuditKind::ActivitySwept,
+                agent_id,
+                json!({ "chain_key": key, "events": gone, "before": before }),
+            ),
+        )
+        .await?;
         tx.commit().await?;
         out.chains += 1;
         out.events += gone;
