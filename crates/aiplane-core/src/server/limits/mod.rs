@@ -295,8 +295,10 @@ impl Enforcer {
     /// Gate a visitor's request to agent `who.principal_id` on its per-visitor
     /// and per-IP rates. The counted events are the rows the requests leave
     /// behind (conversations started, messages sent), so a refused request,
-    /// which writes nothing, never counts. Read errors admit: like the other
-    /// checks, a limits read must not wedge live traffic.
+    /// which writes nothing, never counts. Only the newest `max` events of a
+    /// window are read: whether there are `max` of them, and when the oldest
+    /// of those leaves, is all [`sliding_window`] decides on. Read errors
+    /// admit: like the other checks, a limits read must not wedge live traffic.
     pub async fn check_visitor(
         &self,
         rates: &VisitorRates,
@@ -305,17 +307,18 @@ impl Enforcer {
     ) -> Result<(), RateExceeded> {
         if let Some(visitor) = who.visitor_id {
             let since = rates.visitor.since(now);
-            let times = visitor_sessions::message_times(&self.db, visitor, since)
-                .await
-                .unwrap_or_else(|err| {
-                    tracing::warn!(error = %err, "limits: visitor message times; allowing");
-                    Vec::new()
-                });
+            let times =
+                visitor_sessions::message_times(&self.db, visitor, since, rates.visitor.max)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(error = %err, "limits: visitor message times; allowing");
+                        Vec::new()
+                    });
             sliding_window(RateScope::Visitor, rates.visitor, &times, now)?;
         }
         if let Some(context) = who.a2a_context {
             let since = rates.visitor.since(now);
-            let times = a2a_contexts::message_times(&self.db, context, since)
+            let times = a2a_contexts::message_times(&self.db, context, since, rates.visitor.max)
                 .await
                 .unwrap_or_else(|err| {
                     tracing::warn!(error = %err, "limits: A2A context message times; allowing");
@@ -325,9 +328,11 @@ impl Enforcer {
         }
         if let Some(ip) = who.ip {
             let since = rates.ip.since(now);
+            let max = rates.ip.max;
             let embed =
-                visitor_sessions::ip_event_times(&self.db, who.principal_id, ip, since).await;
-            let a2a = a2a_contexts::ip_event_times(&self.db, who.principal_id, ip, since).await;
+                visitor_sessions::ip_event_times(&self.db, who.principal_id, ip, since, max).await;
+            let a2a =
+                a2a_contexts::ip_event_times(&self.db, who.principal_id, ip, since, max).await;
             let times: Vec<Timestamp> = [embed, a2a]
                 .into_iter()
                 .flat_map(|times| {

@@ -16,7 +16,7 @@ use session_core::db as chat;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::visitor_sessions::{at_or_after, second_before};
+use super::visitor_sessions::{parse_times, window_key};
 use super::{DbError, Pool};
 use crate::server::run_chain::RemoteCaller;
 
@@ -129,41 +129,49 @@ pub async fn get_for_caller(
         .filter(|c| c.agent_id == agent_id && c.caller_id == caller_id))
 }
 
-/// When context `session_id` received each of its messages at or after
-/// `since`: the per-context rate window, as a visitor session's.
+/// The newest `limit` messages sent in context `session_id` at or after
+/// `since`: the per-context rate window.
 pub async fn message_times(
     pool: &Pool,
     session_id: &str,
     since: Timestamp,
+    limit: u32,
 ) -> Result<Vec<Timestamp>, DbError> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT t.created_at FROM chat_turns t
          JOIN a2a_contexts c ON c.session_id = t.session_id
-         WHERE c.session_id = ? AND t.role = 'user' AND t.created_at >= ?",
+         WHERE c.session_id = ? AND t.role = 'user' AND rtrim(t.created_at, 'Z') >= ?
+         ORDER BY rtrim(t.created_at, 'Z') DESC LIMIT ?",
     )
     .bind(session_id)
-    .bind(second_before(since))
+    .bind(window_key(since))
+    .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(at_or_after(rows, since))
+    Ok(parse_times(rows))
 }
 
-/// Every context `ip` opened with agent `agent_id`, and every message sent in
-/// one, at or after `since`: the A2A half of the per-IP rate window.
+/// The newest `limit` of the contexts `ip` opened with agent `agent_id` and
+/// the messages sent in one, at or after `since`: the A2A half of the per-IP
+/// rate window.
 pub async fn ip_event_times(
     pool: &Pool,
     agent_id: &str,
     ip: &str,
     since: Timestamp,
+    limit: u32,
 ) -> Result<Vec<Timestamp>, DbError> {
-    let from = second_before(since);
+    let from = window_key(since);
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT created_at FROM a2a_contexts
-         WHERE agent_id = ? AND client_ip = ? AND created_at >= ?
-         UNION ALL
-         SELECT t.created_at FROM chat_turns t
-         JOIN a2a_contexts c ON c.session_id = t.session_id
-         WHERE c.agent_id = ? AND c.client_ip = ? AND t.role = 'user' AND t.created_at >= ?",
+        "SELECT created_at FROM (
+             SELECT created_at FROM a2a_contexts
+             WHERE agent_id = ? AND client_ip = ? AND rtrim(created_at, 'Z') >= ?
+             UNION ALL
+             SELECT t.created_at FROM chat_turns t
+             JOIN a2a_contexts c ON c.session_id = t.session_id
+             WHERE c.agent_id = ? AND c.client_ip = ? AND t.role = 'user'
+               AND rtrim(t.created_at, 'Z') >= ?
+         ) ORDER BY rtrim(created_at, 'Z') DESC LIMIT ?",
     )
     .bind(agent_id)
     .bind(ip)
@@ -171,9 +179,10 @@ pub async fn ip_event_times(
     .bind(agent_id)
     .bind(ip)
     .bind(&from)
+    .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(at_or_after(rows, since))
+    Ok(parse_times(rows))
 }
 
 #[cfg(test)]
@@ -324,16 +333,25 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            message_times(&fx.pool, &c.session_id, at(2)).await.unwrap(),
+            message_times(&fx.pool, &c.session_id, at(2), 10)
+                .await
+                .unwrap(),
             [at(5)]
         );
-        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0())
+        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0(), 10)
             .await
             .unwrap();
         times.sort();
         assert_eq!(times, [t0(), at(1), at(5)]);
+        assert_eq!(
+            ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0(), 2)
+                .await
+                .unwrap(),
+            [at(5), at(1)],
+            "only the newest are read"
+        );
         assert!(
-            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0())
+            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0(), 10)
                 .await
                 .unwrap()
                 .is_empty()

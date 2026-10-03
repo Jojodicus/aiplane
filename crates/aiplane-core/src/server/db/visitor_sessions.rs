@@ -178,62 +178,64 @@ pub async fn slide(
     })
 }
 
-/// A timestamp column read back as text, kept only when it is at or after
-/// `since`. The columns hold `Timestamp`'s own RFC 3339 text, whose
-/// fractional seconds vary in length and so do not order as strings within
-/// one second; SQL narrows by the whole second before, the comparison here
-/// is exact.
-pub(super) fn at_or_after(rows: Vec<String>, since: Timestamp) -> Vec<Timestamp> {
-    rows.iter()
-        .filter_map(|t| t.parse::<Timestamp>().ok())
-        .filter(|t| *t >= since)
-        .collect()
+/// `t` as it compares against a timestamp column inside SQL. The column
+/// holds `Timestamp`'s own RFC 3339 text, whose fractional seconds vary in
+/// length, so as stored it does not order as a string within one second
+/// (`…:05.1Z` sorts after `…:05.15Z`). Without the trailing `Z` it does, so
+/// the rate-window queries compare and order on `rtrim(created_at, 'Z')`
+/// against this key and stay exact.
+pub(super) fn window_key(t: Timestamp) -> String {
+    t.to_string().trim_end_matches('Z').to_string()
 }
 
-pub(super) fn second_before(since: Timestamp) -> String {
-    since
-        .checked_sub(SignedDuration::from_secs(1))
-        .unwrap_or(since)
-        .to_string()
+pub(super) fn parse_times(rows: Vec<String>) -> Vec<Timestamp> {
+    rows.iter().filter_map(|t| t.parse().ok()).collect()
 }
 
-/// When visitor session `id` sent each of its messages at or after `since`:
-/// the per-visitor rate window.
+/// The newest `limit` messages visitor session `id` sent at or after
+/// `since`: all a per-visitor rate of at most `limit` events needs.
 pub async fn message_times(
     pool: &Pool,
     id: &str,
     since: Timestamp,
+    limit: u32,
 ) -> Result<Vec<Timestamp>, DbError> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT t.created_at FROM chat_turns t
          JOIN visitor_sessions v ON v.session_id = t.session_id
-         WHERE v.id = ? AND t.role = 'user' AND t.created_at >= ?",
+         WHERE v.id = ? AND t.role = 'user' AND rtrim(t.created_at, 'Z') >= ?
+         ORDER BY rtrim(t.created_at, 'Z') DESC LIMIT ?",
     )
     .bind(id)
-    .bind(second_before(since))
+    .bind(window_key(since))
+    .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(at_or_after(rows, since))
+    Ok(parse_times(rows))
 }
 
-/// Every conversation `ip` started with agent `principal_id`, and every
-/// message sent in one, at or after `since`: the per-IP rate window. Starting
-/// conversations counts too, or a client could open a fresh one for each
-/// message and never meet the per-visitor limit.
+/// The newest `limit` of the conversations `ip` started with agent
+/// `principal_id` and the messages sent in one, at or after `since`: the
+/// per-IP rate window. Starting conversations counts too, or a client could
+/// open a fresh one for each message and never meet the per-visitor limit.
 pub async fn ip_event_times(
     pool: &Pool,
     principal_id: &str,
     ip: &str,
     since: Timestamp,
+    limit: u32,
 ) -> Result<Vec<Timestamp>, DbError> {
-    let from = second_before(since);
+    let from = window_key(since);
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT created_at FROM visitor_sessions
-         WHERE principal_id = ? AND client_ip = ? AND created_at >= ?
-         UNION ALL
-         SELECT t.created_at FROM chat_turns t
-         JOIN visitor_sessions v ON v.session_id = t.session_id
-         WHERE v.principal_id = ? AND v.client_ip = ? AND t.role = 'user' AND t.created_at >= ?",
+        "SELECT created_at FROM (
+             SELECT created_at FROM visitor_sessions
+             WHERE principal_id = ? AND client_ip = ? AND rtrim(created_at, 'Z') >= ?
+             UNION ALL
+             SELECT t.created_at FROM chat_turns t
+             JOIN visitor_sessions v ON v.session_id = t.session_id
+             WHERE v.principal_id = ? AND v.client_ip = ? AND t.role = 'user'
+               AND rtrim(t.created_at, 'Z') >= ?
+         ) ORDER BY rtrim(created_at, 'Z') DESC LIMIT ?",
     )
     .bind(principal_id)
     .bind(ip)
@@ -241,9 +243,10 @@ pub async fn ip_event_times(
     .bind(principal_id)
     .bind(ip)
     .bind(&from)
+    .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(at_or_after(rows, since))
+    Ok(parse_times(rows))
 }
 
 #[cfg(test)]
@@ -278,9 +281,40 @@ mod tests {
 
         let since = add(t0(), 2 * MIN).unwrap();
         assert_eq!(
-            message_times(&fx.pool, &v.id, since).await.unwrap(),
+            message_times(&fx.pool, &v.id, since, 10).await.unwrap(),
             [add(t0(), 5 * MIN).unwrap()],
             "the other visitor's message, the answer and the older message do not count"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_window_is_exact_below_the_second_and_reads_only_the_newest() {
+        let fx = fixture().await;
+        let v = fx.start("th", 30 * MIN, 24 * 60 * MIN).await;
+        let at = |s: &str| s.parse::<Timestamp>().unwrap();
+        // As stored, `…:05.1Z` sorts after `…:05.15Z`; the window must not.
+        for t in [
+            "2026-10-01T12:00:05.1Z",
+            "2026-10-01T12:00:05.15Z",
+            "2026-10-01T12:00:06Z",
+        ] {
+            message_at(&fx.pool, &v.session_id, at(t)).await;
+        }
+        let since = at("2026-10-01T12:00:05.12Z");
+        assert_eq!(
+            message_times(&fx.pool, &v.id, since, 10).await.unwrap(),
+            [at("2026-10-01T12:00:06Z"), at("2026-10-01T12:00:05.15Z")],
+            "newest first, and .1 is before the window"
+        );
+        assert_eq!(
+            message_times(&fx.pool, &v.id, since, 1).await.unwrap(),
+            [at("2026-10-01T12:00:06Z")]
+        );
+        assert!(
+            message_times(&fx.pool, &v.id, since, 0)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -306,7 +340,7 @@ mod tests {
         .unwrap();
         message_at(&fx.pool, &elsewhere.session_id, add(t0(), MIN).unwrap()).await;
 
-        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0())
+        let mut times = ip_event_times(&fx.pool, &fx.agent, "192.0.2.1", t0(), 10)
             .await
             .unwrap();
         times.sort();
@@ -316,14 +350,15 @@ mod tests {
                 &fx.pool,
                 &fx.agent,
                 "192.0.2.1",
-                add(t0(), 2 * MIN).unwrap()
+                add(t0(), 2 * MIN).unwrap(),
+                10
             )
             .await
             .unwrap()
             .is_empty()
         );
         assert!(
-            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0())
+            ip_event_times(&fx.pool, "another-agent", "192.0.2.1", t0(), 10)
                 .await
                 .unwrap()
                 .is_empty(),
