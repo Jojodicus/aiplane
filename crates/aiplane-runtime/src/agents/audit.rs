@@ -30,6 +30,8 @@ use serde_json::{Value, json};
 
 use crate::agent_run::AgentRun;
 use crate::server::tools::ToolContext;
+use crate::suspend::{ResumeFrom, Suspend};
+use session_core::db::{Decision, SuspensionKind};
 
 /// The longest a run waits for one event to be written.
 pub const WRITE_BOUND: Duration = Duration::from_secs(5);
@@ -37,14 +39,42 @@ pub const WRITE_BOUND: Duration = Duration::from_secs(5);
 /// What the log leaves out of a run's tool calls, the same wherever a call
 /// appears — its `tool_result` and every `llm_exchange` that carries it: the
 /// arguments of a tool that declares them sensitive (`sensitive_args`), and
-/// a value a resume decided, which the run's tool may have repeated.
+/// a secure input a resume brought, which the run's tool may have repeated.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Redaction<'a> {
-    /// The value the turn was resumed with, withheld wherever it appears.
+    /// The secure input the turn was resumed with, withheld wherever it
+    /// appears.
     pub decided: Option<&'a Value>,
 }
 
-impl Redaction<'_> {
+impl<'a> Redaction<'a> {
+    /// The one rule for what a decision leaves out of everything but the
+    /// tool that asked: the value of a secure input. An approval carries no
+    /// value, and a human's answer is the run's own content (`run_resumed`
+    /// records it), so neither is withheld.
+    pub fn decided(kind: SuspensionKind, decision: &'a Decision) -> Self {
+        Self {
+            decided: match (kind, decision) {
+                (SuspensionKind::SecureInput, Decision::Value { value }) => Some(value),
+                _ => None,
+            },
+        }
+    }
+
+    /// What the call `ctx` runs is withheld from: the secure input it is
+    /// running again with, if any.
+    pub fn for_ctx(ctx: &'a ToolContext) -> Self {
+        match &ctx.suspend {
+            Suspend::Decided(kind, decision) => Self::decided(*kind, decision),
+            Suspend::Available | Suspend::Unavailable => Self::default(),
+        }
+    }
+
+    /// What a resumed turn is withheld from: the secure input it resumes.
+    pub fn for_resume(from: &'a ResumeFrom) -> Self {
+        Self::decided(from.suspension.kind, &from.decision)
+    }
+
     /// What stands in for the arguments of a tool that declares them
     /// sensitive.
     pub fn redacted_arguments() -> Value {
@@ -341,5 +371,51 @@ impl ToolContext {
             .at(self.correlation());
         event.duration_ms = duration_ms;
         record_for_run(&self.db, self.agent.as_deref(), event).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use session_core::db::DenyReason;
+
+    /// The driver (`for_resume`), the resumed call and the verifier
+    /// (`for_ctx`) and the runner all take what to withhold from one rule:
+    /// a secure input's value, and nothing of any other decision.
+    #[tokio::test]
+    async fn every_path_withholds_a_secure_input_and_nothing_else() {
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let value = json!("4711");
+        for kind in [
+            SuspensionKind::Approval,
+            SuspensionKind::SecureInput,
+            SuspensionKind::HumanAnswer,
+        ] {
+            for decision in [
+                Decision::AllowOnce,
+                Decision::Deny {
+                    reason: DenyReason::User,
+                },
+                Decision::Value {
+                    value: value.clone(),
+                },
+            ] {
+                let expected = matches!(
+                    (kind, &decision),
+                    (SuspensionKind::SecureInput, Decision::Value { .. })
+                )
+                .then_some(&value);
+                assert_eq!(Redaction::decided(kind, &decision).decided, expected);
+                let ctx = ToolContext {
+                    suspend: Suspend::Decided(kind, decision.clone()),
+                    ..ToolContext::for_test(pool.clone())
+                };
+                assert_eq!(Redaction::for_ctx(&ctx).decided, expected, "{kind:?}");
+            }
+        }
+        let ctx = ToolContext::for_test(pool);
+        assert_eq!(Redaction::for_ctx(&ctx).decided, None);
     }
 }

@@ -1240,16 +1240,10 @@ async fn run_one_turn(
     let prefix_len = messages.len();
     let exchange_log = exchange::ExchangeLog::new(
         &tool_source,
-        crate::agents::audit::Redaction {
-            decided: d.resume.as_ref().and_then(|from| match &from.decision {
-                chat::Decision::Value { value }
-                    if from.suspension.kind == chat::SuspensionKind::SecureInput =>
-                {
-                    Some(value)
-                }
-                _ => None,
-            }),
-        },
+        d.resume
+            .as_ref()
+            .map(crate::agents::audit::Redaction::for_resume)
+            .unwrap_or_default(),
     );
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {

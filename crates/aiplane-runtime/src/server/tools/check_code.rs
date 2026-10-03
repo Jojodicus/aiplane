@@ -53,10 +53,10 @@ impl Tool for CheckCode {
                     "Enter the code we sent you.",
                     self.timeout,
                 ))),
-                Suspend::Decided(Decision::Value { value }) => {
+                Suspend::Decided(_, Decision::Value { value }) => {
                     Ok(json!({ "verified": value.as_str() == Some(self.expected.as_str()) }))
                 }
-                Suspend::Decided(_) => Err(ToolError::Failed(
+                Suspend::Decided(..) => Err(ToolError::Failed(
                     "no code was entered, so nothing was checked".into(),
                 )),
                 Suspend::Unavailable => Err(ToolError::Failed(

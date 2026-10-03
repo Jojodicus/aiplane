@@ -2667,8 +2667,14 @@ view and the evaluation read — leaves out the content kinds
 `turn_finished`); they are read through the activity API.
 
 **Secrets never enter it.** A one-time code reaches the verifier through
-`Decided(Value)` only; the runner withholds that value from the
-`tool_result` it records whatever the tool did with it, the run's resume
+`Suspend::Decided(SecureInput, Value)` only — the decision carries the kind
+of pause it settles, and one rule, `agents::audit::Redaction::decided`,
+says what is withheld: a secure input's value, never an approval or a
+human's answer (which `run_resumed` records). The runner's `tool_result`,
+the driver's exchanges (`Redaction::for_resume`), the resumed call's result
+and the verifier's connector answer (`Redaction::for_ctx`) all take it
+from there. The runner withholds that value from the `tool_result` it
+records whatever the tool did with it, the run's resume
 records `secure_input_received` instead of it, the verifier's MCP check is
 redacted as before (#95), and the model never saw it, so no
 `llm_exchange` carries it. Both writers redact through one

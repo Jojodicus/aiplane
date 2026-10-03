@@ -613,7 +613,7 @@ impl Tool for ForwardRequest {
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
         Box::pin(async move {
-            if let Suspend::Decided(Decision::Value { value }) = &ctx.suspend {
+            if let Suspend::Decided(_, Decision::Value { value }) = &ctx.suspend {
                 if let Some(pending) = A2aDispatch::resume_pending(&ctx).await? {
                     let Some(RouteTarget::A2a(route_spec)) = self
                         .spec

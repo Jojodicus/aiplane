@@ -14,19 +14,17 @@ use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_agents::db::run_sessions;
 use serde_json::{Value, json};
 use session_core::db::{
-    self as chat, BudgetUsed, Decision, DenyReason, PendingCall, SuspensionKind, ToolCallStatus,
-    TurnSuspension,
+    self as chat, BudgetUsed, Decision, DenyReason, PendingCall, ToolCallStatus, TurnSuspension,
 };
 use session_core::driver::{SessionContext, TurnError};
 use session_core::workers::TurnUpdate;
 
 use super::{OpenAiDriver, ToolResultBudget, cap_tool_result, persist_err};
 use crate::agent_run::AgentRun;
+use crate::agents::audit::Redaction;
 use crate::server::tools::runner::{self, ToolCallRef, ToolResultRecord};
 use crate::server::tools::{ToolContext, ToolSource, extract_content_parts};
-use crate::suspend::{
-    ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend, withhold_secret,
-};
+use crate::suspend::{ChildPause, ResumeFrom, Suspend, SuspendRequest, extract_suspend};
 
 /// The answer to a second suspend request in the same round. A turn waits
 /// for one decision at a time; the model can ask again once it has the first.
@@ -244,7 +242,7 @@ pub(super) async fn resume_into(
                 }
                 None => {
                     let tool_ctx = ToolContext {
-                        suspend: Suspend::Decided(decided.clone()),
+                        suspend: Suspend::Decided(suspension.kind, decided.clone()),
                         ..tool_ctx.clone()
                     };
                     let (status, body) = runner::execute_tool_calls(
@@ -265,12 +263,7 @@ pub(super) async fn resume_into(
                             json!({ "error": "the tool produced no result" }),
                         )
                     });
-                    let body = match (suspension.kind, decided) {
-                        (SuspensionKind::SecureInput, Decision::Value { value }) => {
-                            withhold_secret(body, value)
-                        }
-                        _ => body,
-                    };
+                    let body = Redaction::for_ctx(&tool_ctx).body(body);
                     (body, status)
                 }
             };
@@ -726,11 +719,16 @@ mod tests {
         use crate::suspend::SECURE_INPUT_WITHHELD as W;
         let body = json!({"echo": "you typed 481516", "n": 481516, "ok": true});
         assert_eq!(
-            super::withhold_secret(body.clone(), &json!("481516")),
+            crate::suspend::withhold_secret(body.clone(), &json!("481516")),
             json!({"echo": format!("you typed {W}"), "n": W, "ok": true})
         );
         assert_eq!(
-            super::withhold_secret(body.clone(), &json!("")),
+            crate::suspend::withhold_secret(body.clone(), &json!(" 481516 ")),
+            json!({"echo": format!("you typed {W}"), "n": W, "ok": true}),
+            "typed with spaces around it, as the verifier trims it"
+        );
+        assert_eq!(
+            crate::suspend::withhold_secret(body.clone(), &json!("")),
             body,
             "an empty value matches nothing"
         );

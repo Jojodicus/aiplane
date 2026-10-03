@@ -1062,10 +1062,10 @@ struct CallResult<'a> {
 
 /// The `tool_result` event of a call in an agent run: the full arguments
 /// (or a marker, for a tool that declares them sensitive), the full result,
-/// how it ended, how long it took and what the injection scan found. The
-/// value a resume decided is withheld from the result even when the tool
-/// repeats it: the runner cannot tell a secure input from a staff answer,
-/// and `run_resumed` records the latter. A person's turn records nothing.
+/// how it ended, how long it took and what the injection scan found. A
+/// secure input the call is running again with is withheld from the result
+/// even when the tool repeats it ([`Redaction::for_ctx`]). A person's turn
+/// records nothing.
 async fn record_call(
     ctx: &ToolContext,
     call: &ToolCallRef,
@@ -1076,16 +1076,8 @@ async fn record_call(
     if ctx.agent.is_none() {
         return;
     }
-    let redaction = Redaction {
-        decided: match &ctx.suspend {
-            crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
-                Some(value)
-            }
-            _ => None,
-        },
-    };
     let arguments = Redaction::arguments(&call.arguments_raw, sensitive);
-    let body = redaction.body(result.body.clone());
+    let body = Redaction::for_ctx(ctx).body(result.body.clone());
     let signals: Vec<&str> = result.signals.iter().map(|s| s.as_str()).collect();
     ctx.audit_event(
         AuditKind::ToolResult,
@@ -2075,6 +2067,51 @@ mod tests {
         assert_eq!(
             statuses.last().map(String::as_str),
             Some("refused_repeated")
+        );
+    }
+
+    /// Only a secure input is withheld from the log: a human's answer is
+    /// the run's own content, which `run_resumed` records anyway. The same
+    /// rule the driver, the resume path and the verifier use.
+    #[tokio::test]
+    async fn a_tool_result_withholds_a_secure_input_but_not_a_human_answer() {
+        use session_core::db::{Decision, SuspensionKind};
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        for (kind, value) in [
+            (SuspensionKind::HumanAnswer, "approved-4711"),
+            (SuspensionKind::SecureInput, "code-4711"),
+        ] {
+            let ctx = ToolContext {
+                suspend: crate::suspend::Suspend::Decided(
+                    kind,
+                    Decision::Value {
+                        value: json!(value),
+                    },
+                ),
+                ..agent_ctx(pool.clone())
+            };
+            execute_tool_calls(
+                &registry(),
+                &ctx,
+                &echo_call(value),
+                &InjectionScan::default(),
+            )
+            .await;
+        }
+        let results: Vec<String> = sqlx::query_scalar(
+            "SELECT json_extract(detail, '$.result') FROM agent_audit
+              WHERE kind = 'tool_result' ORDER BY seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(results[0].contains("approved-4711"), "{results:?}");
+        assert!(!results[1].contains("code-4711"), "{results:?}");
+        assert!(
+            results[1].contains(crate::suspend::SECURE_INPUT_WITHHELD),
+            "{results:?}"
         );
     }
 

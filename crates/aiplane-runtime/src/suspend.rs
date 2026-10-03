@@ -135,9 +135,11 @@ pub enum Suspend {
     /// The chat path and agent runs: returning [`tool_suspend`] pauses the
     /// turn.
     Available,
-    /// The call is running again because of this decision. Never `Deny`: a
-    /// denied call is answered by the driver without running the tool.
-    Decided(Decision),
+    /// The call is running again because of this decision on a pause of
+    /// this kind. Never `Deny`: a denied call is answered by the driver
+    /// without running the tool. The kind decides what the log withholds
+    /// (`agents::audit::Redaction`).
+    Decided(SuspensionKind, Decision),
 }
 
 /// A claimed suspension and the decision that settles it — what an
@@ -222,12 +224,15 @@ pub async fn claim_for_resume(
 pub const SECURE_INPUT_WITHHELD: &str = "[secure input withheld]";
 
 /// `body` with every repetition of the secure input `value` replaced by
-/// [`SECURE_INPUT_WITHHELD`]. A well-behaved tool never repeats the value;
+/// [`SECURE_INPUT_WITHHELD`], the value trimmed of surrounding whitespace. A
+/// well-behaved tool never repeats the value;
 /// this makes sure a careless one cannot hand it to the model or the
 /// transcript either.
 pub fn withhold_secret(body: Value, value: &Value) -> Value {
+    // Trimmed, as the tool that asked reads it: a code typed with a space
+    // around it is still the code.
     let secret = match value {
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.trim().to_string(),
         other => other.to_string(),
     };
     if secret.is_empty() {

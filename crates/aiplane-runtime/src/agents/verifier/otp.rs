@@ -43,9 +43,10 @@ use super::{
     McpCode, VerifierRun, answer_object, apply_writes, audit, call_connector, confirms, email_hash,
     no_args, session_of,
 };
+use crate::agents::audit::Redaction;
 use crate::agents::state::{AgentState, TrustedWriter};
 use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
-use crate::suspend::{Suspend, SuspendRequest, tool_suspend, withhold_secret};
+use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
 const NO_ARGS: &str = "The address comes from the email slot, and the visitor types the code \
                        into a field only they see.";
@@ -130,7 +131,7 @@ impl Tool for RequestCode {
             };
             match &ctx.suspend {
                 Suspend::Available => flow.send().await,
-                Suspend::Decided(decision) => flow.check(decision).await,
+                Suspend::Decided(_, decision) => flow.check(decision).await,
                 Suspend::Unavailable => Err(unavailable(&self.name)),
             }
         })
@@ -169,7 +170,7 @@ impl Tool for SubmitCode {
             };
             match &ctx.suspend {
                 Suspend::Available => flow.ask_again().await,
-                Suspend::Decided(decision) => flow.check(decision).await,
+                Suspend::Decided(_, decision) => flow.check(decision).await,
                 Suspend::Unavailable => Err(unavailable(&self.name)),
             }
         })
@@ -459,10 +460,9 @@ impl Flow<'_> {
             true,
         )
         .await;
-        let secret = Value::String(code);
         let answer = answer
             .ok()
-            .map(|body| withhold_secret(body, &secret))
+            .map(|body| Redaction::for_ctx(self.ctx).body(body))
             .as_ref()
             .and_then(answer_object);
         if !confirms(answer.as_ref()) {
