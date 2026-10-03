@@ -43,6 +43,7 @@ agents-setup-assistant = Assistant
 agents-setup-back = Back
 agents-setup-next = Next
 agents-setup-done = Done
+agents-setup-exit = Save and leave
 agents-setup-step-of = Step { $current } of { $total }
 agents-setup-unknown-step = This step does not exist.
 agents-setup-step-start = What is it about?

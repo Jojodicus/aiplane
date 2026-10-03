@@ -572,6 +572,7 @@ export const de: Catalog = {
  "agents-setup-done": "Fertig",
  "agents-setup-dropped": "Weggelassen:",
  "agents-setup-edit": "Bearbeiten",
+ "agents-setup-exit": "Speichern und beenden",
  "agents-setup-fallback": "Sonst, wenn der Agent nicht weiterweiß,",
  "agents-setup-fallback-human": "an einen Menschen übergeben",
  "agents-setup-fallback-none": "das Gespräch freundlich beenden",

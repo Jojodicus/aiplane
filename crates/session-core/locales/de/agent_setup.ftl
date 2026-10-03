@@ -44,6 +44,7 @@ agents-setup-assistant = Assistent
 agents-setup-back = Zurück
 agents-setup-next = Weiter
 agents-setup-done = Fertig
+agents-setup-exit = Speichern und beenden
 agents-setup-step-of = Schritt { $current } von { $total }
 agents-setup-unknown-step = Diesen Schritt gibt es nicht.
 agents-setup-step-start = Worum geht es?

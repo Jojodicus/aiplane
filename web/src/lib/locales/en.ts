@@ -572,6 +572,7 @@ export const en: Catalog = {
  "agents-setup-done": "Done",
  "agents-setup-dropped": "Left out:",
  "agents-setup-edit": "Edit",
+ "agents-setup-exit": "Save and leave",
  "agents-setup-fallback": "Otherwise, when the agent cannot help,",
  "agents-setup-fallback-human": "hand over to a person",
  "agents-setup-fallback-none": "end the conversation politely",

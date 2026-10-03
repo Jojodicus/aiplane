@@ -569,6 +569,7 @@ export const zh: Catalog = {
  "agents-setup-done": "完成",
  "agents-setup-dropped": "未采纳：",
  "agents-setup-edit": "编辑",
+ "agents-setup-exit": "保存并退出",
  "agents-setup-fallback": "否则，当智能体无法帮助时，",
  "agents-setup-fallback-human": "转交给人工",
  "agents-setup-fallback-none": "礼貌地结束对话",

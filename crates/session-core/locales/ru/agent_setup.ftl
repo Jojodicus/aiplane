@@ -50,6 +50,7 @@ agents-setup-assistant = Помощник
 agents-setup-back = Назад
 agents-setup-next = Далее
 agents-setup-done = Готово
+agents-setup-exit = Сохранить и выйти
 agents-setup-step-of = Шаг { $current } из { $total }
 agents-setup-unknown-step = Такого шага нет.
 agents-setup-step-start = О чём речь?
