@@ -219,6 +219,8 @@ admin-defaults-chat-label = 聊天
 
 admin-defaults-voice-label = 语音（转录）
 
+admin-defaults-speech-label = 语音（语音输出）
+
 admin-defaults-image-label = 图像生成
 
 admin-defaults-embedding-label = 嵌入（RAG）

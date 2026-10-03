@@ -222,6 +222,8 @@ admin-defaults-chat-label = Chat
 
 admin-defaults-voice-label = Voz (transcripción)
 
+admin-defaults-speech-label = Voz (salida de voz)
+
 admin-defaults-image-label = Generación de imágenes
 
 admin-defaults-embedding-label = Embedding (RAG)

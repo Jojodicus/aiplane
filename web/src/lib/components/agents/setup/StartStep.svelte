@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
 	import { agentsApi, cleanSpec, ensureShape, type AgentError, type Spec } from '$lib/agents';
-	import { STEPS, TEMPLATES, applyTemplate, isBlank, type StepKey, type TemplateKey } from '$lib/agent-setup';
+	import { STEPS, TEMPLATES, applyTemplate, isBlank, setupErrorMessage, type StepKey, type TemplateKey } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 
@@ -49,7 +49,7 @@
 				})
 			);
 		} catch (err) {
-			proposeError = t('agents-setup-suggest-failed', { reason: (err as AgentError).message });
+			proposeError = setupErrorMessage(err as AgentError, t, 'assist');
 		} finally {
 			proposing = false;
 		}

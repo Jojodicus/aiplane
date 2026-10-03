@@ -2,7 +2,21 @@
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { agentsApi, embedSnippet, type AgentError, type EmbedKey, type Spec } from '$lib/agents';
-	import { originOf, readColor, readSite, readVoice, voiceMissing, writeColor, writeSite, writeVoice, type Voice } from '$lib/agent-setup';
+	import {
+		originOf,
+		readColor,
+		readSite,
+		readVoice,
+		setupErrorMessage,
+		voiceMissing,
+		voiceOffered,
+		voicePoolOnSwitch,
+		writeColor,
+		writeSite,
+		writeVoice,
+		type Voice,
+		type VoiceKind
+	} from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import WidgetPreview from './WidgetPreview.svelte';
@@ -14,7 +28,10 @@
 	 * with the line to paste. The key is the server's to hand out, once.
 	 * Then how the widget looks (`profile.color`) and whether visitors may
 	 * talk to it and hear it (`publish.voice`), each direction on a pool the
-	 * agent is granted.
+	 * agent is granted. Switching a direction on starts it on the pool of the
+	 * gateway's default model for it (staged for granting, so the grant
+	 * route's cap applies on save); a direction the manager holds no pool for
+	 * is explained instead of offered.
 	 */
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
@@ -42,6 +59,13 @@
 		if (previous && previous !== spec.main?.pool && !Object.values(voice).includes(previous)) ws.stageRevoke('pool', previous);
 	}
 
+	function switchVoice(dir: 'input' | 'output', field: 'transcriptionPool' | 'speechPool', kind: VoiceKind, on: boolean) {
+		voice[dir] = on;
+		if (!on) return;
+		const start = voicePoolOnSwitch(kind, voice[field], ws.resources);
+		if (start?.grant) choosePool(field, start.pool);
+	}
+
 	let keys = $state<EmbedKey[]>([]);
 	let snippet = $state<string | null>(null);
 	let error = $state<string | null>(null);
@@ -65,7 +89,7 @@
 			snippet = embedSnippet(`${window.location.origin}${base}/embed.js`, created.key);
 			keys = await agentsApi.embedKeys(ws.id);
 		} catch (err) {
-			error = (err as AgentError).message;
+			error = setupErrorMessage(err as AgentError, t);
 		} finally {
 			busy = false;
 		}
@@ -107,25 +131,33 @@
 		<legend class="font-semibold">{t('agents-setup-voice')}</legend>
 		<span class="text-sm text-base-content/60">{t('agents-setup-voice-hint')}</span>
 		{#each [{ dir: 'input', field: 'transcriptionPool', kind: 'transcription' }, { dir: 'output', field: 'speechPool', kind: 'speech' }] as const as row (row.dir)}
-			<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-				<label class="flex flex-1 items-center gap-2">
-					<input type="checkbox" class="toggle toggle-primary" bind:checked={voice[row.dir]} disabled={!ws.writable} />
-					<span>{t(`agents-setup-voice-${row.dir}`)}</span>
-				</label>
-				{#if voice[row.dir]}
-					{#if offered[row.kind].length || voice[row.field]}
+			{@const available = voiceOffered(row.kind, voice[row.field], ws.resources)}
+			{#if !available}
+				<div class="alert alert-info text-sm" role="status"><span>{t(`agents-setup-voice-unavailable-${row.dir}`)}</span></div>
+			{/if}
+			{#if available || voice[row.dir]}
+				<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<label class="flex flex-1 items-center gap-2">
+						<input
+							type="checkbox"
+							class="toggle toggle-primary"
+							checked={voice[row.dir]}
+							onchange={(e) => switchVoice(row.dir, row.field, row.kind, e.currentTarget.checked)}
+							disabled={!ws.writable}
+						/>
+						<span>{t(`agents-setup-voice-${row.dir}`)}</span>
+					</label>
+					{#if voice[row.dir] && available}
 						<label class="flex items-center gap-2">
 							<span class="text-sm">{t(`agents-setup-voice-${row.kind}-pool`)}</span>
-							<select class="select select-sm w-48" value={voice[row.field]} onchange={(e) => void choosePool(row.field, e.currentTarget.value)} disabled={!ws.writable} aria-invalid={missing.includes(row.kind)}>
+							<select class="select select-sm w-48" value={voice[row.field]} onchange={(e) => choosePool(row.field, e.currentTarget.value)} disabled={!ws.writable} aria-invalid={missing.includes(row.kind)}>
 								<option value="">{t('agents-pick')}</option>
 								{#each [...new Set([...offered[row.kind], ...(voice[row.field] ? [voice[row.field]] : [])])] as pool (pool)}<option value={pool}>{pool}</option>{/each}
 							</select>
 						</label>
-					{:else}
-						<span class="text-sm text-warning">{t('agents-setup-voice-no-pool')}</span>
 					{/if}
-				{/if}
-			</div>
+				</div>
+			{/if}
 		{/each}
 		{#if voice.output}
 			<label class="flex flex-col gap-1">
