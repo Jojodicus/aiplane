@@ -38,6 +38,7 @@ import {
 	suggestedMethod,
 	suggestedRules,
 	suggestedSlotRows,
+	suggestedTone,
 	templateSpec,
 	tierOf,
 	topicsNeedingIdentity,
@@ -467,6 +468,21 @@ test('a proposal maps onto the steps: identity cards, friendly details, hand-off
 	const rules = suggestedRules([{ topic: 'Invoices', target: 'b1' }, { topic: 'invoices', target: 'human' }, { topic: 'Returns', target: 'human' }], []);
 	assert.deepEqual(rules.map((r) => [r.topic, r.target]), [['Invoices', { kind: 'agent', id: 'b1' }], ['Returns', { kind: 'human' }]]);
 	assert.deepEqual(suggestedRules([{ topic: 'Returns', target: 'human' }], rules), []);
+});
+
+test('a proposed tone selects its chips by id and keeps only the rest as free text', () => {
+	const current = { tones: ['detailed' as const], language: null, extra: 'old' };
+	assert.deepEqual(suggestedTone({ chips: ['formal', 'friendly', 'freundlich'], language: 'de', response: 'Sign as Lena.' }, current), {
+		tones: ['friendly', 'formal'],
+		language: 'de',
+		extra: 'Sign as Lena.'
+	});
+	assert.deepEqual(suggestedTone({ chips: [], language: null, response: `${TONE_LINES.brief}\nAnswer in the language the visitor writes in.` }, current), {
+		tones: ['brief'],
+		language: 'visitor',
+		extra: ''
+	});
+	assert.equal(suggestedTone({ chips: ['brief'], language: null, response: '' }, { ...current, language: 'fr' }).language, 'fr');
 });
 
 test('details keep the order they were given, and unordered slots follow by name', () => {

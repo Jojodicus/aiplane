@@ -225,7 +225,8 @@ export interface TestTurn {
 export interface AssistSuggestion {
 	steps: {
 		task?: { orchestration: string } | null;
-		tone?: { response: string; chips: string[] } | null;
+		/** `chips` are tone ids (`TONES`); `language` is `visitor`, an answer language code, or `null`; `response` the rest. */
+		tone?: { response: string; chips: string[]; language?: string | null } | null;
 		scope?: { topics: string[]; refusal: string; strict: boolean } | null;
 		abilities?: { id: string; name: string; why: string }[];
 		slots?: { name: string; label: string; type: string; def: Spec }[];

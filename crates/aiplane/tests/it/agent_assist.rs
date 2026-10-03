@@ -270,7 +270,7 @@ impl Fx {
 fn proposal(billing: &str, secret: &str) -> Value {
     json!({
         "task": "You help Acme customers with their orders. First ask for the order number.",
-        "tone": { "response": "Short and friendly.", "chips": ["friendly", "short"] },
+        "tone": { "response": "Sign as Acme.", "chips": ["friendly", "brief"], "language": "en" },
         "scope": { "topics": ["Acme orders"], "refusal": "I can only help with Acme orders.",
                    "strict": true },
         "abilities": [
@@ -336,6 +336,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     );
     assert_eq!(steps["scope"]["strict"], true);
     assert_eq!(
+        steps["tone"],
+        json!({ "chips": ["friendly", "brief"], "language": "en", "response": "Sign as Acme." })
+    );
+    assert_eq!(
         steps["abilities"],
         json!([{ "id": "get_current_timestamp",
         "name": steps["abilities"][0]["name"], "why": "delivery times" }])
@@ -387,6 +391,10 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
     assert_eq!(
         schema["properties"]["abilities"]["items"]["properties"]["id"]["enum"],
         json!(["get_current_timestamp"])
+    );
+    assert_eq!(
+        schema["properties"]["tone"]["properties"]["chips"]["items"]["enum"][0],
+        "friendly"
     );
     let targets = &schema["properties"]["handoffs"]["items"]["properties"]["target"]["enum"];
     assert_eq!(*targets, json!([fx.billing, "human"]));

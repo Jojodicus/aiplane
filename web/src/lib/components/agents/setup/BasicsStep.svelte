@@ -11,6 +11,7 @@
 		humanize,
 		readBasics,
 		responseText,
+		suggestedTone,
 		tierOf,
 		writeBasics,
 		type AnswerLanguage,
@@ -73,7 +74,21 @@
 		model.extra = read.extra;
 		if (read.language && read.language !== 'visitor') fixedLanguage = read.language;
 	}
+	function applyTone() {
+		const tone = suggested?.tone;
+		if (!tone) return;
+		const next = suggestedTone(tone, model);
+		model.tones = next.tones;
+		model.language = next.language;
+		model.extra = next.extra;
+		if (next.language && next.language !== 'visitor') fixedLanguage = next.language;
+	}
 	const suggested = $derived(ws.suggestion?.steps);
+	const suggestedLanguage = $derived.by(() => {
+		const lang = suggested?.tone?.language;
+		if (lang === 'visitor') return t('agents-setup-language-visitor');
+		return lang && (ANSWER_LANGUAGES as readonly string[]).includes(lang) ? LOCALE_NAMES[lang as AnswerLanguage] : null;
+	});
 </script>
 
 <div class="flex flex-col gap-5">
@@ -136,13 +151,14 @@
 		<textarea class="textarea w-full" rows="2" bind:value={model.extra}></textarea>
 	</label>
 	{#if suggested?.tone}
-		<SuggestionBox part="tone" label={t('agents-setup-suggest-tone')} onapply={() => adoptResponse(suggested?.tone?.response ?? '')}>
-			{#if suggested.tone.chips.length}
+		<SuggestionBox part="tone" label={t('agents-setup-suggest-tone')} onapply={applyTone}>
+			{#if suggested.tone.chips.length || suggestedLanguage}
 				<div class="mb-1.5 flex flex-wrap gap-1.5">
-					{#each suggested.tone.chips as chip (chip)}<span class="badge badge-outline">{chip}</span>{/each}
+					{#each suggested.tone.chips as chip (chip)}<span class="badge badge-outline">{t(`agents-setup-tone-${chip}`)}</span>{/each}
+					{#if suggestedLanguage}<span class="badge badge-outline badge-primary">{suggestedLanguage}</span>{/if}
 				</div>
 			{/if}
-			<p class="m-0 whitespace-pre-line">{suggested.tone.response}</p>
+			{#if suggested.tone.response}<p class="m-0 whitespace-pre-line">{suggested.tone.response}</p>{/if}
 		</SuggestionBox>
 	{/if}
 	<ImproveText field="tone" text={responseText(model)} onapply={adoptResponse} />

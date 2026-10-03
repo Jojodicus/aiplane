@@ -64,8 +64,8 @@ impl World {
 fn good() -> Value {
     json!({
         "task": "You help customers of Acme with orders. First ask for the order number.",
-        "tone": { "response": "Short, friendly, in the customer's language.",
-                  "chips": ["friendly", "short", ""] },
+        "tone": { "response": "Use the customer's name.",
+                  "chips": ["friendly", "brief", ""], "language": "visitor" },
         "scope": { "topics": ["Acme orders", "Acme shipping"],
                    "refusal": "I can only help with Acme orders.", "strict": true },
         "abilities": [{ "id": "get_current_timestamp", "why": "to tell delivery times" }],
@@ -109,7 +109,11 @@ fn apply(base: &Value, steps: &Steps) -> Value {
         set_at(
             &mut d,
             &["main", "instructions", "response"],
-            json!(t.response),
+            json!(tone::response_text(
+                &t.chips,
+                t.language.as_deref(),
+                &t.response
+            )),
         );
     }
     if let Some(s) = &steps.scope {
@@ -137,7 +141,10 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     let out = review(&good(), &base, &w.ctx());
     assert!(out.dropped.is_empty(), "{:#?}", out.dropped);
     let s = &out.steps;
-    assert_eq!(s.tone.as_ref().unwrap().chips, ["friendly", "short"]);
+    let tone = s.tone.as_ref().unwrap();
+    assert_eq!(tone.chips, ["friendly", "brief"]);
+    assert_eq!(tone.language.as_deref(), Some("visitor"));
+    assert_eq!(tone.response, "Use the customer's name.");
     assert_eq!(s.abilities[0].name, "Current time");
     assert_eq!(
         s.slots.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
@@ -191,6 +198,37 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
             "handoffs",
             "tests"
         ]
+    );
+}
+
+#[test]
+fn tone_chips_are_the_setups_ids_and_anything_else_is_left_out() {
+    let w = World::new();
+    let mut answer = good();
+    answer["tone"] = json!({ "chips": ["freundlich", "formal", "formal"], "language": "de",
+                             "response": "" });
+    let out = review(&answer, &json!({}), &w.ctx());
+    let tone = out.steps.tone.unwrap();
+    assert_eq!(tone.chips, ["formal"]);
+    assert_eq!(tone.language.as_deref(), Some("de"));
+    let dropped = out.dropped.iter().find(|d| d.step == "tone").unwrap();
+    assert_eq!(dropped.item.as_deref(), Some("freundlich"));
+
+    answer["tone"] = json!({ "chips": ["nett"], "language": "none", "response": " " });
+    let out = review(&answer, &json!({}), &w.ctx());
+    assert!(out.steps.tone.is_none());
+    assert!(out.dropped.iter().any(|d| d.reason.contains("no tone")));
+}
+
+#[test]
+fn an_architects_tone_is_written_as_the_setups_lines() {
+    let w = World::new();
+    let changes = json!({ "tone": { "chips": ["brief"], "language": "de",
+                                    "response": "Sign as Lena." } });
+    let out = apply_changes(&changes, &json!({}), &w.ctx());
+    assert_eq!(
+        out.draft["main"]["instructions"]["response"],
+        "Keep answers short and to the point.\nAlways answer in German.\nSign as Lena."
     );
 }
 

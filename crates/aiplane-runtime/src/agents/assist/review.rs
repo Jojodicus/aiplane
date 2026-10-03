@@ -20,12 +20,10 @@ use super::proposal::{
     AbilityProposal, HandoffProposal, IdentityProposal, ScopeProposal, SlotProposal, TestProposal,
     ToneProposal,
 };
-use super::{Candidates, HUMAN_TARGET, IDENTITY_METHODS, MAX_TESTS, SLOT_TYPES};
+use super::{Candidates, HUMAN_TARGET, IDENTITY_METHODS, MAX_TESTS, SLOT_TYPES, tone};
 use crate::agents::eval::{self, MAX_CASE_NAME_CHARS};
 use crate::agents::spec::{self, SpecContext, SpecIssue, Stage};
 
-const MAX_CHIPS: usize = 8;
-const MAX_CHIP_CHARS: usize = 40;
 const MAX_IDENT_LEN: usize = 48;
 /// The setup's `text` shape (`SLOT_SHAPES` in `web/src/lib/agent-setup.ts`).
 const TEXT_MAX: u64 = 200;
@@ -85,11 +83,15 @@ pub struct TaskStep {
     pub orchestration: String,
 }
 
-/// `main.instructions.response`; `chips` are short tone words the UI shows.
+/// `main.instructions.response`, as the setup's task-and-tone step holds
+/// it: tone chips by id ([`tone::TONES`]), the answer language (`visitor`
+/// or a code; `None`: nothing said) and `response`, the further text no
+/// chip or language stands for.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToneStep {
     pub response: String,
     pub chips: Vec<String>,
+    pub language: Option<String>,
 }
 
 /// `scope.topics`, `scope.refusal`, `scope.strict`.
@@ -551,21 +553,65 @@ impl<'a> Reviewer<'a> {
     }
 
     fn tone(&mut self, tone: ToneProposal) {
-        let response = tone.response.trim().to_string();
-        if response.is_empty() {
-            return self.drop("tone", None, "the model proposed no response instructions");
-        }
-        let chips: Vec<String> = tone
+        let extra = tone.response.trim().to_string();
+        let mut chips: Vec<String> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
+        for chip in tone
             .chips
             .iter()
             .map(|c| c.trim())
-            .filter(|c| !c.is_empty() && c.chars().count() <= MAX_CHIP_CHARS)
-            .take(MAX_CHIPS)
-            .map(str::to_string)
-            .collect();
+            .filter(|c| !c.is_empty())
+        {
+            if tone::TONES.iter().any(|(id, _)| *id == chip) {
+                if !chips.iter().any(|c| c == chip) {
+                    chips.push(chip.to_string());
+                }
+            } else {
+                unknown.push(chip.to_string());
+            }
+        }
+        if !unknown.is_empty() {
+            self.drop(
+                "tone",
+                Some(&unknown.join(", ")),
+                format!(
+                    "not a tone the setup offers — the chips are: {}",
+                    tone::tone_ids().join(", ")
+                ),
+            );
+        }
+        let language = tone
+            .language
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| *l != tone::NO_LANGUAGE && !l.is_empty())
+            .and_then(|l| {
+                let known = tone::language_choices().iter().any(|c| c == l);
+                if !known {
+                    self.drop(
+                        "tone",
+                        Some(l),
+                        format!(
+                            "not an answer language the setup offers — use one of: {}",
+                            tone::language_choices().join(", ")
+                        ),
+                    );
+                }
+                known.then(|| l.to_string())
+            });
+        let response = tone::response_text(&chips, language.as_deref(), &extra);
+        if response.is_empty() {
+            return self.drop("tone", None, "the model proposed no tone");
+        }
         let candidate = self.with(&["main", "instructions", "response"], json!(response));
         match self.adopt(candidate) {
-            Ok(()) => self.out.steps.tone = Some(ToneStep { response, chips }),
+            Ok(()) => {
+                self.out.steps.tone = Some(ToneStep {
+                    response: extra,
+                    chips,
+                    language,
+                })
+            }
             Err(reason) => self.drop("tone", None, reason),
         }
     }

@@ -1112,6 +1112,25 @@ export function suggestedMethod(method: string): IdentityMethod | null {
 	return SUGGESTED_METHOD[method] ?? null;
 }
 
+/**
+ * A proposed tone (chips by id, the answer language, the rest as text) as
+ * the step's model. Lines of the text a chip or the language stands for
+ * select it too; a proposal that names no language keeps the current one.
+ */
+export function suggestedTone(
+	tone: { chips: string[]; language?: string | null; response: string },
+	current: Pick<Basics, 'tones' | 'language' | 'extra'>
+): Pick<Basics, 'tones' | 'language' | 'extra'> {
+	const read = readBasics({ main: { instructions: { response: tone.response } } });
+	const chips = new Set<string>([...tone.chips, ...read.tones]);
+	const proposed = tone.language === 'visitor' || ANSWER_LANGUAGES.includes(tone.language as AnswerLanguage) ? (tone.language as Language) : null;
+	return {
+		tones: TONES.filter((t) => chips.has(t)),
+		language: proposed ?? read.language ?? current.language,
+		extra: read.extra
+	};
+}
+
 /** Proposed details as rows of the details step: their own key, a friendly kind where one fits, and none twice. */
 export function suggestedSlotRows(slots: { name: string; label: string; def: Spec }[], existing: SlotRow[]): SlotRow[] {
 	const taken = new Set(existing.map((r) => r.key));

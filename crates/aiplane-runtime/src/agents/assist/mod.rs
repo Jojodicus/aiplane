@@ -41,6 +41,7 @@ use crate::rama_server::state::RamaState;
 pub mod handoffs;
 mod proposal;
 pub mod review;
+pub mod tone;
 
 pub use proposal::changes_schema;
 pub use review::{Applied, ReviewContext, Suggestion, apply_changes};
