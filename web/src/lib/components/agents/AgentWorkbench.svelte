@@ -137,6 +137,13 @@
 		}
 	}
 
+	/** A rollback (or roll forward) publishes nothing, so it replaces whatever the last save or publish said. */
+	async function madeLive(version: number) {
+		error = null;
+		notice = t('agents-live-is', { version });
+		await refresh(true);
+	}
+
 	async function publish() {
 		if (dirty && !(await save())) return;
 		busy = true;
@@ -255,7 +262,7 @@
 					{dirty}
 					{writable}
 					onpublish={publish}
-					onchanged={() => refresh(true)}
+					onlive={madeLive}
 				/>
 			{:else if tab === 'analytics'}
 				<AnalyticsPanel agentId={id} {versions} />
