@@ -54,7 +54,7 @@
 	}
 </script>
 
-<article class="card card-border bg-base-100">
+<article class="card card-border">
 	<div class="card-body gap-4">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-start">
 			<div class="min-w-0 flex-1">

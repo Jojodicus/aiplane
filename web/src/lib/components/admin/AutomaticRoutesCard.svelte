@@ -154,7 +154,7 @@
 	onMount(refresh);
 </script>
 
-<article class="card card-border bg-base-100" bind:this={card}>
+<article class="card card-border" bind:this={card}>
 	<div class="card-body gap-4">
 		<header class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
 			<div>

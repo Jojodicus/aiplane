@@ -61,7 +61,7 @@
 	}
 </script>
 
-<article class="card card-border bg-base-100" data-testid={`upstream-pool-${pool.name}`}>
+<article class="card card-border" data-testid={`upstream-pool-${pool.name}`}>
 	<div class="card-body gap-3">
 		<header class="flex flex-wrap items-center gap-2">
 			<h2 class="card-title font-mono text-base">{pool.name}</h2>

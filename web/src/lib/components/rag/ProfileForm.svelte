@@ -59,7 +59,7 @@
 	}
 </script>
 
-<div class="card card-border min-w-0 bg-base-100">
+<div class="card card-border min-w-0">
 	<div class="card-body min-w-0 gap-3">
 		{#if !profile}<h2 class="card-title text-base">{t('rag-profile-create-heading')}</h2>{/if}
 		{#if error}<div class="alert alert-error"><span>{error}</span></div>{/if}

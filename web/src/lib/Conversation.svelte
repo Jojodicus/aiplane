@@ -807,10 +807,10 @@
 		<div class="alert alert-info mb-4"><span>{t('chat-render-shared-readonly-banner')}</span></div>
 	{/if}
 	{#if selectedModel && !selectedModel.gdpr}
-		<div class="alert alert-warning mb-4"><span>{t('chat-render-gdpr-banner')}</span></div>
+		<div class="alert alert-warning alert-soft mb-4"><span>{t('chat-render-gdpr-banner')}</span></div>
 	{/if}
 	{#if selectedModel && !selectedModel.nda}
-		<div class="alert alert-warning mb-4"><span>{t('chat-render-nda-banner')}</span></div>
+		<div class="alert alert-warning alert-soft mb-4"><span>{t('chat-render-nda-banner')}</span></div>
 	{/if}
 
 	<div class="flex min-h-0 flex-1 gap-3" data-chat-workspace>

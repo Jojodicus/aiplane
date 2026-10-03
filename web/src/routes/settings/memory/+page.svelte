@@ -84,7 +84,7 @@
 	{#if notice}<div class="alert alert-warning mb-4"><span>{notice}</span></div>{/if}
 
 	{#each MEMORY_KINDS as memoryKind}
-		<section class="card card-border mb-6 bg-base-100">
+		<section class="card card-border mb-6">
 			<div class="card-body">
 				<div class="flex flex-wrap items-center justify-between gap-2">
 					<h2 class="card-title text-base">{t(`memory-kind-${memoryKind}`)}</h2>

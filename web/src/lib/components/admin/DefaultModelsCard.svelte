@@ -17,7 +17,7 @@
 </script>
 
 {#if defaults.length > 0}
-	<article class="card border border-base-300 bg-base-100">
+	<article class="card">
 		<div class="card-body gap-3">
 			<header class="flex flex-col gap-1">
 				<h2 class="card-title text-base">{t('admin-defaults-heading')}</h2>

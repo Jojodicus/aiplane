@@ -39,7 +39,7 @@
 
 	<ProfileForm onsaved={saved} />
 
-	<section class="card card-border bg-base-100">
+	<section class="card card-border">
 		<div class="card-body">
 			<h2 class="card-title">{t('rag-profile-list-heading')}</h2>
 			<ul class="list">

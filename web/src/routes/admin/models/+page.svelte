@@ -75,7 +75,7 @@
 		{#if data.models.length === 0}
 			<div class="alert"><span>{t('admin-no-models')}</span></div>
 		{:else}
-			<article class="card border border-base-300 bg-base-100">
+			<article class="card">
 				<div class="card-body gap-3 pb-0">
 					<div class="flex flex-wrap items-center gap-2">
 						<input type="search" class="input input-sm w-60 max-w-full" bind:value={query} placeholder={t('admin-filter-placeholder')} aria-label={t('admin-filter-placeholder')} />

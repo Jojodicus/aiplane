@@ -1,4 +1,5 @@
 <script lang="ts">
+	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import CapabilityPicker from '$lib/components/chat/CapabilityPicker.svelte';
 	import { n, t } from '$lib/i18n.svelte';
@@ -90,11 +91,11 @@
 			{/if}
 		</div>
 		{#if token.revoked}
-			<span class="badge badge-error">{t('tokens-badge-revoked')}</span>
-			<button class="btn btn-outline btn-sm" onclick={() => run(onremove)} disabled={busy}>{t('tokens-remove-button')}</button>
+			<StatusPill tone="bad">{t('tokens-badge-revoked')}</StatusPill>
+			<button class="btn btn-sm" onclick={() => run(onremove)} disabled={busy}>{t('tokens-remove-button')}</button>
 		{:else}
-			<span class="badge badge-secondary">{t('tokens-badge-active')}</span>
-			<button class="btn btn-outline btn-sm" title={t('tokens-rotate-title')} onclick={() => run(onrotate)} disabled={busy}>{t('tokens-rotate-button')}</button>
+			<StatusPill tone="ok">{t('tokens-badge-active')}</StatusPill>
+			<button class="btn btn-sm" title={t('tokens-rotate-title')} onclick={() => run(onrotate)} disabled={busy}>{t('tokens-rotate-button')}</button>
 			<button class="btn btn-error btn-sm" onclick={() => run(onrevoke)} disabled={busy}>{t('tokens-revoke-button')}</button>
 		{/if}
 	</div>

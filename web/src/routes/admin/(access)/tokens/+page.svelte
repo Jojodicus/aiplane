@@ -52,7 +52,7 @@
 	{#if notice}<div class="alert alert-success"><span>{notice}</span></div>{/if}
 
 	{#if data}
-		<article class="card border border-base-300 bg-base-100">
+		<article class="card">
 			<div class="card-body gap-2 p-4">
 				{#if data.tokens.length === 0}
 					<p class="text-sm text-base-content/60">{t('admin-tokens-none')}</p>

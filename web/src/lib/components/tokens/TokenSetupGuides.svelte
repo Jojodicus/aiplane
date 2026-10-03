@@ -45,7 +45,7 @@
 	</nav>
 
 	{#if client === 'opencode'}
-		<article class="card border border-base-300 bg-base-100"><div class="card-body gap-4">
+		<article class="card"><div class="card-body gap-4">
 			<h3 class="card-title">{t('tokens-guide-opencode')}</h3>
 			<ol class="list-decimal space-y-3 pl-5 text-sm">
 				<li>{t('tokens-opencode-step-1')}</li>
@@ -56,7 +56,7 @@
 			<p class="text-sm text-base-content/70">{t('tokens-opencode-finish')}</p>
 		</div></article>
 	{:else if client === 'claude'}
-		<article class="card border border-base-300 bg-base-100"><div class="card-body gap-4">
+		<article class="card"><div class="card-body gap-4">
 			<h3 class="card-title">{t('tokens-guide-claude')}</h3>
 			<ol class="list-decimal space-y-3 pl-5 text-sm">
 				<li>{t('tokens-claude-step-1')}</li>
@@ -67,7 +67,7 @@
 			<p class="text-sm text-base-content/70">{t('tokens-claude-finish')}</p>
 		</div></article>
 	{:else}
-		<article class="card border border-base-300 bg-base-100"><div class="card-body gap-4">
+		<article class="card"><div class="card-body gap-4">
 			<h3 class="card-title">{t('tokens-guide-python')}</h3>
 			<ol class="list-decimal space-y-3 pl-5 text-sm">
 				<li>{t('tokens-python-step-1')}</li>
