@@ -430,11 +430,15 @@ pub async fn update_draft(State(state): State<Arc<RamaState>>, req: Request) -> 
     or_return!(require_valid(&state, &id, &body.spec, Stage::Draft, "save the draft").await);
     or_return!(seal_secrets(&state, &mut body.spec));
     match agents_db::update_draft(&state.db, &id, &body.spec.to_string(), &user.id).await {
-        Ok(true) => json_ok(
+        Ok(Some(saved)) => json_ok(
             StatusCode::OK,
-            json!({ "draft_spec": body.spec, "live_version": agent.live_version }),
+            json!({
+                "draft_spec": body.spec,
+                "live_version": agent.live_version,
+                "revision": saved.revision,
+            }),
         ),
-        Ok(false) => not_found("the agent was deleted while its draft was being saved"),
+        Ok(None) => not_found("the agent was deleted while its draft was being saved"),
         Err(err) => internal(err),
     }
 }
