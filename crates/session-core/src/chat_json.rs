@@ -473,7 +473,7 @@ pub async fn run_json_turn_stream(
                     // Missed ticks are subsumed by the next DB re-read.
                     dirty = true;
                 }
-                Err(broadcast::error::RecvError::Closed) => {
+                Ok(TurnUpdate::Released) | Err(broadcast::error::RecvError::Closed) => {
                     // Worker gone without Finalized (killed): flush what's
                     // committed and end the stream.
                     flush(&pool, &session_id, &assistant_turn_id, &mut feed, &mut tx).await;
