@@ -66,7 +66,7 @@
 				waiting.suspension.request_id,
 				decision
 			);
-			messages[i] = agentMessage(turn, waiting.debug);
+			messages[i] = agentMessage(turn, turn.debug ?? waiting.debug);
 			secret = '';
 		} catch (err) {
 			error = (err as AgentError).message;

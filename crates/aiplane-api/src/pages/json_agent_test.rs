@@ -15,7 +15,8 @@
 //! `/api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume` is the
 //! staff side of a suspended agent run: an approval (or a human answer) for
 //! any of the agent's conversations, and any decision in a test
-//! conversation, where the manager is the visitor too.
+//! conversation, where the manager is the visitor too. A resumed test turn
+//! answers with the debug view too, so it shows what the decision changed.
 
 use std::sync::Arc;
 
@@ -101,12 +102,25 @@ pub async fn test_turn(State(state): State<Arc<RamaState>>, req: Request) -> Res
         Ok(reply) => reply,
         Err(err) => return run_error(err),
     };
-    let debug = match collect_debug(&state, &id, &draft, &reply.session_id, started, &options).await
-    {
-        Ok(debug) => debug,
-        Err(err) => return internal(err),
-    };
-    let mut out = reply_json(&reply);
+    with_debug(&state, &id, &draft, &reply, started, &options).await
+}
+
+/// A test-chat reply with the debug view of its conversation as it is now:
+/// state and gates after the turn, and the decisions made since `started`.
+async fn with_debug(
+    state: &RamaState,
+    agent_id: &str,
+    draft: &Value,
+    reply: &AgentReply,
+    started: Timestamp,
+    options: &RunOptions,
+) -> Response {
+    let debug =
+        match collect_debug(state, agent_id, draft, &reply.session_id, started, options).await {
+            Ok(debug) => debug,
+            Err(err) => return internal(err),
+        };
+    let mut out = reply_json(reply);
     out["draft_version"] = json!(DRAFT_VERSION);
     out["debug"] = json!(debug);
     json_ok(StatusCode::OK, out)
@@ -175,7 +189,22 @@ pub async fn resume_turn(State(state): State<Arc<RamaState>>, req: Request) -> R
         Ok(claimed) => claimed,
         Err(err) => return resume_error(err),
     };
-    match run_claimed(&state, claimed, RunOptions::default()).await {
+    let test_chat = claimed.agent_version() == Some(DRAFT_VERSION);
+    let options = RunOptions::default();
+    let started = Timestamp::now();
+    match run_claimed(&state, claimed, options.clone()).await {
+        Ok(reply) if test_chat => {
+            let draft = parse_spec(&agent.draft_spec);
+            with_debug(
+                &state,
+                &agent.principal.id,
+                &draft,
+                &reply,
+                started,
+                &options,
+            )
+            .await
+        }
         Ok(reply) => json_ok(StatusCode::OK, reply_json(&reply)),
         Err(err) => run_error(err),
     }

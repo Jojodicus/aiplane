@@ -390,6 +390,10 @@ async fn a_visitor_cannot_give_an_approval_and_staff_can() {
     assert_eq!(status, StatusCode::OK, "{reply}");
     assert_eq!(reply["status"], "completed");
     assert_eq!(reply["answer"], "Approved and done.");
+    assert!(
+        reply.get("debug").is_none(),
+        "a visitor's conversation is not the test chat's: {reply}"
+    );
     assert_eq!(reply["turn_id"], paused.id.as_str());
     let (status, again) = fx.post(&fx.alice, &uri, body).await;
     assert_eq!(status, StatusCode::CONFLICT, "{again}");
@@ -508,5 +512,9 @@ async fn the_test_chat_shows_its_manager_a_pause_they_can_answer() {
     assert_eq!(status, StatusCode::OK, "{done}");
     assert_eq!(done["status"], "completed");
     assert_eq!(done["answer"], "Verified in the test chat.");
+    assert!(
+        done["debug"]["slots"].is_array() && done["debug"]["routes"].is_array(),
+        "the resumed test turn carries the debug view as it is now, not the paused one's: {done}"
+    );
     assert!(!every_stored_text(&fx.state.db).await.contains(CODE));
 }

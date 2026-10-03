@@ -552,6 +552,8 @@ are in `web/src/lib/components/agents/`.
   `options` allow. The answer goes to `POST
   /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume`, and its
   reply replaces the paused one, since the same turn continued. In a test
+  conversation the resume answers with a fresh debug view too, so a verifier's
+  slot or a gate the decision opened shows on the reply. In a test
   conversation the manager may answer a `secure_input` too.
 - **Not built yet.** Embed keys and the visitor widget (#91, #94), a `state`
   or `gate` SSE event so the debug view could stream, and conversation
