@@ -30,7 +30,7 @@ fn main() {
     let mut registry = ToolRegistry::new()
         .with(aiplane_runtime::server::tools::echo::Echo)
         .with(aiplane_runtime::server::tools::time::CurrentTimestamp)
-        .with(aiplane_tools::fetch_url::FetchUrl)
+        .with(aiplane_tools::fetch_url::FetchUrl::default())
         .with(aiplane_tools::fetch_attachment::FetchAttachment::new(None))
         .with(aiplane_tools::upload_attachment::UploadAttachment)
         .with(aiplane_tools::search_web::SearchWeb)
@@ -39,7 +39,7 @@ fn main() {
         .with(aiplane_tools::memory::Recall)
         .with(aiplane_tools::netcheck::DnsLookup)
         .with(aiplane_tools::netcheck::WhoisLookup)
-        .with(aiplane_tools::netcheck::TlsCert)
+        .with(aiplane_tools::netcheck::TlsCert::default())
         .with(aiplane_tools::wikipedia::Wikipedia)
         .with(aiplane_tools::currency::ConvertCurrency)
         .with(aiplane_tools::lookup_ip::LookupIp);

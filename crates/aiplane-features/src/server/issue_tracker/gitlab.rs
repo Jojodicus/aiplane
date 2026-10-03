@@ -17,6 +17,7 @@
 //! for OAuth tokens, and an access token sent that way fails with a 401 that
 //! says nothing useful.
 
+use aiplane_core::server::capped_read;
 use serde_json::json;
 
 use aiplane_core::server::config::FeedbackConfig;
@@ -78,8 +79,7 @@ pub async fn create_issue(
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
 
     let status = resp.status();
-    let bytes = resp
-        .bytes()
+    let bytes = capped_read::read_capped(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     if !status.is_success() {
@@ -125,8 +125,7 @@ async fn upload_image(
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     let status = resp.status();
-    let body = resp
-        .bytes()
+    let body = capped_read::read_capped(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     if !status.is_success() {

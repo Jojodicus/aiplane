@@ -15,6 +15,7 @@
 //!   push after settings saves, the registry reload + health respawn +
 //!   dirty reset for topology applies.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 
 use rama::http::service::web::extract::{Path, State};
@@ -1790,7 +1791,9 @@ pub async fn backends_test(State(state): State<Arc<RamaState>>, req: Request) ->
         }
     };
     let status = response.status().as_u16();
-    let body = response.bytes().await.unwrap_or_default();
+    let body = capped_read::read_capped(response, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .unwrap_or_default();
     if matches!(status, 401 | 403) {
         return json_ok(
             StatusCode::OK,

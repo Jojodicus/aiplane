@@ -8,6 +8,7 @@
 //! of low-risk capability that's safe to leave always-on (see the tool
 //! catalog's "Web & Network" group).
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
+use aiplane_core::server::outbound_guard;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -122,8 +124,7 @@ impl Tool for DnsLookup {
                 .send()
                 .await
                 .map_err(|e| ToolError::Failed(format!("DoH request failed: {e}")))?;
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("DoH response parse: {e}")))?;
 
@@ -231,8 +232,7 @@ impl Tool for WhoisLookup {
                     resp.status()
                 )));
             }
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("RDAP response parse: {e}")))?;
             Ok(rdap_summary(domain, &body))
@@ -315,7 +315,21 @@ fn rdap_registrar(body: &Value) -> Option<String> {
 // tls_cert — inspect a server's presented TLS certificate
 // ===========================================================================
 
-pub struct TlsCert;
+/// The model chooses the host, so it is resolved and checked through
+/// `outbound_guard` and the connection goes to a checked address: no probing
+/// the gateway's own network without `$AIPLANE_ALLOW_PRIVATE_NETWORKS`.
+#[derive(Default)]
+pub struct TlsCert {
+    allow_private_networks: bool,
+}
+
+impl TlsCert {
+    pub fn new(allow_private_networks: bool) -> Self {
+        Self {
+            allow_private_networks,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct TlsArgs {
@@ -358,7 +372,8 @@ impl Tool for TlsCert {
             }
             let port = args.port.unwrap_or(443);
 
-            match tokio::time::timeout(TIMEOUT, inspect_cert(&host, port)).await {
+            let inspect = inspect_cert(&host, port, self.allow_private_networks);
+            match tokio::time::timeout(TIMEOUT, inspect).await {
                 Ok(Ok(v)) => Ok(v),
                 Ok(Err(e)) => Err(ToolError::Failed(e)),
                 Err(_) => Err(ToolError::Failed(format!(
@@ -369,7 +384,7 @@ impl Tool for TlsCert {
     }
 }
 
-async fn inspect_cert(host: &str, port: u16) -> Result<Value, String> {
+async fn inspect_cert(host: &str, port: u16, allow_private: bool) -> Result<Value, String> {
     use tokio_rustls::TlsConnector;
     use tokio_rustls::rustls::ClientConfig;
     use tokio_rustls::rustls::pki_types::ServerName;
@@ -384,7 +399,8 @@ async fn inspect_cert(host: &str, port: u16) -> Result<Value, String> {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let tcp = tokio::net::TcpStream::connect((host, port))
+    let addrs = outbound_guard::resolve(host, port, allow_private).await?;
+    let tcp = tokio::net::TcpStream::connect(addrs.as_slice())
         .await
         .map_err(|e| format!("connect {host}:{port}: {e}"))?;
     let server_name = ServerName::try_from(host.to_string())
@@ -510,7 +526,35 @@ mod tests {
     fn schema_names_match_ids() {
         assert_eq!(DnsLookup.id(), DnsLookup.schema().function.name);
         assert_eq!(WhoisLookup.id(), WhoisLookup.schema().function.name);
-        assert_eq!(TlsCert.id(), TlsCert.schema().function.name);
+        let tls = TlsCert::default();
+        assert_eq!(tls.id(), tls.schema().function.name);
+    }
+
+    #[tokio::test]
+    async fn tls_cert_refuses_the_gateways_own_network_before_connecting() {
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        for host in [
+            "127.0.0.1",
+            "localhost",
+            "10.0.0.1",
+            "::ffff:127.0.0.1",
+            "169.254.169.254",
+        ] {
+            let err = TlsCert::default()
+                .run(
+                    ToolContext::for_test(db.clone()),
+                    json!({"host": host, "port": 9}),
+                )
+                .await
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS") || msg.contains("never reached"),
+                "{host}: {msg}"
+            );
+        }
     }
 
     #[test]

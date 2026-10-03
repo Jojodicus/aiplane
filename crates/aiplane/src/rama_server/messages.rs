@@ -44,6 +44,7 @@
 //! and a confidently wrong number driving a client's compaction decisions is
 //! worse than no number at all.
 
+use aiplane_core::server::capped_read;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -344,8 +345,7 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         tracing::debug!(%status, %backend, "count_tokens: tokenize unavailable");
         return with_route(tokenize_unavailable());
     }
-    let counted = resp
-        .json::<Value>()
+    let counted = capped_read::read_capped_json::<Value>(resp, capped_read::API_ANSWER_BYTES)
         .await
         .ok()
         .and_then(|v| v.get("count").and_then(Value::as_i64));

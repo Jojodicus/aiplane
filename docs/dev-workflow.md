@@ -121,7 +121,7 @@ just "see AGENTS.md":
 
 ## Invariants to keep
 - Outbound URLs a user, model or agent owner chooses: the net_guard-pinned
-  client (`a2a_client::guard::pin`); operator backends: `AppState::http`.
+  client (`outbound_guard::get` / `pin`); operator backends: `AppState::http`.
 - Bodies: `read_body_capped` / `read_json_capped` / `read_capped`; whole-body
   drains only behind `BodyLimitLayer`.
 - Agent specs: the typed `AgentSpec`, never the JSON.

@@ -16,6 +16,8 @@
 
 use std::time::Duration;
 
+use aiplane_core::server::capped_read;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use session_core::db as chat;
@@ -29,7 +31,20 @@ use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub struct LoadImageUrl;
+#[derive(Default)]
+pub struct LoadImageUrl {
+    allow_private_networks: bool,
+}
+
+impl LoadImageUrl {
+    /// `allow_private_networks` is the operator's
+    /// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`.
+    pub fn new(allow_private_networks: bool) -> Self {
+        Self {
+            allow_private_networks,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct LoadArgs {
@@ -131,24 +146,14 @@ impl Tool for LoadImageUrl {
                 .map(|s| s.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(s))
                 .map(str::to_string);
 
-            // KNOWN GAP (architecture test OUTBOUND_CLIENTS): the model picks
-            // this URL and nothing checks it against net_guard yet.
-            #[allow(clippy::disallowed_methods)]
-            let client = reqwest::Client::builder()
-                .timeout(FETCH_TIMEOUT)
-                .user_agent(concat!(
-                    "aiplane/",
-                    env!("CARGO_PKG_VERSION"),
-                    " load_image_url"
-                ))
-                .build()
-                .map_err(|e| ToolError::Failed(format!("HTTP client build: {e}")))?;
-
-            let resp = client
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| ToolError::Failed(format!("fetch failed: {e}")))?;
+            let resp = outbound_guard::get(
+                url.as_str(),
+                Policy::web(self.allow_private_networks),
+                FETCH_TIMEOUT,
+                concat!("aiplane/", env!("CARGO_PKG_VERSION"), " load_image_url"),
+            )
+            .await
+            .map_err(ToolError::Failed)?;
             let status = resp.status();
             if !status.is_success() {
                 return Err(ToolError::Failed(format!(
@@ -172,19 +177,11 @@ impl Tool for LoadImageUrl {
                      This tool only stores images; use `fetch_url` for other content."
                 )));
             }
-            let bytes = resp
-                .bytes()
+            let bytes = capped_read::read_capped_for(resp, MAX_IMAGE_BYTES, "the image")
                 .await
-                .map_err(|e| ToolError::Failed(format!("read body: {e}")))?
-                .to_vec();
+                .map_err(ToolError::Failed)?;
             if bytes.is_empty() {
                 return Err(ToolError::Failed("image response was empty".into()));
-            }
-            if bytes.len() > MAX_IMAGE_BYTES {
-                return Err(ToolError::Failed(format!(
-                    "image is {} bytes; the ceiling is {MAX_IMAGE_BYTES} bytes",
-                    bytes.len()
-                )));
             }
 
             // Filename: caller-supplied stem wins, else the URL's, else a
@@ -314,7 +311,44 @@ mod tests {
 
     #[test]
     fn schema_names_match_id() {
-        assert_eq!(LoadImageUrl.id(), LoadImageUrl.schema().function.name);
+        let tool = LoadImageUrl::default();
+        assert_eq!(tool.id(), tool.schema().function.name);
+    }
+
+    /// A context whose storage preconditions pass, so a call gets as far as
+    /// the fetch. The bucket is never reached in these tests.
+    async fn ctx_with_storage() -> ToolContext {
+        let s3: aiplane_core::server::config::S3Config = serde_json::from_value(json!({
+            "endpoint": "http://127.0.0.1:9",
+            "region": "us-east-1",
+            "bucket": "b",
+        }))
+        .unwrap();
+        ToolContext {
+            s3: Some(std::sync::Arc::new(s3)),
+            attachment_reservations: Some(Default::default()),
+            ..ctx_no_s3().await
+        }
+    }
+
+    #[tokio::test]
+    async fn the_gateways_own_network_is_refused_before_connecting() {
+        for url in [
+            "http://127.0.0.1:9/a.png",
+            "http://10.0.0.1/a.png",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::ffff:127.0.0.1]:9/a.png",
+        ] {
+            let err = LoadImageUrl::default()
+                .run(ctx_with_storage().await, json!({"url": url}))
+                .await
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS") || msg.contains("never reached"),
+                "{url}: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -328,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_http_scheme() {
-        let err = LoadImageUrl
+        let err = LoadImageUrl::default()
             .run(ctx_no_s3().await, json!({"url": "file:///etc/passwd"}))
             .await
             .unwrap_err();
@@ -337,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn errors_when_s3_not_configured() {
-        let err = LoadImageUrl
+        let err = LoadImageUrl::default()
             .run(
                 ctx_no_s3().await,
                 json!({"url": "https://example.com/a.png"}),
@@ -366,7 +400,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/page.html", server.uri());
-        let err = LoadImageUrl
+        let err = LoadImageUrl::default()
             .run(ctx_no_s3().await, json!({"url": url}))
             .await
             .unwrap_err();

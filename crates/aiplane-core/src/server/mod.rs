@@ -21,6 +21,7 @@ pub mod limits;
 pub mod model_defaults;
 pub mod net_guard;
 pub mod oidc_settings;
+pub mod outbound_guard;
 pub mod principal;
 pub mod rbac;
 pub mod reasoning;

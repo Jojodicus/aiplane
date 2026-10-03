@@ -22,6 +22,7 @@
 //! or times out is a warning in the log, never a failed search — degraded
 //! ordering beats no answer.
 
+use aiplane_core::server::capped_read;
 use aiplane_core::server::upstreams::{PoolKind, UpstreamRegistry};
 use serde::Deserialize;
 use serde_json::json;
@@ -33,6 +34,8 @@ pub enum RerankError {
     NoModel(String),
     #[error("rerank request failed: {0}")]
     Transport(#[from] reqwest::Error),
+    #[error("reading the rerank backend's answer: {0}")]
+    Read(#[from] capped_read::CappedReadError),
     #[error("rerank backend returned HTTP {status}: {body}")]
     Status { status: u16, body: String },
     #[error("rerank backend sent an unusable response: {0}")]
@@ -114,16 +117,15 @@ pub async fn rerank(
     if !status.is_success() {
         return Err(RerankError::Status {
             status: status.as_u16(),
-            body: resp
-                .text()
+            body: capped_read::read_error_text(resp)
                 .await
-                .unwrap_or_default()
                 .chars()
                 .take(400)
                 .collect(),
         });
     }
-    let value: serde_json::Value = resp.json().await?;
+    let value: serde_json::Value =
+        capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES).await?;
     let mut scored = parse_results(&value, documents.len())?;
     // Descending by score; ties break by original position so the fused
     // ranking still shows through when the reranker cannot separate two.

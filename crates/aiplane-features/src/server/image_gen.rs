@@ -19,6 +19,7 @@
 //! the client the provider's exact response. The two paths share only
 //! `PoolKind::Image` and `UsageKind::Image`.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -337,14 +338,19 @@ impl ImageGenerator {
     ) -> Result<GeneratedImage, ImageGenError> {
         let status = resp.status();
         let (result, units) = if !status.is_success() {
-            let detail = resp.text().await.unwrap_or_default();
+            let detail = capped_read::read_error_text(resp).await;
             let detail = detail.chars().take(500).collect::<String>();
             (
                 Err(ImageGenError::Upstream(format!("HTTP {status}: {detail}"))),
                 UnitUsage::default(),
             )
         } else {
-            match resp.json::<ImagesResponse>().await {
+            match capped_read::read_capped_json::<ImagesResponse>(
+                resp,
+                capped_read::MODEL_ANSWER_BYTES,
+            )
+            .await
+            {
                 Err(e) => (
                     Err(ImageGenError::BadResponse(format!("unparseable body: {e}"))),
                     UnitUsage::default(),
@@ -460,11 +466,9 @@ impl ImageGenerator {
             .unwrap_or("application/octet-stream")
             .trim()
             .to_string();
-        let bytes = resp
-            .bytes()
+        let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
             .await
-            .map_err(|e| ImageGenError::Upstream(format!("reading image url body: {e}")))?
-            .to_vec();
+            .map_err(|e| ImageGenError::Upstream(format!("reading image url body: {e}")))?;
 
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(ImageGenError::TooLarge);

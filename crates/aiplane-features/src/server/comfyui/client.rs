@@ -22,6 +22,7 @@
 //! ever demands it, a future PR can add a `/ws` listener that flips
 //! [`Client::submit_workflow`] to await the `execution_success` message.
 
+use aiplane_core::server::capped_read;
 use std::time::Duration;
 
 use reqwest::Client as HttpClient;
@@ -55,7 +56,7 @@ pub enum ComfyuiClientError {
         method: &'static str,
         path: String,
         #[source]
-        source: reqwest::Error,
+        source: capped_read::CappedReadError,
     },
     #[error("ComfyUI history for `{prompt_id}` is missing or malformed")]
     HistoryMissing { prompt_id: String },
@@ -155,7 +156,7 @@ impl Client {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = capped_read::read_error_text(resp).await;
             return Err(ComfyuiClientError::HttpStatus {
                 method: "GET",
                 path: path.into(),
@@ -163,7 +164,7 @@ impl Client {
                 body: truncate(body, 500),
             });
         }
-        resp.json()
+        capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
             .await
             .map_err(|e| ComfyuiClientError::BadResponse {
                 method: "GET",
@@ -192,7 +193,7 @@ impl Client {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = capped_read::read_error_text(resp).await;
             return Err(ComfyuiClientError::HttpStatus {
                 method: "POST",
                 path: "/prompt".into(),
@@ -201,7 +202,7 @@ impl Client {
             });
         }
         let parsed: SubmitResponse =
-            resp.json()
+            capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
                 .await
                 .map_err(|e| ComfyuiClientError::BadResponse {
                     method: "POST",
@@ -292,7 +293,7 @@ impl Client {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = capped_read::read_error_text(resp).await;
             return Err(ComfyuiClientError::HttpStatus {
                 method: "GET",
                 path,
@@ -301,7 +302,7 @@ impl Client {
             });
         }
         let parsed: HistoryResponse =
-            resp.json()
+            capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
                 .await
                 .map_err(|e| ComfyuiClientError::BadResponse {
                     method: "GET",
@@ -333,7 +334,7 @@ impl Client {
             .map_err(|e| ComfyuiClientError::BadResponse {
                 method: "POST",
                 path: "/upload/image".into(),
-                source: e,
+                source: e.into(),
             })?;
         let form = reqwest::multipart::Form::new()
             .text("type", "input")
@@ -351,7 +352,7 @@ impl Client {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = capped_read::read_error_text(resp).await;
             return Err(ComfyuiClientError::HttpStatus {
                 method: "POST",
                 path: "/upload/image".into(),
@@ -360,7 +361,7 @@ impl Client {
             });
         }
         let parsed: UploadResponse =
-            resp.json()
+            capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
                 .await
                 .map_err(|e| ComfyuiClientError::BadResponse {
                     method: "POST",
@@ -397,7 +398,7 @@ impl Client {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = capped_read::read_error_text(resp).await;
             return Err(ComfyuiClientError::HttpStatus {
                 method: "GET",
                 path,
@@ -412,19 +413,16 @@ impl Client {
             .map(|s| s.split(';').next().unwrap_or("").trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| sniff_mime_from_name(&asset.filename).to_string());
-        let bytes = resp
-            .bytes()
+        let bytes = capped_read::read_capped(resp, MAX_OUTPUT_BYTES as u64)
             .await
-            .map_err(|e| ComfyuiClientError::BadResponse {
-                method: "GET",
-                path,
-                source: e,
+            .map_err(|e| match e {
+                capped_read::CappedReadError::TooLarge { .. } => ComfyuiClientError::OutputTooLarge,
+                e => ComfyuiClientError::BadResponse {
+                    method: "GET",
+                    path,
+                    source: e,
+                },
             })?;
-        // Reject oversized payloads before copying the buffer into a `Vec`.
-        if bytes.len() > MAX_OUTPUT_BYTES {
-            return Err(ComfyuiClientError::OutputTooLarge);
-        }
-        let bytes = bytes.to_vec();
         Ok(DownloadedAsset {
             bytes,
             mime: content_type,

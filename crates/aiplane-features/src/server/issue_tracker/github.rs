@@ -14,6 +14,7 @@
 //! goes through `reqwest` (the shared `AppState.http` client) with the three
 //! headers GitHub requires (`User-Agent`, `Accept`, `X-GitHub-Api-Version`).
 
+use aiplane_core::server::capped_read;
 use serde_json::json;
 
 use aiplane_core::server::config::FeedbackConfig;
@@ -84,8 +85,7 @@ pub async fn create_issue(
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
 
     let status = resp.status();
-    let bytes = resp
-        .bytes()
+    let bytes = capped_read::read_capped(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     if !status.is_success() {
@@ -158,8 +158,7 @@ async fn upload_image(
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     let status = resp.status();
-    let bytes = resp
-        .bytes()
+    let bytes = capped_read::read_capped(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     if !status.is_success() {
@@ -252,7 +251,7 @@ async fn ensure_assets_branch(
         // 422 == "Reference already exists" (a concurrent first submit won).
         return Ok(());
     }
-    let body = resp.text().await.unwrap_or_default();
+    let body = capped_read::read_error_text(resp).await;
     Err(TrackerError::Api {
         status: status.as_u16(),
         body: body.chars().take(400).collect(),
@@ -274,8 +273,7 @@ async fn get_json(
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     let status = resp.status();
-    let bytes = resp
-        .bytes()
+    let bytes = capped_read::read_capped(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| TrackerError::Transport(e.to_string()))?;
     if !status.is_success() {

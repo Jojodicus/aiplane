@@ -31,6 +31,7 @@ use crate::budget::{Clock, Limit};
 use crate::finish::{IncompleteReason, RunOutcome, gateway_summary};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{ToolContext, ToolPhase, ToolSource, runner};
+use aiplane_core::server::capped_read;
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::db::user_memories::KindCounts;
 use aiplane_core::server::tool_naming::RECALL_TOOL_ID;
@@ -1380,7 +1381,9 @@ async fn run_one_turn(
         let upstream = http_req.send().await.map_err(transport_err)?;
         if !upstream.status().is_success() {
             let status = upstream.status();
-            let bytes = upstream.bytes().await.unwrap_or_default();
+            let bytes = capped_read::read_capped(upstream, capped_read::MODEL_ANSWER_BYTES)
+                .await
+                .unwrap_or_default();
             drop(acquired);
             emit_usage(
                 d,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
+use crate::server::capped_read;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -497,8 +498,7 @@ impl AutomaticRouter {
             .await
             .map_err(|error| format!("sending selector request: {error}"))?;
         let status = response.status();
-        let value: Value = response
-            .json()
+        let value: Value = capped_read::read_capped_json(response, capped_read::MODEL_ANSWER_BYTES)
             .await
             .map_err(|error| format!("reading selector response: {error}"))?;
         if !status.is_success() {

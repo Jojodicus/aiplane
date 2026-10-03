@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use aiplane_core::server::capped_read;
 use serde_json::{Value, json};
 
 use aiplane_core::server::config::{ContentGuardMode, ContentGuardPolicy};
@@ -151,8 +152,7 @@ async fn evaluate_checked(
         .await
         .map_err(|error| format!("calling content guard model: {error}"))?;
     let status = response.status();
-    let answer: Value = response
-        .json()
+    let answer: Value = capped_read::read_capped_json(response, capped_read::MODEL_ANSWER_BYTES)
         .await
         .map_err(|error| format!("reading content guard response: {error}"))?;
     if !status.is_success() {

@@ -5,9 +5,12 @@
 # why, and is on the matching allow-list in the test. See docs/testing.md →
 # "Architecture tests".
 disallowed-methods = [
-    { path = "reqwest::Client::new", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (a2a_client::guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
-    { path = "reqwest::Client::builder", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (a2a_client::guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
-    { path = "reqwest::ClientBuilder::new", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (a2a_client::guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
+    { path = "reqwest::Client::new", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (outbound_guard::get / outbound_guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
+    { path = "reqwest::Client::builder", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (outbound_guard::get / outbound_guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
+    { path = "reqwest::ClientBuilder::new", reason = "build outbound clients only at the vetted sites: the net_guard-pinned client (outbound_guard::get / outbound_guard::pin) for destinations a user, model or agent owner chooses, AppState::http for operator-configured backends" },
     { path = "reqwest::get", reason = "builds a throwaway client; see reqwest::Client::new" },
+    { path = "reqwest::Response::bytes", reason = "buffers whatever the peer sends; read through aiplane_core::server::capped_read::read_capped with a cap that fits the use" },
+    { path = "reqwest::Response::text", reason = "buffers whatever the peer sends; read through capped_read::read_capped_text (or read_error_text for an error answer)" },
+    { path = "reqwest::Response::json", reason = "buffers whatever the peer sends; read through capped_read::read_capped_json with a cap that fits the use" },
     { path = "http_body_util::BodyExt::collect", reason = "buffers a body with no bound; read through session_core::chrome::read_body_capped (or read_body_to_bytes behind BodyLimitLayer)" },
 ]

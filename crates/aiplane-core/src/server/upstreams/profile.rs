@@ -38,6 +38,7 @@
 //! does it do vision) stays with the model, where `model_defaults` and the
 //! capability learner already handle it.
 
+use crate::server::capped_read;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -463,11 +464,11 @@ async fn get_json(http: &reqwest::Client, url: &str, api_key: Option<&str>) -> P
                 body: None,
             };
         }
-        let body = resp
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .filter(serde_json::Value::is_object);
+        let body =
+            capped_read::read_capped_json::<serde_json::Value>(resp, capped_read::API_ANSWER_BYTES)
+                .await
+                .ok()
+                .filter(serde_json::Value::is_object);
         Probe {
             reached: true,
             body,

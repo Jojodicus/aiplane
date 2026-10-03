@@ -23,6 +23,7 @@
 //!
 //! Every decision is written to `agent_audit` with the run's call chain.
 
+use aiplane_core::server::capped_read;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -727,7 +728,9 @@ impl RouteClassifier for PoolClassifier {
             );
             return Err(format!("upstream {status}"));
         }
-        let parsed: Value = resp.json().await.map_err(|e| e.to_string())?;
+        let parsed: Value = capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
+            .await
+            .map_err(|e| e.to_string())?;
         drop(acquired);
         self.record(&backend_name, &model, status.as_u16(), started, &parsed);
         let content = parsed

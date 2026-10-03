@@ -5,6 +5,9 @@
 //! gateway. Three routes:
 //!   - `GET    /healthz`        — liveness/readiness for the Quadlet + gateway.
 //!   - `POST   /run`            — execute one [`RunRequest`], return a [`RunResponse`].
+//!     The body is read up to [`MAX_RUN_REQUEST_BYTES`] and refused with
+//!     `413` past it, so not even the gateway can make the runner buffer
+//!     without bound.
 //!   - `DELETE /container/{id}` — release a kept-alive (leased) container.
 //!
 //! There is no auth here by design: the runner must be reachable **only**
@@ -14,6 +17,7 @@
 
 use std::sync::Arc;
 
+use rama::futures::StreamExt;
 use rama::http::layer::error_handling::ErrorHandlerLayer;
 use rama::http::server::HttpServer;
 use rama::http::service::web::Router;
@@ -22,7 +26,7 @@ use rama::http::service::web::response::{IntoResponse, Json};
 use rama::http::{Request, Response, StatusCode, header};
 use rama::layer::{ArcLayer, Layer};
 use rama::net::address::SocketAddress;
-use shared::sandbox::{RunError, RunRequest, RunnerHealth};
+use shared::sandbox::{MAX_RUN_REQUEST_BYTES, RunError, RunRequest, RunnerHealth};
 
 use crate::pool::{Pool, RunnerError};
 
@@ -68,10 +72,9 @@ async fn release_container(
 
 /// POST /run — decode the request, execute it, return the result.
 async fn run(State(state): State<Arc<RunnerState>>, req: Request) -> Response {
-    let (_, body) = req.into_parts();
-    let bytes = match read_body(body).await {
+    let bytes = match read_capped(req, MAX_RUN_REQUEST_BYTES).await {
         Ok(b) => b,
-        Err(msg) => return err(StatusCode::BAD_REQUEST, &msg),
+        Err(refusal) => return refusal,
     };
     let request: RunRequest = match serde_json::from_slice(&bytes) {
         Ok(r) => r,
@@ -99,15 +102,43 @@ async fn run(State(state): State<Arc<RunnerState>>, req: Request) -> Response {
     }
 }
 
-// KNOWN GAP (architecture test BODY_READERS): uncapped. The runner listens on
-// a private network only the gateway reaches, and the gateway sizes requests.
-#[allow(clippy::disallowed_methods)]
-async fn read_body(body: rama::http::Body) -> Result<rama::bytes::Bytes, String> {
-    use rama::http::body::util::BodyExt;
-    body.collect()
-        .await
-        .map(|c| c.to_bytes())
-        .map_err(|e| format!("reading request body: {e}"))
+/// The request body, or the refusal to answer with: `413` for a declared
+/// length over `max` before anything is read, and the moment the running
+/// total passes it otherwise. The runner sits outside the crate stack, so it
+/// cannot use `session_core::chrome::read_body_capped`.
+async fn read_capped(req: Request, max: usize) -> Result<Vec<u8>, Response> {
+    let too_large = || {
+        err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!(
+                "the request body is larger than {max} bytes, the runner's limit; stage fewer \
+                 or smaller files"
+            ),
+        )
+    };
+    let declared = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if declared.is_some_and(|len| len > max as u64) {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    let mut chunks = req.into_body().into_data_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|e| {
+            err(
+                StatusCode::BAD_REQUEST,
+                &format!("reading request body: {e}"),
+            )
+        })?;
+        if body.len() + chunk.len() > max {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 fn json_ok<T: serde::Serialize>(value: &T) -> Response {
@@ -150,4 +181,60 @@ pub async fn serve(state: Arc<RunnerState>, addr: SocketAddress) -> anyhow::Resu
         .await
         .map_err(|e| anyhow::anyhow!("rama listen: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::fake::FakeBackend;
+    use crate::config::Config;
+    use rama::Service;
+    use rama::http::{Body, Method};
+
+    fn state() -> Arc<RunnerState> {
+        let pool = Pool::new(
+            Arc::new(FakeBackend::default()),
+            Arc::new(Config::for_test()),
+        );
+        Arc::new(RunnerState { pool })
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_limit_is_refused_with_413() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/run")
+            .header(
+                header::CONTENT_LENGTH,
+                (shared::sandbox::MAX_RUN_REQUEST_BYTES + 1).to_string(),
+            )
+            .body(Body::from("{}"))
+            .unwrap();
+        let resp = service(state()).serve(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// A chunked body with no length: eight 1 KiB chunks against a 4 KiB
+    /// cap. Finite, so a lost cap fails the assertion instead of buffering.
+    fn chunked(chunks: usize) -> Request {
+        let stream = rama::futures::stream::iter(
+            (0..chunks).map(|_| Ok::<_, std::io::Error>(vec![b' '; 1024])),
+        );
+        Request::builder()
+            .method(Method::POST)
+            .uri("/run")
+            .body(Body::from_stream(stream))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_length_is_cut_off_at_the_limit() {
+        let refusal = read_capped(chunked(8), 4096).await.unwrap_err();
+        assert_eq!(refusal.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn a_body_within_the_limit_is_read_whole() {
+        assert_eq!(read_capped(chunked(4), 4096).await.unwrap().len(), 4096);
+    }
 }

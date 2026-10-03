@@ -21,6 +21,7 @@ pub mod dev_seed;
 pub mod embed_cors;
 pub mod first_run;
 pub mod messages;
+pub mod multipart;
 pub mod oidc_handlers;
 pub mod openapi;
 pub mod proxy;

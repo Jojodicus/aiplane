@@ -6,18 +6,26 @@ use std::sync::Arc;
 use aiplane_core::server::rbac::Resolver;
 use aiplane_runtime::server as rt;
 
+/// `allow_private_networks` is the operator's
+/// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`, for the tools that reach a host the
+/// model names.
 pub fn base_registry(
     rbac: Arc<Resolver>,
     sandbox_client: Option<Arc<rt::tools::sandbox::SandboxClient>>,
+    allow_private_networks: bool,
 ) -> rt::tools::ToolRegistry {
     rt::tools::ToolRegistry::new()
         .with(rt::tools::echo::Echo)
         .with(rt::tools::time::CurrentTimestamp)
-        .with(aiplane_tools::fetch_url::FetchUrl)
+        .with(aiplane_tools::fetch_url::FetchUrl::new(
+            allow_private_networks,
+        ))
         // Fetch an image from a URL and keep it as a reusable attachment
         // (so it can be embedded in a later typst render). Always on — the
         // runtime guard errors cleanly off the chat path / without [chat.s3].
-        .with(aiplane_tools::load_image_url::LoadImageUrl)
+        .with(aiplane_tools::load_image_url::LoadImageUrl::new(
+            allow_private_networks,
+        ))
         .with(aiplane_tools::fetch_attachment::FetchAttachment::new(
             sandbox_client.clone(),
         ))
@@ -78,7 +86,9 @@ pub fn base_registry(
         // leave always-on.
         .with(aiplane_tools::netcheck::DnsLookup)
         .with(aiplane_tools::netcheck::WhoisLookup)
-        .with(aiplane_tools::netcheck::TlsCert)
+        .with(aiplane_tools::netcheck::TlsCert::new(
+            allow_private_networks,
+        ))
         .with(aiplane_tools::wikipedia::Wikipedia)
         .with(aiplane_tools::currency::ConvertCurrency)
         // RAG. These tools are no-ops without the indexer wired into
@@ -130,7 +140,7 @@ mod tests {
     #[test]
     fn base_registry_includes_the_user_facing_tool_families() {
         let rbac = std::sync::Arc::new(Resolver::empty());
-        let tools = base_registry(rbac, None);
+        let tools = base_registry(rbac, None, false);
         for id in [
             "browser_control",
             "show_screenshot",
@@ -161,7 +171,7 @@ mod tests {
         use rt::tools::catalog::{self, BOOTSTRAP_TOOL_ID, entry_key_for, is_hidden};
         use std::collections::BTreeSet;
 
-        let registry = base_registry(std::sync::Arc::new(Resolver::empty()), None);
+        let registry = base_registry(std::sync::Arc::new(Resolver::empty()), None, false);
         let ids: Vec<String> = registry.ids().map(str::to_string).collect();
         let enforced: BTreeSet<String> = ids
             .iter()

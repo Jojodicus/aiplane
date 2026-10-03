@@ -25,14 +25,15 @@ use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_agents::db::agent_verifiers;
+use aiplane_core::server::capped_read;
 use aiplane_core::server::crypto::sha256_hex;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use jiff::{SignedDuration, Timestamp};
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::{Map, Value, json};
 
 use super::JwtAlgorithm;
-use crate::agents::a2a_client::guard;
 use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
@@ -262,7 +263,7 @@ pub fn seal_secrets(
 type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;
 static JWKS: LazyLock<JwksCache> = LazyLock::new(Default::default);
 
-/// The key set at `url`, fetched through the A2A client's guard: the URL is
+/// The key set at `url`, fetched through `outbound_guard`: the URL is
 /// chosen by an agent's owner, so it gets the same resolve-and-pin, no
 /// redirects and private-network rule as an A2A route.
 async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityError> {
@@ -273,8 +274,8 @@ async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityErro
             reason,
         }
     };
-    let allow_private = state.config().agents.a2a_allow_private_networks;
-    let pinned = guard::pin(url, allow_private, JWKS_TIMEOUT)
+    let allow_private = state.config().network.allow_private_networks;
+    let pinned = outbound_guard::pin(url, Policy::agent(allow_private), JWKS_TIMEOUT)
         .await
         .map_err(unavailable)?;
     let resp = pinned
@@ -287,7 +288,7 @@ async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityErro
     if !resp.status().is_success() {
         return Err(unavailable(format!("it answered {}", resp.status())));
     }
-    let bytes = guard::read_capped(resp, MAX_JWKS_BYTES, "the JWKS document")
+    let bytes = capped_read::read_capped_for(resp, MAX_JWKS_BYTES, "the JWKS document")
         .await
         .map_err(unavailable)?;
     let set: JwkSet = serde_json::from_slice(&bytes)

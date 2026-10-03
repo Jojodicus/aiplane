@@ -323,9 +323,9 @@ fn scan(needles: &[&str], view: fn(&Source) -> &str) -> Vec<(String, usize, Stri
 /// the crate; its destinations are the admin-curated connector catalog.
 const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
-        path: "aiplane-runtime/src/agents/a2a_client/guard.rs",
-        why: "guarded: resolve-and-pin with net_guard, no redirects — the one client for \
-              destinations an agent's owner chooses",
+        path: "aiplane-core/src/server/outbound_guard.rs",
+        why: "guarded: resolve-and-pin with net_guard, every redirect hop re-checked — the one \
+              client for destinations a user, a model or an agent's owner chooses",
     },
     Allowed {
         path: "aiplane-core/src/server/auth/mcp_oauth.rs",
@@ -375,16 +375,6 @@ const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
         path: "aiplane-tools/src/netcheck.rs",
         why: "fixed hosts: Cloudflare DoH and rdap.org (redirects followed for RDAP bootstrap)",
-    },
-    Allowed {
-        path: "aiplane-tools/src/fetch_url.rs",
-        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
-              to be moved onto the a2a guard's resolve-and-pin client",
-    },
-    Allowed {
-        path: "aiplane-tools/src/load_image_url.rs",
-        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
-              to be moved onto the a2a guard's resolve-and-pin client",
     },
 ];
 
@@ -441,7 +431,7 @@ fn outbound_http_clients_are_built_only_at_the_vetted_sites() {
         "A reqwest client is built outside the vetted sites. A new client is a new place \
          the gateway connects from: a destination a user, a model or an agent's owner can \
          choose must go through the net_guard-checked, pinned client \
-         (aiplane-runtime agents/a2a_client/guard.rs), and one only the operator configures \
+         (aiplane-core server/outbound_guard.rs), and one only the operator configures \
          should reuse AppState::http.",
         OUTBOUND_CLIENTS,
         &hits,
@@ -461,8 +451,8 @@ const BODY_READERS: &[Allowed] = &[
     },
     Allowed {
         path: "sandbox-runner/src/server.rs",
-        why: "KNOWN GAP: the runner's /run reads its body uncapped; it listens on a private \
-              network only the gateway reaches, which sizes the request",
+        why: "the runner's own capped /run reader (413 past MAX_RUN_REQUEST_BYTES): it stands \
+              outside the crate stack and cannot use session_core::chrome",
     },
 ];
 
@@ -507,6 +497,7 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
             "http_body_util",
             ".try_into_json(",
             ".try_into_string(",
+            ".into_data_stream(",
         ],
         |s| s.code.as_str(),
     );
@@ -560,6 +551,93 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
          read_json_capped / read_body_prefix:\n  {}",
         uncapped.join("\n  ")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Unbounded response body reads.
+
+/// Where a body may be read whole with `.bytes()` / `.text()` / `.json()`.
+/// Outbound responses never are: they go through `capped_read`.
+const WHOLE_BODY_READS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-api/src/pages/chat/mod.rs",
+        why: "the fields of an inbound multipart upload, behind BodyLimitLayer — not a response",
+    },
+    Allowed {
+        path: "aiplane-api/src/pages/json_skills.rs",
+        why: "the field of an inbound skill-archive upload, behind BodyLimitLayer — not a \
+              response",
+    },
+    Allowed {
+        path: "aiplane/src/rama_server/multipart.rs",
+        why: "the fields of an inbound /v1 multipart upload, behind BodyLimitLayer — not a \
+              response",
+    },
+];
+
+/// Offsets of `.bytes()`, `.text()`, `.json()` and `.json::<…>()` calls that
+/// are awaited: reqwest's whole-body reads (and multipart's). `str::bytes()`
+/// and friends are never awaited, so they do not match.
+fn awaited_whole_body_reads(code: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    for (needle, name) in [
+        (".bytes()", ".bytes()"),
+        (".text()", ".text()"),
+        (".json()", ".json()"),
+        (".json::<", ".json::<…>()"),
+    ] {
+        for at in offsets(code, needle) {
+            let mut end = at + needle.len();
+            if needle.ends_with('<') {
+                let mut depth = 1;
+                let bytes = code.as_bytes();
+                while end < bytes.len() && depth > 0 {
+                    match bytes[end] {
+                        b'<' => depth += 1,
+                        b'>' => depth -= 1,
+                        _ => {}
+                    }
+                    end += 1;
+                }
+                if !code[end..].starts_with("()") {
+                    continue;
+                }
+                end += 2;
+            }
+            if code[end..].trim_start().starts_with(".await") {
+                out.push((at, name));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn response_bodies_are_read_only_through_the_capped_reader() {
+    let mut hits = Vec::new();
+    for src in production_sources() {
+        for (at, name) in awaited_whole_body_reads(&src.code) {
+            hits.push((src.rel.clone(), line_of(&src.code, at), name.to_string()));
+        }
+    }
+    assert_within(
+        "A response body is read whole. `.bytes()` / `.text()` / `.json()` buffer whatever \
+         the peer sends; read through aiplane_core::server::capped_read (read_capped, \
+         read_capped_for, read_capped_json, read_capped_text, read_error_text) with a cap that fits the use.",
+        WHOLE_BODY_READS,
+        &hits,
+    );
+}
+
+#[test]
+fn the_whole_body_scan_matches_awaited_reads_only() {
+    let code = "let a = resp.bytes().await?; let b = s.bytes().count(); \
+                let c = r.json::<Vec<u8>>()\n    .await; let d = r.text().await;";
+    let names: Vec<&str> = awaited_whole_body_reads(code)
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(names, [".bytes()", ".text()", ".json::<…>()"]);
 }
 
 // ---------------------------------------------------------------------------

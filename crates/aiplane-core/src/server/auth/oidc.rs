@@ -28,6 +28,7 @@
 //! - Pull `sub`, `email`, `name`, and the configured `roles_claim` straight
 //!   out of the verified JSON payload — no claims-stripping middleman.
 
+use crate::server::capped_read;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -211,8 +212,7 @@ impl OidcClient {
                 "GET {well_known} returned {status}"
             )));
         }
-        let body = response
-            .text()
+        let body = capped_read::read_capped_text(response, capped_read::API_ANSWER_BYTES)
             .await
             .map_err(|e| OidcError::Discover(format!("reading discovery body: {e}")))?;
         let metadata: ProviderMetadata = serde_json::from_str(&body)
@@ -315,8 +315,7 @@ impl OidcClient {
             .await
             .map_err(|e| OidcError::Exchange(format!("POST token_endpoint: {e}")))?;
         let status = response.status();
-        let body = response
-            .text()
+        let body = capped_read::read_capped_text(response, capped_read::API_ANSWER_BYTES)
             .await
             .map_err(|e| OidcError::Exchange(format!("reading token body: {e}")))?;
         if !status.is_success() {
@@ -471,8 +470,7 @@ impl OidcClient {
             .await
             .map_err(|e| OidcError::Verify(format!("GET jwks_uri: {e}")))?;
         let status = response.status();
-        let body = response
-            .text()
+        let body = capped_read::read_capped_text(response, capped_read::API_ANSWER_BYTES)
             .await
             .map_err(|e| OidcError::Verify(format!("reading JWKS body: {e}")))?;
         if !status.is_success() {

@@ -132,6 +132,7 @@ pub async fn read_capped(
                 "`{path}` is larger than the {max_bytes}-byte limit for indexed files"
             )),
             CappedReadError::Transport(source) => ProviderError::Transport { provider, source },
+            e @ CappedReadError::Json(_) => ProviderError::Config(e.to_string()),
         })
 }
 

@@ -21,6 +21,7 @@
 //!
 //! [`search_settings`]: aiplane_features::server::search_settings
 
+use aiplane_core::server::capped_read;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -382,11 +383,10 @@ async fn searxng(
         return Err(ToolError::Failed(format!(
             "searxng returned {}: {}",
             resp.status(),
-            resp.text().await.unwrap_or_default()
+            capped_read::read_error_text(resp).await
         )));
     }
-    let body: Value = resp
-        .json()
+    let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| ToolError::Failed(format!("searxng response is not JSON: {e}")))?;
     let items = body
@@ -441,7 +441,7 @@ async fn brave(
         .map_err(|e| ToolError::Failed(format!("brave request failed: {e}")))?;
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = capped_read::read_error_text(resp).await;
         let error = ToolError::Failed(format!("brave returned {status}: {body}"));
         return Err(
             if status.as_u16() == 402
@@ -461,8 +461,7 @@ async fn brave(
             },
         );
     }
-    let body: Value = resp
-        .json()
+    let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| ToolError::Failed(format!("brave response is not JSON: {e}")))?;
     let items = body
@@ -514,7 +513,7 @@ async fn tavily(
         .map_err(|e| ToolError::Failed(format!("tavily request failed: {e}")))?;
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = capped_read::read_error_text(resp).await;
         let error = ToolError::Failed(format!("tavily returned {status}: {body}"));
         return Err(if matches!(status.as_u16(), 432 | 433) {
             SearchFailure::Quota(error)
@@ -522,8 +521,7 @@ async fn tavily(
             SearchFailure::Other(error)
         });
     }
-    let body: Value = resp
-        .json()
+    let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
         .await
         .map_err(|e| ToolError::Failed(format!("tavily response is not JSON: {e}")))?;
     let items = body

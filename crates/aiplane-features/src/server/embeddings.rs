@@ -15,6 +15,7 @@
 //! Acquire→drop is RAII the same way `proxy::forward` does it: the
 //! inflight slot is held for the duration of the upstream call.
 
+use aiplane_core::server::capped_read;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -30,6 +31,8 @@ pub enum EmbedError {
     },
     #[error("calling embedding upstream: {0}")]
     Transport(#[from] reqwest::Error),
+    #[error("reading the embedding upstream's answer: {0}")]
+    Read(#[from] capped_read::CappedReadError),
     #[error("embedding upstream returned status {status}: {body}")]
     UpstreamStatus { status: u16, body: String },
     #[error("parsing embedding response: {0}")]
@@ -105,13 +108,13 @@ async fn post(
     let resp = req.send().await?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = capped_read::read_error_text(resp).await;
         return Err(EmbedError::UpstreamStatus {
             status: status.as_u16(),
             body,
         });
     }
-    let bytes = resp.bytes().await?;
+    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES).await?;
     let parsed: EmbeddingsResponse = serde_json::from_slice(&bytes).map_err(EmbedError::Parse)?;
     if parsed.data.len() != inputs.len() {
         return Err(EmbedError::CountMismatch {

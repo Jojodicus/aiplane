@@ -6,6 +6,7 @@
 //! no secrets, no writes. LLMs guess exchange rates badly; this gives a live
 //! (if once-daily) figure with the rate and reference date.
 
+use aiplane_core::server::capped_read;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
@@ -117,8 +118,7 @@ impl Tool for ConvertCurrency {
                     resp.status()
                 )));
             }
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("rate response parse: {e}")))?;
 
