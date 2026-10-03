@@ -34,6 +34,39 @@ starts when they send their first message.
 | `data-title` | panel title | the agent's display name |
 | `data-identity-token` | a token your site signed for the signed-in visitor ([below](#signed-in-visitors)) | none |
 
+## Colour
+
+The agent's colour (`profile.color` in its spec, set in the builder's
+*Website* step) paints the header, the launcher and the visitor's messages;
+the text on it is white or near-black, whichever reads better. Your own
+stylesheet still wins (see [Styling](#styling)).
+
+## Voice
+
+When the agent's owner switches it on (`publish.voice`, the builder's
+*Website* step), the widget offers:
+
+- **A microphone.** Hold it while speaking, or click once to start and
+  again to stop (Enter or Space work too). What was said appears in the
+  input; the visitor reads it, corrects it if needed and sends it — nothing
+  is sent on their behalf. Escape or *Cancel* discards a recording. A
+  recording ends by itself after 60 seconds. The browser asks for microphone
+  permission the first time; if it is refused, the widget says how to allow
+  it.
+- **Read aloud.** A speaker button in the header. Once the visitor turns it
+  on, each finished answer is read aloud; *Stop* ends it. Nothing plays
+  before the visitor clicks it.
+
+**What is kept.** The recording is held in memory only while it is
+transcribed; neither it nor the spoken audio is stored. The agent's
+activity log keeps the transcript, the text that was read aloud, and the
+size and length of the audio. Voice calls count against the same visitor
+rate limits and the owner's budget as messages.
+
+Voice needs a secure page (`https://`, or `localhost`) and, on the
+gateway, a transcription and a speech pool granted to the agent. If your
+site sends a `Permissions-Policy`, allow `microphone` for your own origin.
+
 ## Verification codes
 
 When the agent verifies a visitor's email address (an `mcp_code` verifier),
@@ -148,7 +181,10 @@ connect-src https://YOUR-GATEWAY;
 ```
 
 Nothing else is needed: the styles are a constructed stylesheet (not subject to
-`style-src`), there are no images, fonts or frames, and no inline script.
+`style-src`), there are no images, fonts or frames, and no inline script. With
+voice on, the recorder is an audio worklet loaded from the gateway (covered by
+`script-src` above) and spoken answers are decoded in Web Audio, so `media-src`
+is not involved.
 
 ## Try it locally
 

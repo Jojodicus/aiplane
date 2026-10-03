@@ -12,7 +12,7 @@ import { isSafeHref } from '../shared/url.ts';
 import { parseBlocks, type Block, type Inline } from './markdown.ts';
 import { secureInputForm, secureRequest } from './secure-input.ts';
 import { trackWaiting, waitingFromTurns, waitingLabel, WAIT_POLL_MS, type Waiting } from './waiting.ts';
-import { MAX_RECORDING_MS, answerToSpeak, idleMic, micErrorKey, micStep, type MicEvent } from './voice.ts';
+import { MAX_RECORDING_MS, idleMic, micErrorKey, micStep, nextToSpeak, type MicEvent } from './voice.ts';
 
 export interface WidgetOptions {
 	api: EmbedApi;
@@ -118,6 +118,7 @@ export class Widget {
 	private recording: MicRecording | null = null;
 	private recordingLimit: ReturnType<typeof setTimeout> | null = null;
 	private speakAloud = false;
+	private readonly heard = new Set<string>();
 	private readonly speaker = new Speaker();
 
 	private readonly launcher: HTMLButtonElement;
@@ -187,6 +188,7 @@ export class Widget {
 		this.mic.addEventListener('pointerdown', (e) => {
 			if (e.button !== 0) return;
 			e.preventDefault();
+			this.mic.focus();
 			try {
 				this.mic.setPointerCapture(e.pointerId);
 			} catch {
@@ -204,7 +206,10 @@ export class Widget {
 		this.micCancel.addEventListener('click', () => this.micEvent({ type: 'cancel' }));
 		this.speakToggle.addEventListener('click', () => {
 			this.speakAloud = !this.speakAloud;
-			if (this.speakAloud) this.speaker.unlock();
+			if (this.speakAloud) {
+				this.speaker.unlock();
+				nextToSpeak(this.state.messages, this.heard);
+			}
 			else this.speaker.stop();
 			this.renderSpeaker();
 		});
@@ -449,8 +454,8 @@ export class Widget {
 			try {
 				for await (const frame of this.o.api.events(controller.signal)) {
 					applyFrame(this.state, frame);
-					const spoken = answerToSpeak(frame);
-					if (spoken && this.speakAloud) void this.speakTurn(spoken);
+					const spoken = this.speakAloud ? nextToSpeak(this.state.messages, this.heard) : null;
+					if (spoken) void this.speakTurn(spoken);
 					this.waiting = trackWaiting(this.waiting, frame);
 					this.syncInput();
 					this.renderLog();

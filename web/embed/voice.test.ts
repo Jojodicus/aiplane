@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HOLD_MS, answerToSpeak, idleMic, micErrorKey, micStep, type MicEffect, type MicEvent, type MicState } from './voice.ts';
+import { HOLD_MS, nextToSpeak, idleMic, micErrorKey, micStep, type MicEffect, type MicEvent, type MicState } from './voice.ts';
 
 function run(events: MicEvent[], from: MicState = idleMic()): { state: MicState; effects: MicEffect[] } {
 	let state = from;
@@ -63,8 +63,12 @@ test('microphone errors map to what the visitor can do about them', () => {
 	assert.equal(micErrorKey(new Error('boom')), 'embed-voice-failed');
 });
 
-test('only a completed answer is spoken', () => {
-	assert.equal(answerToSpeak({ event: 'turn_finalized', data: { turn_id: 't1', status: 'completed' } }), 't1');
-	assert.equal(answerToSpeak({ event: 'turn_finalized', data: { turn_id: 't1', status: 'errored' } }), null);
-	assert.equal(answerToSpeak({ event: 'turn_delta', data: { turn_id: 't1' } }), null);
+test('each finished answer is spoken once, whichever frame brought it', () => {
+	const msg = (id: string, role = 'assistant', status = 'completed', failed = false) => ({ id, role, status, failed });
+	const heard = new Set<string>();
+	assert.equal(nextToSpeak([msg('old')], heard), 'old');
+	assert.equal(nextToSpeak([msg('old')], heard), null, 'not twice');
+	assert.equal(nextToSpeak([msg('old'), msg('u1', 'user'), msg('a1', 'assistant', 'in_progress')], heard), null);
+	assert.equal(nextToSpeak([msg('old'), msg('u1', 'user'), msg('a1')], heard), 'a1');
+	assert.equal(nextToSpeak([msg('e1', 'assistant', 'errored', true)], heard), null, 'an error is not read');
 });

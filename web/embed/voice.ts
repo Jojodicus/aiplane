@@ -73,8 +73,22 @@ export function micErrorKey(error: unknown): string {
 	return 'embed-voice-failed';
 }
 
-/** The answer a visitor who turned the speaker on should hear after this frame, if any. */
-export function answerToSpeak(frame: { event: string; data: Record<string, unknown> }): string | null {
-	if (frame.event !== 'turn_finalized' || frame.data.status !== 'completed') return null;
-	return typeof frame.data.turn_id === 'string' ? frame.data.turn_id : null;
+/**
+ * The newest finished answer not yet heard, if any, marking every finished
+ * answer heard. An answer can arrive in a `turn_finalized` frame or already
+ * whole in a `snapshot` (when it finished before the stream attached), so
+ * this reads the transcript, not the frame. Mark the transcript heard when
+ * the speaker is switched on, so it reads what comes next, not the history.
+ */
+export function nextToSpeak(
+	messages: ReadonlyArray<{ id: string; role: string; status: string; failed: boolean }>,
+	heard: Set<string>
+): string | null {
+	let next: string | null = null;
+	for (const m of messages) {
+		if (m.role !== 'assistant' || m.status !== 'completed' || m.failed || heard.has(m.id)) continue;
+		heard.add(m.id);
+		next = m.id;
+	}
+	return next;
 }
