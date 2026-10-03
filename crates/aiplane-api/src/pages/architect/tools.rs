@@ -145,7 +145,8 @@ impl Tool for ArchitectTool {
             Kind::UpdateAgentDraft => (
                 "Change an agent's draft, only the steps given in `changes`: name (`display`), \
                  model (`pool`), task, tone, scope, abilities (granted to the agent), slots \
-                 (information to collect) and handoffs. Each piece is checked and kept or \
+                 (information to collect), handoffs (topic → agent or person) and \
+                 fallback_to_person. Each piece is checked and kept or \
                  dropped with a reason; the previous draft is kept so the person can undo.",
                 json!({ "type": "object", "additionalProperties": false,
                         "required": ["agent_id", "changes"],
@@ -445,6 +446,9 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
         changed.push("pool");
     }
     changed.extend(applied.suggestion.steps.offered());
+    if applied.handoffs {
+        changed.push("handoffs");
+    }
     Ok(json!({
         "agent_id": id,
         "revision": saved["revision"],

@@ -38,6 +38,7 @@ use super::pool_choice::{JsonExchange, JsonQuestion, ask_json};
 use super::profile::pool_model;
 use crate::rama_server::state::RamaState;
 
+pub mod handoffs;
 mod proposal;
 pub mod review;
 

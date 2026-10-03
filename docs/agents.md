@@ -2999,7 +2999,7 @@ system message says to ignore instructions in it.
 - `abilities: [{id, name, why}]` — tools for `main.tools`, which the UI grants
   when applied;
 - `slots: [{name, label, type, def}]` — `state.<name> = def`. `type` is a
-  friendly kind: `text` (string, ≤500), `long_text` (string, ≤2000), `email`,
+  friendly kind: `text` (string, ≤200, the setup's shape), `long_text` (string, ≤2000), `email`,
   `number`, `whole_number` (integer), `yes_no` (boolean), `choice` (enum of
   the proposed values); `set_by: [llm]`, `description` = `label`;
 - `identity: {method, why}` — `none`, `website_login`, `email_code` or
@@ -3115,20 +3115,37 @@ There is **no publish tool**: the prompt tells the model to send the person
 to the setup page (`setup_url`), where Publish stays a click. An agent may
 be named by its id or its name.
 
-**`changes`** is the prompt assistant's step shape without tests and
-identity (`assist::changes_schema`): `display`, `pool`, `task`, `tone`,
-`scope`, `abilities`, `slots`, `handoffs`. `apply_changes` runs the same
-`Reviewer` as `review`: each piece is applied to the stored draft and kept
-when it adds no validator issue, else dropped with the reason. An ability is
-offered only when it is one of the person's grantable tools, and `pool` only
-when it is a chat pool the person may use — both are then granted through
-the capped grant route before the draft is saved, so a grant the person
-lacks is never made (`grant_exceeds_manager` would refuse it anyway). When
-nothing at all is applied the call fails with the reasons, so the chat shows
-it as an error. Identity checks need a connector or a key only the setup's
-identity step asks for, and test cases are saved from its last step; both
-are left to the UI. Hand-offs are written in the proposal's route shape,
-which the setup shows as "set up in the advanced editor".
+**`changes`** (`assist::changes_schema`): `display`, `pool`, `task`, `tone`,
+`scope`, `abilities` and `slots` in the prompt assistant's step shape, plus
+`handoffs: [{topic, target, identity?}]` and `fallback_to_person`.
+`apply_changes` runs the same `Reviewer` as `review`: each piece is applied
+to the stored draft and kept when it adds no validator issue, else dropped
+with the reason. An ability is offered only when it is one of the person's
+grantable tools, and `pool` only when it is a chat pool the person may use —
+both are then granted through the capped grant route before the draft is
+saved, so a grant the person lacks is never made (`grant_exceeds_manager`
+would refuse it anyway). When nothing at all is applied the call fails with
+the reasons, so the chat shows it as an error.
+
+*Written in the setup's shapes.* What the architect writes must read in the
+setup assistant as what it is, not as "set up in the advanced editor":
+- a slot gets the setup's friendly-kind shape (`text` is ≤ 200, as
+  `SLOT_SHAPES`) and the next `order`;
+- hand-offs are the hand-off step's rules: `assist::handoffs` is a port of
+  `readHandoffs` / `writeHandoffs` / `deriveBind` from
+  `web/src/lib/agent-setup.ts` (routes `when: {all: [topic eq, request set,
+  (verified provenance)]}`, `task` `Request about {topic}: {request}`, the
+  `topic` enum and `request` slots, `router.order`, the `fallback` route). A
+  rule whose topic exists replaces it; other routes stay as they are. The
+  bind comes from the specialist's live spec; `identity` is honoured only
+  when the agent has an identity check (otherwise kept without it, with a
+  note). `web/src/lib/fixtures/architect-draft.json` is a draft written by
+  `apply_changes` (pinned in `review/tests.rs`) that `agent-setup.test.ts`
+  reads back as rules and friendly slots, and writes back unchanged.
+
+Identity checks need a connector or a key only the setup's identity step
+asks for, and test cases are saved from its last step; both are left to the
+UI.
 
 **Undo: draft revisions.** Every draft save (the UI's and the architect's)
 keeps the draft it replaced in `agent_draft_revisions` (newest

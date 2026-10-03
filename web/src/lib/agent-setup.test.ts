@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 
 import { cleanSpec, ensureShape, type AgentResources, type Grant, type Spec } from './agents.ts';
 import {
@@ -478,4 +479,30 @@ test('details keep the order they were given, and unordered slots follow by name
 	writeSlots(spec, [rows[1], rows[0], ...rows.slice(2)]);
 	assert.deepEqual(readSlots(throughEditor(spec)).map((r) => r.key), ['second', 'first', 'alpha', 'zeta']);
 	assert.equal(slotKind(spec.state.first), 'email', 'the order is not part of the friendly kind');
+});
+
+test('a draft the agent architect wrote reads as hand-off sentences and friendly details, not "advanced"', () => {
+	// Written by `apply_changes` on the server; `review/tests.rs` pins it.
+	const draft = JSON.parse(readFileSync(new URL('./fixtures/architect-draft.json', import.meta.url), 'utf8')) as Spec;
+	const h = readHandoffs(throughEditor(draft));
+	assert.deepEqual(h.custom, []);
+	assert.equal(h.fallback, true);
+	assert.deepEqual(
+		h.rules.map((r) => [r.topic, r.target, r.identity]),
+		[
+			['Invoices', { kind: 'agent', id: 'billing-agent' }, false],
+			['Complaints', { kind: 'human' }, false]
+		]
+	);
+	assert.deepEqual(
+		readSlots(throughEditor(draft)).map((r) => [r.key, r.kind]),
+		[
+			['order', 'text'],
+			['issue', 'choice']
+		]
+	);
+	const again = structuredClone(draft);
+	writeHandoffs(again, h);
+	assert.deepEqual(sortKeys(again.routes), sortKeys(draft.routes), 'writing the rules back changes nothing');
+	assert.deepEqual(sortKeys(again.state), sortKeys(draft.state));
 });

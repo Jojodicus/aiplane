@@ -268,14 +268,24 @@ pub fn changes_schema() -> Value {
                 "type": one_of(to_strings(SLOT_TYPES)),
                 "choices": strings(),
             })) },
-            "handoffs": { "type": "array", "items": object(json!({
-                "name": { "type": "string" },
-                "topic": { "type": "string" },
-                "slot": { "type": "string" },
-                "equals": { "type": ["string", "null"] },
-                "target": { "type": "string", "description": "an agent id, or \"human\"" },
-                "task": { "type": "string" },
-            })) },
+            "handoffs": { "type": "array",
+                "description": "rules: when the request is about `topic`, hand it over to \
+                                `target`; a rule with a topic that exists replaces it",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["topic", "target"],
+                    "properties": {
+                        "topic": { "type": "string" },
+                        "target": { "type": "string",
+                                    "description": "an agent id, or \"human\" for a person" },
+                        "identity": { "type": "boolean",
+                                      "description": "only once the visitor's identity is \
+                                                      confirmed" },
+                    },
+                } },
+            "fallback_to_person": { "type": "boolean",
+                "description": "otherwise hand every other request over to a person" },
         },
     })
 }
