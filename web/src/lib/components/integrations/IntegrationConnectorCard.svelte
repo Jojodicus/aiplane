@@ -57,7 +57,7 @@
 
 		{#if connector.auth_type === 'static_bearer' && !connector.connected && !connector.is_global}
 			<form class="flex flex-wrap items-end gap-2 border-t border-base-300 pt-3" onsubmit={connectToken}>
-				<label class="flex min-w-48 flex-1 flex-col gap-1"><span class="label-text text-xs">{t('integrations-token-label')}</span><input class="input input-bordered input-sm w-full" type="password" required autocomplete="off" placeholder={t('integrations-token-placeholder')} bind:value={token} /></label>
+				<label class="flex min-w-48 flex-1 flex-col gap-1"><span class="label-text text-xs">{t('integrations-token-label')}</span><input class="input input-sm w-full" type="password" required autocomplete="off" placeholder={t('integrations-token-placeholder')} bind:value={token} /></label>
 				<button class="btn btn-primary btn-sm" type="submit" disabled={saving}>{t('integrations-connect-button')}</button>
 			</form>
 		{/if}

@@ -27,7 +27,7 @@
 		<form class="card border border-base-300" onsubmit={upload}>
 			<div class="card-body gap-2 p-3">
 				<div class="text-xs uppercase tracking-wide text-base-content/50">{t('my-skills-upload-heading')}</div>
-				<input type="file" accept=".skill,.zip" required class="file-input file-input-bordered file-input-sm w-full" onchange={(event) => (file = event.currentTarget.files?.[0] ?? null)} />
+				<input type="file" accept=".skill,.zip" required class="file-input file-input-sm w-full" onchange={(event) => (file = event.currentTarget.files?.[0] ?? null)} />
 				<button type="submit" class="btn btn-primary btn-sm w-full" disabled={!file || uploading}>{t('my-skills-upload-button')}</button>
 			</div>
 		</form>

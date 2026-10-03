@@ -189,11 +189,11 @@
 				<div class="flex gap-2">
 					<label class="flex flex-col gap-1 flex-1">
 						<span class="label-text text-xs">{t('setup-manual-claim')}</span>
-						<input class="input input-bordered input-sm" placeholder={t('setup-manual-claim-placeholder')} bind:value={manualClaim} />
+						<input class="input input-sm" placeholder={t('setup-manual-claim-placeholder')} bind:value={manualClaim} />
 					</label>
 					<label class="flex flex-col gap-1 flex-1">
 						<span class="label-text text-xs">{t('setup-manual-value')}</span>
-						<input class="input input-bordered input-sm" placeholder={t('setup-manual-value-placeholder')} bind:value={manualValue} />
+						<input class="input input-sm" placeholder={t('setup-manual-value-placeholder')} bind:value={manualValue} />
 					</label>
 				</div>
 				<p class="text-xs text-base-content/60">{t('setup-manual-help')}</p>
@@ -229,7 +229,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex flex-col gap-1">
 						<label class="label-text" for="setup-public-url">{t('setup-field-public-url')}</label>
-						<input id="setup-public-url" class="input input-bordered w-full" type="url" required bind:value={fpublicUrl} />
+						<input id="setup-public-url" class="input w-full" type="url" required bind:value={fpublicUrl} />
 						<span class="text-xs text-base-content/60">{t('setup-field-public-url-help')}</span>
 					</div>
 
@@ -241,26 +241,26 @@
 
 					<div class="flex flex-col gap-1">
 						<label class="label-text" for="setup-issuer">{t('setup-field-issuer')}</label>
-						<input id="setup-issuer" class="input input-bordered w-full" type="url" required bind:value={fissuer} placeholder={t('setup-issuer-placeholder')} />
+						<input id="setup-issuer" class="input w-full" type="url" required bind:value={fissuer} placeholder={t('setup-issuer-placeholder')} />
 						<span class="text-xs text-base-content/60">{t('setup-field-issuer-help')}</span>
 					</div>
 					<div class="grid gap-4 sm:grid-cols-2">
-					<div class="flex flex-col gap-1"><label class="label-text" for="setup-client-id">{t('setup-field-client-id')}</label><input id="setup-client-id" class="input input-bordered w-full" required bind:value={fclientId} /></div>
+					<div class="flex flex-col gap-1"><label class="label-text" for="setup-client-id">{t('setup-field-client-id')}</label><input id="setup-client-id" class="input w-full" required bind:value={fclientId} /></div>
 					<div class="flex flex-col gap-1"><label class="label-text" for="setup-client-secret">
 							{t('setup-field-client-secret')}{wiz?.draft?.client_secret_set
 								? ` (${t('setup-secret-set-hint')})`
 								: ''}
-						</label><input id="setup-client-secret" class="input input-bordered w-full" type="password" required={!wiz?.draft?.client_secret_set} autocomplete="off" bind:value={fsecret} /></div>
+						</label><input id="setup-client-secret" class="input w-full" type="password" required={!wiz?.draft?.client_secret_set} autocomplete="off" bind:value={fsecret} /></div>
 					</div>
 					<div class="grid gap-4 sm:grid-cols-2">
 					<div class="flex flex-col gap-1">
 						<label class="label-text" for="setup-scopes">{t('setup-field-scopes')}</label>
-						<input id="setup-scopes" class="input input-bordered w-full" bind:value={fscopes} />
+						<input id="setup-scopes" class="input w-full" bind:value={fscopes} />
 						<span class="text-xs text-base-content/60">{t('setup-field-scopes-help')}</span>
 					</div>
 					<div class="flex flex-col gap-1">
 						<label class="label-text" for="setup-roles-claim">{t('setup-field-roles-claim')}</label>
-						<input id="setup-roles-claim" class="input input-bordered w-full" bind:value={frolesClaim} />
+						<input id="setup-roles-claim" class="input w-full" bind:value={frolesClaim} />
 						<span class="text-xs text-base-content/60">{t('setup-field-roles-claim-help')}</span>
 					</div>
 					</div>

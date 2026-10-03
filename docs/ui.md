@@ -607,7 +607,21 @@ Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as 
 
 ## Theming
 
-`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. Dark is the default: deep anthracite surfaces, white text, purple primary actions, peach secondary accents, and 18 px card corners. Light uses white and light gray surfaces with dark purple actions for readable contrast. The shared layout adds subtle peach and purple ambient accents; daisyUI cards and the sidebar use translucent surfaces. Urbanist Latin and Latin Extended fonts are bundled under `web/static/fonts/`, with the OFL license beside them. Other scripts use the fallback font stack. The official white and black SVG wordmarks are served from `web/static/` and selected by theme. Tailwind v4 Vite scans the Svelte sources automatically, so no `@source` globs are needed.
+`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. They are one design in two lightnesses, taken from the agent-setup mockup (#113):
+
+| Token | Dark (default) | Light | Used for |
+|---|---|---|---|
+| `base-100` | `#1b1b1d` | `#ffffff` | the page, field fills |
+| `base-200` | `#242427` | `#f5f4f8` | cards, panels, default buttons |
+| `base-300` | `#3a3a40` | `#dedce4` | the one line colour: card edges, tables, dividers (`border-base-300`) |
+| `base-content` | `#ecebf0` | `#1c1b22` | text; muted text is `text-base-content/60` |
+| `primary` | `#8558f0` | `#7c3aed` | actions, selection, focus ring |
+| `neutral` | `#2d2d31` | `#1c1b22` | raised chips, scrims |
+| `success` / `warning` / `error` | `#4ade80` / `#fbbf24` / `#f87171` with dark text | `#15803d` / `#b45309` / `#c81e1e` with white text | alerts, badges, `StatusPill` |
+
+Shapes are shared: `--radius-field` 10 px (buttons, inputs, tabs), `--radius-box` 14 px (cards, alerts, modals), `--radius-selector` 8 px (badges, checkboxes, toggles), no depth or noise. Secondary stays the brand peach. `lib/theme.test.ts` keeps both themes on the same token set and checks every text-on-fill pair for WCAG AA (4.5:1); change a colour and that test tells you whether it still reads. The dark primary is a shade under the mockup's `#8b5cf6` because white text on `#8b5cf6` is only 4.2:1.
+
+Cards are solid `base-200` panels with a `base-300` edge (one rule in `app.css`, so no page repeats it). Fields have one look app-wide: daisyUI's `input` / `select` / `textarea` at the default size (40 px) in forms, `-sm` only inside dense rows (table cells, toolbars, filter bars); a focused field rings in `primary`, and a field with `aria-invalid="true"` (or the `-error` variant) is error-coloured, focused or not. daisyUI 4's `input-bordered` & co. are inert in v5 and rejected by `markup-drift.test.ts`. The shared layout adds subtle peach and purple ambient accents. Urbanist Latin and Latin Extended fonts are bundled under `web/static/fonts/`, with the OFL license beside them. Other scripts use the fallback font stack. The official white and black SVG wordmarks are served from `web/static/` and selected by theme. Tailwind v4 Vite scans the Svelte sources automatically, so no `@source` globs are needed.
 
 The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before first paint** by a small inline script in `app.html`: it reads the cookie and sets `document.documentElement.dataset.theme`, using `dark` when there is no cookie. Doing it there — before CSS resolves — avoids a flash of the wrong theme. The toggle in `+layout.svelte` writes the same cookie, flips the attribute, and updates the browser theme color.
 

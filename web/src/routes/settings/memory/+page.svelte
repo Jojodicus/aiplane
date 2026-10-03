@@ -99,7 +99,7 @@
 					{#each grouped[memoryKind] as memory (memory.id)}
 						<li class="flex items-center gap-2 py-2">
 							<form class="m-0 flex min-w-0 flex-1 items-center gap-2" onsubmit={(event) => { event.preventDefault(); void save(memory); }}>
-								<input class="input input-bordered input-sm min-w-0 flex-1" bind:value={drafts[memory.id]} maxlength="2000" required aria-label={t('memory-content-label')} />
+								<input class="input input-sm min-w-0 flex-1" bind:value={drafts[memory.id]} maxlength="2000" required aria-label={t('memory-content-label')} />
 								<button class="btn btn-outline btn-sm" type="submit" disabled={!drafts[memory.id]?.trim()}>{t('memory-save-button')}</button>
 							</form>
 							<button class="btn btn-ghost btn-square btn-sm" type="button" onclick={() => remove(memory.id)} title={t('memory-delete-title')} aria-label={t('memory-delete-title')}>

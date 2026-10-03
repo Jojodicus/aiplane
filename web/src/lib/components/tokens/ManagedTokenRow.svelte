@@ -146,9 +146,9 @@
 				<p class="m-0 text-xs text-base-content/60">{t('tokens-limits-help')}</p>
 				{#each token.quotas as quota (quota.id)}<div class="flex flex-wrap items-center gap-2 border-b border-base-300 py-2 text-sm"><code>{quota.value} {quota.dimension} / {quota.window}</code>{#if quota.model}<span class="badge badge-outline">{quota.model}</span>{/if}{#if quota.managed_by === 'admin'}<span class="badge badge-secondary">{t('tokens-limits-admin-badge')}</span>{:else}<button class="btn btn-ghost btn-xs ml-auto" onclick={() => run(() => onremovequota(quota.id))}>{t('tokens-limits-remove')}</button>{/if}</div>{/each}
 				<div class="mt-3 flex flex-wrap items-end gap-2">
-					<select class="select select-bordered select-sm" bind:value={dimension}><option value="requests">{t('limits-dim-requests')}</option><option value="tokens">{t('limits-dim-tokens')}</option><option value="cost">{t('limits-dim-cost', { cur: currency })}</option></select>
-					<select class="select select-bordered select-sm" bind:value={windowKind}><option value="hour">{t('limits-win-hour')}</option><option value="day">{t('limits-win-day')}</option><option value="week">{t('limits-win-week')}</option><option value="month">{t('limits-win-month')}</option></select>
-					<input class="input input-bordered input-sm w-32" type="number" min="0" step="any" bind:value={quotaValue} placeholder={t('tokens-quota-max-placeholder')} aria-label={t('tokens-quota-max-placeholder')} />
+					<select class="select select-sm" bind:value={dimension}><option value="requests">{t('limits-dim-requests')}</option><option value="tokens">{t('limits-dim-tokens')}</option><option value="cost">{t('limits-dim-cost', { cur: currency })}</option></select>
+					<select class="select select-sm" bind:value={windowKind}><option value="hour">{t('limits-win-hour')}</option><option value="day">{t('limits-win-day')}</option><option value="week">{t('limits-win-week')}</option><option value="month">{t('limits-win-month')}</option></select>
+					<input class="input input-sm w-32" type="number" min="0" step="any" bind:value={quotaValue} placeholder={t('tokens-quota-max-placeholder')} aria-label={t('tokens-quota-max-placeholder')} />
 					<button class="btn btn-primary btn-sm" disabled={busy || quotaValue === null || quotaValue < 0} onclick={() => run(() => onquota(dimension, windowKind, quotaValue ?? 0))}>{t('tokens-limits-add')}</button>
 				</div>
 			</div>

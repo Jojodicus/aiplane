@@ -45,7 +45,7 @@
 			<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 				<label class="flex flex-col gap-1">
 					<span class="label-text text-xs">{t('admin-search-provider-label')}</span>
-					<select class="select select-bordered select-sm w-full" aria-label={t('admin-search-provider-label')} bind:value={provider}>
+					<select class="select select-sm w-full" aria-label={t('admin-search-provider-label')} bind:value={provider}>
 						<option value="searxng">{t('admin-search-provider-searxng')}</option>
 						<option value="brave">{t('admin-search-provider-brave')}</option>
 						<option value="tavily">{t('admin-search-provider-tavily')}</option>
@@ -53,7 +53,7 @@
 				</label>
 				<label class="flex flex-col gap-1">
 					<span class="label-text text-xs">{t('admin-search-searxng-url-label')}</span>
-					<input type="url" class="input input-bordered input-sm w-full" aria-label={t('admin-search-searxng-url-label')} bind:value={searxngUrl} placeholder={t('admin-search-searxng-url-placeholder')} />
+					<input type="url" class="input input-sm w-full" aria-label={t('admin-search-searxng-url-label')} bind:value={searxngUrl} placeholder={t('admin-search-searxng-url-placeholder')} />
 				</label>
 			</div>
 			<div class="flex flex-col gap-1">
@@ -73,7 +73,7 @@
 			<div class="flex flex-col gap-1">
 				<label class="flex flex-col gap-1">
 					<span class="label-text text-xs">{t('admin-search-brave-key-label')}</span>
-					<input type="password" autocomplete="off" class="input input-bordered input-sm w-full" aria-label={t('admin-search-brave-key-label')} bind:value={braveKey} placeholder={t('admin-search-brave-key-placeholder')} />
+					<input type="password" autocomplete="off" class="input input-sm w-full" aria-label={t('admin-search-brave-key-label')} bind:value={braveKey} placeholder={t('admin-search-brave-key-placeholder')} />
 				</label>
 				<span class="text-xs text-base-content/60">{t(search.brave_key_set ? 'admin-search-brave-key-set' : 'admin-search-brave-key-unset')}</span>
 				{#if search.brave_key_set}
