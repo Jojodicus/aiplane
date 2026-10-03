@@ -9,6 +9,7 @@ import type { ToolCall } from './chat-protocol.ts';
 const DRAFT_WRITERS = new Set(['update_agent_draft']);
 /** The architect's tools whose answer names an agent's setup page. */
 const SETUP_LINKERS = new Set(['create_agent_draft', 'update_agent_draft', 'read_agent']);
+const TOOLS = new Set(['list_agents', 'read_agent', 'list_grantable', 'propose_setup', 'create_agent_draft', 'update_agent_draft', 'run_test_turn']);
 
 function output(call: ToolCall): Record<string, unknown> | null {
 	if (call.status !== 'completed' || !call.output_json) return null;
@@ -53,4 +54,9 @@ export function canSend(phase: Phase, text: string, liveTurnId: string | null): 
 export function conversationTitle(tr: (key: string, args?: Record<string, string | number>) => string, name: string | null | undefined): string {
 	const shown = name?.trim();
 	return shown ? tr('architect-conversation-title', { name: shown }) : tr('architect-conversation-new');
+}
+
+/** A call's name as the person reads it: what the architect did, not the tool's id. */
+export function toolLabel(tr: (key: string) => string): (name: string) => string {
+	return (name) => (TOOLS.has(name) ? tr(`architect-tool-${name.replaceAll('_', '-')}`) : name);
 }

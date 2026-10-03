@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ToolCall } from './chat-protocol.ts';
-import { canSend, changesAgent, conversationTitle, setupPath, undoTarget } from './architect.ts';
+import { canSend, changesAgent, conversationTitle, setupPath, toolLabel, undoTarget } from './architect.ts';
 
 const call = (name: string, output: unknown, status: ToolCall['status'] = 'completed'): ToolCall => ({
 	id: `${name}-1`,
@@ -53,4 +53,11 @@ test('the conversation is titled after the agent, or as a new one', () => {
 	assert.equal(conversationTitle(tr, ' Harald '), 'architect-conversation-title:Harald');
 	assert.equal(conversationTitle(tr, ''), 'architect-conversation-new');
 	assert.equal(conversationTitle(tr, null), 'architect-conversation-new');
+});
+
+test('an architect tool reads as what it did, any other keeps its name', () => {
+	const tr = (key: string) => `<${key}>`;
+	assert.equal(toolLabel(tr)('run_test_turn'), '<architect-tool-run-test-turn>');
+	assert.equal(toolLabel(tr)('list_grantable'), '<architect-tool-list-grantable>');
+	assert.equal(toolLabel(tr)('fetch_url'), 'fetch_url');
 });

@@ -3,7 +3,7 @@
 	import { prettyToolPayload, summarizeToolCalls, TOOL_GROUP_THRESHOLD } from '$lib/chat-transcript';
 	import { n, t } from '$lib/i18n.svelte';
 
-	let { calls }: { calls: ToolCall[] } = $props();
+	let { calls, label = (name: string) => name }: { calls: ToolCall[]; label?: (name: string) => string } = $props();
 	const anyRunning = $derived(calls.some((call: ToolCall) => call.status === 'running'));
 	const anyErrored = $derived(calls.some((call: ToolCall) => call.status === 'errored'));
 
@@ -33,7 +33,7 @@
 				<span class="loading loading-spinner loading-xs"></span>
 			{/if}
 			<span class="text-base-content/60">{statusLabel(call)}</span>
-			<span class="font-medium">{call.name}</span>
+			<span class="font-medium">{label(call.name)}</span>
 		</summary>
 		<div class="collapse-content flex flex-col gap-2 text-xs text-base-content/70">
 			<div>
@@ -57,7 +57,7 @@
 		<summary class="collapse-title flex min-h-8 items-center gap-2 py-1.5 text-sm">
 			{#if anyRunning}<span class="loading loading-spinner loading-xs"></span>{:else}<span class={anyErrored ? 'text-error' : 'text-success'}>{anyErrored ? '✗' : '✓'}</span>{/if}
 			<span class="text-base-content/60">{groupLabel()}</span>
-			<span class="font-medium">{t('render-tools-summary', { count: calls.length, breakdown: summarizeToolCalls(calls) })}</span>
+			<span class="font-medium">{t('render-tools-summary', { count: calls.length, breakdown: summarizeToolCalls(calls, label) })}</span>
 		</summary>
 		<div class="collapse-content flex flex-col gap-1">
 			{#each calls as call (call.id)}{@render callRow(call)}{/each}

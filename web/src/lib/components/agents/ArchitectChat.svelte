@@ -3,7 +3,7 @@
 	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { agentsApi, type AgentError } from '$lib/agents';
-	import { canSend, conversationTitle, setupPath, undoTarget, type Phase } from '$lib/architect';
+	import { canSend, conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '$lib/architect';
 	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
 	import type { ToolCall } from '$lib/chat-protocol';
 	import { t } from '$lib/i18n.svelte';
@@ -140,7 +140,7 @@
 				<div class="chat chat-start">
 					<div class="chat-bubble flex w-full max-w-full flex-col gap-2 border border-base-300 bg-base-200 text-base-content">
 						{#if live.tool_calls.length}
-							<ToolCalls calls={live.tool_calls} />
+							<ToolCalls calls={live.tool_calls} label={toolLabel(t)} />
 							{@const path = agentId ? null : live.tool_calls.map(setupPath).findLast((p) => p !== null)}
 							<div class="flex flex-wrap gap-2">
 								{#each live.tool_calls as call (call.id)}

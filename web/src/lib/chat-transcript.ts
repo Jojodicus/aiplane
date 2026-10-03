@@ -21,8 +21,8 @@ export function prettyToolPayload(raw: string, limit = TOOL_PAYLOAD_LIMIT): { te
 	return { text: pretty.slice(0, end), truncated: true, bytes, chars: end };
 }
 
-export function summarizeToolCalls(calls: { name: string }[]): string {
+export function summarizeToolCalls(calls: { name: string }[], label: (name: string) => string = (name) => name): string {
 	const counts = new Map<string, number>();
-	for (const call of calls) counts.set(call.name, (counts.get(call.name) ?? 0) + 1);
+	for (const call of calls) counts.set(label(call.name), (counts.get(label(call.name)) ?? 0) + 1);
 	return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(', ');
 }
