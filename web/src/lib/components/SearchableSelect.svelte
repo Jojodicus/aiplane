@@ -204,7 +204,7 @@
 	<button
 		bind:this={trigger}
 		type="button"
-		class="btn {buttonSize} w-full min-w-0 justify-between gap-2 border-base-300 bg-base-200 font-normal focus-visible:outline-1 focus-visible:outline-info focus-visible:outline-offset-1"
+		class="btn {buttonSize} w-full min-w-0 justify-between gap-2 border-base-content/20 bg-base-100 font-normal focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
 		role="combobox"
 		aria-label={ariaLabel}
 		aria-haspopup="listbox"
@@ -230,7 +230,7 @@
 			style:width="{placement.width}px"
 			style:max-height="{placement.maxHeight}px"
 		>
-			<label class="input input-sm flex w-full shrink-0 items-center gap-2 focus-within:outline-1 focus-within:outline-info focus-within:outline-offset-1">
+			<label class="input input-sm flex w-full shrink-0 items-center gap-2">
 				<svg class="size-4 shrink-0 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
 				<input bind:this={searchInput} class="min-w-0 flex-1" value={query} oninput={search} onkeydown={onSearchKeydown} placeholder={t('searchable-select-search-placeholder')} aria-label={t('searchable-select-search-aria', { field: ariaLabel })} />
 				{#if query}<button type="button" class="btn btn-ghost btn-xs btn-circle" onclick={() => { query = ''; activeIndex = nextEnabledOptionIndex(options, -1, 1); void tick().then(() => searchInput?.focus()); }} aria-label={t('searchable-select-clear-search')}>✕</button>{/if}

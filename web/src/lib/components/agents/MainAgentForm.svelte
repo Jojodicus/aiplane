@@ -83,8 +83,8 @@
 			<p class="text-sm text-base-content/60">{t('agents-main-no-tools')}</p>
 		{/if}
 		<div class="flex gap-2">
-			<input class="input input-sm w-72 font-mono" bind:value={customTool} placeholder="mcp__connector__tool" aria-label={t('agents-main-add-tool')} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomTool(); } }} />
-			<button class="btn btn-sm" type="button" onclick={addCustomTool}>{t('agents-main-add-tool')}</button>
+			<input class="input w-72 font-mono" bind:value={customTool} placeholder="mcp__connector__tool" aria-label={t('agents-main-add-tool')} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomTool(); } }} />
+			<button class="btn" type="button" onclick={addCustomTool}>{t('agents-main-add-tool')}</button>
 		</div>
 		{#each main.tools as _tool, i (i)}<FieldIssues {issues} path="main.tools[{i}]" />{/each}
 	</fieldset>
@@ -116,7 +116,7 @@
 					<div class="collapse-content space-y-3">
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-tool-permission')}</span>
-							<select class="select select-sm w-60" value={main.tool_resources[tool]?.permission ?? ''} onchange={(e) => (resource(tool).permission = e.currentTarget.value)}>
+							<select class="select w-60" value={main.tool_resources[tool]?.permission ?? ''} onchange={(e) => (resource(tool).permission = e.currentTarget.value)}>
 								<option value="">{t('agents-tool-permission-default')}</option>
 								<option value="always_allow">{t('agents-tool-permission-allow')}</option>
 								<option value="always_ask">{t('agents-tool-permission-ask')}</option>
@@ -147,7 +147,7 @@
 			{#each ['rounds', 'seconds', 'tokens'] as const as key (key)}
 				<label class="flex flex-col gap-1">
 					<span class="text-xs text-base-content/60">{t(`agents-budget-${key}`)}</span>
-					<input class="input input-sm w-28" type="number" min="1" value={main.budget[key] ?? ''} onchange={(e) => number(key, e.currentTarget.value)} />
+					<input class="input w-28" type="number" min="1" value={main.budget[key] ?? ''} onchange={(e) => number(key, e.currentTarget.value)} />
 					<FieldIssues {issues} path="main.budget.{key}" />
 				</label>
 			{/each}

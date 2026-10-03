@@ -42,7 +42,7 @@
 		});
 </script>
 
-<section class="card card-border bg-base-100">
+<section class="card card-border">
 	<div class="card-body gap-4 p-4">
 		<h2 class="card-title text-base">{t('agents-embed-heading')}</h2>
 		<p class="text-sm text-base-content/70">{t('agents-embed-intro')}</p>
@@ -77,14 +77,14 @@
 			<form class="flex flex-col gap-3" onsubmit={(e) => { e.preventDefault(); void create(); }}>
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-embed-name')}</span>
-					<input class="input input-sm w-64 max-w-full" bind:value={name} placeholder={t('agents-embed-name-hint')} required />
+					<input class="input w-64 max-w-full" bind:value={name} placeholder={t('agents-embed-name-hint')} required />
 				</label>
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-embed-origins')}</span>
-					<textarea class="textarea textarea-sm w-full max-w-lg font-mono" rows="2" bind:value={origins} placeholder="https://www.example.com" required></textarea>
+					<textarea class="textarea w-full max-w-lg font-mono" rows="2" bind:value={origins} placeholder="https://www.example.com" required></textarea>
 					<span class="text-xs text-base-content/60">{t('agents-embed-origins-help')}</span>
 				</label>
-				<div><button class="btn btn-primary btn-sm" type="submit" disabled={busy || !name.trim() || !origins.trim()}>{t('agents-embed-create')}</button></div>
+				<div><button class="btn btn-primary" type="submit" disabled={busy || !name.trim() || !origins.trim()}>{t('agents-embed-create')}</button></div>
 			</form>
 		{/if}
 	</div>

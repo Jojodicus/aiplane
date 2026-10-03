@@ -157,23 +157,23 @@
 	<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-name')}</span>
-			<input class="input input-bordered input-sm font-mono w-full" bind:value={name} required />
+			<input class="input font-mono w-full" bind:value={name} required />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-base-url')}</span>
-			<input class="input input-bordered input-sm font-mono w-full" bind:value={baseUrl} required />
+			<input class="input font-mono w-full" bind:value={baseUrl} required />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-api-key')}</span>
-			<input class="input input-bordered input-sm font-mono w-full" type="password" autocomplete="off" bind:value={apiKey} placeholder={backend?.has_stored_key ? t('backends-field-api-key-keep') : t('backends-field-api-key-placeholder')} />
+			<input class="input font-mono w-full" type="password" autocomplete="off" bind:value={apiKey} placeholder={backend?.has_stored_key ? t('backends-field-api-key-keep') : t('backends-field-api-key-placeholder')} />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-api-key-env')}</span>
-			<input class="input input-bordered input-sm font-mono w-full" bind:value={apiKeyEnv} />
+			<input class="input font-mono w-full" bind:value={apiKeyEnv} />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-health-path')}</span>
-			<input class="input input-bordered input-sm font-mono w-full" bind:value={healthPath} />
+			<input class="input font-mono w-full" bind:value={healthPath} />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-pool')}</span>
@@ -182,20 +182,20 @@
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-weight')}</span>
-			<input class="input input-bordered input-sm w-full" type="number" min="1" bind:value={weight} />
+			<input class="input w-full" type="number" min="1" bind:value={weight} />
 		</label>
 		<label class="flex flex-col gap-1">
 			<span class="text-xs text-base-content/70">{t('backends-field-max-inflight')}</span>
-			<input class="input input-bordered input-sm w-full" type="number" min="1" bind:value={maxInflight} />
+			<input class="input w-full" type="number" min="1" bind:value={maxInflight} />
 		</label>
 	</div>
 	<label class="flex flex-col gap-1">
 		<span class="text-xs text-base-content/70">{t('backends-field-models')}</span>
-		<input class="input input-bordered input-sm font-mono w-full" bind:value={models} />
+		<input class="input font-mono w-full" bind:value={models} />
 	</label>
 	<label class="flex flex-col gap-1">
 		<span class="text-xs text-base-content/70">{t('backends-field-aliases')}</span>
-		<textarea bind:this={aliasesInput} class="textarea textarea-bordered textarea-sm font-mono w-full" rows="3" bind:value={aliases}></textarea>
+		<textarea bind:this={aliasesInput} class="textarea font-mono w-full" rows="3" bind:value={aliases}></textarea>
 	</label>
 	<div class="flex flex-wrap gap-4">
 		<label class="label gap-2"><input class="checkbox checkbox-sm" type="checkbox" bind:checked={supportsEdit} /><span>{t('backends-field-supports-edit')}</span></label>

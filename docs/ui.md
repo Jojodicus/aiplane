@@ -62,6 +62,9 @@ web/
 │   │   ├── voice.svelte.ts    voice-conversation orchestration
 │   │   ├── voice-recorder.ts  PCM capture + analyser
 │   │   ├── markdown.ts        marked → DOMPurify → {@html}
+│   │   ├── ui-variants.ts     class strings for components/ui/ (see Theming)
+│   │   ├── components/ui/     Modal, ChoiceCard, SegmentedControl, ChipToggle,
+│   │   │                      AiSuggestion, StatusPill, StepIndicator
 │   │   └── usage-types.ts
 │   └── routes/
 │       ├── +layout.svelte     app shell: nav, sidebar, theme, sign-out, feedback
@@ -142,8 +145,9 @@ badges; supports arrow keys, Enter and Escape; and bounds long result lists to
 their own scroll region. Model choices render the model id left-aligned and show
 compact GDPR and NDA status badges right-aligned on every row. Green check badges
 mean the model is cleared; red crossed-out badges mean it is restricted. The
-search field alone carries the accent focus ring; triggers use neutral borders,
-and keyboard-active options use a subtle surface change. Small
+trigger looks and focuses like any other field (field border, primary focus
+ring), and keyboard-active options use a subtle surface change. In forms it takes
+the default size like the fields around it; `size="sm"` is for toolbars and filter bars. Small
 closed enums such as hour/day/week or on/off remain native selects because a
 search field would add friction without improving discovery.
 
@@ -607,7 +611,21 @@ Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as 
 
 ## Theming
 
-`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. Dark is the default: deep anthracite surfaces, white text, purple primary actions, peach secondary accents, and 18 px card corners. Light uses white and light gray surfaces with dark purple actions for readable contrast. The shared layout adds subtle peach and purple ambient accents; daisyUI cards and the sidebar use translucent surfaces. Urbanist Latin and Latin Extended fonts are bundled under `web/static/fonts/`, with the OFL license beside them. Other scripts use the fallback font stack. The official white and black SVG wordmarks are served from `web/static/` and selected by theme. Tailwind v4 Vite scans the Svelte sources automatically, so no `@source` globs are needed.
+`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. They are one design in two lightnesses, taken from the agent-setup mockup (#113):
+
+| Token | Dark (default) | Light | Used for |
+|---|---|---|---|
+| `base-100` | `#1b1b1d` | `#ffffff` | the page, field fills |
+| `base-200` | `#242427` | `#f5f4f8` | cards, panels, default buttons |
+| `base-300` | `#3a3a40` | `#dedce4` | the one line colour: card edges, tables, dividers (`border-base-300`) |
+| `base-content` | `#ecebf0` | `#1c1b22` | text; muted text is `text-base-content/60` |
+| `primary` | `#8558f0` | `#7c3aed` | actions, selection, focus ring |
+| `neutral` | `#2d2d31` | `#1c1b22` | raised chips, scrims |
+| `success` / `warning` / `error` | `#4ade80` / `#fbbf24` / `#f87171` with dark text | `#15803d` / `#b45309` / `#c81e1e` with white text | alerts, badges, `StatusPill` |
+
+Shapes are shared: `--radius-field` 10 px (buttons, inputs, tabs), `--radius-box` 14 px (cards, alerts, modals), `--radius-selector` 8 px (badges, checkboxes, toggles), no depth or noise. Secondary stays the brand peach. `lib/theme.test.ts` keeps both themes on the same token set and checks every text-on-fill pair for WCAG AA (4.5:1); change a colour and that test tells you whether it still reads. The dark primary is a shade under the mockup's `#8b5cf6` because white text on `#8b5cf6` is only 4.2:1.
+
+Cards are solid `base-200` panels with a `base-300` edge (one rule in `app.css`, so no page repeats it). Fields have one look app-wide: daisyUI's `input` / `select` / `textarea` at the default size (40 px) in forms, `-sm` only inside dense rows (table cells, toolbars, filter bars); a focused field rings in `primary`, and a field with `aria-invalid="true"` (or the `-error` variant) is error-coloured, focused or not. daisyUI 4's `input-bordered` & co. are inert in v5 and rejected by `markup-drift.test.ts`. The shared layout adds subtle peach and purple ambient accents. Urbanist Latin and Latin Extended fonts are bundled under `web/static/fonts/`, with the OFL license beside them. Other scripts use the fallback font stack. The official white and black SVG wordmarks are served from `web/static/` and selected by theme. Tailwind v4 Vite scans the Svelte sources automatically, so no `@source` globs are needed.
 
 The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before first paint** by a small inline script in `app.html`: it reads the cookie and sets `document.documentElement.dataset.theme`, using `dark` when there is no cookie. Doing it there — before CSS resolves — avoids a flash of the wrong theme. The toggle in `+layout.svelte` writes the same cookie, flips the attribute, and updates the browser theme color.
 
@@ -617,6 +635,20 @@ The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before 
 - Override daisyUI focus/borders in `@layer utilities` **unlayered** (`@layer utilities { … }` with no nested sub-layer name). daisyUI emits its components inside `@layer utilities { @layer daisyui.l1.l2.l3 { … } }`, so anything in `@layer components` loses regardless of specificity; per the Cascade Layers spec, unlayered content in a layer comes after its sub-layers, which is the slot we need.
 - **Mobile-first.** Target ~360 px first and use `sm:` to enhance. Touch targets ≥44 px. `dvh`/`dvw`, never `vh`/`vw`. Stack via a parent `gap`, not child `margin-top`.
 - `form-control` and `label-text-alt` do **not** exist in daisyUI 5. The house pattern for a labelled control is a `flex flex-col gap-1` label with the help `<span>` after the input.
+
+### Shared UI components
+
+Where daisyUI has no component for a pattern the mockup uses, `web/src/lib/components/ui/` has one, built from daisyUI classes and Tailwind utilities only. Their state-to-class mapping lives in `lib/ui-variants.ts` (unit-tested), so "selected" looks the same on every one of them. Reach for these before composing the classes by hand.
+
+| Component | Use it for | Not for |
+|---|---|---|
+| `Modal` | Any centred dialog: bindable `open`, title, optional description, `size` (`sm`–`xl`), body, optional `footer` snippet. Escape, backdrop and the ✕ all close it; nothing renders while closed. `EditModal` is `Modal` plus the admin rows' Cancel/Save footers. | Full-screen pickers (`CapabilityPicker`) and the feedback sheet, which are bottom sheets on mobile. |
+| `ChoiceCard` | A single pick between options that each need a sentence ("on the website" / "by e-mail"). Several in a `role="radiogroup"` grid. | Two or three short words — use `SegmentedControl`. |
+| `SegmentedControl` | A small closed enum (2–4 options) shown at once, as a daisyUI `join` of radio buttons. | Long or data-driven lists — `SearchableSelect`. |
+| `ChipToggle` | Multi-pick from a short visible set (channels, tags); with `onremove` a removable token. | A grant field over a closed server-known set — `SearchableSelect multiple`. |
+| `AiSuggestion` | Anything the model proposed that the user has not accepted yet; the dashed primary edge is reserved for this. `actions` holds Apply / Dismiss. | Settled configuration or help text — `alert alert-info`. |
+| `StatusPill` | A state word next to a name: `ok` / `warn` / `bad` / `info` / `neutral` as a soft, round daisyUI badge ("Live v3", "Needs setup"). | Counts and kinds (`badge badge-outline`). |
+| `StepIndicator` | Where the user is in a multi-step flow; pills are current (primary), done (green) or upcoming; `onselect` makes them jump. | Page sections — `SectionTabs` / daisyUI `tabs`. |
 
 ## PWA and Web Push
 

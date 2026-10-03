@@ -34,6 +34,14 @@
     themes: false;
 }
 
+/* One design in two lightnesses. The dark theme is the agent-setup mockup's
+ * palette: a near-black page (base-100), slightly lifted surfaces for cards
+ * and panels (base-200), and one line colour (base-300) that borders every
+ * card, table and divider. Light mirrors the same three steps around white.
+ * Status colours are tuned per theme so both the filled form (alert, badge)
+ * and the soft form (StatusPill: tinted fill, coloured text) stay readable;
+ * `lib/theme.test.ts` checks the text-on-fill pairs. Shapes are shared:
+ * 10 px fields and buttons, 14 px boxes. */
 @plugin "daisyui/theme" {
     name: "light";
     default: false;
@@ -41,37 +49,37 @@
     color-scheme: "light";
 
     --color-base-100: #ffffff;
-    --color-base-200: #f6f6f6;
-    --color-base-300: #e7e3ec;
-    --color-base-content: #1d1d1b;
+    --color-base-200: #f5f4f8;
+    --color-base-300: #dedce4;
+    --color-base-content: #1c1b22;
 
-    --color-primary: #6c3eb5;
+    --color-primary: #7c3aed;
     --color-primary-content: #ffffff;
 
     --color-secondary: #fca68c;
-    --color-secondary-content: #1d1d1b;
+    --color-secondary-content: #1c1b22;
 
-    --color-accent: #0a889a;
+    --color-accent: #0a7a8a;
     --color-accent-content: #ffffff;
 
-    --color-neutral: #1d1d1b;
+    --color-neutral: #1c1b22;
     --color-neutral-content: #ffffff;
 
-    --color-info: oklch(64% 0.18 233);
-    --color-info-content: oklch(98% 0 0);
+    --color-info: #0369a1;
+    --color-info-content: #ffffff;
 
-    --color-success: oklch(60% 0.15 152);
-    --color-success-content: oklch(98% 0 0);
+    --color-success: #15803d;
+    --color-success-content: #ffffff;
 
-    --color-warning: #fca68c;
-    --color-warning-content: #1d1d1b;
+    --color-warning: #b45309;
+    --color-warning-content: #ffffff;
 
-    --color-error: oklch(51.2% 0.244 27.5);
-    --color-error-content: oklch(98% 0 0);
+    --color-error: #c81e1e;
+    --color-error-content: #ffffff;
 
     --radius-selector: 0.5rem;
-    --radius-field: 0.75rem;
-    --radius-box: 1.125rem;
+    --radius-field: 0.625rem;
+    --radius-box: 0.875rem;
     --size-selector: 0.25rem;
     --size-field: 0.25rem;
     --border: 1px;
@@ -85,38 +93,38 @@
     prefersdark: true;
     color-scheme: "dark";
 
-    --color-base-100: #1d1d1b;
-    --color-base-200: #292927;
-    --color-base-300: #41413f;
-    --color-base-content: #ffffff;
+    --color-base-100: #1b1b1d;
+    --color-base-200: #242427;
+    --color-base-300: #3a3a40;
+    --color-base-content: #ecebf0;
 
-    --color-primary: #8e54e9;
+    --color-primary: #8558f0;
     --color-primary-content: #ffffff;
 
     --color-secondary: #fca68c;
-    --color-secondary-content: #1d1d1b;
+    --color-secondary-content: #1b1b1d;
 
-    --color-accent: #0a889a;
-    --color-accent-content: #ffffff;
+    --color-accent: #2bb3c4;
+    --color-accent-content: #0b1f22;
 
-    --color-neutral: #f6f6f6;
-    --color-neutral-content: #1d1d1b;
+    --color-neutral: #2d2d31;
+    --color-neutral-content: #ecebf0;
 
-    --color-info: oklch(64% 0.18 233);
-    --color-info-content: oklch(98% 0 0);
+    --color-info: #60a5fa;
+    --color-info-content: #0b1b33;
 
-    --color-success: oklch(60% 0.15 152);
-    --color-success-content: oklch(98% 0 0);
+    --color-success: #4ade80;
+    --color-success-content: #052e16;
 
-    --color-warning: #fca68c;
-    --color-warning-content: #1d1d1b;
+    --color-warning: #fbbf24;
+    --color-warning-content: #451a03;
 
-    --color-error: oklch(70.4% 0.191 22.2);
-    --color-error-content: oklch(98% 0 0);
+    --color-error: #f87171;
+    --color-error-content: #450a0a;
 
     --radius-selector: 0.5rem;
-    --radius-field: 0.75rem;
-    --radius-box: 1.125rem;
+    --radius-field: 0.625rem;
+    --radius-box: 0.875rem;
     --size-selector: 0.25rem;
     --size-field: 0.25rem;
     --border: 1px;
@@ -132,11 +140,41 @@ h1, h2, h3, .card-title {
     font-weight: 600;
 }
 
+/* Cards are solid surfaces edged in the line colour, the mockup's panel.
+ * Written once here so every `card` matches without a per-page
+ * `bg-base-200 border-base-300`. */
 @layer components {
     .card {
-        background-color: color-mix(in srgb, var(--color-base-200) 65%, transparent);
-        backdrop-filter: blur(12px);
-        border: 1px solid color-mix(in srgb, var(--color-base-300) 70%, transparent);
+        background-color: var(--color-base-200);
+        border: 1px solid var(--color-base-300);
+    }
+}
+
+/* One field look app-wide. daisyUI rings a focused field in `base-content`
+ * (white on dark) and shows no error unless a page remembers `input-error`.
+ * Here a focused field rings in the primary colour, and a field marked
+ * `aria-invalid="true"` (which an accessible error needs anyway) turns
+ * error-coloured, focused or not. Unlayered inside `utilities` so it follows
+ * daisyUI's nested sub-layers (docs/ui.md → Theming). The focus selector is
+ * kept at one class of specificity by `:where`, so the error rule after it
+ * wins even on a focused field. */
+@layer utilities {
+    :where(.input, .select, .textarea):is(:focus, :focus-within) {
+        --input-color: var(--color-primary);
+    }
+
+    /* daisyUI's plain `btn` is a `base-200` fill with a border of the same
+     * colour, which vanishes on a `base-200` card. The line colour gives it
+     * the mockup's edge. Zero specificity (`:where`), so a Tailwind
+     * `border-*` on a button still wins. */
+    :where(.btn:not(.btn-ghost, .btn-link, .btn-outline, .btn-dash, .btn-soft, .btn-primary, .btn-secondary, .btn-accent, .btn-neutral, .btn-info, .btn-success, .btn-warning, .btn-error)) {
+        border-color: var(--color-base-300);
+    }
+
+    .input[aria-invalid="true"], .input:has(> input[aria-invalid="true"]),
+    .select[aria-invalid="true"], .textarea[aria-invalid="true"],
+    .input-error, .select-error, .textarea-error {
+        --input-color: var(--color-error);
     }
 }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import { tokenState, visibleTokenModels } from '$lib/admin-tokens';
 	import type { AdminToken, AdminTokenLimit } from '$lib/admin-tokens';
@@ -80,9 +81,9 @@
 	<td class="w-64"><div class="font-medium">{token.name}</div><div class="max-w-56 truncate font-mono text-xs text-base-content/50" title={token.id}>{token.id}</div></td>
 	<td class="w-56"><div class="max-w-52 truncate" title={token.owner_email}>{token.owner_email}</div></td>
 	<td class="w-28">
-		{#if credentialState === 'revoked'}<span class="badge badge-error">{t('tokens-badge-revoked')}</span>
-		{:else if credentialState === 'expired'}<span class="badge badge-warning">{t('admin-tokens-badge-expired')}</span>
-		{:else}<span class="badge badge-secondary">{t('tokens-badge-active')}</span>{/if}
+		{#if credentialState === 'revoked'}<StatusPill tone="bad">{t('tokens-badge-revoked')}</StatusPill>
+		{:else if credentialState === 'expired'}<StatusPill tone="warn">{t('admin-tokens-badge-expired')}</StatusPill>
+		{:else}<StatusPill tone="ok">{t('tokens-badge-active')}</StatusPill>{/if}
 	</td>
 	<td class="w-64 text-xs leading-relaxed text-base-content/70">
 		{t('tokens-row-meta', {

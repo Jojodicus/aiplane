@@ -243,7 +243,7 @@
 						<label class="flex flex-col gap-1 sm:col-span-2">
 							<span class="text-sm font-medium">{t('feedback-title-label')}</span>
 							<input
-								class="input input-sm input-bordered w-full"
+								class="input input-sm w-full"
 								maxlength="120"
 								placeholder={t('feedback-title-placeholder')}
 								bind:value={feedback.title}
@@ -251,7 +251,7 @@
 						</label>
 						<label class="flex flex-col gap-1">
 							<span class="text-sm font-medium">{t('feedback-priority-label')}</span>
-							<select class="select select-sm select-bordered w-full" bind:value={feedback.priority}>
+							<select class="select select-sm w-full" bind:value={feedback.priority}>
 								<option value="low">{t('feedback-priority-low')}</option>
 								<option value="medium">{t('feedback-priority-medium')}</option>
 								<option value="high">{t('feedback-priority-high')}</option>
@@ -262,7 +262,7 @@
 					<label class="flex flex-col gap-1">
 						<span class="text-sm font-medium">{t('feedback-description-label')}</span>
 						<textarea
-							class="textarea textarea-bordered w-full text-sm"
+							class="textarea w-full text-sm"
 							rows="4"
 							maxlength="2000"
 							placeholder={t('feedback-description-placeholder')}
@@ -273,7 +273,7 @@
 					<label class="flex flex-col gap-1">
 						<span class="text-sm font-medium">{t('feedback-business-label')}</span>
 						<textarea
-							class="textarea textarea-bordered w-full text-sm"
+							class="textarea w-full text-sm"
 							rows="2"
 							maxlength="2000"
 							placeholder={t('feedback-business-placeholder')}
@@ -284,7 +284,7 @@
 					<label class="flex flex-col gap-1">
 						<span class="text-sm font-medium">{t('feedback-acceptance-label')}</span>
 						<textarea
-							class="textarea textarea-bordered w-full text-sm"
+							class="textarea w-full text-sm"
 							rows="2"
 							maxlength="2000"
 							placeholder={t('feedback-acceptance-placeholder')}

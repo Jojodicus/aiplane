@@ -163,7 +163,7 @@
 	}
 </script>
 
-<div class="card card-border min-w-0 bg-base-100">
+<div class="card card-border min-w-0">
 	<div class="card-body min-w-0 gap-4">
 		<!-- The route above owns the heading; repeating it here just stacked two
 		     identical titles once the form moved off the list. -->

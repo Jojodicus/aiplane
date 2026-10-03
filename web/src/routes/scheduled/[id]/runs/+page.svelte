@@ -52,7 +52,7 @@
 	{#if loading}
 		<div class="skeleton mt-5 h-40 w-full"></div>
 	{:else if action}
-		<section class="card card-border mt-5 bg-base-100">
+		<section class="card card-border mt-5">
 			<div class="card-body">
 				<ul class="flex flex-col divide-y divide-base-300">
 					{#each runs as run (run.id)}

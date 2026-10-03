@@ -100,7 +100,7 @@
 				{@const heading = itemHeading(item)}
 				{@const link = itemLink(item, base)}
 				{@const left = minutesLeft(item.expires_at)}
-				<li id="inbox-item-{item.id}" class="card card-border bg-base-100 {highlighted === item.id ? 'border-primary' : ''}">
+				<li id="inbox-item-{item.id}" class="card card-border {highlighted === item.id ? 'border-primary' : ''}">
 					<div class="card-body gap-3 p-4">
 						<div class="flex flex-wrap items-start justify-between gap-2">
 							<div class="min-w-0">

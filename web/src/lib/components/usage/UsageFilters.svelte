@@ -22,13 +22,13 @@
 <form class="flex flex-wrap items-end gap-3" onsubmit={(event) => event.preventDefault()}>
 	<label class="flex flex-col gap-1">
 		<span class="label-text text-xs text-base-content/60">{t('usage-filter-period')}</span>
-		<select aria-label={t('usage-filter-period')} class="select select-bordered select-sm" value={filters.period} onchange={(event) => onchange('period', event.currentTarget.value)}>
+		<select aria-label={t('usage-filter-period')} class="select select-sm" value={filters.period} onchange={(event) => onchange('period', event.currentTarget.value)}>
 			{#each USAGE_PERIODS as [value, label] (value)}<option {value}>{t(label)}</option>{/each}
 		</select>
 	</label>
 	<label class="flex flex-col gap-1">
 		<span class="label-text text-xs text-base-content/60">{t('usage-filter-source')}</span>
-		<select aria-label={t('usage-filter-source')} class="select select-bordered select-sm" value={filters.source} onchange={(event) => onchange('source', event.currentTarget.value)}>
+		<select aria-label={t('usage-filter-source')} class="select select-sm" value={filters.source} onchange={(event) => onchange('source', event.currentTarget.value)}>
 			{#each USAGE_SOURCES as [value, label] (value)}<option {value}>{t(label)}</option>{/each}
 		</select>
 	</label>

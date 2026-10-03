@@ -46,11 +46,11 @@
 			<div class="flex flex-wrap items-end gap-3">
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-route-name')}</span>
-					<input class="input input-sm w-44 font-mono" value={name} onchange={(e) => rename(e.currentTarget.value)} />
+					<input class="input w-44 font-mono" value={name} onchange={(e) => rename(e.currentTarget.value)} />
 				</label>
 				<label class="flex min-w-60 grow flex-col gap-1">
 					<span class="label-text">{t('agents-route-description')}</span>
-					<input class="input input-sm w-full" bind:value={route.description} placeholder={t('agents-route-description-hint')} />
+					<input class="input w-full" bind:value={route.description} placeholder={t('agents-route-description-hint')} />
 					<FieldIssues {issues} path="routes.{name}.description" />
 				</label>
 				{#if part === 'all' && onremove}
@@ -83,7 +83,7 @@
 			{:else}
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-route-agent')}</span>
-					<select class="select select-sm w-full max-w-lg" bind:value={route.agent}>
+					<select class="select w-full max-w-lg" bind:value={route.agent}>
 						<option value="">{t('agents-pick')}</option>
 						{#each agents as a (a.id)}<option value={a.id}>{agentLabel(a)}</option>{/each}
 						{#if route.agent && !agentOf(route.agent)}<option value={route.agent}>{route.agent}</option>{/if}

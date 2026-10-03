@@ -33,7 +33,7 @@
 	{#if rows.length === 0}
 		<div class="alert"><span>{t('groups-identity-empty')}</span></div>
 	{:else}
-		<article class="card border border-base-300 bg-base-100">
+		<article class="card">
 			<div class="card-body gap-0 overflow-x-auto">
 				<table class="table table-sm">
 					<thead>

@@ -14,7 +14,7 @@
 	}
 </script>
 
-<section class="card border border-base-300 bg-base-100">
+<section class="card">
 	<div class="card-body gap-3 p-4">
 		<h2 class="card-title text-base">{t('usage-limits-heading')}</h2>
 		<div class="flex flex-col gap-3">

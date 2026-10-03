@@ -73,7 +73,7 @@
 	{#if notice}<div class="alert alert-warning"><span>{notice}</span></div>{/if}
 
 	{#if data}
-		<div class="card overflow-x-auto border border-base-300 bg-base-100">
+		<div class="card overflow-x-auto">
 			<table class="table table-sm">
 				<thead><tr>
 					<th>{t('admin-users-col-user')}</th>
@@ -104,7 +104,7 @@
 			</table>
 		</div>
 
-		<section class="card mt-2 border border-base-300 bg-base-100">
+		<section class="card mt-2">
 			<div class="card-body gap-2">
 				<h3 class="card-title text-base">{t('admin-users-audit-heading')}</h3>
 				{#if data.audit.length === 0}

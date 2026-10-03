@@ -204,7 +204,7 @@
 						</div>
 					{/if}
 					<p class="text-xs opacity-60">{t('render-canvas-edit-hint')}</p>
-					<textarea class="textarea textarea-bordered min-h-96 w-full flex-1 font-mono text-sm" bind:value={draft}></textarea>
+					<textarea class="textarea min-h-96 w-full flex-1 font-mono text-sm" bind:value={draft}></textarea>
 				{:else}
 					<Markdown content={opened.version.content} class="prose prose-sm max-w-none overflow-x-auto" />
 				{/if}
@@ -218,7 +218,7 @@
 			{:else}
 				<div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-3">
 					{#each assets as asset (asset.id)}
-						<div class="card border border-base-300 bg-base-100">
+						<div class="card">
 							{#if asset.mime.startsWith('image/')}<img src={asset.url} alt={asset.filename} class="max-h-56 w-full rounded-t-box object-contain" />{:else if asset.mime.startsWith('video/')}<!-- svelte-ignore a11y_media_has_caption --><video src={asset.url} controls class="max-h-56 w-full rounded-t-box"></video>{:else if asset.mime.startsWith('audio/')}<audio src={asset.url} controls class="mt-4 w-full px-3"></audio>{/if}
 							<div class="card-body gap-1 p-3"><strong class="truncate text-sm" title={asset.filename}>{asset.filename}</strong><span class="text-xs opacity-60">{asset.mime} · {n(Math.ceil(asset.size / 1024))} KB</span><div class="card-actions justify-end"><a class="btn btn-ghost btn-sm" href={asset.url} download={asset.filename}>{t('chat-render-canvas-asset-download')}</a></div></div>
 						</div>

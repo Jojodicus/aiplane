@@ -75,10 +75,10 @@
 		{#if data.models.length === 0}
 			<div class="alert"><span>{t('admin-no-models')}</span></div>
 		{:else}
-			<article class="card border border-base-300 bg-base-100">
+			<article class="card">
 				<div class="card-body gap-3 pb-0">
 					<div class="flex flex-wrap items-center gap-2">
-						<input type="search" class="input input-bordered input-sm w-60 max-w-full" bind:value={query} placeholder={t('admin-filter-placeholder')} aria-label={t('admin-filter-placeholder')} />
+						<input type="search" class="input input-sm w-60 max-w-full" bind:value={query} placeholder={t('admin-filter-placeholder')} aria-label={t('admin-filter-placeholder')} />
 						{#each [['all', 'admin-filter-all'], ['chat', 'admin-filter-chat'], ['other', 'admin-filter-other'], ['alias', 'admin-filter-aliases'], ['configured', 'admin-filter-configured']] as option}
 							<button type="button" class="btn btn-xs {filter === option[0] ? 'btn-active' : ''}" onclick={() => (filter = option[0] as ModelFilter)}>{t(option[1])}</button>
 						{/each}

@@ -102,29 +102,29 @@
 	{#if error}<div class="alert alert-error py-2 text-sm"><span>{error}</span></div>{/if}
 	<form class="m-0 flex flex-col gap-3" onsubmit={(event) => { event.preventDefault(); save(!isChat); }}>
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-price-in-label')} ({priceLabel})</span><input type="number" min="0" step="any" class="input input-bordered input-sm" bind:value={inputPrice} placeholder={t('admin-price-in-placeholder')} /></label>
-			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-price-out-label')} ({priceLabel})</span><input type="number" min="0" step="any" class="input input-bordered input-sm" bind:value={outputPrice} placeholder={t('admin-price-out-placeholder')} /></label>
+			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-price-in-label')} ({priceLabel})</span><input type="number" min="0" step="any" class="input" bind:value={inputPrice} placeholder={t('admin-price-in-placeholder')} /></label>
+			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-price-out-label')} ({priceLabel})</span><input type="number" min="0" step="any" class="input" bind:value={outputPrice} placeholder={t('admin-price-out-placeholder')} /></label>
 			{#if isChat}
 				<label class="flex flex-col gap-1">
 					<span class="text-xs opacity-70">{t('admin-context-window-full-label')}</span>
-					<input type="number" min="1" class="input input-bordered input-sm" class:input-warning={contextHint?.tone === 'warning'} bind:value={contextWindow} placeholder={t('admin-context-window-placeholder')} aria-describedby={contextHint ? 'context-window-hint' : undefined} />
+					<input type="number" min="1" class="input" class:input-warning={contextHint?.tone === 'warning'} bind:value={contextWindow} placeholder={t('admin-context-window-placeholder')} aria-describedby={contextHint ? 'context-window-hint' : undefined} />
 					{#if contextHint}
 						<span id="context-window-hint" class="text-xs {contextHint.tone === 'warning' ? 'text-warning' : 'opacity-60'}">{contextHint.tone === 'warning' ? '⚠ ' : ''}{t(contextHint.key, contextHint.window === undefined ? undefined : { window: n(contextHint.window) })}</span>
 					{/if}
 				</label>
-				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-reasoning-style-label')}</span><select class="select select-bordered select-sm" aria-label={t('admin-reasoning-style-aria')} bind:value={reasoningStyle}><option value="">{t('admin-reasoning-auto')}</option><option value="none">{t('admin-reasoning-none')}</option><option value="qwen">{t('admin-reasoning-qwen')}</option><option value="openai">{t('admin-reasoning-openai')}</option><option value="glm">{t('admin-reasoning-glm')}</option><option value="anthropic">{t('admin-reasoning-anthropic')}</option><option value="ollama">{t('admin-reasoning-ollama')}</option></select></label>
+				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-reasoning-style-label')}</span><select class="select" aria-label={t('admin-reasoning-style-aria')} bind:value={reasoningStyle}><option value="">{t('admin-reasoning-auto')}</option><option value="none">{t('admin-reasoning-none')}</option><option value="qwen">{t('admin-reasoning-qwen')}</option><option value="openai">{t('admin-reasoning-openai')}</option><option value="glm">{t('admin-reasoning-glm')}</option><option value="anthropic">{t('admin-reasoning-anthropic')}</option><option value="ollama">{t('admin-reasoning-ollama')}</option></select></label>
 			{/if}
 		</div>
 		{#if isChat && model.uses_token_budget}
 			<div class="flex flex-col gap-2 border-t border-base-300 pt-3"><span class="text-xs text-base-content/60">{t('admin-budget-hint')}</span><div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-standard')}</span><input type="number" min="1" class="input input-bordered input-sm" bind:value={budgetStandard} placeholder={t('admin-budget-placeholder')} /></label>
-				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-deep')}</span><input type="number" min="1" class="input input-bordered input-sm" bind:value={budgetDeep} placeholder={t('admin-budget-placeholder')} /></label>
-				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-max')}</span><input type="number" min="1" class="input input-bordered input-sm" bind:value={budgetMax} placeholder={t('admin-budget-placeholder')} /></label>
+				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-standard')}</span><input type="number" min="1" class="input" bind:value={budgetStandard} placeholder={t('admin-budget-placeholder')} /></label>
+				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-deep')}</span><input type="number" min="1" class="input" bind:value={budgetDeep} placeholder={t('admin-budget-placeholder')} /></label>
+				<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-effort-max')}</span><input type="number" min="1" class="input" bind:value={budgetMax} placeholder={t('admin-budget-placeholder')} /></label>
 			</div></div>
 		{:else if isChat && model.effort_levels.length > 0}
 			<div class="flex flex-col gap-2 border-t border-base-300 pt-3"><span class="text-xs text-base-content/60">{t('admin-effort-hint')}</span><div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
 				{#each [['admin-effort-standard', effortStandard], ['admin-effort-deep', effortDeep], ['admin-effort-max', effortMax]] as control, index}
-					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t(control[0])}</span><select class="select select-bordered select-sm" value={control[1]} onchange={(event) => { if (index === 0) effortStandard = event.currentTarget.value; else if (index === 1) effortDeep = event.currentTarget.value; else effortMax = event.currentTarget.value; }}><option value="">{t('admin-effort-default-option')}</option>{#each model.effort_levels as level}<option value={level}>{level}</option>{/each}</select></label>
+					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t(control[0])}</span><select class="select" value={control[1]} onchange={(event) => { if (index === 0) effortStandard = event.currentTarget.value; else if (index === 1) effortDeep = event.currentTarget.value; else effortMax = event.currentTarget.value; }}><option value="">{t('admin-effort-default-option')}</option>{#each model.effort_levels as level}<option value={level}>{level}</option>{/each}</select></label>
 				{/each}
 			</div></div>
 		{/if}
@@ -133,15 +133,15 @@
 				<span class="text-xs text-base-content/60">{t('admin-capabilities-heading')}</span>
 				<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
 					{#each [['admin-cap-vision', capVision], ['admin-cap-tools', capTools], ['admin-cap-structured-output', capStructured], ['admin-cap-audio-input', capAudio], ['admin-cap-pdf-input', capPdf], ['admin-cap-parallel-tools', capParallel]] as control, index}
-						<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t(control[0])}</span><select class="select select-bordered select-sm" aria-label={t(control[0])} value={control[1]} onchange={(event) => { const value = event.currentTarget.value; if (index === 0) capVision = value; else if (index === 1) capTools = value; else if (index === 2) capStructured = value; else if (index === 3) capAudio = value; else if (index === 4) capPdf = value; else capParallel = value; }}><option value="">{t('admin-cap-unknown')}</option><option value="true">{t('admin-cap-enabled')}</option><option value="false">{t('admin-cap-disabled')}</option></select></label>
+						<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t(control[0])}</span><select class="select" aria-label={t(control[0])} value={control[1]} onchange={(event) => { const value = event.currentTarget.value; if (index === 0) capVision = value; else if (index === 1) capTools = value; else if (index === 2) capStructured = value; else if (index === 3) capAudio = value; else if (index === 4) capPdf = value; else capParallel = value; }}><option value="">{t('admin-cap-unknown')}</option><option value="true">{t('admin-cap-enabled')}</option><option value="false">{t('admin-cap-disabled')}</option></select></label>
 					{/each}
 				</div>
 				<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-cap-fallback-vision')}</span><SearchableSelect options={[{ value: '', label: t('admin-cap-no-fallback') }, ...allModels.map((name) => ({ value: name, label: name }))]} bind:value={fallbackVision} ariaLabel={t('admin-cap-fallback-vision')} size="sm" class="w-full" /></label>
-					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-cap-fallback-tools')}</span><SearchableSelect options={[{ value: '', label: t('admin-cap-no-fallback') }, ...allModels.map((name) => ({ value: name, label: name }))]} bind:value={fallbackTools} ariaLabel={t('admin-cap-fallback-tools')} size="sm" class="w-full" /></label>
+					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-cap-fallback-vision')}</span><SearchableSelect options={[{ value: '', label: t('admin-cap-no-fallback') }, ...allModels.map((name) => ({ value: name, label: name }))]} bind:value={fallbackVision} ariaLabel={t('admin-cap-fallback-vision')} class="w-full" /></label>
+					<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-cap-fallback-tools')}</span><SearchableSelect options={[{ value: '', label: t('admin-cap-no-fallback') }, ...allModels.map((name) => ({ value: name, label: name }))]} bind:value={fallbackTools} ariaLabel={t('admin-cap-fallback-tools')} class="w-full" /></label>
 				</div>
 			</div>
-			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-toml-defaults-label')}</span><textarea class="textarea textarea-bordered w-full font-mono text-sm leading-relaxed" rows="6" spellcheck="false" bind:value={defaultsToml} placeholder={t('admin-toml-placeholder-header')}></textarea></label>
+			<label class="flex flex-col gap-1"><span class="text-xs opacity-70">{t('admin-toml-defaults-label')}</span><textarea class="textarea w-full font-mono text-sm leading-relaxed" rows="6" spellcheck="false" bind:value={defaultsToml} placeholder={t('admin-toml-placeholder-header')}></textarea></label>
 		{:else}
 			<p class="m-0 text-xs text-base-content/60">{t('admin-other-price-note')}</p>
 		{/if}

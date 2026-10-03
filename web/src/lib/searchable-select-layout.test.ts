@@ -9,7 +9,11 @@ describe('searchable select option layout', () => {
 		assert.doesNotMatch(searchableSelect, /class="menu [^"]*" role="listbox"/);
 		assert.doesNotMatch(searchableSelect, /class="btn btn-outline/);
 		assert.match(searchableSelect, /border-base-300 bg-base-200/);
-		assert.match(searchableSelect, /focus-within:outline-info/);
+		// The trigger and the search field look and focus like every other
+		// field (app.css rings a focused `input` in primary) — no private ring.
+		assert.doesNotMatch(searchableSelect, /outline-info/);
+		assert.match(searchableSelect, /role="combobox"/);
+		assert.match(searchableSelect, /class="btn \{buttonSize\} [^"]*border-base-content\/20 bg-base-100 [^"]*focus-visible:outline-primary/);
 		assert.doesNotMatch(searchableSelect, /border-primary bg-base-200/);
 		assert.match(searchableSelect, /grid-cols-\[1rem_minmax\(0,1fr\)\]/);
 		assert.match(searchableSelect, /badge badge-success badge-xs/);

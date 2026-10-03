@@ -80,7 +80,7 @@
 						<SearchableSelect options={modelOptions} bind:value={model} ariaLabel={t('chat-render-model-aria')} size="sm" class="w-64" />
 					</label>
 				{:else}
-					<input class="input input-bordered input-sm w-56" placeholder={t('chat-render-model-placeholder')} aria-label={t('chat-render-model-aria')} bind:value={model} />
+					<input class="input input-sm w-56" placeholder={t('chat-render-model-placeholder')} aria-label={t('chat-render-model-aria')} bind:value={model} />
 				{/if}
 				{#if transcriptionModels.length > 0}
 					<label class="flex min-w-0 items-center gap-1.5">

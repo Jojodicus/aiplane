@@ -807,10 +807,10 @@
 		<div class="alert alert-info mb-4"><span>{t('chat-render-shared-readonly-banner')}</span></div>
 	{/if}
 	{#if selectedModel && !selectedModel.gdpr}
-		<div class="alert alert-warning mb-4"><span>{t('chat-render-gdpr-banner')}</span></div>
+		<div class="alert alert-warning alert-soft mb-4"><span>{t('chat-render-gdpr-banner')}</span></div>
 	{/if}
 	{#if selectedModel && !selectedModel.nda}
-		<div class="alert alert-warning mb-4"><span>{t('chat-render-nda-banner')}</span></div>
+		<div class="alert alert-warning alert-soft mb-4"><span>{t('chat-render-nda-banner')}</span></div>
 	{/if}
 
 	<div class="flex min-h-0 flex-1 gap-3" data-chat-workspace>
@@ -1006,7 +1006,7 @@
 				{/if}
 				<div class="join w-full">
 					<input
-						class="input input-bordered input-sm join-item w-full"
+						class="input input-sm join-item w-full"
 						placeholder={t('chat-prompt-placeholder')}
 						bind:value={promptText}
 						onkeydown={(e) => e.key === 'Enter' && submitPrompt()}
@@ -1028,7 +1028,7 @@
 			<CapabilityPicker capabilities={tools} onset={setCapability} />
 			<span class="flex-1"></span>
 			<select
-				class="select select-bordered select-xs w-auto max-w-48"
+				class="select select-xs w-auto max-w-48"
 				aria-label={t('chat-render-effort-title')}
 				title={effortApplies ? t('chat-render-effort-tooltip') : t('chat-render-effort-unsupported')}
 				disabled={!effortApplies}
@@ -1173,7 +1173,7 @@
 			ondrop={onDrop}
 		>
 			<h2 class="text-lg font-semibold">{t('render-edit-prompt')}</h2>
-			<textarea class="textarea textarea-bordered mt-3 min-h-36 w-full" bind:value={editDraft}></textarea>
+			<textarea class="textarea mt-3 min-h-36 w-full" bind:value={editDraft}></textarea>
 			{#if editFiles.length > 0}
 				<div class="mt-2 flex flex-wrap gap-1">
 					{#each editFiles as file, index (`${file.name}-${file.size}-${file.lastModified}`)}

@@ -17,7 +17,7 @@
 //
 //     <label class="flex flex-col gap-1">
 //       <span class="text-xs">Name</span>
-//       <input class="input input-bordered input-sm" />
+//       <input class="input" />
 //       <span class="text-xs opacity-60">why this field exists</span>
 //     </label>
 //
@@ -40,6 +40,28 @@ function svelteFiles(dir: string, out: string[] = []): string[] {
 }
 
 const DROPPED = ['form-control', 'label-text-alt'];
+
+// daisyUI 4's `input-bordered` / `select-bordered` / `textarea-bordered` /
+// `file-input-bordered` are inert in v5 — every field is bordered. Unlike the
+// two above they break nothing visibly, which is why they spread: copied from
+// one form to the next, they suggested a borderless default that does not
+// exist and made two identical fields look like two different variants.
+const INERT = ['input-bordered', 'select-bordered', 'textarea-bordered', 'file-input-bordered'];
+
+test('no component carries an inert daisyUI 4 field variant', () => {
+	const root = new URL('../..', import.meta.url).pathname;
+	const offenders: string[] = [];
+	for (const file of svelteFiles(join(root, 'src'))) {
+		readFileSync(file, 'utf8')
+			.split('\n')
+			.forEach((line, i) => {
+				for (const cls of INERT) {
+					if (new RegExp(`(?<![\\w-])${cls}(?![\\w-])`).test(line)) offenders.push(`${file.slice(root.length)}:${i + 1}: ${cls}`);
+				}
+			});
+	}
+	assert.deepEqual(offenders, [], `daisyUI 5 fields are always bordered — drop the class:\n` + offenders.join('\n'));
+});
 
 test('no component uses a class daisyUI 5 dropped', () => {
 	const root = new URL('../..', import.meta.url).pathname;

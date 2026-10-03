@@ -27,7 +27,7 @@
 		<h2 class="m-0 text-xs font-medium uppercase tracking-wide text-base-content/50">{t('admin-comfyui-loaded-workflows')}</h2>
 		<span class="text-xs tabular-nums text-base-content/40">{n(total)}</span>
 	</div>
-	<label class="input input-sm input-bordered flex w-full items-center gap-2">
+	<label class="input input-sm flex w-full items-center gap-2">
 		<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0 opacity-60" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
 		<input
 			type="search"

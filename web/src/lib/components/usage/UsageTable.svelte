@@ -13,7 +13,7 @@
 	} = $props();
 </script>
 
-<section class="card border border-base-300 bg-base-100">
+<section class="card">
 	<div class="card-body gap-2 p-4">
 		<h2 class="card-title text-base">{t(titleKey)}</h2>
 		{#if rows.length === 0}

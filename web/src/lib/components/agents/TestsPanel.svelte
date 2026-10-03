@@ -168,7 +168,7 @@
 			<div class="card-body gap-4 p-4">
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-tests-name')}</span>
-					<input class="input input-sm w-full max-w-md" bind:value={form.name} />
+					<input class="input w-full max-w-md" bind:value={form.name} />
 				</label>
 
 				<section class="space-y-2">
@@ -200,7 +200,7 @@
 					<div class="flex flex-wrap gap-3">
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-tests-finished')}</span>
-							<select class="select select-sm" bind:value={form.finished}>
+							<select class="select" bind:value={form.finished}>
 								<option value="">{t('agents-tests-unchecked')}</option>
 								<option value="true">{t('agents-tests-finished-yes')}</option>
 								<option value="false">{t('agents-tests-finished-no')}</option>
@@ -208,14 +208,14 @@
 						</label>
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-tests-filter')}</span>
-							<select class="select select-sm" bind:value={form.filter}>
+							<select class="select" bind:value={form.filter}>
 								<option value="">{t('agents-tests-unchecked')}</option>
 								{#each FILTER_OUTCOMES as o (o)}<option value={o}>{t(`agents-tests-filter-${o}`)}</option>{/each}
 							</select>
 						</label>
 						<label class="flex flex-col gap-1">
 							<span class="label-text">{t('agents-tests-route')}</span>
-							<select class="select select-sm" bind:value={form.routeMode}>
+							<select class="select" bind:value={form.routeMode}>
 								<option value="">{t('agents-tests-unchecked')}</option>
 								<option value="none">{t('agents-tests-route-none')}</option>
 								<option value="named">{t('agents-tests-route-named')}</option>
@@ -224,7 +224,7 @@
 						{#if form.routeMode === 'named'}
 							<label class="flex flex-col gap-1">
 								<span class="label-text">{t('agents-tests-route-name')}</span>
-								<input class="input input-sm w-40 font-mono" bind:value={form.routeName} />
+								<input class="input w-40 font-mono" bind:value={form.routeName} />
 							</label>
 						{/if}
 					</div>
@@ -251,7 +251,7 @@
 						{#each [['subCalled', 'agents-tests-sub-called'], ['subNotCalled', 'agents-tests-sub-not-called'], ['toolCalled', 'agents-tests-tool-called'], ['toolNotCalled', 'agents-tests-tool-not-called']] as [key, label] (key)}
 							<label class="flex flex-col gap-1">
 								<span class="label-text">{t(label)}</span>
-								<input class="input input-sm w-full font-mono" bind:value={form[key as 'subCalled' | 'subNotCalled' | 'toolCalled' | 'toolNotCalled']} placeholder={t('agents-tests-list-hint')} />
+								<input class="input w-full font-mono" bind:value={form[key as 'subCalled' | 'subNotCalled' | 'toolCalled' | 'toolNotCalled']} placeholder={t('agents-tests-list-hint')} />
 							</label>
 						{/each}
 						<label class="flex flex-col gap-1">

@@ -328,7 +328,7 @@
 				<div class="px-2 pb-1">
 					<!-- svelte-ignore a11y_autofocus -->
 					<input
-						class="input input-sm input-bordered w-full"
+						class="input input-sm w-full"
 						autofocus
 						placeholder={t('nav-search-placeholder')}
 						value={sidebar.query}

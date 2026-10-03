@@ -49,7 +49,7 @@
 		});
 </script>
 
-<section class="card card-border bg-base-100">
+<section class="card card-border">
 	<div class="card-body gap-4 p-4">
 		<h2 class="card-title text-base">{t('agents-channels-heading')}</h2>
 		<p class="text-sm text-base-content/70">{t('agents-channels-intro')}</p>
@@ -77,31 +77,31 @@
 				<div class="flex flex-wrap items-end gap-3">
 					<label class="flex flex-col gap-1">
 						<span class="label-text">{t('agents-channels-kind')}</span>
-						<select class="select select-sm w-32" bind:value={kind}>
+						<select class="select w-32" bind:value={kind}>
 							{#each CHANNEL_KINDS as k (k)}<option value={k}>{t(`agents-channels-kind-${k}`)}</option>{/each}
 						</select>
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="label-text">{t('agents-channels-name')}</span>
-						<input class="input input-sm w-48 max-w-full" bind:value={name} required />
+						<input class="input w-48 max-w-full" bind:value={name} required />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="label-text">{t('agents-channels-lang')}</span>
-						<select class="select select-sm w-36" bind:value={lang}>
+						<select class="select w-36" bind:value={lang}>
 							{#each LOCALES as l (l)}<option value={l}>{LOCALE_NAMES[l]}</option>{/each}
 						</select>
 					</label>
 				</div>
 				<label class="flex flex-col gap-1">
 					<span class="label-text">{t('agents-channels-url')}</span>
-					<input class="input input-sm w-full font-mono" type="url" bind:value={url} required autocomplete="off" />
+					<input class="input w-full font-mono" type="url" bind:value={url} required autocomplete="off" />
 					<span class="text-xs text-base-content/60">{t('agents-channels-url-help')}</span>
 				</label>
 				<label class="flex items-start gap-2">
 					<input class="checkbox checkbox-sm mt-0.5" type="checkbox" bind:checked={details} />
 					<span class="text-sm">{t('agents-channels-details')}</span>
 				</label>
-				<div><button class="btn btn-primary btn-sm" type="submit" disabled={busy || !name.trim() || !url.trim()}>{t('agents-channels-add')}</button></div>
+				<div><button class="btn btn-primary" type="submit" disabled={busy || !name.trim() || !url.trim()}>{t('agents-channels-add')}</button></div>
 			</form>
 		{/if}
 	</div>
