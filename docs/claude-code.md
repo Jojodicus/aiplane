@@ -214,7 +214,9 @@ stream to the client's 300-second watchdog.
 **Errors keep the upstream's wording.** Claude Code recovers from certain
 backend rejections by matching on the error message and retrying with the
 capability disabled; AIplane re-wraps the body in the Anthropic error
-envelope but never rewords it.
+envelope but never rewords it. The gateway's own refusals use the same
+envelope — including a body over the 64 MiB request cap, which is a `413`
+of type `request_too_large`.
 
 ## Server-side tools
 

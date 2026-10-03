@@ -10,6 +10,8 @@
 use rama::http::{Body, Method, Request, StatusCode, header};
 use serde_json::Value;
 
+use aiplane::rama_server::body_limit::UPLOAD_MAX_BODY_BYTES;
+
 use crate::common;
 
 fn post(uri: &str, body: Body) -> Request {
@@ -56,4 +58,43 @@ async fn an_upload_route_takes_a_body_over_the_default() {
             assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{uri}");
         }
     }
+}
+
+/// A finite body just past the upload cap, sent as 1 MiB chunks that share
+/// one buffer and declare no length, so the cap trips on the running total.
+fn over_the_upload_cap() -> Body {
+    let chunk = rama::bytes::Bytes::from(vec![b' '; 1024 * 1024]);
+    let chunks = UPLOAD_MAX_BODY_BYTES / (1024 * 1024) + 1;
+    Body::from_stream(rama::futures::stream::iter(
+        std::iter::repeat_n(chunk, chunks).map(Ok::<_, std::io::Error>),
+    ))
+}
+
+#[tokio::test]
+async fn the_messages_routes_refuse_an_oversized_body_in_the_anthropic_shape() {
+    let state = common::state_no_skills().await;
+    for uri in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let resp = common::serve_promptly(&state, post(uri, over_the_upload_cap())).await;
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE, "{uri}");
+        let body: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+        assert_eq!(body["type"], "error", "{uri}: {body}");
+        assert_eq!(body["error"]["type"], "request_too_large", "{uri}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("64 MiB"),
+            "the message names the cap: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_openai_routes_keep_their_shape_for_an_oversized_body() {
+    let state = common::state_no_skills().await;
+    let resp =
+        common::serve_promptly(&state, post("/v1/chat/completions", over_the_upload_cap())).await;
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(body["error"]["code"], "payload_too_large", "{body}");
 }

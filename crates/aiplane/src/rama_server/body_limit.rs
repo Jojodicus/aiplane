@@ -20,6 +20,12 @@
 //! their own tighter cap (`/hooks`, `/a2a`, `/api/v0/embed`) are passed
 //! through untouched so their refusals keep their own shape. A new route
 //! under one of those pass-through prefixes must cap its own read.
+//!
+//! A refusal speaks the route's dialect: on the Anthropic Messages routes
+//! (`/v1/messages`, `/v1/messages/count_tokens`) it is the Anthropic error
+//! envelope (`request_too_large`) every other error there uses, so a client
+//! such as Claude Code reads it like any other rejection; everywhere else it
+//! is the gateway's OpenAI-shaped error.
 
 use std::convert::Infallible;
 
@@ -27,7 +33,7 @@ use rama::http::{Body, Request, Response, StatusCode};
 use rama::{Layer, Service};
 use session_core::chrome::{CappedBodyError, read_body_capped};
 
-use crate::rama_server::proxy::error_response;
+use crate::rama_server::{messages, proxy};
 
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const UPLOAD_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -48,6 +54,22 @@ pub enum Policy {
     Cap(usize),
     /// The handler reads through its own, tighter cap.
     HandlerCapped,
+}
+
+/// Whether `path` is an Anthropic Messages route, whose errors use the
+/// Anthropic envelope.
+fn is_anthropic(path: &str) -> bool {
+    path.strip_prefix("/v1/messages")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// A refusal of the body, in the dialect of the route at `path`.
+fn refusal(path: &str, status: StatusCode, code: &str, message: &str) -> Response {
+    if is_anthropic(path) {
+        messages::error_response(status, message)
+    } else {
+        proxy::error_response(status, code, message)
+    }
 }
 
 pub fn policy(path: &str) -> Policy {
@@ -92,13 +114,15 @@ where
             return self.inner.serve(req).await;
         }
         let (parts, body) = req.into_parts();
+        let path = parts.uri.path();
         match read_body_capped(body, max).await {
             Ok(bytes) => {
                 self.inner
                     .serve(Request::from_parts(parts, Body::from(bytes)))
                     .await
             }
-            Err(CappedBodyError::TooLarge { max }) => Ok(error_response(
+            Err(CappedBodyError::TooLarge { max }) => Ok(refusal(
+                path,
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
                 &format!(
@@ -107,7 +131,8 @@ where
                     max / (1024 * 1024)
                 ),
             )),
-            Err(CappedBodyError::Read(e)) => Ok(error_response(
+            Err(CappedBodyError::Read(e)) => Ok(refusal(
+                path,
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 &e,
@@ -144,6 +169,20 @@ mod tests {
             "/auth/logout",
         ] {
             assert_eq!(policy(path), Policy::Cap(DEFAULT_MAX_BODY_BYTES), "{path}");
+        }
+    }
+
+    #[test]
+    fn only_the_messages_routes_speak_the_anthropic_dialect() {
+        for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+            assert!(is_anthropic(path), "{path}");
+        }
+        for path in [
+            "/v1/chat/completions",
+            "/v1/messagesx",
+            "/api/v0/chat/messages",
+        ] {
+            assert!(!is_anthropic(path), "{path}");
         }
     }
 
