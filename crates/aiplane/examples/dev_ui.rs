@@ -695,7 +695,9 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("    serve examples/embed on :8000 (python3 -m http.server 8000 -d examples/embed)");
     eprintln!("    and open http://localhost:8000/?gateway=http://127.0.0.1:8080");
     eprintln!("    scripted agent model: mention an invoice, an email address or a human;");
-    eprintln!("    the demo ERP accepts the code {DEV_ERP_CODE}; eng@example.com answers the inbox");
+    eprintln!(
+        "    the demo ERP accepts the code {DEV_ERP_CODE}; eng@example.com answers the inbox"
+    );
     eprintln!("seed cookie (paste into playwright / curl):");
     eprintln!("    id={cookie}");
     eprintln!("non-admin (engineering) seed cookie:");
@@ -915,7 +917,8 @@ async fn erp_mock() -> MockServer {
 /// synthetic tools (or the test-case judge), acts on keywords of the
 /// visitor's last message and calls only the tools the request offers:
 ///
-/// - an email address: `set_email` + `verify_otp_request_code`;
+/// - an email address: `set_email` + `verify_otp_request_code`, and
+///   `verify_otp_submit_code` after a wrong code;
 /// - "invoice" / "billing" / "Rechnung": `set_issue(billing)` + `forward_request`;
 /// - "human" / "person" / "staff" / "Mensch": `set_issue(other)` + `request_human`;
 /// - a routed sub-agent (offered `finish`): `finish({answer})`.
@@ -999,6 +1002,9 @@ fn scripted_step(body: &serde_json::Value) -> serde_json::Value {
         };
     }
     if let Some(last) = results.last() {
+        if last["reason"] == "wrong_code" && has("verify_otp_submit_code") {
+            return calls(&[("verify_otp_submit_code", serde_json::json!({}))]);
+        }
         return serde_json::json!({ "content": summarise(last) });
     }
     let lower = said.to_lowercase();
