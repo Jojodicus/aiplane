@@ -301,6 +301,18 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>> {
             "/api/v0/agents/{id}/analytics",
             pages::json_agents::analytics,
         )
+        .with_get(
+            "/api/v0/agents/{id}/activity",
+            pages::json_agent_activity::list,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/activity/export",
+            pages::json_agent_activity::export,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/activity/verify",
+            pages::json_agent_activity::verify,
+        )
         .with_post("/api/v0/agents/{id}/live", pages::json_agents::set_live)
         .with_get("/api/v0/agents/{id}/shares", pages::json_agents::shares)
         .with_post("/api/v0/agents/{id}/shares", pages::json_agents::share)
