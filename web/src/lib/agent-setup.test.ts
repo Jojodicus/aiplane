@@ -9,6 +9,7 @@ import {
 	TONE_LINES,
 	abilities,
 	applyTemplate,
+	applySuggestedRules,
 	asStep,
 	checklist,
 	deriveBind,
@@ -335,6 +336,22 @@ test('the identity step regates a hand-off waiting for every detail when it adds
 	writeIdentity(spec, identity({ method: 'email_code', connector: 'erp' }), labels);
 	assert.deepEqual(spec.routes.lead.when.all.slice(2).map((leaf: Spec) => leaf.slot), ['company', 'email']);
 	assert.equal(readHandoffs(spec).rules[0].details, true);
+});
+
+test('a suggested hand-off that waits for the identity sets up the proposed check, so it keeps its gate', () => {
+	const spec: Spec = {};
+	const proposed = [{ topic: 'Refunds', target: 'human', identity: true }];
+	const applied = applySuggestedRules(spec, [], proposed, { method: 'email_code' }, labels);
+	assert.equal(applied.identity, true);
+	assert.equal(readIdentity(spec).method, 'email_code');
+	writeHandoffs(spec, { rules: applied.rules, fallback: false, custom: [] });
+	assert.deepEqual(spec.routes.refunds.when.all.at(-1), { slot: 'verified', provenance: 'verifier:identity' });
+	assert.equal(readHandoffs(throughEditor(spec)).rules[0].identity, true);
+
+	const signedIn: Spec = { verifiers: { identity: { kind: 'host_jwt' } } };
+	assert.equal(applySuggestedRules(signedIn, [], proposed, { method: 'email_code' }, labels).identity, false, 'an existing check stays');
+	assert.equal(applySuggestedRules({}, [], proposed, { method: 'none' }, labels).identity, false);
+	assert.equal(applySuggestedRules({}, [], [{ topic: 'X', target: 'human' }], { method: 'email_code' }, labels).identity, false);
 });
 
 test('a specialist’s route values come from trusted slots or the confirmed identity', () => {

@@ -3036,7 +3036,11 @@ system message says to ignore instructions in it.
   `assist::handoffs::write` gives it. The model picks a `condition`:
   `always`, `details` (wait until every slot of the details step is set —
   a qualified lead) or `identity`. A rule about a topic the draft already
-  hands off is left out;
+  hands off is left out. `identity` on a draft with no identity check is
+  kept when the same offer recommends one (other than `none`): applying the
+  hand-offs sets up that check first (`applySuggestedRules`), so the rule
+  is written gated — `route` carries no identity leaf until then. With no
+  check recommended either, the condition is left out with a note;
 - `tests: [{name, kind, script, expect}]` — the body `POST …/tests` takes, at
   most 6. Every case expects `finished: true`; an `out_of_scope` case expects
   the draft's refusal in the answer (and is dropped when there is none yet).
@@ -3176,7 +3180,8 @@ setup assistant as what it is, not as "set up in the advanced editor":
   `topic` enum and `request` slots, `router.order`, the `fallback` route). A
   rule whose topic exists replaces it; other routes stay as they are. The
   bind comes from the specialist's live spec; `identity` is honoured only
-  when the agent has an identity check, `details` only when it collects
+  when the agent has an identity check (an architect cannot set one up, so
+  unlike the prompt assistant's offer a recommended method does not count), `details` only when it collects
   details (otherwise kept without it, with a note). `web/src/lib/fixtures/architect-draft.json` is a draft written by
   `apply_changes` (pinned in `review/tests.rs`) that `agent-setup.test.ts`
   reads back as rules and friendly slots, and writes back unchanged.

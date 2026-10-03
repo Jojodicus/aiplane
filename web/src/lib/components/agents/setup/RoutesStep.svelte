@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { agentsApi, type Spec } from '$lib/agents';
-	import { deriveBind, identityWriter, readHandoffs, readSlots, suggestedRules, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, readHandoffs, readSlots, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
@@ -63,7 +63,9 @@
 	const suggested = $derived(ws.suggestion?.steps.handoffs ?? []);
 	function applySuggested() {
 		const start = model.rules.length;
-		model.rules = [...model.rules, ...suggestedRules(suggested, model.rules)];
+		const applied = applySuggestedRules(spec, model.rules, suggested, ws.suggestion?.steps.identity, identityLabels(t));
+		if (applied.identity) ws.settle('identity');
+		model.rules = [...model.rules, ...applied.rules];
 		model.rules.slice(start).forEach((_, i) => void derive(start + i));
 	}
 

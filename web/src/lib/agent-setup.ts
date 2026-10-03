@@ -574,6 +574,11 @@ function rewriteProvenance(cond: any, from: string, to: string): any {
 	return out;
 }
 
+/** The labels the identity check's slots get, in the manager's language. */
+export function identityLabels(tr: (key: string) => string): IdentityLabels {
+	return { email: tr('agents-tpl-slot-email'), name: tr('agents-tpl-slot-name'), customerNumber: tr('agents-setup-slot-kind-customer_number') };
+}
+
 export function writeIdentity(spec: Spec, id: Identity, labels: IdentityLabels): void {
 	withDetails(spec, () => replaceIdentity(spec, id, labels));
 }
@@ -1215,4 +1220,24 @@ export function suggestedRules(handoffs: { topic: string; target: string; detail
 			return true;
 		})
 		.map((h) => ({ route: null, topic: h.topic.trim(), details: !!h.details, identity: !!h.identity, target: h.target === 'human' ? { kind: 'human' as const } : { kind: 'agent' as const, id: h.target }, bind: {} }));
+}
+
+/**
+ * The proposed hand-offs as rules, for the hand-off step to add. When one
+ * waits for a confirmed identity and the agent has no identity check yet,
+ * the check the same proposal recommends is set up first, so the rule keeps
+ * its gate instead of losing it on the write; `identity` says it was.
+ */
+export function applySuggestedRules(
+	spec: Spec,
+	existing: Rule[],
+	handoffs: { topic: string; target: string; details?: boolean; identity?: boolean }[],
+	proposedIdentity: { method: string } | null | undefined,
+	labels: IdentityLabels
+): { rules: Rule[]; identity: boolean } {
+	const rules = suggestedRules(handoffs, existing);
+	const method = proposedIdentity ? suggestedMethod(proposedIdentity.method) : null;
+	const needed = rules.some((r) => r.identity) && !identityWriter(spec) && !!method && method !== 'none';
+	if (needed) writeIdentity(spec, { ...readIdentity(spec), method }, labels);
+	return { rules, identity: needed };
 }

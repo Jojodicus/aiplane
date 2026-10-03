@@ -712,6 +712,31 @@ fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() 
 }
 
 #[test]
+fn a_hand_off_waiting_for_the_identity_keeps_it_when_the_proposal_brings_the_check() {
+    let w = World::new();
+    let proposal = |method: &str| {
+        json!({
+            "identity": { "method": method, "why": "refunds are personal" },
+            "handoffs": [{ "name": "refunds", "topic": "Refunds", "condition": "identity",
+                           "target": "human" }],
+        })
+    };
+    let out = review(&proposal("email_code"), &json!({}), &w.ctx());
+    assert!(out.steps.handoffs[0].identity, "{:#?}", out.dropped);
+    assert!(out.dropped.is_empty(), "{:#?}", out.dropped);
+
+    let out = review(&proposal("none"), &json!({}), &w.ctx());
+    assert!(!out.steps.handoffs[0].identity);
+    assert!(
+        out.dropped
+            .iter()
+            .any(|d| d.reason.contains("without the identity condition")),
+        "{:#?}",
+        out.dropped
+    );
+}
+
+#[test]
 fn a_new_detail_joins_the_gate_of_a_hand_off_waiting_for_every_detail() {
     let w = World::new();
     let mut base = json!({ "main": { "pool": "main-pool" }, "state": {

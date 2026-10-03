@@ -3,6 +3,7 @@
 	import type { Spec } from '$lib/agents';
 	import {
 		IDENTITY_METHODS,
+		identityLabels,
 		newSecret,
 		readIdentity,
 		suggestedMethod,
@@ -27,7 +28,7 @@
 	let model = $state(readIdentity(spec));
 	writeOnChange(
 		() => $state.snapshot(model),
-		(m) => writeIdentity(spec, m, { email: t('agents-tpl-slot-email'), name: t('agents-tpl-slot-name'), customerNumber: t('agents-setup-slot-kind-customer_number') })
+		(m) => writeIdentity(spec, m, identityLabels(t))
 	);
 
 	const blockers = $derived(topicsNeedingIdentity(spec));

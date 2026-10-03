@@ -154,7 +154,10 @@ pub struct IdentityStep {
 /// `routes.<name>` = `route`: one rule of the setup's hand-off step
 /// ("when it is about `topic` (and all details are collected, and the
 /// identity is confirmed), hand over to `target`"), in the shape
-/// [`handoffs::write`] gives it.
+/// [`handoffs::write`] gives it. `identity` on a draft without an identity
+/// check stands for the check the same offer recommends: applying the
+/// hand-off sets that up first (`applySuggestedRules`), and `route` has no
+/// identity leaf until then.
 #[derive(Debug, Clone, Serialize)]
 pub struct HandoffStep {
     pub name: String,
@@ -189,6 +192,12 @@ pub struct Dropped {
 pub fn review(answer: &Value, base: &Value, ctx: &ReviewContext<'_>) -> Suggestion {
     let mut r = Reviewer::new(base, ctx);
     r.steps(answer);
+    r.identity_proposed = r
+        .out
+        .steps
+        .identity
+        .as_ref()
+        .is_some_and(|i| i.method != "none");
     for handoff in r
         .field::<Vec<HandoffProposal>>(answer, "handoffs")
         .unwrap_or_default()
@@ -281,6 +290,10 @@ struct Reviewer<'a> {
     tests: BTreeSet<String>,
     /// Give each new slot the setup's next position (`order`).
     ordered: bool,
+    /// The offer recommends an identity check, which the setup sets up along
+    /// with a hand-off that waits for it: such a hand-off keeps the
+    /// condition although the draft has no check yet.
+    identity_proposed: bool,
     out: Suggestion,
 }
 
@@ -298,6 +311,7 @@ impl<'a> Reviewer<'a> {
             known: BTreeSet::new(),
             tests: BTreeSet::new(),
             ordered: false,
+            identity_proposed: false,
             out: Suggestion::default(),
         };
         r.known = r.issues(&r.draft);
@@ -492,7 +506,8 @@ impl<'a> Reviewer<'a> {
             }
             Target::Human => Map::new(),
         };
-        let has_identity = handoffs::identity_writer(&self.draft).is_some();
+        let has_identity =
+            handoffs::identity_writer(&self.draft).is_some() || self.identity_proposed;
         if identity && !has_identity {
             self.drop(
                 "handoffs",

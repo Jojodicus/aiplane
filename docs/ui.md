@@ -693,8 +693,10 @@ that every step round-trips through the advanced editor's
   (granted when applied) and the knowledge bases (switched on as their cards
   are), with a note per subject no knowledge base covers yet, the details
   (`suggestedSlotRows`), the identity card (`suggestedMethod`), the
-  hand-offs as sentences with their condition (`suggestedRules`) and, on
-  the last step, test conversations. Applying edits the step's model like a
+  hand-offs as sentences with their condition (`applySuggestedRules`: a
+  hand-off that waits for the identity, on an agent without an identity
+  check, sets up the check the proposal recommends first, so the gate is
+  written rather than dropped) and, on the last step, test conversations. Applying edits the step's model like a
   manual edit, so it reaches the spec only through the normal save; the
   endpoint writes nothing. What the assistant left out is listed on the start
   step with its reason. The task, the tone and the answer for other topics
