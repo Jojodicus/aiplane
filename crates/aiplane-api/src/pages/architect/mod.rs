@@ -138,16 +138,17 @@ pub async fn start(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     }
     .map(|agent| agent.principal.id);
     let access = state.pool_access_for(&user.roles);
-    let model = match aiplane_runtime::agents::assist::choose_pool(&state, &access, None, None).await {
-        Ok((_, model)) => model,
-        Err(err) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "architect_no_model",
-                &err.to_string(),
-            );
-        }
-    };
+    let model =
+        match aiplane_runtime::agents::assist::choose_pool(&state, &access, None, None).await {
+            Ok((_, model)) => model,
+            Err(err) => {
+                return json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "architect_no_model",
+                    &err.to_string(),
+                );
+            }
+        };
     if !body.fresh {
         match architect_sessions::latest(&state.db, &user.id, agent_id.as_deref()).await {
             Ok(Some(session_id)) => {

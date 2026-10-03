@@ -176,7 +176,7 @@ table activity_verified on activity_verified: CREATE TABLE activity_verified(cha
 table agent_a2a_tasks on agent_a2a_tasks: CREATE TABLE agent_a2a_tasks(turn_id TEXT NOT NULL REFERENCES chat_turns(id)ON DELETE CASCADE,tool_call_id TEXT NOT NULL,route TEXT NOT NULL,card_url TEXT NOT NULL,task_id TEXT NOT NULL,context_id TEXT,created_at TEXT NOT NULL,PRIMARY KEY(turn_id,tool_call_id))STRICT
 table agent_architect_sessions on agent_architect_sessions: CREATE TABLE agent_architect_sessions(session_id TEXT PRIMARY KEY NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,user_id TEXT NOT NULL REFERENCES users(id)ON DELETE CASCADE,agent_id TEXT REFERENCES agents(principal_id)ON DELETE SET NULL,created_at TEXT NOT NULL)STRICT
 table agent_audit on agent_audit: CREATE TABLE agent_audit(id TEXT PRIMARY KEY NOT NULL,kind TEXT NOT NULL,principal_id TEXT NOT NULL,actor_id TEXT,chain TEXT,detail TEXT NOT NULL,created_at TEXT NOT NULL,chain_key TEXT,seq INTEGER,prev_hash TEXT,hash TEXT,agent_id TEXT,version INTEGER,conversation_id TEXT,session_id TEXT,turn_id TEXT,round INTEGER,call_id TEXT,visitor_id TEXT,caller_id TEXT,duration_ms INTEGER,key_id TEXT)STRICT
-table agent_draft_revisions on agent_draft_revisions: CREATE TABLE agent_draft_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,spec TEXT NOT NULL,saved_by TEXT NOT NULL,saved_at TEXT NOT NULL)STRICT
+table agent_draft_revisions on agent_draft_revisions: CREATE TABLE agent_draft_revisions(id INTEGER PRIMARY KEY AUTOINCREMENT,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,spec TEXT NOT NULL,granted TEXT NOT NULL DEFAULT '[]',saved_by TEXT NOT NULL,saved_at TEXT NOT NULL)STRICT
 table agent_embed_keys on agent_embed_keys: CREATE TABLE agent_embed_keys(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,key_hash TEXT NOT NULL UNIQUE,origins TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL,revoked_at TEXT)STRICT
 table agent_identity_jtis on agent_identity_jtis: CREATE TABLE agent_identity_jtis(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,jti_hash TEXT NOT NULL,expires_at TEXT NOT NULL,PRIMARY KEY(principal_id,jti_hash))STRICT
 table agent_notify_channels on agent_notify_channels: CREATE TABLE agent_notify_channels(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN('slack','discord')),name TEXT NOT NULL,url_nonce BLOB NOT NULL,url_ct BLOB NOT NULL,url_host TEXT NOT NULL,details INTEGER NOT NULL DEFAULT 0 CHECK(details IN(0,1)),lang TEXT NOT NULL DEFAULT 'en',created_by TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
@@ -392,8 +392,9 @@ agent_audit index sqlite_autoindex_agent_audit_1 1|-1|NULL|0|BINARY|0
 agent_draft_revisions column 0|id|INTEGER|0|NULL|1|0
 agent_draft_revisions column 1|principal_id|TEXT|1|NULL|0|0
 agent_draft_revisions column 2|spec|TEXT|1|NULL|0|0
-agent_draft_revisions column 3|saved_by|TEXT|1|NULL|0|0
-agent_draft_revisions column 4|saved_at|TEXT|1|NULL|0|0
+agent_draft_revisions column 3|granted|TEXT|1|'[]'|0|0
+agent_draft_revisions column 4|saved_by|TEXT|1|NULL|0|0
+agent_draft_revisions column 5|saved_at|TEXT|1|NULL|0|0
 agent_draft_revisions fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
 agent_draft_revisions index agent_draft_revisions_by_agent 0|c|0
 agent_draft_revisions index agent_draft_revisions_by_agent 0|1|principal_id|0|BINARY|1

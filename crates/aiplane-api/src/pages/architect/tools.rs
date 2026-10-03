@@ -23,12 +23,12 @@ use super::super::json_agents::{
     save_draft, visible_agents,
 };
 use super::super::json_principals::add_capped_grant;
-use aiplane_agents::db::agents::{Access, AgentRow};
+use aiplane_agents::db::agents::{Access, AgentRow, DraftChange};
 use aiplane_agents::db::architect_sessions;
 use aiplane_core::server::db::users::User;
 use aiplane_core::server::principal::GrantKind;
-use aiplane_runtime::agents::defaults;
 use aiplane_runtime::agents::assist::{ReviewContext, apply_changes, changes_schema};
+use aiplane_runtime::agents::defaults;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
@@ -381,9 +381,21 @@ async fn start_on_default_pool(
         return Ok(None);
     }
     let (agent, _) = agent_by_id(&ctx.state, &ctx.user, agent_id, Access::Write).await?;
-    add_capped_grant(&ctx.state, &ctx.user, agent_id, GrantKind::Pool, &default.pool).await?;
+    add_capped_grant(
+        &ctx.state,
+        &ctx.user,
+        agent_id,
+        GrantKind::Pool,
+        &default.pool,
+    )
+    .await?;
     let spec = json!({ "profile": { "display": display }, "main": { "pool": default.pool } });
-    save_draft(&ctx.state, &ctx.user, &agent, spec).await?;
+    let granted = [(GrantKind::Pool, default.pool.clone())];
+    let change = DraftChange {
+        granted: &granted,
+        ..DraftChange::default()
+    };
+    save_draft(&ctx.state, &ctx.user, &agent, spec, change).await?;
     Ok(Some(default.pool))
 }
 
@@ -461,14 +473,22 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
             format!("nothing was changed — {}", reasons.join("; "))
         }));
     }
-    let mut granted = Vec::new();
+    let mut made = Vec::new();
     for (kind, reference) in &applied.grants {
         if !world.grants.has(*kind, reference) {
             add_capped_grant(&ctx.state, &ctx.user, id, *kind, reference).await?;
-            granted.push(json!({ "kind": kind.as_str(), "ref": reference }));
+            made.push((*kind, reference.clone()));
         }
     }
-    let saved = save_draft(&ctx.state, &ctx.user, &agent, applied.draft).await?;
+    let change = DraftChange {
+        granted: &made,
+        ..DraftChange::default()
+    };
+    let saved = save_draft(&ctx.state, &ctx.user, &agent, applied.draft, change).await?;
+    let granted: Vec<Value> = made
+        .iter()
+        .map(|(kind, reference)| json!({ "kind": kind.as_str(), "ref": reference }))
+        .collect();
     let mut changed: Vec<&str> = Vec::new();
     if applied.display.is_some() {
         changed.push("display");

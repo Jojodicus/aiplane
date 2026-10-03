@@ -709,7 +709,8 @@ while it is open.
   every tool call shows in `ToolCalls` with its input and output.
 - **Undo and links** (`lib/architect.ts`, unit-tested): a completed
   `update_agent_draft` offers *Undo*, which restores the revision it kept
-  (`agentsApi.restoreDraft`) and then shows *Undone*; on the agents list a
+  (`agentsApi.restoreDraft`; the server also revokes the grants that change
+  made unless something still uses them) and then shows *Undone*; on the agents list a
   call naming a setup page offers *Open setup*. After every finished turn
   (and an undo) the host reloads: the list its agents, the overview the
   workspace with `refresh(ws.dirty)`, which keeps an unsaved edit of the

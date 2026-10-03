@@ -440,11 +440,97 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
     assert_eq!(status, StatusCode::OK, "{restored}");
     assert_eq!(
         restored["draft_spec"],
-        json!({ "profile": { "display": "Harald" } })
+        json!({ "profile": { "display": "Harald" }, "main": { "pool": "pool" } }),
+        "back to the draft the create left, on the default chat pool"
+    );
+    assert_eq!(
+        restored["revoked"],
+        json!([{ "kind": "tool", "ref": "get_current_timestamp" }]),
+        "the undone change's tool goes, the pool the restored draft runs on stays"
     );
     assert!(
         restored["revision"].is_i64(),
         "an undo can itself be undone"
+    );
+    let after = fx.get(&format!("/api/v0/agents/{id}")).await["agent"].clone();
+    let grants: Vec<String> = after["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| {
+            format!(
+                "{}:{}",
+                g["kind"].as_str().unwrap(),
+                g["ref"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(grants, ["pool:pool"]);
+    let events = fx
+        .get(&format!(
+            "/api/v0/agents/{id}/activity?kind=agent_draft_updated,grant_removed"
+        ))
+        .await;
+    let kinds: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds[..2],
+        ["grant_removed", "agent_draft_updated"],
+        "{events}"
+    );
+    let undo = &events["events"][1]["detail"];
+    assert_eq!(undo["restored"], revision);
+    assert_eq!(undo["revoking"][0]["ref"], "get_current_timestamp");
+}
+
+/// Undoing a change keeps a grant the live version still uses.
+#[tokio::test]
+async fn undo_keeps_a_grant_the_live_version_uses() {
+    let fx = fixture(vec![
+        call("c1", "create_agent_draft", json!({ "display": "Live" })),
+        call(
+            "c2",
+            "update_agent_draft",
+            json!({ "agent_id": "live", "changes": {
+                "task": "You tell the time.",
+                "abilities": [{ "id": "get_current_timestamp", "why": "the time" }]
+            }}),
+        ),
+        json!({ "content": "Done." }),
+    ])
+    .await;
+    let (_, turn) = fx.converse("Make an agent called Live").await;
+    let revision = output(&turn, 1)["revision"].as_i64().expect("a revision");
+    let live = fx.agent_named("live").await;
+    let id = live["id"].as_str().unwrap();
+    let (status, published) = fx
+        .post(
+            &fx.alice,
+            &format!("/api/v0/agents/{id}/publish"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+
+    let (status, restored) = fx
+        .post(
+            &fx.alice,
+            &format!("/api/v0/agents/{id}/draft/restore"),
+            json!({ "revision": revision }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["revoked"], json!([]));
+    let after = fx.agent_named("live").await;
+    assert!(
+        after["grants"]
+            .to_string()
+            .contains("get_current_timestamp"),
+        "{after}"
     );
 }
 

@@ -3109,7 +3109,7 @@ code. Each checks `can_manage_agents` again when it runs.
 | `read_agent(agent_id)` | draft, grants, what blocks publishing | `agent_by_id` (`read` share), `SpecWorld`, `publish_issues` |
 | `list_grantable` | pools, model choices, tools, connectors, skills, collections | `resources_for` (as `GET /api/v0/agent-resources`) |
 | `propose_setup(agent_id, scenario, template?)` | the #117 proposal; writes nothing | `suggest_for` (as `…/assist/suggest`: its rate, usage row and `assist_suggested` event) |
-| `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName` | `create_agent` (as `POST /api/v0/agents`) |
+| `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName`; it starts on `agents::defaults::chat_pool` when the person may use it (granted, capped) | `create_agent` (as `POST /api/v0/agents`) |
 | `update_agent_draft(agent_id, changes)` | changes the draft step by step | `assist::apply_changes`, then `add_capped_grant` per needed grant, then `save_draft` |
 | `run_test_turn(agent_id, message, conversation_id?)` | one test-chat turn of the draft | `draft_test_turn` (as `…/test-turn`) |
 
@@ -3155,15 +3155,21 @@ keeps the draft it replaced in `agent_draft_revisions` (newest
 answers with that `revision`. `update_agent_draft` returns it, and the
 window's *Undo* calls `POST /api/v0/agents/{id}/draft/restore {revision}`,
 which validates and saves it like any draft (so the undo is itself
-undoable). Grants an undone change made stay: they are the person's capped
-grants and unused by the restored draft; the setup offers to revoke them.
+undoable). A revision also keeps the grants its change made
+(`agent_draft_revisions.granted`, filled by the architect's
+`update_agent_draft` and `create_agent_draft`). The undo revokes those
+after the save unless the restored draft or the live version still uses one
+— "uses" is asked of the validator (`uses_grant`: the spec has more issues
+without the grant), not a list of fields. The activity log has the draft
+event with `restored` and `revoking`, and a `grant_removed` per revocation;
+the answer lists them as `revoked`.
 
 **API.**
 
 | Method | Path | Body | Answer |
 |---|---|---|---|
 | POST | `/api/v0/agent-architect` | `{agent_id?, title, fresh?}` | `{session_id, model, agent_id, resumed}` |
-| POST | `/api/v0/agents/{id}/draft/restore` | `{revision}` | `{draft_spec, live_version, revision}` |
+| POST | `/api/v0/agents/{id}/draft/restore` | `{revision}` | `{draft_spec, live_version, revision, revoked}` |
 
 `agent-architect` needs `can_manage_agents` (403 otherwise) and a `write`
 share on `agent_id`. It reopens the person's newest architect conversation
@@ -3192,7 +3198,9 @@ a name, no publish tool); `tests/it/agent_architect.rs` (a scripted
 conversation lists, creates, proposes, updates, is refused an ability the
 person lacks, tests the draft and cannot publish, every call recorded; the
 offered tools; undo through `draft/restore`; reopening and `fresh`; 403 for a
-non-manager); `web/src/lib/architect.test.ts`.
+non-manager; an undo revoking the change's tool but keeping the pool the
+restored draft runs on, logged; an undo keeping a grant the live version
+uses); `web/src/lib/architect.test.ts`.
 
 ### What #119 built
 

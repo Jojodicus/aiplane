@@ -488,11 +488,14 @@ CREATE INDEX agent_architect_sessions_by_user
     ON agent_architect_sessions (user_id, agent_id, created_at);
 
 -- The draft as it was before each save, so a change can be undone. Only the
--- newest few per agent are kept.
+-- newest few per agent are kept. `granted` lists the grants the save's change
+-- made (`[{kind, ref}]`), which undoing it revokes unless something still
+-- uses them.
 CREATE TABLE agent_draft_revisions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     principal_id TEXT NOT NULL REFERENCES agents(principal_id) ON DELETE CASCADE,
     spec        TEXT NOT NULL,
+    granted     TEXT NOT NULL DEFAULT '[]',
     saved_by    TEXT NOT NULL,
     saved_at    TEXT NOT NULL
 ) STRICT;

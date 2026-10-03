@@ -26,7 +26,9 @@ use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
-use aiplane_agents::db::agents::{self as agents_db, Access, ShareChange, SubjectKind};
+use aiplane_agents::db::agents::{
+    self as agents_db, Access, DraftChange, ShareChange, SubjectKind,
+};
 use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
 use aiplane_core::server::db::{gateway_groups, users};
 use aiplane_core::server::feature_defaults::Feature;
@@ -470,7 +472,7 @@ pub async fn update_draft(State(state): State<Arc<RamaState>>, req: Request) -> 
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
     let body: DraftBody = or_return!(super::read_json(req.into_body(), "the draft body").await);
-    match save_draft(&state, &user, &agent, body.spec).await {
+    match save_draft(&state, &user, &agent, body.spec, DraftChange::default()).await {
         Ok(saved) => json_ok(StatusCode::OK, saved),
         Err(resp) => resp,
     }
@@ -483,11 +485,12 @@ pub(super) async fn save_draft(
     user: &users::User,
     agent: &agents_db::AgentRow,
     mut spec: Value,
+    change: DraftChange<'_>,
 ) -> Result<Value, Response> {
     let id = &agent.principal.id;
     require_valid(state, id, &spec, Stage::Draft, "save the draft").await?;
     seal_secrets(state, &mut spec)?;
-    match agents_db::update_draft(&state.db, id, &spec.to_string(), &user.id).await {
+    match agents_db::update_draft(&state.db, id, &spec.to_string(), &user.id, change).await {
         Ok(Some(saved)) => Ok(json!({
             "draft_spec": spec,
             "live_version": agent.live_version,
@@ -506,9 +509,47 @@ pub struct RestoreBody {
     pub revision: i64,
 }
 
+/// Whether `spec` needs `kind` `reference`: the validator finds more wrong
+/// with it once that grant is gone. Asking the validator rather than listing
+/// where a spec names a pool or tool keeps this right as the spec grows.
+fn uses_grant(
+    world: &SpecWorld,
+    agent_id: &str,
+    spec: &Value,
+    kind: GrantKind,
+    reference: &str,
+) -> bool {
+    let check = |grants: &GrantSet| {
+        spec::validate(
+            spec,
+            &SpecContext {
+                agent_id,
+                grants,
+                agents: &world.agents,
+                live_specs: &world.live_specs,
+                voice_defaults: &world.voice_defaults,
+            },
+            Stage::Draft,
+        )
+        .len()
+    };
+    let without = GrantSet::new(
+        world
+            .grants
+            .iter()
+            .filter(|(k, r)| !(*k == kind && *r == reference))
+            .map(|(k, r)| (k, r.to_string())),
+    );
+    check(&without) > check(&world.grants)
+}
+
 /// POST /api/v0/agents/{id}/draft/restore — `{revision}`: make an earlier
 /// draft the draft again (undo). It is validated like any save, and the
 /// draft it replaces becomes a revision too, so a restore can be undone.
+/// The grants the undone change made are revoked after the save, unless the
+/// restored draft or the live version still uses them; the draft event in
+/// the activity log names the restore and those grants, and each revocation
+/// records its own `grant_removed`.
 pub async fn restore_draft(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
@@ -526,10 +567,43 @@ pub async fn restore_draft(State(state): State<Arc<RamaState>>, req: Request) ->
         }
         Err(err) => return internal(err),
     };
-    match save_draft(&state, &user, &agent, parse_spec(&revision.spec)).await {
-        Ok(saved) => json_ok(StatusCode::OK, saved),
-        Err(resp) => resp,
+    let restored = parse_spec(&revision.spec);
+    let world = or_return!(SpecWorld::load(&state, id).await);
+    let live = match agent.live_version {
+        Some(n) => match agents_db::version(&state.db, id, n).await {
+            Ok(v) => v.map(|v| parse_spec(&v.spec)),
+            Err(err) => return internal(err),
+        },
+        None => None,
+    };
+    let revoking: Vec<(GrantKind, String)> = revision
+        .granted
+        .iter()
+        .filter(|(kind, reference)| world.grants.has(*kind, reference))
+        .filter(|(kind, reference)| {
+            !uses_grant(&world, id, &restored, *kind, reference)
+                && !live
+                    .as_ref()
+                    .is_some_and(|l| uses_grant(&world, id, l, *kind, reference))
+        })
+        .cloned()
+        .collect();
+    let change = DraftChange {
+        restored: Some(revision.id),
+        revoking: &revoking,
+        ..DraftChange::default()
+    };
+    let mut saved = or_return!(save_draft(&state, &user, &agent, restored, change).await);
+    for (kind, reference) in &revoking {
+        if let Err(err) = sp_db::remove_grant(&state.db, id, *kind, reference, &user.id).await {
+            return internal(err);
+        }
     }
+    saved["revoked"] = revoking
+        .iter()
+        .map(|(kind, reference)| json!({ "kind": kind.as_str(), "ref": reference }))
+        .collect();
+    json_ok(StatusCode::OK, saved)
 }
 
 /// POST /api/v0/agents/{id}/publish — validate the draft for running and

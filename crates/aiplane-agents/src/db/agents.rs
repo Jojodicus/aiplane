@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use aiplane_core::server::principal::GrantKind;
 use jiff::Timestamp;
 use serde_json::json;
 use sqlx::Row;
@@ -313,8 +314,42 @@ pub struct DraftSaved {
 pub struct RevisionRow {
     pub id: i64,
     pub spec: String,
+    /// The grants the change after this draft made.
+    pub granted: Vec<(GrantKind, String)>,
     pub saved_by: String,
     pub saved_at: String,
+}
+
+/// What a draft save is, besides the new draft: for the revision it keeps
+/// and the activity log.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DraftChange<'a> {
+    /// Grants made for this change (an architect's), revoked when it is undone.
+    pub granted: &'a [(GrantKind, String)],
+    /// The revision this save restores (an undo).
+    pub restored: Option<i64>,
+    /// Grants the undo revokes after the save.
+    pub revoking: &'a [(GrantKind, String)],
+}
+
+fn grants_json(grants: &[(GrantKind, String)]) -> serde_json::Value {
+    grants
+        .iter()
+        .map(|(kind, reference)| json!({ "kind": kind.as_str(), "ref": reference }))
+        .collect()
+}
+
+fn parse_grants(text: &str) -> Vec<(GrantKind, String)> {
+    serde_json::from_str::<Vec<serde_json::Value>>(text)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| {
+            Some((
+                GrantKind::parse(g.get("kind")?.as_str()?)?,
+                g.get("ref")?.as_str()?.to_string(),
+            ))
+        })
+        .collect()
 }
 
 /// Replace the draft, keeping the one it replaces as a revision (the newest
@@ -325,6 +360,7 @@ pub async fn update_draft(
     id: &str,
     draft_spec: &str,
     actor_id: &str,
+    change: DraftChange<'_>,
 ) -> Result<Option<DraftSaved>, DbError> {
     let mut tx = WriteTx::begin(pool).await?;
     let before: Option<String> =
@@ -340,11 +376,12 @@ pub async fn update_draft(
         None
     } else {
         let revision: i64 = sqlx::query_scalar(
-            "INSERT INTO agent_draft_revisions (principal_id, spec, saved_by, saved_at)
-             VALUES (?, ?, ?, ?) RETURNING id",
+            "INSERT INTO agent_draft_revisions (principal_id, spec, granted, saved_by, saved_at)
+             VALUES (?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(id)
         .bind(&before)
+        .bind(grants_json(change.granted).to_string())
         .bind(actor_id)
         .bind(&now)
         .fetch_one(&mut *tx)
@@ -372,7 +409,13 @@ pub async fn update_draft(
         agent_audit::NewEvent::new(
             AuditKind::AgentDraftUpdated,
             id,
-            json!({ "bytes": draft_spec.len(), "revision": revision }),
+            json!({
+                "bytes": draft_spec.len(),
+                "revision": revision,
+                "granted": grants_json(change.granted),
+                "restored": change.restored,
+                "revoking": grants_json(change.revoking),
+            }),
         )
         .by(Some(actor_id)),
     )
@@ -388,7 +431,7 @@ pub async fn draft_revision(
     revision: i64,
 ) -> Result<Option<RevisionRow>, DbError> {
     let row = sqlx::query(
-        "SELECT id, spec, saved_by, saved_at FROM agent_draft_revisions
+        "SELECT id, spec, granted, saved_by, saved_at FROM agent_draft_revisions
           WHERE principal_id = ? AND id = ?",
     )
     .bind(id)
@@ -399,6 +442,7 @@ pub async fn draft_revision(
         Ok(RevisionRow {
             id: r.try_get("id")?,
             spec: r.try_get("spec")?,
+            granted: parse_grants(&r.try_get::<String, _>("granted")?),
             saved_by: r.try_get("saved_by")?,
             saved_at: r.try_get("saved_at")?,
         })
@@ -825,7 +869,7 @@ mod tests {
             Some(1)
         );
         assert!(
-            update_draft(&pool, id, "{\"v\":2}", "alice")
+            update_draft(&pool, id, "{\"v\":2}", "alice", DraftChange::default())
                 .await
                 .unwrap()
                 .is_some()
@@ -1071,7 +1115,7 @@ mod tests {
         let a = agent(&pool, "undo", "alice").await;
         let id = &a.principal.id;
 
-        let first = update_draft(&pool, id, r#"{"v":1}"#, "alice")
+        let first = update_draft(&pool, id, r#"{"v":1}"#, "alice", DraftChange::default())
             .await
             .unwrap()
             .unwrap();
@@ -1081,8 +1125,32 @@ mod tests {
             .unwrap();
         assert_eq!(kept.spec, r#"{"main":{}}"#);
         assert_eq!(kept.saved_by, "alice");
+        assert!(kept.granted.is_empty());
 
-        let same = update_draft(&pool, id, r#"{"v":1}"#, "alice")
+        let granted = [(GrantKind::Tool, "fetch_url".to_string())];
+        let tooled = update_draft(
+            &pool,
+            id,
+            r#"{"v":"tooled"}"#,
+            "alice",
+            DraftChange {
+                granted: &granted,
+                ..DraftChange::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let kept = draft_revision(&pool, id, tooled.revision.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            kept.granted, granted,
+            "the change's grants ride with its revision"
+        );
+
+        let same = update_draft(&pool, id, r#"{"v":1}"#, "alice", DraftChange::default())
             .await
             .unwrap()
             .unwrap();
@@ -1090,11 +1158,17 @@ mod tests {
 
         let mut last = None;
         for n in 2..(MAX_DRAFT_REVISIONS + 5) {
-            last = update_draft(&pool, id, &format!(r#"{{"v":{n}}}"#), "bob")
-                .await
-                .unwrap()
-                .unwrap()
-                .revision;
+            last = update_draft(
+                &pool,
+                id,
+                &format!(r#"{{"v":{n}}}"#),
+                "bob",
+                DraftChange::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .revision;
         }
         let kept: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM agent_draft_revisions WHERE principal_id = ?")
@@ -1123,7 +1197,9 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            update_draft(&pool, "missing", "{}", "alice").await.unwrap(),
+            update_draft(&pool, "missing", "{}", "alice", DraftChange::default())
+                .await
+                .unwrap(),
             None
         );
     }
