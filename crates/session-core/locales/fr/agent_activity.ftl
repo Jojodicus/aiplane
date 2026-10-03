@@ -1,0 +1,41 @@
+# STATUS: llm-generated, unreviewed — pending native-speaker QA
+# Strings owned by the Activity tab of the agent builder (#111).
+
+agents-tab-activity = Activité
+agents-act-intro = Tout ce que cet agent a fait, enregistré sans lacune : chaque échange avec le modèle avec le prompt et la réponse complets, chaque appel d’outil avec ses arguments et son résultat complets, les écritures d’état, le routage, les pauses et chaque modification de l’agent. Chaque conversation forme une chaîne de hachage : une modification du journal apparaît à la vérification. Le journal contient des conversations entières ; seules les personnes ayant un partage sur l’agent peuvent le lire, et les secrets comme les codes à usage unique n’y entrent jamais.
+agents-act-conversation = Conversation
+agents-act-conversation-all = Toutes les conversations, les plus récentes d’abord
+agents-act-kind = Afficher
+agents-act-group-all = Tout
+agents-act-group-turns = Tours et réponses
+agents-act-group-exchanges = Échanges avec le modèle
+agents-act-group-tools = Appels d’outils
+agents-act-group-state = État et vérificateurs
+agents-act-group-routing = Routage et sous-agents
+agents-act-group-people = Pauses, personnes et refus
+agents-act-group-management = Modifications de l’agent
+agents-act-from = Du
+agents-act-to = Au
+agents-act-export = Exporter en JSONL
+agents-act-verify = Vérifier la chaîne
+agents-act-verified = { $events } événements dans { $chains } chaînes sont intacts.
+agents-act-unchained = { $count } événements plus anciens ont été enregistrés avant le chaînage du journal.
+agents-act-unanchored = { $count } événements plus récents ne sont pas encore ancrés : ils ont été écrits après la fin du dernier tour.
+agents-act-head = Conservez cette tête de la chaîne propre de l’agent en dehors de la passerelle : elle ancre chaque conversation, donc un journal ramené à une tête antérieure se voit à la comparaison.
+agents-act-broken = La chaîne { $chain } est rompue à l’événement { $seq } : { $reason }
+agents-act-none = Aucune activité ne correspond à ces filtres.
+agents-act-more = Charger plus
+agents-act-turn = Tour { $turn }
+agents-act-agent-chain = Hors d’un tour
+agents-act-open-conversation = Afficher cette conversation
+agents-act-round = passage { $round }
+agents-act-took = { $ms } ms
+agents-act-sub-agent = sous-agent
+agents-act-sum-llm = { $model } : { $tokens } jetons, { $finish }
+agents-act-sum-llm-error = { $model } a échoué : { $error }
+agents-act-sum-tool = { $tool } : { $status }
+agents-act-sum-state = { $slot } écrit par { $provenance }
+agents-act-sum-message = « { $text } »
+agents-act-sum-resumed = Repris après une décision
+agents-act-sum-finished = { $status } : { $text }
+agents-act-sum-route = { $route }

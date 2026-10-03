@@ -19,8 +19,8 @@ use super::*;
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use crate::agents::verifier::host_jwt::{self, IdentityError, Refusal};
 
-const CODE: &str = "481516";
-const ALICE: &str = "alice@example.com";
+pub(super) const CODE: &str = "481516";
+pub(super) const ALICE: &str = "alice@example.com";
 const STRANGER: &str = "nobody@example.com";
 const REQUEST: &str = "verify_otp_request_code";
 const SUBMIT: &str = "verify_otp_submit_code";
@@ -28,7 +28,7 @@ const SUBMIT: &str = "verify_otp_submit_code";
 /// The customer's ERP over MCP: `send_code` knows only [`ALICE`],
 /// `check_code` accepts [`CODE`] for her, `find_customer` knows Alice
 /// Smith, K-1. Every call is recorded as `(tool, arguments)`.
-async fn erp() -> (MockServer, Arc<Mutex<Vec<(String, Value)>>>) {
+pub(super) async fn erp() -> (MockServer, Arc<Mutex<Vec<(String, Value)>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     let server = MockServer::start().await;
@@ -96,7 +96,7 @@ async fn erp() -> (MockServer, Arc<Mutex<Vec<(String, Value)>>>) {
 
 impl World {
     /// The ERP as an enabled, audited `agent` connector `erp`.
-    async fn connect_erp(&self, erp: &MockServer) {
+    pub(super) async fn connect_erp(&self, erp: &MockServer) {
         mcp_catalog::create(
             self.db(),
             mcp_catalog::ConnectorInput {

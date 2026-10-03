@@ -219,15 +219,29 @@ pub(super) async fn resume_into(
         arguments_raw: suspension.tool_call.arguments.clone(),
     };
 
+    let call_ctx = ToolContext {
+        call_id: Some(call.id.clone()),
+        ..tool_ctx.clone()
+    };
     let content = match (&resume.child_result, &resume.decision) {
         (None, Decision::Deny { reason }) => {
             let refusal = denial(*reason, &call.name);
             settle_call(d, ctx, &call.id, &refusal, ToolCallStatus::Errored).await?;
+            settled_without_running(&call_ctx, &call, "denied", json!({ "error": refusal })).await;
             Value::String(refusal)
         }
         (child_result, decided) => {
             let (body, status) = match child_result {
-                Some(body) => (body.clone(), ToolCallStatus::Completed),
+                Some(body) => {
+                    settled_without_running(
+                        &call_ctx,
+                        &call,
+                        "answered_by_sub_agent",
+                        body.clone(),
+                    )
+                    .await;
+                    (body.clone(), ToolCallStatus::Completed)
+                }
                 None => {
                     let tool_ctx = ToolContext {
                         suspend: Suspend::Decided(decided.clone()),
@@ -292,6 +306,32 @@ pub(super) async fn resume_into(
     Ok(Resumed::Continue {
         start_round: suspension.budget_used.rounds,
     })
+}
+
+/// The `tool_result` event of a waiting call a resume settles without
+/// running its tool: a denial, or the resumed sub-agent's result.
+async fn settled_without_running(
+    ctx: &ToolContext,
+    call: &ToolCallRef,
+    status: &str,
+    result: Value,
+) {
+    if !ctx.agent_active() {
+        return;
+    }
+    ctx.audit_event(
+        AuditKind::ToolResult,
+        None,
+        json!({
+            "tool": call.name,
+            "arguments": serde_json::from_str::<Value>(&call.arguments_raw)
+                .unwrap_or_else(|_| Value::String(call.arguments_raw.clone())),
+            "status": status,
+            "result": result,
+            "resumed": true,
+        }),
+    )
+    .await;
 }
 
 /// Every tool-call id the replayed `messages` already used, so a resumed

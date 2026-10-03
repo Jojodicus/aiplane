@@ -1,0 +1,41 @@
+# STATUS: llm-generated, unreviewed — pending native-speaker QA
+# Strings owned by the Activity tab of the agent builder (#111).
+
+agents-tab-activity = 活动
+agents-act-intro = 此智能体所做的一切都被完整记录：每次模型交互及完整的提示和回答、每次工具调用及完整的参数和结果、状态写入、路由、暂停以及对智能体的每次更改。每个对话是一条哈希链，因此对日志的修改在校验时会被发现。日志包含完整对话；只有拥有该智能体共享权限的人才能读取，一次性验证码等机密信息绝不会写入其中。
+agents-act-conversation = 对话
+agents-act-conversation-all = 所有对话，最新的在前
+agents-act-kind = 显示
+agents-act-group-all = 全部
+agents-act-group-turns = 轮次与回答
+agents-act-group-exchanges = 模型交互
+agents-act-group-tools = 工具调用
+agents-act-group-state = 状态与验证器
+agents-act-group-routing = 路由与子智能体
+agents-act-group-people = 暂停、人工与拒绝
+agents-act-group-management = 智能体变更
+agents-act-from = 从
+agents-act-to = 到
+agents-act-export = 导出 JSONL
+agents-act-verify = 校验链
+agents-act-verified = { $chains } 条链中的 { $events } 个事件完好无损。
+agents-act-unchained = 有 { $count } 个较早的事件记录于日志成链之前。
+agents-act-unanchored = 有 { $count } 个较新的事件尚未锚定：它们写于上一轮结束之后。
+agents-act-head = 请将智能体自身链的这一链头保存在网关之外：它锚定了每个对话，因此日志若被截回到更早的链头，比较时即可发现。
+agents-act-broken = 链 { $chain } 在第 { $seq } 个事件处断开：{ $reason }
+agents-act-none = 没有符合这些筛选条件的活动。
+agents-act-more = 加载更多
+agents-act-turn = 轮次 { $turn }
+agents-act-agent-chain = 不属于任何轮次
+agents-act-open-conversation = 显示此对话
+agents-act-round = 第 { $round } 轮
+agents-act-took = { $ms } 毫秒
+agents-act-sub-agent = 子智能体
+agents-act-sum-llm = { $model }：{ $tokens } 个令牌，{ $finish }
+agents-act-sum-llm-error = { $model } 失败：{ $error }
+agents-act-sum-tool = { $tool }：{ $status }
+agents-act-sum-state = { $slot } 由 { $provenance } 写入
+agents-act-sum-message = “{ $text }”
+agents-act-sum-resumed = 在决定后继续
+agents-act-sum-finished = { $status }：{ $text }
+agents-act-sum-route = { $route }

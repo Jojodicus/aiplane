@@ -217,6 +217,19 @@ pub async fn drive_opened_from(
     resume: Option<ResumeFrom>,
 ) -> Result<AgentReply, AgentRunError> {
     let chain = root_chain(profile, turn);
+    let reply = drive_and_read(state, profile, turn, resume, &chain).await;
+    super::audit::anchor(&state.db, &profile.principal.id, &turn.session_id).await;
+    reply
+}
+
+/// [`drive_opened_from`] without the anchor every way out of it ends with.
+async fn drive_and_read(
+    state: &Arc<RamaState>,
+    profile: &RunProfile,
+    turn: &OpenedTurn,
+    resume: Option<ResumeFrom>,
+    chain: &Arc<RunChain>,
+) -> Result<AgentReply, AgentRunError> {
     let params = profile.drive_params(&turn.session_id, &turn.turn_id, chain.clone())?;
     match resume {
         Some(resume) => drive_resumed(state, params, resume).await,
@@ -258,7 +271,7 @@ pub async fn drive_opened_from(
             principal_id: &profile.principal.id,
             session_id: &turn.session_id,
             turn_id: &turn.turn_id,
-            chain: &chain,
+            chain,
             lang: conversation_lang(&state.db, &profile.principal.id, &turn.session_id).await,
         };
         answer = Some(guard_answer(state, filter, &profile.surface, at, text).await);

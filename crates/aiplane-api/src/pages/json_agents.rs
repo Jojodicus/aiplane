@@ -464,7 +464,11 @@ const MAX_ANALYTICS_DAYS: i64 = 366;
 /// An analytics bound: an RFC 3339 instant, or a `YYYY-MM-DD` day in UTC. A
 /// day as `to` means the end of that day, so `from=2026-10-01&to=2026-10-07`
 /// covers seven whole days.
-fn analytics_bound(name: &str, value: &str, end_of_day: bool) -> Result<jiff::Timestamp, Response> {
+pub(super) fn analytics_bound(
+    name: &str,
+    value: &str,
+    end_of_day: bool,
+) -> Result<jiff::Timestamp, Response> {
     use jiff::ToSpan;
     if let Ok(at) = value.parse::<jiff::Timestamp>() {
         return Ok(at);

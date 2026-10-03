@@ -19,13 +19,13 @@ use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
 use session_core::i18n::Lang;
 
-const TOKEN: &str = "partner-bearer-token-0123456789";
+pub(super) const TOKEN: &str = "partner-bearer-token-0123456789";
 const VISITOR: &str = "Is order 42 still covered? My private note: blue-heron-7.";
 
 /// The remote agent: its card at `/.well-known/agent-card.json`, a JSON-RPC
 /// endpoint at `/a2a` that answers each call with the next scripted
 /// `result`, and a client-credentials token endpoint at `/token`.
-struct Peer {
+pub(super) struct Peer {
     server: MockServer,
 }
 
@@ -86,7 +86,7 @@ impl Peer {
         Self::start(json!({}), results, Duration::ZERO).await
     }
 
-    async fn bearer(results: Vec<Value>) -> Self {
+    pub(super) async fn bearer(results: Vec<Value>) -> Self {
         Self::start(
             json!({
                 "securitySchemes": { "partner": { "httpAuthSecurityScheme": { "scheme": "Bearer" } } },
@@ -98,7 +98,7 @@ impl Peer {
         .await
     }
 
-    fn card_url(&self) -> String {
+    pub(super) fn card_url(&self) -> String {
         format!("{}/.well-known/agent-card.json", self.server.uri())
     }
 
@@ -121,7 +121,7 @@ impl Peer {
     }
 }
 
-fn completed(result: Value) -> Value {
+pub(super) fn completed(result: Value) -> Value {
     json!({ "task": {
         "id": "task-1", "contextId": "ctx-1",
         "status": { "state": "TASK_STATE_COMPLETED" },
@@ -137,7 +137,7 @@ fn task_in(state: &str, parts: Value) -> Value {
     } })
 }
 
-fn finish_schema() -> Value {
+pub(super) fn finish_schema() -> Value {
     json!({ "type": "object", "required": ["answer"],
             "properties": { "answer": { "type": "string" } } })
 }

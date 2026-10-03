@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use session_core::SessionWorkers;
 use session_core::workers::{ActiveWorker, RegisterOutcome, TurnUpdate};
 
-use aiplane_agents::db::agent_audit::{self, AuditKind};
+use aiplane_agents::db::agent_audit::AuditKind;
 use aiplane_agents::db::inbound::Inbound;
 use aiplane_agents::rates::{self, Rate, RateExceeded, VisitorKey};
 use aiplane_core::server::db::limits::{Dimension, EffectiveLimit, SubjectType, Window};
@@ -201,9 +201,11 @@ const REFUSAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 const MAX_OPEN_REFUSALS: usize = 10_000;
 
 /// Keeps a flood of refused requests from becoming a flood of database
-/// work: one `limit_refused` audit row per (agent, subject, limit) per
-/// window, whose `count` is set to the refusals it stands for when the
-/// window closes. One sweeper task, started with the first refusal, closes
+/// work: one `limit_refused` event per (agent, subject, limit) when a window
+/// opens, with `count: 1`, and — when more were refused in it — one more as
+/// the window closes, whose `count` is the rest and whose `folds` names the
+/// first. The log is append-only, so the count is never written back into
+/// the first event. One sweeper task, started with the first refusal, closes
 /// the windows that have run their course.
 #[derive(Clone)]
 pub struct RefusalAudit {
@@ -218,7 +220,9 @@ pub struct RefusalAudit {
 type RefusalKey = (String, String, String);
 
 struct OpenRefusal {
-    audit_id: String,
+    /// The first refusal's detail; its `window_id` is what the closing
+    /// event's `folds` names.
+    detail: Value,
     count: u64,
     opened: std::time::Instant,
 }
@@ -248,7 +252,7 @@ impl RefusalAudit {
     ) {
         let kind = detail["limit"].as_str().unwrap_or("unknown").to_string();
         let mut key = (agent_id.to_string(), subject.to_string(), kind);
-        let audit_id = {
+        {
             let mut open = self.open.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(entry) = open.get_mut(&key) {
                 entry.count += 1;
@@ -262,29 +266,19 @@ impl RefusalAudit {
                     return;
                 }
             }
-            let audit_id = uuid::Uuid::new_v4().to_string();
+            let window_id = uuid::Uuid::new_v4().to_string();
+            detail["count"] = json!(1);
+            detail["window_id"] = json!(window_id);
             open.insert(
                 key,
                 OpenRefusal {
-                    audit_id: audit_id.clone(),
+                    detail: detail.clone(),
                     count: 1,
                     opened: std::time::Instant::now(),
                 },
             );
-            audit_id
-        };
-        detail["count"] = json!(1);
-        if let Err(err) = agent_audit::record_run_event_with_id(
-            db,
-            &audit_id,
-            AuditKind::LimitRefused,
-            agent_id,
-            detail,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, agent = agent_id, "recording a refused visitor request");
         }
+        refusal_event(db, agent_id, detail).await;
         self.start_sweeper(db);
     }
 
@@ -309,17 +303,18 @@ impl RefusalAudit {
                     .collect();
                 drop(open);
                 for (key, entry) in closed.into_iter().filter(|(_, e)| e.count > 1) {
-                    if let Err(err) =
-                        agent_audit::set_detail_count(&db, &entry.audit_id, entry.count).await
-                    {
-                        tracing::warn!(
-                            error = %err, agent = %key.0, "counting refused visitor requests"
-                        );
-                    }
+                    let mut detail = entry.detail;
+                    detail["folds"] = detail["window_id"].take();
+                    detail["count"] = json!(entry.count - 1);
+                    refusal_event(&db, &key.0, detail).await;
                 }
             }
         });
     }
+}
+
+async fn refusal_event(db: &aiplane_core::server::db::Pool, agent_id: &str, detail: Value) {
+    super::audit::record(db, AuditKind::LimitRefused, agent_id, None, None, detail).await;
 }
 
 /// What an agent's managers see of its limits under the live spec `live`
@@ -361,6 +356,7 @@ pub async fn limits_view(
     json!({
         "rate_limits": { "visitor": rate(rates.visitor), "ip": rate(rates.ip) },
         "retention_days": spec.publish.retention_days(),
+        "audit_retention_days": spec.publish.audit_retention_days(),
         "budget": budget,
         "available": exhausted.is_none(),
         "unavailable_reason": exhausted.as_ref().map(budget_detail),
@@ -765,7 +761,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_flood_of_refusals_writes_one_row_per_window_carrying_the_count() {
+    async fn a_flood_of_refusals_writes_one_event_per_window_and_one_with_the_count() {
         let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
@@ -784,10 +780,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         let mut counts: Vec<i64> = rows(&db).await;
         counts.sort();
-        assert_eq!(counts, [1, 1000]);
+        assert_eq!(
+            counts,
+            [1, 1, 999],
+            "the window's first event, and its closing event with the rest"
+        );
 
         audit.record(&db, "agent", "visitor-1", detail).await;
-        assert_eq!(rows(&db).await.len(), 3, "the next window audits again");
+        assert_eq!(rows(&db).await.len(), 4, "the next window audits again");
     }
 
     #[tokio::test]
@@ -816,21 +816,35 @@ mod tests {
         );
         let mut counts = rows(&db).await;
         counts.sort();
-        assert_eq!(counts, [1, 1, 48], "every refusal is still counted");
-        let overflow = agent_audit::for_principal(&db, "agent")
+        assert_eq!(
+            counts,
+            [1, 1, 1, 47],
+            "every refusal is still counted, the overflow window's rest in a closing event"
+        );
+        let events = aiplane_agents::db::agent_audit::for_principal(&db, "agent")
             .await
-            .unwrap()
-            .into_iter()
-            .find(|e| e.detail["count"] == 48)
             .unwrap();
+        let closing = events.iter().find(|e| e.detail["count"] == 47).unwrap();
         assert!(
-            overflow.detail["visitor_id"].is_null(),
+            closing.detail["visitor_id"].is_null(),
             "the overflow window names no one visitor"
+        );
+        let opened = events
+            .iter()
+            .find(|e| e.detail["window_id"] == closing.detail["folds"])
+            .expect("the closing event names the window's first");
+        assert_eq!(opened.detail["count"], 1);
+        assert!(
+            aiplane_agents::db::agent_audit::verify(&db, "agent")
+                .await
+                .unwrap()
+                .ok(),
+            "nothing was written back into an event"
         );
     }
 
     async fn rows(db: &aiplane_core::server::db::Pool) -> Vec<i64> {
-        agent_audit::for_principal(db, "agent")
+        aiplane_agents::db::agent_audit::for_principal(db, "agent")
             .await
             .unwrap()
             .into_iter()

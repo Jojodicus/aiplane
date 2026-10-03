@@ -853,6 +853,70 @@ fn model_tool_calls_dispatch_only_through_the_grant() {
 // ---------------------------------------------------------------------------
 // The scanner itself.
 
+// ---------------------------------------------------------------------------
+// The agent activity log.
+
+/// Where SQL may change `agent_audit`: the log's own module, the only
+/// writer of its hash chains.
+const ACTIVITY_LOG_SQL: &[Allowed] = &[Allowed {
+    path: "aiplane-agents/src/db/agent_audit.rs",
+    why: "the activity log itself: `append` is the one INSERT, and the retention sweep deletes \
+          whole chains",
+}];
+
+/// Who may call the log's writers.
+const ACTIVITY_LOG_WRITERS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-agents/src/db/",
+        why: "management changes and state writes record their event on the change's own \
+              transaction (`agent_audit::record`, `agent_audit::append`)",
+    },
+    Allowed {
+        path: "aiplane-runtime/src/agents/audit.rs",
+        why: "the runtime's one door for run events: bounded, and it stops a run whose event \
+              cannot be written",
+    },
+];
+
+#[test]
+fn activity_events_are_written_only_through_the_activity_log() {
+    let sql = scan(
+        &[
+            "INSERT INTO agent_audit",
+            "INSERT OR REPLACE INTO agent_audit",
+            "REPLACE INTO agent_audit",
+            "UPDATE agent_audit",
+            "DELETE FROM agent_audit",
+        ],
+        |s| s.text.as_str(),
+    );
+    assert_within(
+        "SQL changes agent_audit outside the activity log. Every event is appended by \
+         agent_audit::append so it takes its place in a hash chain, and the log is never edited \
+         in place; record an event through aiplane_runtime::agents::audit (or \
+         agent_audit::record on a management change's transaction) instead.",
+        ACTIVITY_LOG_SQL,
+        &sql,
+    );
+    let writers = scan(
+        &[
+            "agent_audit::append",
+            "append_now",
+            "agent_audit::record(",
+            "agent_audit::anchor",
+        ],
+        |s| s.code.as_str(),
+    );
+    assert_within(
+        "An activity event is written around the runtime's door. A run event goes through \
+         aiplane_runtime::agents::audit (record_event, record, ToolContext::audit), which bounds \
+         the write and stops a run whose event is lost; only the agent DB modules write on a \
+         change's own transaction.",
+        ACTIVITY_LOG_WRITERS,
+        &writers,
+    );
+}
+
 #[test]
 fn the_mask_blanks_comments_strings_and_test_items_but_keeps_lines() {
     let src = "let a = \"Client::new()\"; // Client::new()\n\

@@ -45,7 +45,8 @@ const UNDOCUMENTED: &[&str] = &[];
 /// `big_result` is one inside the tool runner's result-stubbing tests;
 /// `bound_fixture` one inside the bound-argument tests; `check_code` the
 /// secure-input fixture of the suspend tests, which `main` never registers;
-/// `lookup_invoice` the invoice lookup of the output-filter tests.
+/// `lookup_invoice` the invoice lookup of the output-filter tests;
+/// `snapshot` the image-returning tool of the activity-log tests.
 const NOT_REAL_TOOLS: &[&str] = &[
     "mcp__demo__echo",
     "big_result",
@@ -53,6 +54,7 @@ const NOT_REAL_TOOLS: &[&str] = &[
     "check_code",
     "lookup_invoice",
     "phase_step",
+    "snapshot",
 ];
 
 /// Tools whose `category_for` is legitimately `Utility` — the catch-all is a

@@ -120,6 +120,15 @@ impl ForwardRequest {
 
     /// The route to dispatch among `open` (name order, never empty), or why
     /// none was chosen.
+    /// How [`Self::choose`] decides among `open`, as the decision records it.
+    fn method(&self, open: &[String]) -> &'static str {
+        match self.router() {
+            Some(r) if r.kind == RouterKind::Rules => "rules",
+            _ if open.len() == 1 => "only_open",
+            _ => "classifier",
+        }
+    }
+
     async fn choose(
         &self,
         ctx: &ToolContext,
@@ -183,6 +192,7 @@ impl ForwardRequest {
             pool,
             principal: self.spec.principal.clone(),
             run: ctx.agent.as_ref().map(|a| a.chain().clone()),
+            log: ctx.clone(),
         }
     }
 
@@ -237,7 +247,12 @@ impl ForwardRequest {
             Err(message) => {
                 ctx.audit(
                     AuditKind::RouteDecision,
-                    json!({ "routes": gate_json, "picked": null, "reason": message }),
+                    json!({
+                        "routes": gate_json,
+                        "picked": null,
+                        "reason": message,
+                        "method": self.method(&open),
+                    }),
                 )
                 .await;
                 return Ok(json!({
@@ -254,7 +269,7 @@ impl ForwardRequest {
         })?;
         ctx.audit(
             AuditKind::RouteDecision,
-            json!({ "routes": gate_json, "picked": picked }),
+            json!({ "routes": gate_json, "picked": picked, "method": self.method(&open) }),
         )
         .await;
         self.dispatch(ctx, route, &state).await
@@ -629,9 +644,49 @@ pub struct PoolClassifier {
     access: PoolAccess,
     principal: SystemPrincipal,
     run: Option<Arc<RunChain>>,
+    /// The `forward_request` call it decides for: its exchange is recorded
+    /// there.
+    log: ToolContext,
+}
+
+/// The classifier's exchange as the activity log records it.
+#[derive(Default)]
+struct ClassifierExchange {
+    model: Option<String>,
+    backend: Option<String>,
+    request: Value,
+    status: Option<u16>,
+    response: Value,
 }
 
 impl PoolClassifier {
+    /// The `llm_exchange` of a classifier call: what it asked, what came
+    /// back or why nothing did.
+    async fn log_exchange(
+        &self,
+        exchange: ClassifierExchange,
+        result: &Result<String, String>,
+        started: Instant,
+    ) {
+        let latency = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut detail = json!({
+            "purpose": "route_classifier",
+            "pool": self.pool,
+            "model": exchange.model,
+            "backend": exchange.backend,
+            "request": exchange.request,
+            "response": { "status": exchange.status, "body": exchange.response },
+            "picked": result.as_ref().ok(),
+            "latency_ms": latency,
+        });
+        if let Err(error) = result {
+            detail["error"] = json!(error);
+        }
+        self.log
+            .audit_event(AuditKind::LlmExchange, Some(latency), detail)
+            .await;
+    }
+
     fn record(&self, backend: &str, model: &str, status: u16, started: Instant, body: &Value) {
         if !self.state.usage.is_enabled() {
             return;
@@ -666,11 +721,13 @@ impl PoolClassifier {
             .in_run(self.run.as_deref()),
         );
     }
-}
 
-#[async_trait]
-impl RouteClassifier for PoolClassifier {
-    async fn pick(&self, choices: &[RouteChoice], view: &[SlotView]) -> Result<String, String> {
+    async fn ask(
+        &self,
+        choices: &[RouteChoice],
+        view: &[SlotView],
+        exchange: &mut ClassifierExchange,
+    ) -> Result<String, String> {
         let model = pool_model(&self.state, &self.pool, &self.access)
             .ok_or_else(|| format!("pool `{}` serves no model it may use", self.pool))?;
         let names: Vec<&str> = choices.iter().map(|c| c.name.as_str()).collect();
@@ -705,6 +762,9 @@ impl RouteClassifier for PoolClassifier {
                 },
             },
         });
+        exchange.model = Some(model.clone());
+        exchange.backend = Some(backend.name.clone());
+        exchange.request = body.clone();
         let mut req = self
             .state
             .http
@@ -718,6 +778,7 @@ impl RouteClassifier for PoolClassifier {
         let backend_name = backend.name.clone();
         let resp = req.send().await.map_err(|e| e.to_string())?;
         let status = resp.status();
+        exchange.status = Some(status.as_u16());
         if !status.is_success() {
             self.record(
                 &backend_name,
@@ -733,6 +794,7 @@ impl RouteClassifier for PoolClassifier {
             .map_err(|e| e.to_string())?;
         drop(acquired);
         self.record(&backend_name, &model, status.as_u16(), started, &parsed);
+        exchange.response = parsed.clone();
         let content = parsed
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
@@ -750,5 +812,16 @@ impl RouteClassifier for PoolClassifier {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| "the answer names no `route`".into())
+    }
+}
+
+#[async_trait]
+impl RouteClassifier for PoolClassifier {
+    async fn pick(&self, choices: &[RouteChoice], view: &[SlotView]) -> Result<String, String> {
+        let started = Instant::now();
+        let mut exchange = ClassifierExchange::default();
+        let result = self.ask(choices, view, &mut exchange).await;
+        self.log_exchange(exchange, &result, started).await;
+        result
     }
 }

@@ -621,7 +621,14 @@ pub struct Exchange {
 
 #[async_trait]
 pub trait RubricJudge: Send + Sync {
-    async fn judge(&self, rubric: &str, exchanges: &[Exchange]) -> Result<RubricVerdict, String>;
+    /// Grade `exchanges` of the case's test conversation `conversation`
+    /// against `rubric`.
+    async fn judge(
+        &self,
+        rubric: &str,
+        exchanges: &[Exchange],
+        conversation: &str,
+    ) -> Result<RubricVerdict, String>;
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -822,7 +829,7 @@ pub async fn run_case(
                     agent: t.answer.clone(),
                 })
                 .collect();
-            Some(match judge.judge(text, &exchanges).await {
+            Some(match judge.judge(text, &exchanges, &session_id).await {
                 Ok(v) => RubricReport {
                     verdict: if v.passed { "passed" } else { "failed" },
                     reason: v.reason,

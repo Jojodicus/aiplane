@@ -409,6 +409,7 @@ pub mod a2a;
 mod agent_errors;
 pub mod embed;
 pub mod json_admin;
+pub mod json_agent_activity;
 pub mod json_agent_resources;
 pub mod json_agent_test;
 pub mod json_agent_tests;

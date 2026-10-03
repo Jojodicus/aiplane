@@ -20,6 +20,7 @@
 	import { t } from '$lib/i18n.svelte';
 	import AgentEditor from './AgentEditor.svelte';
 	import AgentCanvas from './AgentCanvas.svelte';
+	import ActivityPanel from './ActivityPanel.svelte';
 	import AnalyticsPanel from './AnalyticsPanel.svelte';
 	import TestsPanel from './TestsPanel.svelte';
 	import GrantsPanel from './GrantsPanel.svelte';
@@ -39,7 +40,7 @@
 	 */
 	let { id }: { id: string } = $props();
 
-	const TABS = ['edit', 'canvas', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'sharing'] as const;
+	const TABS = ['edit', 'canvas', 'json', 'grants', 'test', 'tests', 'versions', 'analytics', 'activity', 'sharing'] as const;
 	type Tab = (typeof TABS)[number];
 	const asTab = (v: string | null): Tab => (TABS.find((x) => x === v) ?? 'edit');
 
@@ -257,6 +258,8 @@
 				/>
 			{:else if tab === 'analytics'}
 				<AnalyticsPanel agentId={id} {versions} />
+			{:else if tab === 'activity'}
+				<ActivityPanel agentId={id} />
 			{:else}
 				<div class="space-y-6">
 					<SharingPanel agentId={id} shares={detail.shares} {writable} onchanged={() => refresh(true)} />

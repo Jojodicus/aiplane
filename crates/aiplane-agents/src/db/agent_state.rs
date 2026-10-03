@@ -10,9 +10,10 @@
 //! nothing else may.
 
 use jiff::Timestamp;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::Row;
 
+use super::agent_audit::{self, AuditKind, Correlation, NewEvent};
 use super::{DbError, Pool};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,16 +25,34 @@ pub struct StoredSlot {
     pub set_at: Timestamp,
 }
 
-/// Insert or replace one slot of `session_id`, on the pool or inside a
-/// caller's transaction.
-pub async fn put<'e>(
-    db: impl sqlx::SqliteExecutor<'e>,
+/// Insert or replace one slot of `session_id` on `conn` — inside a
+/// transaction, which this takes the write lock of — and record the write
+/// in the activity log on the same transaction: the slot, its old and new
+/// value, the provenance, and when. The write and its event commit together
+/// or not at all. A slot of a person's conversation is written without an
+/// event; only an agent's conversation has a log.
+pub async fn put(
+    conn: &mut sqlx::SqliteConnection,
     session_id: &str,
     slot: &str,
     value: &Value,
     provenance: &str,
     set_at: Timestamp,
 ) -> Result<(), DbError> {
+    // A write first, so the old value is read under the lock it is replaced
+    // under.
+    sqlx::query("UPDATE agent_state SET value = value WHERE session_id = ? AND slot = ?")
+        .bind(session_id)
+        .bind(slot)
+        .execute(&mut *conn)
+        .await?;
+    let old: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT value, provenance, set_at FROM agent_state WHERE session_id = ? AND slot = ?",
+    )
+    .bind(session_id)
+    .bind(slot)
+    .fetch_optional(&mut *conn)
+    .await?;
     sqlx::query(
         "INSERT INTO agent_state (session_id, slot, value, provenance, set_at)
          VALUES (?, ?, ?, ?, ?)
@@ -47,7 +66,44 @@ pub async fn put<'e>(
     .bind(value.to_string())
     .bind(provenance)
     .bind(set_at.to_string())
-    .execute(db)
+    .execute(&mut *conn)
+    .await?;
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT principal_id FROM chat_sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    let old = old.map(|(value, provenance, set_at)| {
+        json!({
+            "value": serde_json::from_str::<Value>(&value).unwrap_or(Value::String(value)),
+            "provenance": provenance,
+            "set_at": set_at,
+        })
+    });
+    agent_audit::append(
+        conn,
+        NewEvent::new(
+            AuditKind::StateWritten,
+            &owner,
+            json!({
+                "slot": slot,
+                "old": old,
+                "new": value,
+                "provenance": provenance,
+                "writer": provenance,
+                "set_at": set_at,
+            }),
+        )
+        .at(Correlation {
+            session_id: Some(session_id.to_string()),
+            conversation_id: Some(session_id.to_string()),
+            ..Correlation::default()
+        }),
+    )
     .await?;
     Ok(())
 }
@@ -117,7 +173,7 @@ mod tests {
         let pool = fresh().await;
         seed_session(&pool, "s1").await;
         put(
-            &pool,
+            &mut pool.acquire().await.unwrap(),
             "s1",
             "verified",
             &json!({"customer_id": "K-12345"}),
@@ -127,7 +183,7 @@ mod tests {
         .await
         .unwrap();
         put(
-            &pool,
+            &mut pool.acquire().await.unwrap(),
             "s1",
             "email",
             &json!("a@b.example"),
@@ -161,7 +217,7 @@ mod tests {
         let pool = fresh().await;
         seed_session(&pool, "s1").await;
         put(
-            &pool,
+            &mut pool.acquire().await.unwrap(),
             "s1",
             "issue",
             &json!("sales"),
@@ -171,7 +227,7 @@ mod tests {
         .await
         .unwrap();
         put(
-            &pool,
+            &mut pool.acquire().await.unwrap(),
             "s1",
             "issue",
             &json!("billing"),
@@ -192,9 +248,16 @@ mod tests {
         let pool = fresh().await;
         seed_session(&pool, "s1").await;
         seed_session(&pool, "s2").await;
-        put(&pool, "s1", "name", &json!("Ada"), "llm", Timestamp::now())
-            .await
-            .unwrap();
+        put(
+            &mut pool.acquire().await.unwrap(),
+            "s1",
+            "name",
+            &json!("Ada"),
+            "llm",
+            Timestamp::now(),
+        )
+        .await
+        .unwrap();
         assert!(for_session(&pool, "s2").await.unwrap().is_empty());
 
         sqlx::query("DELETE FROM chat_sessions WHERE id = 's1'")
@@ -210,9 +273,16 @@ mod tests {
         seed_session(&pool, "s1").await;
         for bad in ["model", "verifier:", "LLM", ""] {
             assert!(
-                put(&pool, "s1", "x", &json!(1), bad, Timestamp::now())
-                    .await
-                    .is_err(),
+                put(
+                    &mut pool.acquire().await.unwrap(),
+                    "s1",
+                    "x",
+                    &json!(1),
+                    bad,
+                    Timestamp::now()
+                )
+                .await
+                .is_err(),
                 "{bad:?} was accepted"
             );
         }
@@ -222,9 +292,16 @@ mod tests {
     async fn a_row_for_a_session_that_does_not_exist_is_refused() {
         let pool = fresh().await;
         assert!(
-            put(&pool, "ghost", "x", &json!(1), "llm", Timestamp::now())
-                .await
-                .is_err()
+            put(
+                &mut pool.acquire().await.unwrap(),
+                "ghost",
+                "x",
+                &json!(1),
+                "llm",
+                Timestamp::now()
+            )
+            .await
+            .is_err()
         );
     }
 }

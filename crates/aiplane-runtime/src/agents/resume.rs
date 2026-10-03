@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_agents::db::run_sessions;
 use aiplane_agents::db::run_sessions::RunSession;
 use aiplane_agents::db::{a2a_contexts, agents as agents_db};
@@ -364,23 +364,36 @@ pub async fn run_claimed(
         ResumedBy::Staff { user_id } => Some(user_id.as_str()),
         _ => None,
     };
-    super::audit::record(
+    let mut detail = json!({
+        "session_id": opened.session_id,
+        "turn_id": opened.turn_id,
+        "request_id": levels[0].suspension.request_id,
+        "kind": innermost.kind,
+        "decision": decision.kind(),
+        "answered_by": by.as_str(),
+        "waiting_turn": innermost.turn_id,
+    });
+    if let Decision::Value { value } = &decision {
+        // A staff answer to a handoff is what the agent passes on, and the
+        // log keeps it; a secure input is only ever marked as received.
+        match innermost.kind {
+            SuspensionKind::HumanAnswer => detail["answer"] = value.clone(),
+            _ => detail["secure_input_received"] = json!(true),
+        }
+    }
+    super::audit::record_event(
         &state.db,
-        AuditKind::RunResumed,
-        &profiles[0].principal.id,
-        actor,
-        Some(&chains[0]),
-        json!({
-            "session_id": opened.session_id,
-            "turn_id": opened.turn_id,
-            "request_id": levels[0].suspension.request_id,
-            "kind": innermost.kind,
-            "decision": decision.kind(),
-            "answered_by": by.as_str(),
-            "waiting_turn": innermost.turn_id,
-        }),
+        NewEvent::new(AuditKind::RunResumed, &profiles[0].principal.id, detail)
+            .by(actor)
+            .in_run(Some(&chains[0]))
+            .at(Correlation {
+                session_id: Some(opened.session_id.clone()),
+                turn_id: Some(opened.turn_id.clone()),
+                ..Correlation::default()
+            }),
     )
-    .await;
+    .await
+    .ok();
     tracing::info!(
         turn = %opened.turn_id,
         depth = levels.len(),

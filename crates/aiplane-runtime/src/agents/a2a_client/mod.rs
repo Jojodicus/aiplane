@@ -748,6 +748,14 @@ impl Dispatch<'_> {
             "dispatch_id": dispatch_id,
             "resumed": resumed,
         });
+        // What leaves the gateway, for the activity log — except an answer
+        // to the peer's `input-required`, which is the visitor's secure
+        // input and is only ever marked.
+        let sent = if resumed {
+            json!({ "secure_input_sent": true })
+        } else {
+            message.clone()
+        };
         if !self
             .principal
             .grants
@@ -764,9 +772,12 @@ impl Dispatch<'_> {
                 ),
             }));
         }
+        let mut dispatched = about.clone();
+        dispatched["message"] = sent;
         self.ctx
-            .audit(AuditKind::SubAgentDispatched, about.clone())
+            .audit(AuditKind::SubAgentDispatched, dispatched)
             .await;
+
         let budget = Duration::from_secs(target.seconds);
         let work = async {
             // Each request may take a little longer than the whole budget, so

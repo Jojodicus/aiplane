@@ -1,0 +1,41 @@
+# STATUS: llm-generated, unreviewed — pending native-speaker QA
+# Strings owned by the Activity tab of the agent builder (#111).
+
+agents-tab-activity = Активность
+agents-act-intro = Всё, что сделал этот агент, записано без пропусков: каждый обмен с моделью с полным промптом и ответом, каждый вызов инструмента с полными аргументами и результатом, записи состояния, маршрутизация, паузы и каждое изменение агента. Каждый разговор — это цепочка хешей, поэтому изменение журнала обнаруживается при проверке. Журнал содержит разговоры целиком; читать его могут только те, у кого есть доступ к агенту, а секреты, например одноразовые коды, в него никогда не попадают.
+agents-act-conversation = Разговор
+agents-act-conversation-all = Все разговоры, сначала новые
+agents-act-kind = Показать
+agents-act-group-all = Всё
+agents-act-group-turns = Ходы и ответы
+agents-act-group-exchanges = Обмены с моделью
+agents-act-group-tools = Вызовы инструментов
+agents-act-group-state = Состояние и проверки
+agents-act-group-routing = Маршрутизация и субагенты
+agents-act-group-people = Паузы, люди и отказы
+agents-act-group-management = Изменения агента
+agents-act-from = С
+agents-act-to = По
+agents-act-export = Экспорт в JSONL
+agents-act-verify = Проверить цепочку
+agents-act-verified = { $events } событий в { $chains } цепочках не изменены.
+agents-act-unchained = { $count } более старых событий записаны до появления цепочки.
+agents-act-unanchored = { $count } более новых событий ещё не закреплены: они записаны после окончания последнего хода.
+agents-act-head = Сохраните эту вершину собственной цепочки агента вне шлюза: она закрепляет каждый разговор, поэтому журнал, обрезанный до более ранней вершины, заметен при сравнении.
+agents-act-broken = Цепочка { $chain } обрывается на событии { $seq }: { $reason }
+agents-act-none = Нет активности по этим фильтрам.
+agents-act-more = Загрузить ещё
+agents-act-turn = Ход { $turn }
+agents-act-agent-chain = Вне хода
+agents-act-open-conversation = Показать этот разговор
+agents-act-round = раунд { $round }
+agents-act-took = { $ms } мс
+agents-act-sub-agent = субагент
+agents-act-sum-llm = { $model }: { $tokens } токенов, { $finish }
+agents-act-sum-llm-error = { $model }: ошибка — { $error }
+agents-act-sum-tool = { $tool }: { $status }
+agents-act-sum-state = { $slot } записал { $provenance }
+agents-act-sum-message = «{ $text }»
+agents-act-sum-resumed = Продолжено после решения
+agents-act-sum-finished = { $status }: { $text }
+agents-act-sum-route = { $route }
