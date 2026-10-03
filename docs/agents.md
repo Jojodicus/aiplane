@@ -2623,7 +2623,7 @@ logged and the request goes on as it would have.
 
 | Event | Written by | Detail |
 |---|---|---|
-| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` (the body exactly as sent: system message, messages, tool offer, parameters), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
+| `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
 | `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
@@ -2648,7 +2648,14 @@ view and the evaluation read — leaves out the content kinds
 `tool_result` it records whatever the tool did with it, the run's resume
 records `secure_input_received` instead of it, the verifier's MCP check is
 redacted as before (#95), and the model never saw it, so no
-`llm_exchange` carries it. The A2A credential is sealed in the spec and
+`llm_exchange` carries it. Both writers redact through one
+`agents::audit::Redaction`, so a call looks the same in its `tool_result`
+and in every `llm_exchange` that carries it: the arguments of a tool that
+declares `sensitive_args` are `{redacted: true}` — in the answer's
+`tool_calls` and in the assistant `tool_calls` of every later request — and
+a turn resumed with a secure input has that value withheld
+(`[secure input withheld]`) from each of its exchanges too. A stored
+request therefore differs from the one sent exactly there. The A2A credential is sealed in the spec and
 sent only as a header, which no event records. Tokens, embed keys and
 client secrets are hashed or sealed where they are stored and never part
 of an event. `activity::a_whole_run_is_one_hash_chain_that_reconstructs_it_and_holds_no_secret`

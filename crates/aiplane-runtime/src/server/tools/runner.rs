@@ -39,6 +39,7 @@
 use rama::bytes::Bytes;
 use serde_json::{Value, json};
 
+use crate::agents::audit::Redaction;
 use crate::repeated_calls::{CallVerdict, REFUSAL_MESSAGE, RepeatedCallGuard, stop_message};
 use aiplane_agents::db::agent_audit::AuditKind;
 
@@ -1075,18 +1076,16 @@ async fn record_call(
     if ctx.agent.is_none() {
         return;
     }
-    let arguments = if sensitive {
-        json!({ "redacted": true })
-    } else {
-        serde_json::from_str(&call.arguments_raw)
-            .unwrap_or_else(|_| Value::String(call.arguments_raw.clone()))
+    let redaction = Redaction {
+        decided: match &ctx.suspend {
+            crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
+                Some(value)
+            }
+            _ => None,
+        },
     };
-    let body = match &ctx.suspend {
-        crate::suspend::Suspend::Decided(session_core::db::Decision::Value { value }) => {
-            crate::suspend::withhold_secret(result.body.clone(), value)
-        }
-        _ => result.body.clone(),
-    };
+    let arguments = Redaction::arguments(&call.arguments_raw, sensitive);
+    let body = redaction.body(result.body.clone());
     let signals: Vec<&str> = result.signals.iter().map(|s| s.as_str()).collect();
     ctx.audit_event(
         AuditKind::ToolResult,

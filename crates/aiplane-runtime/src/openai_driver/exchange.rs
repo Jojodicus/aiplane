@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use session_core::driver::TurnError;
 
 use super::OpenAiDriver;
-use crate::server::tools::ToolContext;
+use crate::agents::audit::Redaction;
+use crate::server::tools::{ToolContext, ToolSource};
 
 /// Which backend took the request.
 pub(super) struct Served<'a> {
@@ -82,10 +83,41 @@ pub(super) async fn record_vision_fallback(
     }
 }
 
-/// Record one round. `request` is the body that went (or would have gone)
-/// upstream; `started` is when it was sent.
-pub(super) async fn record(
-    d: &OpenAiDriver,
+/// The rounds of one turn, as the log keeps them.
+pub(super) struct ExchangeLog<'a> {
+    /// The turn's tools: which of them declare their arguments sensitive.
+    pub tools: &'a dyn ToolSource,
+    pub redaction: Redaction<'a>,
+}
+
+impl ExchangeLog<'_> {
+    /// Record one round. `request` is the body that went (or would have
+    /// gone) upstream; `started` is when it was sent.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record(
+        &self,
+        d: &OpenAiDriver,
+        tool_ctx: &ToolContext,
+        round: u32,
+        request: &Value,
+        served: Served<'_>,
+        answer: Answer,
+        started: Instant,
+    ) {
+        if d.agent().is_none() {
+            return;
+        }
+        let mut request = request.clone();
+        let mut answer = answer;
+        self.redaction
+            .exchange(&mut request, &mut answer.tool_calls, |name| {
+                self.tools.get(name).is_some_and(|t| t.sensitive_args())
+            });
+        record(tool_ctx, round, &request, served, answer, started).await;
+    }
+}
+
+async fn record(
     tool_ctx: &ToolContext,
     round: u32,
     request: &Value,
@@ -93,9 +125,6 @@ pub(super) async fn record(
     answer: Answer,
     started: Instant,
 ) {
-    if d.agent().is_none() {
-        return;
-    }
     let (prompt, completion, total) = answer.usage;
     let latency = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let ctx = ToolContext {

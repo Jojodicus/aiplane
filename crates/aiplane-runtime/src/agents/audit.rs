@@ -34,6 +34,73 @@ use crate::server::tools::ToolContext;
 /// The longest a run waits for one event to be written.
 pub const WRITE_BOUND: Duration = Duration::from_secs(5);
 
+/// What the log leaves out of a run's tool calls, the same wherever a call
+/// appears — its `tool_result` and every `llm_exchange` that carries it: the
+/// arguments of a tool that declares them sensitive (`sensitive_args`), and
+/// a value a resume decided, which the run's tool may have repeated.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Redaction<'a> {
+    /// The value the turn was resumed with, withheld wherever it appears.
+    pub decided: Option<&'a Value>,
+}
+
+impl Redaction<'_> {
+    /// What stands in for the arguments of a tool that declares them
+    /// sensitive.
+    pub fn redacted_arguments() -> Value {
+        json!({ "redacted": true })
+    }
+
+    /// The arguments of a call as the log keeps them, from what the model
+    /// wrote.
+    pub fn arguments(raw: &str, sensitive: bool) -> Value {
+        if sensitive {
+            return Self::redacted_arguments();
+        }
+        serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+    }
+
+    /// `body` with the decided value withheld.
+    pub fn body(&self, body: Value) -> Value {
+        match self.decided {
+            Some(value) => crate::suspend::withhold_secret(body, value),
+            None => body,
+        }
+    }
+
+    /// A model exchange as the log keeps it: in `request.messages`' assistant
+    /// tool calls and in the answer's `tool_calls`, the arguments of every
+    /// call to a tool `sensitive` names replaced by the marker the call's
+    /// `tool_result` keeps; then the decided value withheld from both.
+    pub fn exchange(
+        &self,
+        request: &mut Value,
+        tool_calls: &mut [Value],
+        sensitive: impl Fn(&str) -> bool,
+    ) {
+        let redact = |call: &mut Value| {
+            let name = call["function"]["name"].as_str().unwrap_or_default();
+            if sensitive(name) {
+                call["function"]["arguments"] = Self::redacted_arguments();
+            }
+        };
+        if let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) {
+            for message in messages {
+                if let Some(calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) {
+                    calls.iter_mut().for_each(redact);
+                }
+            }
+        }
+        tool_calls.iter_mut().for_each(redact);
+        if self.decided.is_some() {
+            *request = self.body(std::mem::take(request));
+            for call in tool_calls {
+                *call = self.body(std::mem::take(call));
+            }
+        }
+    }
+}
+
 /// Why an event did not reach the log.
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
