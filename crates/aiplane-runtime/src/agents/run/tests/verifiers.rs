@@ -960,6 +960,34 @@ async fn a_token_signed_with_another_algorithm_is_refused_before_its_signature()
 }
 
 #[tokio::test]
+async fn a_flood_of_refused_identity_tokens_writes_one_event_per_window() {
+    let world = World::new(&[], None).await;
+    let spec = host_spec(&world, hs256());
+    let (agent, session) = conversation(&world).await;
+    let forged = signed(&claims(300), "another-secret-of-at-least-32-bytes!!");
+    for token in
+        std::iter::repeat_n("not.a.jwt", 100).chain(std::iter::repeat_n(forged.as_str(), 100))
+    {
+        let refused = accept(
+            &world.state,
+            &agent,
+            &session,
+            &spec,
+            token,
+            jiff::Timestamp::now(),
+        )
+        .await;
+        assert!(matches!(refused, Err(IdentityError::Invalid(_))));
+    }
+    let rows: Vec<String> =
+        sqlx::query_scalar("SELECT detail FROM agent_audit WHERE kind = 'host_identity'")
+            .fetch_all(world.db())
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 2, "one per reason, not per request");
+}
+
+#[tokio::test]
 async fn a_token_with_a_jti_is_accepted_once() {
     let world = World::new(&[], None).await;
     let spec = host_spec(&world, hs256());

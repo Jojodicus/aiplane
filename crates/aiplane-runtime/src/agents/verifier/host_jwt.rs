@@ -34,6 +34,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::{Map, Value, json};
 
 use super::JwtAlgorithm;
+use crate::agents::embed::Refused;
 use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
@@ -469,13 +470,32 @@ pub async fn accept(
         }),
         Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
     };
-    if !matches!(outcome, Err(IdentityError::NotConfigured)) {
-        let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
-            session_id: Some(session_id.to_string()),
-            conversation_id: Some(session_id.to_string()),
-            ..Correlation::default()
-        });
-        let _ = crate::agents::audit::record_event(&state.db, event).await;
+    match &outcome {
+        Err(IdentityError::NotConfigured) => {}
+        Ok(_) => {
+            let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
+                session_id: Some(session_id.to_string()),
+                conversation_id: Some(session_id.to_string()),
+                ..Correlation::default()
+            });
+            let _ = crate::agents::audit::record_event(&state.db, event).await;
+        }
+        // A website (or someone posing as it) can post bad tokens as fast
+        // as it likes; each reason is counted in a window, not a row each.
+        Err(e) => {
+            let refused = Refused {
+                agent_id,
+                subject: session_id,
+                class: format!(
+                    "host_identity:{}",
+                    detail["reason"].as_str().unwrap_or(e.code())
+                ),
+                kind: AuditKind::HostIdentity,
+                conversation_id: Some(session_id),
+                detail,
+            };
+            state.refusals.fold(&state.db, refused).await;
+        }
     }
     outcome
 }
