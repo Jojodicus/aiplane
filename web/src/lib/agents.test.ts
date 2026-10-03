@@ -13,6 +13,8 @@ import {
 	parseBindSource,
 	parseSpecError,
 	renameKey,
+	renameRoute,
+	removeRoute,
 	freshName,
 	writerOptions,
 	slotValueFromText,
@@ -183,6 +185,21 @@ test('renaming a key keeps its place and refuses a taken name', () => {
 	assert.deepEqual(Object.keys(renameKey({ a: 1, b: 2, c: 3 }, 'b', 'x')), ['a', 'x', 'c']);
 	assert.deepEqual(renameKey({ a: 1, b: 2 }, 'a', 'b'), { a: 1, b: 2 });
 	assert.deepEqual(renameKey({ a: 1 }, 'zz', 'y'), { a: 1 });
+});
+
+test('renaming or removing a route keeps the router order naming routes that exist', () => {
+	const spec = {
+		routes: { billing: { agent: 'a' }, staff: { human: {} } },
+		router: { kind: 'rules', order: ['billing', 'staff'] }
+	};
+	assert.equal(renameRoute(spec, 'staff', 'people'), 'people');
+	assert.deepEqual(Object.keys(spec.routes), ['billing', 'people']);
+	assert.deepEqual(spec.router.order, ['billing', 'people']);
+	removeRoute(spec, 'billing');
+	assert.deepEqual(spec.router.order, ['people']);
+	removeRoute(spec, 'people');
+	assert.deepEqual(spec.router, { kind: 'rules' }, 'an empty order is no order');
+	assert.deepEqual(spec.routes, {});
 });
 
 test('a fresh name skips the ones in use', () => {

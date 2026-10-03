@@ -501,16 +501,26 @@ export function addRoute(spec: Spec): string {
 	return name;
 }
 
+/** Removes route `name`, and its place in `router.order`: the server refuses an order naming a route that does not exist. */
 export function removeRoute(spec: Spec, name: string): void {
 	delete spec.routes?.[name];
+	setRouterOrder(spec, (order) => order.filter((r) => r !== name));
 }
 
-/** Renames route `from` to `to` (trimmed), keeping its position. A blank or taken name changes nothing. Returns the name the route has afterwards. */
+/** Renames route `from` to `to` (trimmed), keeping its position, in `router.order` too. A blank or taken name changes nothing. Returns the name the route has afterwards. */
 export function renameRoute(spec: Spec, from: string, to: string): string {
 	const name = to.trim();
 	if (!name || name === from || name in spec.routes || !(from in spec.routes)) return from;
 	spec.routes = renameKey(spec.routes, from, name);
+	setRouterOrder(spec, (order) => order.map((r) => (r === from ? name : r)));
 	return name;
+}
+
+function setRouterOrder(spec: Spec, edit: (order: string[]) => string[]): void {
+	if (!Array.isArray(spec.router?.order)) return;
+	const order = edit(spec.router.order);
+	if (order.length) spec.router.order = order;
+	else delete spec.router.order;
 }
 
 /** What the agent's principal has been granted, for the editor's pickers. */
