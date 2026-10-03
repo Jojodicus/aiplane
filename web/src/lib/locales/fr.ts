@@ -584,7 +584,7 @@ export const fr: Catalog = {
  "agents-test-deny": "Refuser",
  "agents-test-empty": "Écrivez quelque chose pour démarrer une conversation avec le brouillon.",
  "agents-test-expires": "Expire {at}",
- "agents-test-intro": "Parlez au brouillon enregistré comme le ferait un visiteur. Ses outils s'exécutent vraiment, en tant que cet agent. Cliquez sur une réponse pour voir ce qui s'est passé derrière.",
+ "agents-test-intro": "Parlez au brouillon enregistré comme le ferait un visiteur. Ses outils s'exécutent vraiment, en tant que cet agent. Utilisez « Afficher ce qui s'est passé » sous une réponse pour voir ce qui s'est passé derrière.",
  "agents-test-new": "Nouvelle conversation",
  "agents-test-placeholder": "Message en tant que visiteur…",
  "agents-test-send": "Envoyer",

@@ -584,7 +584,7 @@ export const zh: Catalog = {
  "agents-test-deny": "拒绝",
  "agents-test-empty": "发送一条消息，开始与草稿对话。",
  "agents-test-expires": "过期时间 {at}",
- "agents-test-intro": "像访客一样与已保存的草稿对话。它的工具会以该智能体的身份真实运行。点击回复可查看其背后发生的事。",
+ "agents-test-intro": "像访客一样与已保存的草稿对话。它的工具会以该智能体的身份真实运行。点击回复下方的“查看发生了什么”可查看其背后发生的事。",
  "agents-test-new": "新对话",
  "agents-test-placeholder": "以访客身份发送消息…",
  "agents-test-send": "发送",

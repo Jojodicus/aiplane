@@ -584,7 +584,7 @@ export const de: Catalog = {
  "agents-test-deny": "Ablehnen",
  "agents-test-empty": "Schreiben Sie etwas, um ein Gespräch mit dem Entwurf zu beginnen.",
  "agents-test-expires": "Läuft ab {at}",
- "agents-test-intro": "Sprechen Sie mit dem gespeicherten Entwurf, wie es ein Besucher täte. Seine Tools laufen wirklich, als dieser Agent. Klicken Sie auf eine Antwort, um zu sehen, was dahinter geschah.",
+ "agents-test-intro": "Sprechen Sie mit dem gespeicherten Entwurf, wie es ein Besucher täte. Seine Tools laufen wirklich, als dieser Agent. Mit „Anzeigen, was geschah“ unter einer Antwort sehen Sie, was dahinter geschah.",
  "agents-test-new": "Neues Gespräch",
  "agents-test-placeholder": "Nachricht als Besucher…",
  "agents-test-send": "Senden",

@@ -584,7 +584,7 @@ export const es: Catalog = {
  "agents-test-deny": "Rechazar",
  "agents-test-empty": "Escribe algo para iniciar una conversación con el borrador.",
  "agents-test-expires": "Caduca {at}",
- "agents-test-intro": "Habla con el borrador guardado como lo haría un visitante. Sus herramientas se ejecutan de verdad, como este agente. Haz clic en una respuesta para ver qué ocurrió detrás.",
+ "agents-test-intro": "Habla con el borrador guardado como lo haría un visitante. Sus herramientas se ejecutan de verdad, como este agente. Usa «Mostrar lo ocurrido» bajo una respuesta para ver qué ocurrió detrás.",
  "agents-test-new": "Nueva conversación",
  "agents-test-placeholder": "Mensaje como visitante…",
  "agents-test-send": "Enviar",
