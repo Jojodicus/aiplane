@@ -38,6 +38,7 @@ use crate::agents::embed::Refused;
 use crate::agents::spec::AgentSpec;
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{StateSchema, TrustedWriter, write_trusted_all};
+use aiplane_agents::db::WriteTx;
 use crate::rama_server::state::RamaState;
 
 const LEEWAY_SECS: u64 = 30;
@@ -517,7 +518,7 @@ async fn accept_inner(
     // One transaction: the `jti` is spent only together with every slot, so
     // a failed write neither leaves half an identity behind nor burns the
     // token the website will retry with.
-    let mut tx = state.db.begin().await.map_err(|e| storage(&e))?;
+    let mut tx = WriteTx::begin(&state.db).await.map_err(|e| storage(&e))?;
     if let Some(jti) = claims.get("jti").and_then(Value::as_str) {
         let exp = claims
             .get("exp")

@@ -2605,7 +2605,12 @@ queue:* every event is written before the run moves on, in a write
 transaction of its own (`BEGIN IMMEDIATE`, so concurrent writers to one
 chain queue on SQLite's lock instead of racing for its head) or — for a
 management change and a state write — on the change's own transaction, so
-the change and its event commit together or not at all. WAL with
+the change and its event commit together or not at all. Either way the
+transaction is a `db::WriteTx`, which only `WriteTx::begin` (`BEGIN
+IMMEDIATE`) makes and which `agent_audit::append` and `record` require: a
+chain head, a slot's old value or a rate window is read under the write
+lock it is then written under, never in a deferred transaction that takes
+the lock only at its first write. WAL with
 `synchronous = NORMAL` makes a commit a page write, not an fsync, so this
 costs a turn about a millisecond per event; nothing waits in memory, so
 nothing is lost on a crash or a shutdown and there is no queue to flush.

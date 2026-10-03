@@ -25,7 +25,7 @@ use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 use super::agent_audit::{self, AuditKind};
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedKey {
@@ -81,7 +81,7 @@ pub async fn create(
 ) -> Result<EmbedKey, DbError> {
     let id = Uuid::new_v4().to_string();
     let origins = serde_json::Value::from(new.origins.to_vec()).to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     sqlx::query(
         "INSERT INTO agent_embed_keys (id, principal_id, name, key_hash, origins, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -148,7 +148,7 @@ pub async fn revoke(
     key_id: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let changed = sqlx::query(
         "UPDATE agent_embed_keys SET revoked_at = ?
           WHERE id = ? AND principal_id = ? AND revoked_at IS NULL",

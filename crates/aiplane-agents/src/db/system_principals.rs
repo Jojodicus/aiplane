@@ -14,7 +14,7 @@ use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 use super::agent_audit::{self, AuditKind};
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
 
 const MAX_NAME_LEN: usize = 64;
@@ -117,7 +117,7 @@ pub async fn create(
     new: &NewPrincipal<'_>,
     actor_id: &str,
 ) -> Result<Option<PrincipalRow>, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let Some(id) = insert(&mut tx, new, actor_id).await? else {
         return Ok(None);
     };
@@ -129,7 +129,7 @@ pub async fn create(
 /// caller's transaction, so an agent can create its principal atomically with
 /// itself. `Ok(None)` when the name is taken.
 pub(crate) async fn insert(
-    conn: &mut sqlx::SqliteConnection,
+    conn: &mut WriteTx,
     new: &NewPrincipal<'_>,
     actor_id: &str,
 ) -> Result<Option<String>, DbError> {
@@ -145,7 +145,7 @@ pub(crate) async fn insert(
     .bind(new.description)
     .bind(actor_id)
     .bind(Timestamp::now().to_string())
-    .execute(&mut *conn)
+    .execute(&mut **conn)
     .await?
     .rows_affected();
     if inserted == 0 {
@@ -185,7 +185,7 @@ pub async fn get(pool: &Pool, id: &str) -> Result<Option<PrincipalRow>, DbError>
 /// `Ok(false)` when there is no such principal or it was already disabled.
 pub async fn disable(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbError> {
     let now = Timestamp::now().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let changed = sqlx::query(
         "UPDATE system_principals SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL",
     )
@@ -251,7 +251,7 @@ pub async fn add_grant(
     reference: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let inserted = sqlx::query(
         "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at)
          VALUES (?, ?, ?, ?, ?)
@@ -288,7 +288,7 @@ pub async fn remove_grant(
     reference: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let removed =
         sqlx::query("DELETE FROM principal_grants WHERE principal_id = ? AND kind = ? AND ref = ?")
             .bind(principal_id)
@@ -337,7 +337,7 @@ pub async fn insert_token(
     actor_id: &str,
 ) -> Result<SystemToken, DbError> {
     let id = Uuid::new_v4().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     sqlx::query(
         "INSERT INTO system_tokens (id, principal_id, name, hash, created_by, created_at, expires_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -387,7 +387,7 @@ pub async fn revoke_token(
     token_id: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let changed = sqlx::query(
         "UPDATE system_tokens SET revoked_at = ?
           WHERE id = ? AND principal_id = ? AND revoked_at IS NULL",

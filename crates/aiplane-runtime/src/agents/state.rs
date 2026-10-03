@@ -25,6 +25,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use aiplane_agents::db::WriteTx;
 use aiplane_agents::db::agent_state::{self, StoredSlot};
 use aiplane_core::server::db::{DbError, Pool};
 use aiplane_core::server::run_chain::RunChain;
@@ -746,7 +747,7 @@ pub(crate) async fn write_from_model(
 /// commits or rolls back with the slots. Every value is checked before the
 /// first is stored.
 pub async fn write_trusted_all(
-    conn: &mut sqlx::SqliteConnection,
+    conn: &mut WriteTx,
     schema: &StateSchema,
     session_id: &str,
     values: &[(String, Value)],
@@ -760,7 +761,7 @@ pub async fn write_trusted_all(
     }
     let stamp = provenance.to_string();
     for (slot, value) in values {
-        agent_state::put(&mut *conn, session_id, slot, value, &stamp, now, run)
+        agent_state::put(conn, session_id, slot, value, &stamp, now, run)
             .await
             .map_err(|source| StateWriteError::Db {
                 slot: slot.clone(),
@@ -816,7 +817,7 @@ async fn write(
         slot: slot.to_string(),
         source,
     };
-    let mut tx = pool.begin().await.map_err(|e| db_error(e.into()))?;
+    let mut tx = WriteTx::begin(pool).await.map_err(db_error)?;
     agent_state::put(
         &mut tx,
         session_id,
@@ -828,7 +829,7 @@ async fn write(
     )
     .await
     .map_err(db_error)?;
-    tx.commit().await.map_err(|e| db_error(e.into()))?;
+    tx.commit().await.map_err(db_error)?;
     Ok(SlotEntry {
         value,
         provenance,

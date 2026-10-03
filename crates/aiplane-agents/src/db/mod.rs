@@ -22,5 +22,7 @@ pub mod inbound;
 pub mod run_sessions;
 pub mod system_principals;
 pub mod visitor_sessions;
+pub mod write_tx;
 
 pub use aiplane_core::server::db::{DbError, Pool, parse_optional_ts, parse_ts, window_key};
+pub use write_tx::WriteTx;

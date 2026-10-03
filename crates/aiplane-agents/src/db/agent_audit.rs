@@ -40,7 +40,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{DbError, Pool};
+use super::{DbError, Pool, WriteTx};
 use aiplane_core::server::crypto::{ActivityKey, sha256_hex};
 use aiplane_core::server::run_chain::RunChain;
 
@@ -486,7 +486,7 @@ pub struct Appended {
 /// Record a management change on `conn` — the caller's transaction, so the
 /// event commits or rolls back with the change it records.
 pub async fn record(
-    conn: &mut sqlx::SqliteConnection,
+    conn: &mut WriteTx,
     kind: AuditKind,
     principal_id: &str,
     actor_id: &str,
@@ -513,13 +513,12 @@ const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at
                           WHERE agent_id = ? AND chain_key LIKE 'conversation:%'
                           GROUP BY chain_key";
 
-/// Append one event on `conn`, which must hold the database's write lock
-/// for the rest of its transaction (a write already made in it, or
-/// `BEGIN IMMEDIATE`): the chain's head is read and extended under it, so
-/// two writers cannot both take the same place. The unique index on
-/// `(chain_key, seq)` refuses a fork should one try.
+/// Append one event on `conn`, which holds the database's write lock for the
+/// rest of its transaction ([`WriteTx`]): the chain's head is read and
+/// extended under it, so two writers cannot both take the same place. The
+/// unique index on `(chain_key, seq)` refuses a fork should one try.
 pub async fn append(
-    conn: &mut sqlx::SqliteConnection,
+    conn: &mut WriteTx,
     mut event: NewEvent<'_>,
 ) -> Result<Appended, DbError> {
     let conversation_id = event.conversation_id();
@@ -538,13 +537,13 @@ pub async fn append(
             .bind(&hash)
             .bind(&data)
             .bind(&created_at)
-            .execute(&mut *conn)
+            .execute(&mut **conn)
             .await?;
         }
     }
     let head: Option<(i64, Option<String>)> = sqlx::query_as(HEAD_SQL)
         .bind(&chain_key)
-        .fetch_optional(&mut *conn)
+        .fetch_optional(&mut **conn)
         .await?;
     let (seq, prev_hash) = match head {
         Some((seq, hash)) => (seq + 1, hash),
@@ -620,7 +619,7 @@ pub async fn append(
     .bind(&row.caller_id)
     .bind(row.duration_ms)
     .bind(&row.key_id)
-    .execute(&mut *conn)
+    .execute(&mut **conn)
     .await?;
     Ok(Appended {
         id: row.id,
@@ -635,7 +634,7 @@ pub async fn append(
 /// instead of racing. Waits at most the pool's busy timeout for the lock;
 /// the runtime bounds the whole call (`agents::audit`).
 pub async fn append_now(pool: &Pool, event: NewEvent<'_>) -> Result<Appended, DbError> {
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let appended = append(&mut tx, event).await?;
     tx.commit().await?;
     Ok(appended)
@@ -651,7 +650,7 @@ pub async fn anchor_conversation(
     conversation_id: &str,
 ) -> Result<Option<Appended>, DbError> {
     let key = conversation_chain(conversation_id);
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let head: Option<(i64, Option<String>)> = sqlx::query_as(HEAD_SQL)
         .bind(&key)
         .fetch_optional(&mut *tx)
@@ -1225,7 +1224,7 @@ impl AnchorBook {
 async fn cut_agent_chain(pool: &Pool, agent_id: &str, before: Timestamp) -> Result<u64, DbError> {
     let own = agent_chain(agent_id);
     let cutoff = super::window_key(before);
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut tx = WriteTx::begin(pool).await?;
     let (first, head): (Option<i64>, Option<i64>) =
         sqlx::query_as("SELECT MIN(seq), MAX(seq) FROM agent_audit WHERE chain_key = ?")
             .bind(&own)
@@ -1342,7 +1341,7 @@ pub async fn sweep_conversation_chains(
         if exists {
             continue;
         }
-        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut tx = WriteTx::begin(pool).await?;
         let gone = sqlx::query("DELETE FROM agent_audit WHERE chain_key = ?")
             .bind(&key)
             .execute(&mut *tx)
