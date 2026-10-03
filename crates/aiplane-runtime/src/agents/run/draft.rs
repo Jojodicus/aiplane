@@ -41,8 +41,7 @@ pub async fn run_draft_turn(
 ) -> Result<AgentReply, AgentRunError> {
     if let Some(session) = turn.session_id {
         let continues = run_sessions::get_principal_session(&state.db, turn.agent_id, session)
-            .await
-            .map_err(DbError::from)?
+            .await?
             .is_some_and(|run| run.agent_version == Some(DRAFT_VERSION));
         if !continues {
             let agent = aiplane_agents::db::system_principals::get(&state.db, turn.agent_id)

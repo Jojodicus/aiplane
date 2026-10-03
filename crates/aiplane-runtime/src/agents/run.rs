@@ -87,9 +87,8 @@ pub async fn run_turn_with(
     let pinned = match turn.session_id {
         None => None,
         Some(session) => {
-            let Some(run) = run_sessions::get_principal_session(&state.db, turn.agent_id, session)
-                .await
-                .map_err(DbError::from)?
+            let Some(run) =
+                run_sessions::get_principal_session(&state.db, turn.agent_id, session).await?
             else {
                 let agent = sp::get(&state.db, turn.agent_id)
                     .await?
@@ -223,9 +222,7 @@ pub async fn drive_opened_from(
         Some(resume) => drive_resumed(state, params, resume).await,
         None => {
             if let Some(lang) = turn.lang {
-                run_sessions::set_run_lang(&state.db, &turn.session_id, lang)
-                    .await
-                    .map_err(DbError::from)?;
+                run_sessions::set_run_lang(&state.db, &turn.session_id, lang).await?;
             }
             drive(state, params).await
         }
