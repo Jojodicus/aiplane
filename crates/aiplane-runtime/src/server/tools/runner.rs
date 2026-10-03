@@ -969,7 +969,7 @@ async fn run_one(
     let started = std::time::Instant::now();
     let sensitive = tool.sensitive_args();
     let logged_args = if sensitive {
-        "[redacted]".to_string()
+        aiplane_agents::db::agent_audit::redaction::redacted_arguments().to_string()
     } else {
         truncate_for_log(&call.arguments_raw)
     };

@@ -347,7 +347,11 @@ async fn a_code_the_visitor_types_writes_the_verifier_slots_and_opens_the_gate()
         .iter()
         .find(|e| e.tool_id.ends_with("check_code"))
         .unwrap();
-    assert_eq!(check.arguments.as_deref(), Some("[redacted]"));
+    assert_eq!(
+        check.arguments,
+        Some(aiplane_agents::db::agent_audit::redaction::redacted_arguments().to_string()),
+        "the activity log's marker"
+    );
     let send = audited
         .iter()
         .find(|e| e.tool_id.ends_with("send_code"))

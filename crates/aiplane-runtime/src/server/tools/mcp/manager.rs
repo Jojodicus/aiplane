@@ -14,6 +14,7 @@
 //! tools (minus the ones they set to `off`), which [`CompositeToolSource`]
 //! unions on top of the static [`ToolRegistry`] for the tool-call runner.
 
+use aiplane_agents::db::agent_audit::redaction::redacted_arguments;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -791,7 +792,8 @@ struct AuditedTool {
     inner: Arc<dyn Tool>,
     connector_key: String,
     db: Pool,
-    /// Record `[redacted]` instead of the arguments: set for a call whose
+    /// Record the redaction marker (`redacted_arguments`, the activity
+    /// log's own) instead of the arguments: set for a call whose
     /// arguments carry a secret, such as a verifier's `check_code` with the
     /// visitor's code.
     sensitive: bool,
@@ -826,7 +828,7 @@ impl Tool for AuditedTool {
         let session = ctx.session_id.clone();
         let chain = ctx.agent.as_ref().map(|a| a.chain().clone());
         let args_summary = if self.sensitive_args() {
-            Some(REDACTED_ARGS.to_string())
+            Some(redacted_arguments().to_string())
         } else {
             serde_json::to_string(&args).ok()
         };
@@ -838,7 +840,7 @@ impl Tool for AuditedTool {
             // wrong"), so a sensitive call keeps only that it failed.
             let (outcome, error) = match &res {
                 Ok(_) => ("ok", None),
-                Err(_) if sensitive => ("error", Some(REDACTED_ARGS.to_string())),
+                Err(_) if sensitive => ("error", Some(redacted_arguments().to_string())),
                 Err(e) => ("error", Some(e.to_string())),
             };
             if let Err(e) = mcp_audit::record(
@@ -890,9 +892,6 @@ impl Tool for SensitiveArgs {
         self.0.run(ctx, args)
     }
 }
-
-/// What an audit row holds in place of arguments that must not be stored.
-const REDACTED_ARGS: &str = "[redacted]";
 
 /// Per-request overlay of a user's connected-connector MCP tools.
 #[derive(Default)]
@@ -956,7 +955,8 @@ impl UserMcpLayer {
     }
 
     /// Tool `id`, declaring its arguments sensitive: an audited connector
-    /// records `[redacted]` for them, and the runner never logs them.
+    /// records the redaction marker for them, and the runner never logs
+    /// them.
     pub fn get_with_sensitive_args(&self, id: &str) -> Option<Arc<dyn Tool>> {
         if let Some((inner, connector_key, db)) = self.audited.get(id) {
             return Some(Arc::new(AuditedTool {
@@ -1406,7 +1406,7 @@ mod tests {
 
         let ev = mcp_audit::recent(&pool, 10).await.unwrap();
         assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0].arguments.as_deref(), Some(REDACTED_ARGS));
+        assert_eq!(ev[0].arguments, Some(redacted_arguments().to_string()));
         assert!(!format!("{ev:?}").contains("481516"));
 
         let plain = layer.get("company_echo").unwrap();

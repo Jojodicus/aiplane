@@ -260,7 +260,7 @@ be a worse liability than the problem it documents.
 The same applies to the journal: the runner logs every tool call's arguments at
 info level, which for this tool would be exactly the URLs and the typed text. It
 declares `Tool::sensitive_args`, so the log line records that the call happened,
-for whom and how long it took, with `args = [redacted]`. A redaction the process
+for whom and how long it took, with `args = {"redacted":true}` (the activity log's marker). A redaction the process
 logger quietly undoes is not a redaction.
 
 Users can turn the tool off entirely on `/tools` ("Your own browser"), and

@@ -288,7 +288,11 @@ async fn a_visitor_verifies_with_the_code_in_the_secure_field_and_the_gate_opens
         .into_iter()
         .find(|ev| ev.tool_id.ends_with("check_code"))
         .expect("the connector is audited");
-    assert_eq!(check.arguments.as_deref(), Some("[redacted]"));
+    assert_eq!(
+        check.arguments,
+        Some(aiplane_agents::db::agent_audit::redaction::redacted_arguments().to_string()),
+        "the activity log's marker"
+    );
     let logged = logs.text();
     assert!(
         logged.contains("resuming a suspended agent run"),

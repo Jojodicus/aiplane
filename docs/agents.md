@@ -1849,9 +1849,11 @@ verifiers:
   recorded as `delivery: accepted|refused` in the owner's audit only.
 - **Where the code is not.** It reaches the connector's `check_code` and
   nothing else. The verifier's tools declare `sensitive_args`; the layer's
-  `get_with_sensitive_args` makes an audited connector record `[redacted]`
+  `get_with_sensitive_args` makes an audited connector record the activity
+  log's redaction marker (`{"redacted":true}`,
+  `agent_audit::redaction::redacted_arguments`)
   for both the arguments and a failed call's error in `mcp_tool_audit`; the
-  answer is passed through `withhold_secret` before a slot is written. rmcp
+  answer is passed through `Redaction::withhold` before a slot is written. rmcp
   dumps outgoing MCP requests at `trace`, so the binary's log filter
   (`aiplane::logging`) pins `rmcp::service=debug` whatever `RUST_LOG` asks.
   `tests/it/embed/verifiers.rs` greps every table and every log line (at

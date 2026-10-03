@@ -25,7 +25,7 @@
 //!   `send_code` is recorded for the owner, never relayed.
 //!
 //! The code reaches only the connector's `check_code`, whose arguments are
-//! declared sensitive: `mcp_tool_audit` records `[redacted]`.
+//! declared sensitive: `mcp_tool_audit` records the redaction marker.
 
 use std::sync::Arc;
 
