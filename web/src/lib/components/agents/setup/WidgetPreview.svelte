@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Spec } from '$lib/agents';
-	import { readScope } from '$lib/agent-setup';
+	import { readColor, readScope } from '$lib/agent-setup';
+	import { parseHex, readableText } from '../../../../../shared/color.ts';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 
@@ -14,9 +15,14 @@
 
 	const name = $derived(spec.profile?.display || ws.detail?.display || ws.detail?.name || '');
 	const scope = $derived(readScope(spec));
+	/** The agent's colour as the widget paints it (`web/embed/theme.ts`), text chosen for contrast. */
+	const colors = $derived.by(() => {
+		const rgb = parseHex(readColor(spec));
+		return rgb ? `--color-primary:${readColor(spec)};--color-primary-content:${readableText(rgb)}` : undefined;
+	});
 </script>
 
-<div class="w-full max-w-xs overflow-hidden rounded-box border border-base-300 bg-base-200" aria-label={t('agents-setup-preview')}>
+<div class="w-full max-w-xs overflow-hidden rounded-box border border-base-300 bg-base-200" style={colors} aria-label={t('agents-setup-preview')}>
 	<div class="flex items-center justify-between bg-primary px-3.5 py-2.5 font-bold text-primary-content">
 		<span class="truncate">{name}</span><span aria-hidden="true">✕</span>
 	</div>

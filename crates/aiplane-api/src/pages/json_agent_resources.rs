@@ -55,18 +55,23 @@ pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Abi
         .collect()
 }
 
-/// The chat pools `user` may use, by name.
-pub(super) fn usable_chat_pools(state: &RamaState, user: &User) -> Vec<String> {
+/// The pools of `kind` `user` may use, by name.
+fn usable_pools(state: &RamaState, user: &User, kind: PoolKind) -> Vec<String> {
     let access = state.pool_access_for(&user.roles);
-    let mut pools: Vec<String> = state
+    let mut names: Vec<String> = state
         .upstreams
         .pools()
         .into_iter()
-        .filter(|p| p.kind == PoolKind::Chat && access.allows(p))
+        .filter(|p| p.kind == kind && access.allows(p))
         .map(|p| p.name.clone())
         .collect();
-    pools.sort();
-    pools
+    names.sort();
+    names
+}
+
+/// The chat pools `user` may use, by name.
+pub(super) fn usable_chat_pools(state: &RamaState, user: &User) -> Vec<String> {
+    usable_pools(state, user, PoolKind::Chat)
 }
 
 pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -86,6 +91,11 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
     let role_ids = state.rbac.role_ids_for(&user.roles);
     let is_admin = state.rbac.is_admin(&role_ids);
     let pools = usable_chat_pools(state, user);
+    // `publish.voice` names one of each for the embed widget.
+    let voice_pools = json!({
+        "speech": usable_pools(state, user, PoolKind::Speech),
+        "transcription": usable_pools(state, user, PoolKind::Transcription),
+    });
 
     let grantable = state.grantable_tool_ids();
     let tools: Vec<_> = grantable_tools(state, &role_ids)
@@ -145,6 +155,7 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
 
     Ok(json!({
         "pools": pools,
+        "voice_pools": voice_pools,
         "tiers": tiers,
         "tools": tools,
         "connectors": connectors,

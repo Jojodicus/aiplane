@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ApiError } from './api.ts';
 import {
+	agentIdFromName,
 	bindSource,
 	cleanSpec,
 	condKind,
@@ -279,4 +280,15 @@ test('a reactive proxy can be cleaned and shaped like a plain object', () => {
 	const proxy = new Proxy({ main: { pool: 'p', tools: [] } }, {});
 	assert.deepEqual(cleanSpec(proxy), { main: { pool: 'p' } });
 	assert.deepEqual(ensureShape(proxy).main.pool, 'p');
+});
+
+test('an agent id is derived from the name people type', () => {
+	assert.equal(agentIdFromName('Harald'), 'harald');
+	assert.equal(agentIdFromName('Kundensupport Österreich'), 'kundensupport-oesterreich');
+	assert.equal(agentIdFromName('  croit Support (Website)!  '), 'croit-support-website');
+	assert.equal(agentIdFromName('Straße & Maß'), 'strasse-mass');
+	assert.equal(agentIdFromName('Café Noël'), 'cafe-noel');
+	assert.equal(agentIdFromName('支持'), 'agent');
+	assert.equal(agentIdFromName('a'.repeat(80)).length, 48);
+	assert.ok(!agentIdFromName(`${'a'.repeat(47)} b`).endsWith('-'));
 });

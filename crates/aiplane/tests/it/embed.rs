@@ -45,6 +45,8 @@ mod hil;
 // Identity verifiers: a one-time code through the agent's connector, a
 // website's signed identity token.
 mod verifiers;
+// Voice in the widget: transcription and spoken answers.
+mod voice;
 
 /// Stands in for the agent turn runner, which the router
 /// (`docs/agents.md` "What #87/#88 built") builds on the real driver. The endpoint's contract with it is only "drive

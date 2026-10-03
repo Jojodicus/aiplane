@@ -218,6 +218,29 @@ impl RunLog {
         }
     }
 
+    /// Visitor `visitor_id`'s conversation of `principal` at `version`,
+    /// between turns: a voice call it made, about `turn_id` when it names one.
+    pub fn visitor(
+        principal: &SystemPrincipal,
+        version: i64,
+        conversation: &str,
+        visitor_id: &str,
+        turn_id: Option<&str>,
+    ) -> Self {
+        Self {
+            chain: Arc::new(RunChain::root(
+                conversation,
+                Some(visitor_id.to_string()),
+                Frame::for_principal(principal, Some(version)),
+            )),
+            at: Correlation {
+                turn_id: turn_id.map(str::to_string),
+                ..Self::conversation(principal, version, conversation).at
+            },
+            ..Self::conversation(principal, version, conversation)
+        }
+    }
+
     pub async fn record(&self, db: &Pool, exchange: SideExchange) {
         let latency = u64::try_from(exchange.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut detail = json!({

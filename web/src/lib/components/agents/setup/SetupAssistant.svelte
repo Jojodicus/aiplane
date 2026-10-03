@@ -60,9 +60,14 @@
 	<section class="flex flex-col rounded-box border border-base-300 bg-base-200" aria-labelledby="setup-title">
 		<header class="flex flex-col gap-1 px-4 pt-4 sm:px-8">
 			<nav class="text-sm text-base-content/60" aria-label={t('agents-setup-assistant')}>
-				<a class="link link-hover" href={overview()}>{name}</a> › {t('agents-tab-setup')} › {t('agents-setup-assistant')}
+				<a class="link link-hover" href={overview()}>{name}</a> › <a class="link link-hover" href={overview()}>{t('agents-tab-setup')}</a> › {t('agents-setup-assistant')}
 			</nav>
-			<h2 id="setup-title" class="m-0 text-xl font-semibold">{t(`agents-setup-step-${step}`)}</h2>
+			<div class="flex flex-wrap items-center gap-2">
+				<h2 id="setup-title" class="m-0 text-xl font-semibold">{t(`agents-setup-step-${step}`)}</h2>
+				<button class="btn btn-ghost btn-sm ml-auto" type="button" disabled={ws.busy} onclick={() => void done()}>
+					<span aria-hidden="true">✕</span>{t('agents-setup-exit')}
+				</button>
+			</div>
 			<div class="mt-2">
 				<StepIndicator steps={labels} current={index} {completed} onselect={(i) => void go(i)} />
 			</div>

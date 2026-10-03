@@ -30,7 +30,6 @@ pub mod router;
 pub mod sandbox_api;
 pub mod setup_api;
 pub mod spa;
-pub mod vad;
 
 pub use aiplane_api::pages;
 pub use aiplane_core::rama_server::{SessionStore, cors, session};

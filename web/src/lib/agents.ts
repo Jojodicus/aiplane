@@ -125,6 +125,8 @@ export interface AgentVersion {
 /** What the signed-in manager holds, and so may grant (`GET /api/v0/agent-resources`). */
 export interface AgentResources {
 	pools: string[];
+	/** Speech and transcription pools the manager holds, for `publish.voice`. */
+	voice_pools?: { speech: string[]; transcription: string[] };
 	tools: { id: string; name: string; description: string | null }[];
 	connectors: { key: string; name: string; tools: string[] }[];
 	skills: string[];
@@ -619,4 +621,24 @@ export interface Granted {
 	pools: string[];
 	tools: { id: string; name: string }[];
 	skills: string[];
+}
+
+const GERMAN_LETTERS: Record<string, string> = { ä: 'ae', ö: 'oe', ü: 'ue', ß: 'ss' };
+
+/**
+ * The agent's id (its system principal's name: lowercase letters, digits and
+ * dashes, at most 48) derived from the name a person types, so creating an
+ * agent asks for one name, not two.
+ */
+export function agentIdFromName(name: string): string {
+	const id = name
+		.toLowerCase()
+		.replace(/[äöüß]/g, (c) => GERMAN_LETTERS[c])
+		.normalize('NFKD')
+		.replace(/[̀-ͯ]/g, '')
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 48)
+		.replace(/-+$/, '');
+	return id || 'agent';
 }

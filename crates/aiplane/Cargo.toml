@@ -37,12 +37,6 @@ tracing-subscriber = { workspace = true }
 rama = { workspace = true }
 # Form-body parsing for the form-encoded POST endpoints.
 serde_urlencoded = { workspace = true }
-# Pure-Rust neural VAD. ~110 KiB binary footprint, no ONNX runtime.
-# Used in rama_server::vad to strip leading/trailing silence from
-# uploaded voice notes before they hit Whisper (silence is the single
-# biggest source of Whisper hallucinations).
-earshot = "1"
-symphonia = { workspace = true }
 # Multipart parsing for the `/v1/audio/transcriptions` upload path.
 multer = { workspace = true }
 

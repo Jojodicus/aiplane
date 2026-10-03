@@ -204,3 +204,38 @@ test('an identity set during a conversation is sent at once, and a refusal does 
 	assert.equal(t.seen[0].url, 'https://gw.test/api/v0/embed/identity');
 	assert.match(warned[0] ?? '', /identity_token_invalid/);
 });
+
+test('the agent is described from its key before any conversation', async () => {
+	const t = api(new MemoryStorage(), [
+		json(200, { agent: { display: 'Ada', color: '#0b6bcb', voice: { input: true, output: false } } })
+	]);
+	const agent = await t.api.describe();
+	assert.deepEqual(agent.voice, { input: true, output: false });
+	assert.equal(t.seen[0].url, 'https://gw.test/api/v0/embed/agent');
+	assert.equal(header(t.seen[0], 'authorization'), undefined);
+});
+
+test('a recording starts a conversation, goes up as WAV and comes back as text only', async () => {
+	const storage = new MemoryStorage();
+	const t = api(storage, [json(201, { token: 'gwv_1', agent: { display: 'Ada' } }), json(200, { text: 'Hallo' })]);
+	const wav = new ArrayBuffer(48);
+	const result = await t.api.transcribe(wav);
+	assert.equal(result.text, 'Hallo');
+	assert.equal(result.agent?.display, 'Ada');
+	assert.equal(t.seen[1].url, 'https://gw.test/api/v0/embed/transcribe');
+	assert.equal(header(t.seen[1], 'content-type'), 'audio/wav');
+	assert.equal(header(t.seen[1], 'authorization'), 'Bearer gwv_1');
+	assert.equal(t.seen[1].init.body, wav);
+	assert.equal(t.seen.length, 2, 'nothing is sent as a message');
+});
+
+test('an answer is spoken by its turn id, and an unspeakable one is nothing', async () => {
+	const storage = new MemoryStorage();
+	storage.setItem('slot', 'gwv_1');
+	const t = api(storage, [new Response(new Uint8Array([1, 2, 3]), { status: 200 }), new Response(null, { status: 204 })]);
+	const audio = await t.api.speak('t1');
+	assert.equal(audio?.byteLength, 3);
+	assert.deepEqual(JSON.parse(t.seen[0].init.body as string), { turn_id: 't1' });
+	assert.equal(await t.api.speak('t2'), null);
+	assert.equal(t.api.recorderUrl, 'https://gw.test/api/v0/embed/recorder.js');
+});

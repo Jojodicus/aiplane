@@ -26,16 +26,25 @@ export function forShadowRoot(css: string): string {
 
 /**
  * Constructed stylesheets are not subject to a page's `style-src` CSP, a
- * `<style>` element would be. Browsers without them get the element.
+ * `<style>` element would be. Browsers without them get the element. Called
+ * again (the agent's colour arrives after the widget is drawn), it replaces
+ * what it applied before.
  */
-export function applyStyles(root: ShadowRoot, css: string): void {
+export function applyStyles(root: ShadowRoot, ...sheets: string[]): void {
+	const css = sheets.filter(Boolean);
 	try {
-		const sheet = new CSSStyleSheet();
-		sheet.replaceSync(css);
-		root.adoptedStyleSheets = [sheet];
+		root.adoptedStyleSheets = css.map((text) => {
+			const sheet = new CSSStyleSheet();
+			sheet.replaceSync(text);
+			return sheet;
+		});
 	} catch {
-		const style = document.createElement('style');
-		style.textContent = css;
-		root.prepend(style);
+		let style = root.querySelector<HTMLStyleElement>('style[data-croit-aiplane]');
+		if (!style) {
+			style = document.createElement('style');
+			style.setAttribute('data-croit-aiplane', '');
+			root.prepend(style);
+		}
+		style.textContent = css.join('\n');
 	}
 }

@@ -28,7 +28,6 @@ use std::time::Instant;
 use jiff::Timestamp;
 
 use crate::rama_server::multipart::{MultipartField, build_multipart, parse_multipart_fields};
-use crate::rama_server::vad;
 use aiplane_core::server::auth::UserCtx;
 use aiplane_core::server::automatic_routing::{
     AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError,
@@ -38,6 +37,7 @@ use aiplane_core::server::upstreams::registry::{Acquired, RouteError};
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use aiplane_core::server::usage::UsageHandle;
 use aiplane_features::server::speech::{self, SpokenMarkers};
+use aiplane_features::server::vad;
 use aiplane_runtime::content_guard::{self, Action as ContentGuardAction};
 use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;

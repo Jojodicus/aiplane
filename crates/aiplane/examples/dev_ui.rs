@@ -194,6 +194,18 @@ async fn main() -> anyhow::Result<()> {
         .mount(&voice_mock)
         .await;
 
+    // Spoken answers for the embed widget's read-aloud: half a second of a
+    // tone as WAV, which the widget decodes like any speech answer.
+    Mock::given(method("POST"))
+        .and(path("/audio/speech"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "audio/wav")
+                .set_body_bytes(tone_wav(0.5)),
+        )
+        .mount(&chat_mock)
+        .await;
+
     // --- RamaState (in-memory SQLite + chat + transcription pools) ---
     let pool = db::open(std::path::Path::new(":memory:")).await?;
     let mut pools = HashMap::new();
@@ -283,8 +295,8 @@ async fn main() -> anyhow::Result<()> {
     );
     // Speech (TTS) pool — its mere presence flips `voice_available` on so the
     // chat composer renders the live-voice button (and modal). Points at the
-    // chat mock's URL (never actually called just to render the button);
-    // an explicit pool model keeps it out of the
+    // chat mock's URL, which answers `/audio/speech` with a short tone for
+    // the embed widget; an explicit pool model keeps it out of the
     // /models discovery path.
     pools.insert(
         "speech".to_string(),
@@ -812,6 +824,11 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
             "otp": { "kind": "mcp_code", "connector": "erp", "email_slot": "email",
                      "writes": { "verified": "result" } }
         },
+        "profile": { "color": "#0b6bcb" },
+        "publish": { "voice": {
+            "input": true, "output": true,
+            "transcription_pool": "voice", "speech_pool": "speech"
+        } },
         "router": { "kind": "rules", "order": ["billing", "staff"] },
         "routes": {
             "billing": {
@@ -844,6 +861,9 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
     let id = &agent.principal.id;
     system_principals::add_grant(&state.db, id, GrantKind::Pool, "chat", "dev").await?;
     system_principals::add_grant(&state.db, id, GrantKind::Connector, "erp", "dev").await?;
+    for voice_pool in ["voice", "speech"] {
+        system_principals::add_grant(&state.db, id, GrantKind::Pool, voice_pool, "dev").await?;
+    }
     agents::publish(&state.db, id, &spec, "dev").await?;
     agent_responders::add(&state.db, id, SubjectKind::User, "eng", "dev").await?;
     let key_hash = token::hash_embed_key(DEV_EMBED_KEY)
@@ -863,6 +883,25 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
     )
     .await?;
     Ok(())
+}
+
+/// `seconds` of a 440 Hz tone as 16 kHz mono 16-bit WAV.
+fn tone_wav(seconds: f64) -> Vec<u8> {
+    let samples = (seconds * 16_000.0) as u32;
+    let mut out = Vec::with_capacity(44 + samples as usize * 2);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + samples * 2).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    for v in [16u32, 1 | (1 << 16), 16_000, 32_000, 2 | (16 << 16)] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(samples * 2).to_le_bytes());
+    for i in 0..samples {
+        let v = (f64::from(i) * 440.0 * std::f64::consts::TAU / 16_000.0).sin() * 6_000.0;
+        out.extend_from_slice(&(v as i16).to_le_bytes());
+    }
+    out
 }
 
 /// The dev ERP: an MCP server with `send_code` and `check_code` that

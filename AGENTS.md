@@ -126,7 +126,7 @@ accessors of the agent tables (`agents`, `system_principals`, `agent_audit`,
 
 Inside `crates/aiplane-features/src/server/`: the optional subsystems — `rag/`,
 `skills.rs`, `comfyui/`, `push/`, `github/`, `geoip/`, `typst.rs`, `image_gen.rs`,
-`chat_attachments.rs`, `embeddings.rs`, `speech.rs`, `pdf.rs`, `ocr.rs`,
+`chat_attachments.rs`, `embeddings.rs`, `speech.rs`, `vad.rs` (silence trimming ahead of Whisper), `pdf.rs`, `ocr.rs`,
 `search_settings.rs`, `document_canvas.rs`. None of them may name `AppState` or the
 tool registry.
 
@@ -180,7 +180,6 @@ rama_server/              # routing glue only:
     oidc_handlers.rs          /auth/{login,callback,logout}
     embed_cors.rs             CORS for /api/v0/embed/*, scoped to embed-key origins
     rag_api.rs sandbox_api.rs comfyui_api.rs
-    vad.rs                    silence trimming ahead of Whisper
 tests/it/                 # integration suite — builds the router, serves requests in-process
 ```
 
