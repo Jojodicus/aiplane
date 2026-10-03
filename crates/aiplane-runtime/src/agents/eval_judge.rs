@@ -8,6 +8,7 @@
 //! no slot values, no tool results. Its verdict is reported next to a case's
 //! deterministic result and never changes it.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -103,7 +104,9 @@ impl RubricJudge for PoolJudge {
         if !resp.status().is_success() {
             return Err(format!("the judge's upstream answered {}", resp.status()));
         }
-        let parsed: Value = resp.json().await.map_err(|e| e.to_string())?;
+        let parsed: Value = capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES)
+            .await
+            .map_err(|e| e.to_string())?;
         drop(acquired);
         let content = parsed
             .pointer("/choices/0/message/content")

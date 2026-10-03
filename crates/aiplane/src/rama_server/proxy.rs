@@ -11,12 +11,12 @@
 //! `Authorization` is stripped, upstream `api_key_env` is injected,
 //! hop-by-hop headers are filtered both directions.
 
+use aiplane_core::server::capped_read;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rama::bytes::Bytes;
 use rama::futures::channel::mpsc;
-use rama::futures::stream;
 use rama::http::service::web::extract::State;
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{HeaderMap, HeaderName, Method, Request, Response, StatusCode};
@@ -27,6 +27,7 @@ use std::time::Instant;
 
 use jiff::Timestamp;
 
+use crate::rama_server::multipart::{MultipartField, build_multipart, parse_multipart_fields};
 use crate::rama_server::vad;
 use aiplane_core::server::auth::UserCtx;
 use aiplane_core::server::automatic_routing::{
@@ -573,7 +574,10 @@ async fn forward_one_round_once(
         }
     };
     let status = resp.status().as_u16();
-    let bytes = match resp.bytes().await {
+    let bytes = match capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .map(Bytes::from)
+    {
         Ok(b) => b,
         Err(e) => {
             acquired.backend().set_healthy(false);
@@ -1326,53 +1330,6 @@ async fn handle_transcription(
     with_resolved_model_header(resp, &model, &real_model)
 }
 
-/// A single parsed multipart field. We hold everything in memory — the
-/// existing handler already buffered the whole body to extract `model`,
-/// so this just makes the same buffering reusable for the rebuild.
-struct MultipartField {
-    name: String,
-    filename: Option<String>,
-    content_type: Option<String>,
-    bytes: Bytes,
-}
-
-async fn parse_multipart_fields(
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<Vec<MultipartField>, String> {
-    let ct = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            "missing Content-Type; transcription requires multipart/form-data".to_string()
-        })?;
-    let boundary = multer::parse_boundary(ct)
-        .map_err(|e| format!("Content-Type is not a multipart/form-data: {e}"))?;
-    let stream_once = stream::once(async move { Ok::<_, std::io::Error>(body) });
-    let mut mp = multer::Multipart::new(stream_once, boundary);
-    let mut fields = Vec::new();
-    while let Some(field) = mp
-        .next_field()
-        .await
-        .map_err(|e| format!("malformed multipart: {e}"))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().map(str::to_owned);
-        let content_type = field.content_type().map(|m| m.essence_str().to_string());
-        let bytes = field
-            .bytes()
-            .await
-            .map_err(|e| format!("reading multipart field `{name}`: {e}"))?;
-        fields.push(MultipartField {
-            name,
-            filename,
-            content_type,
-            bytes,
-        });
-    }
-    Ok(fields)
-}
-
 /// If the field set contains a `file` part, run it through VAD trim and
 /// overwrite the bytes/filename/content-type with the trimmed WAV.
 /// Falls back to the original part on any rejection (wrong format,
@@ -1392,63 +1349,6 @@ fn trim_audio_field(fields: Vec<MultipartField>) -> Vec<MultipartField> {
         out.push(f);
     }
     out
-}
-
-/// Serialise a parsed field set back into a multipart body. Returns the
-/// body bytes and the matching `Content-Type` header value (boundary
-/// included).
-fn build_multipart(fields: &[MultipartField]) -> Result<(Bytes, String), String> {
-    let boundary = format!("------rama-vad-{}", uuid::Uuid::new_v4().simple());
-    let mut out: Vec<u8> = Vec::with_capacity(
-        fields
-            .iter()
-            .map(|f| f.bytes.len() + f.name.len() + 64)
-            .sum::<usize>()
-            + boundary.len() * (fields.len() + 1),
-    );
-    for f in fields {
-        // multer hands us the field name verbatim; we don't accept
-        // arbitrary user input here (the chat composer + the API
-        // client are the only writers), so a quote in the name is a
-        // bug, not a security concern — reject loudly rather than
-        // emit a malformed Content-Disposition.
-        if f.name.contains('"') || f.name.contains('\r') || f.name.contains('\n') {
-            return Err(format!(
-                "multipart field name `{}` contains invalid characters",
-                f.name
-            ));
-        }
-        out.extend_from_slice(b"--");
-        out.extend_from_slice(boundary.as_bytes());
-        out.extend_from_slice(b"\r\n");
-        out.extend_from_slice(b"Content-Disposition: form-data; name=\"");
-        out.extend_from_slice(f.name.as_bytes());
-        out.push(b'"');
-        if let Some(fname) = f.filename.as_deref() {
-            if fname.contains('"') || fname.contains('\r') || fname.contains('\n') {
-                return Err(format!(
-                    "multipart filename `{fname}` contains invalid characters"
-                ));
-            }
-            out.extend_from_slice(b"; filename=\"");
-            out.extend_from_slice(fname.as_bytes());
-            out.push(b'"');
-        }
-        out.extend_from_slice(b"\r\n");
-        if let Some(ct) = f.content_type.as_deref() {
-            out.extend_from_slice(b"Content-Type: ");
-            out.extend_from_slice(ct.as_bytes());
-            out.extend_from_slice(b"\r\n");
-        }
-        out.extend_from_slice(b"\r\n");
-        out.extend_from_slice(&f.bytes);
-        out.extend_from_slice(b"\r\n");
-    }
-    out.extend_from_slice(b"--");
-    out.extend_from_slice(boundary.as_bytes());
-    out.extend_from_slice(b"--\r\n");
-    let content_type = format!("multipart/form-data; boundary={boundary}");
-    Ok((Bytes::from(out), content_type))
 }
 
 /// `POST /v1/embeddings` — OpenAI-compatible text embeddings. Byte-dumb
@@ -2253,7 +2153,10 @@ async fn forward(
         .filter(|(n, _)| is_response_header_forwarded(n))
         .map(|(n, v)| (n.clone(), v.clone()))
         .collect();
-    let bytes = match upstream.bytes().await {
+    let bytes = match capped_read::read_capped(upstream, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .map(Bytes::from)
+    {
         Ok(b) => b,
         Err(err) => {
             drop(acquired);
@@ -2442,7 +2345,10 @@ async fn forward_streaming(
     // byte-dumb stream relay below never inspects status), then relay the same
     // status + body verbatim. Auto-learning fires before the client sees it.
     if !status.is_success() {
-        let bytes = upstream.bytes().await.unwrap_or_default();
+        let bytes = capped_read::read_capped(upstream, capped_read::MODEL_ANSWER_BYTES)
+            .await
+            .map(Bytes::from)
+            .unwrap_or_default();
         let retryable = is_retryable_dispatch_status(status.as_u16());
         if retryable {
             acquired.backend().set_healthy(false);
@@ -3300,7 +3206,10 @@ async fn drive_streaming_tool_loop_inner(
         };
         if !upstream.status().is_success() {
             let status = upstream.status();
-            let bytes = upstream.bytes().await.unwrap_or_default();
+            let bytes = capped_read::read_capped(upstream, capped_read::MODEL_ANSWER_BYTES)
+                .await
+                .map(Bytes::from)
+                .unwrap_or_default();
             drop(acquired);
             rec.emit(
                 &state.usage,

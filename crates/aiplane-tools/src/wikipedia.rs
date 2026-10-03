@@ -6,6 +6,7 @@
 //! "who/what is X" questions. One request to the MediaWiki action API:
 //! search for the best-matching article and return its intro extract + URL.
 
+use aiplane_core::server::capped_read;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
@@ -115,8 +116,7 @@ impl Tool for Wikipedia {
                     resp.status()
                 )));
             }
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("Wikipedia response parse: {e}")))?;
 

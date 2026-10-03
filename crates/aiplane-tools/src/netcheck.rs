@@ -8,6 +8,7 @@
 //! of low-risk capability that's safe to leave always-on (see the tool
 //! catalog's "Web & Network" group).
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -123,8 +124,7 @@ impl Tool for DnsLookup {
                 .send()
                 .await
                 .map_err(|e| ToolError::Failed(format!("DoH request failed: {e}")))?;
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("DoH response parse: {e}")))?;
 
@@ -232,8 +232,7 @@ impl Tool for WhoisLookup {
                     resp.status()
                 )));
             }
-            let body: Value = resp
-                .json()
+            let body: Value = capped_read::read_capped_json(resp, capped_read::API_ANSWER_BYTES)
                 .await
                 .map_err(|e| ToolError::Failed(format!("RDAP response parse: {e}")))?;
             Ok(rdap_summary(domain, &body))

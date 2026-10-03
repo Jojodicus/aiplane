@@ -23,6 +23,7 @@
 //! serving traffic with empty model sets — the first `POST /v1/chat/
 //! completions` lands on a registry that already knows what's where.
 
+use crate::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -523,7 +524,7 @@ async fn probe_once(
     // leave the model set unchanged, so the operator can either keep
     // a previously-populated set or accept that the backend won't be
     // routable.
-    let body = match resp.bytes().await {
+    let body = match capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES).await {
         Ok(b) => b,
         Err(err) => {
             tracing::debug!(

@@ -24,6 +24,7 @@
 //! delimited block and never as a system message — a scanned page that says
 //! "ignore your instructions" is content, not an instruction.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -147,6 +148,8 @@ pub enum OcrError {
     TooLarge { bytes: usize, limit: usize },
     #[error("calling OCR upstream: {0}")]
     Transport(#[from] reqwest::Error),
+    #[error("reading the OCR upstream's answer: {0}")]
+    Read(#[from] capped_read::CappedReadError),
     #[error("OCR upstream returned status {status}: {body}")]
     UpstreamStatus { status: u16, body: String },
     #[error("parsing OCR response: {0}")]
@@ -591,7 +594,7 @@ pub async fn recognize_document(
     }
     let response = request.send().await?;
     let status = response.status();
-    let bytes = response.bytes().await?;
+    let bytes = capped_read::read_capped(response, capped_read::MODEL_ANSWER_BYTES).await?;
     drop(acquired);
 
     if !status.is_success() {

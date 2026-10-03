@@ -25,6 +25,7 @@
 //! version + model, so a full corpus rebuild re-embeds but re-runs neither
 //! OCR nor this pass.
 
+use aiplane_core::server::capped_read;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -42,6 +43,8 @@ pub enum ProfileError {
     NoModel(String),
     #[error("extraction request failed: {0}")]
     Transport(#[from] reqwest::Error),
+    #[error("reading the extraction backend's answer: {0}")]
+    Read(#[from] capped_read::CappedReadError),
     #[error("extraction backend returned HTTP {status}: {body}")]
     Status { status: u16, body: String },
     #[error("extraction backend did not return usable JSON: {0}")]
@@ -278,16 +281,15 @@ async fn call_model(
     if !status.is_success() {
         return Err(ProfileError::Status {
             status: status.as_u16(),
-            body: resp
-                .text()
+            body: capped_read::read_error_text(resp)
                 .await
-                .unwrap_or_default()
                 .chars()
                 .take(400)
                 .collect(),
         });
     }
-    let parsed: Value = resp.json().await?;
+    let parsed: Value =
+        capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES).await?;
     let content = parsed
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)

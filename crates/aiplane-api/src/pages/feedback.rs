@@ -27,6 +27,7 @@
 //!   - POST /api/v0/feedback/extract  → transcript → structured fields
 //!   - POST /api/v0/feedback          → file the issue
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
@@ -316,7 +317,9 @@ async fn extract_fields(
     }
     let resp = http_req.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
     drop(acquired);
     if !status.is_success() {
         return Err(format!(

@@ -554,6 +554,93 @@ fn request_bodies_are_read_only_through_the_capped_readers() {
 }
 
 // ---------------------------------------------------------------------------
+// Unbounded response body reads.
+
+/// Where a body may be read whole with `.bytes()` / `.text()` / `.json()`.
+/// Outbound responses never are: they go through `capped_read`.
+const WHOLE_BODY_READS: &[Allowed] = &[
+    Allowed {
+        path: "aiplane-api/src/pages/chat/mod.rs",
+        why: "the fields of an inbound multipart upload, behind BodyLimitLayer — not a response",
+    },
+    Allowed {
+        path: "aiplane-api/src/pages/json_skills.rs",
+        why: "the field of an inbound skill-archive upload, behind BodyLimitLayer — not a \
+              response",
+    },
+    Allowed {
+        path: "aiplane/src/rama_server/multipart.rs",
+        why: "the fields of an inbound /v1 multipart upload, behind BodyLimitLayer — not a \
+              response",
+    },
+];
+
+/// Offsets of `.bytes()`, `.text()`, `.json()` and `.json::<…>()` calls that
+/// are awaited: reqwest's whole-body reads (and multipart's). `str::bytes()`
+/// and friends are never awaited, so they do not match.
+fn awaited_whole_body_reads(code: &str) -> Vec<(usize, &'static str)> {
+    let mut out = Vec::new();
+    for (needle, name) in [
+        (".bytes()", ".bytes()"),
+        (".text()", ".text()"),
+        (".json()", ".json()"),
+        (".json::<", ".json::<…>()"),
+    ] {
+        for at in offsets(code, needle) {
+            let mut end = at + needle.len();
+            if needle.ends_with('<') {
+                let mut depth = 1;
+                let bytes = code.as_bytes();
+                while end < bytes.len() && depth > 0 {
+                    match bytes[end] {
+                        b'<' => depth += 1,
+                        b'>' => depth -= 1,
+                        _ => {}
+                    }
+                    end += 1;
+                }
+                if !code[end..].starts_with("()") {
+                    continue;
+                }
+                end += 2;
+            }
+            if code[end..].trim_start().starts_with(".await") {
+                out.push((at, name));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn response_bodies_are_read_only_through_the_capped_reader() {
+    let mut hits = Vec::new();
+    for src in production_sources() {
+        for (at, name) in awaited_whole_body_reads(&src.code) {
+            hits.push((src.rel.clone(), line_of(&src.code, at), name.to_string()));
+        }
+    }
+    assert_within(
+        "A response body is read whole. `.bytes()` / `.text()` / `.json()` buffer whatever \
+         the peer sends; read through aiplane_core::server::capped_read (read_capped, \
+         read_capped_for, read_capped_json, read_capped_text, read_error_text) with a cap that fits the use.",
+        WHOLE_BODY_READS,
+        &hits,
+    );
+}
+
+#[test]
+fn the_whole_body_scan_matches_awaited_reads_only() {
+    let code = "let a = resp.bytes().await?; let b = s.bytes().count(); \
+                let c = r.json::<Vec<u8>>()\n    .await; let d = r.text().await;";
+    let names: Vec<&str> = awaited_whole_body_reads(code)
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(names, [".bytes()", ".text()", ".json::<…>()"]);
+}
+
+// ---------------------------------------------------------------------------
 // Agent spec JSON.
 
 /// Where an agent spec's JSON may be read by key: the validator walk, and

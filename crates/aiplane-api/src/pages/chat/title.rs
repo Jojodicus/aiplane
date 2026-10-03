@@ -15,6 +15,7 @@
 //! (if any) so the sidebar row updates in place without waiting for
 //! the user's next navigation.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 
 use session_core::TurnUpdate;
@@ -208,7 +209,9 @@ async fn call_upstream(
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
     drop(acquired);
     if !status.is_success() {
         return Err(format!(

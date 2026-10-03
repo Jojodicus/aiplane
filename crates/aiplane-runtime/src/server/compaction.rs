@@ -26,6 +26,7 @@
 //! never deleted — they stay in `chat_turns` and remain visible in the
 //! transcript; they are simply not sent upstream.
 
+use aiplane_core::server::capped_read;
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 
 use crate::rama_server::state::RamaState;
@@ -362,7 +363,9 @@ async fn call_summarizer(
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
     drop(acquired);
     if !status.is_success() {
         return Err(format!(

@@ -33,6 +33,7 @@
 //! still skips fetch/extract/embed for every file whose `version` is
 //! unchanged, so a re-sync costs listings rather than documents.
 
+use aiplane_core::server::capped_read;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -249,7 +250,7 @@ impl GoogleDriveProvider {
                 hint: "The folder id may be wrong, or the connected account cannot see it.",
             }),
             _ => {
-                let body = resp.text().await.unwrap_or_default();
+                let body = capped_read::read_error_text(resp).await;
                 Err(ProviderError::Status {
                     provider: KIND,
                     status,
@@ -284,7 +285,7 @@ impl GoogleDriveProvider {
             }
         }
         let resp = self.get(url).await?;
-        resp.json::<FileList>()
+        capped_read::read_capped_json::<FileList>(resp, capped_read::API_ANSWER_BYTES)
             .await
             .map_err(|e| ProviderError::Malformed(format!("listing was not valid JSON: {e}")))
     }
@@ -618,12 +619,11 @@ impl FileProvider for GoogleDriveProvider {
     async fn probe(&self) -> Result<ProbeReport, ProviderError> {
         let about_url = reqwest::Url::parse(&format!("{API}/about?fields=user(emailAddress)"))
             .map_err(|e| ProviderError::Config(e.to_string()))?;
-        let about = self
-            .get(about_url)
-            .await?
-            .json::<AboutResponse>()
-            .await
-            .map_err(|e| ProviderError::Malformed(format!("about was not valid JSON: {e}")))?;
+        let about = self.get(about_url).await?;
+        let about =
+            capped_read::read_capped_json::<AboutResponse>(about, capped_read::API_ANSWER_BYTES)
+                .await
+                .map_err(|e| ProviderError::Malformed(format!("about was not valid JSON: {e}")))?;
         let page = self.list_page(&self.root_folder_id, None).await?;
         Ok(ProbeReport {
             account: about.user.and_then(|u| u.email_address),

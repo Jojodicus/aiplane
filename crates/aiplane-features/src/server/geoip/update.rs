@@ -11,6 +11,7 @@
 //! an operator. With no token the task is never spawned, so the gateway
 //! runs unchanged.
 
+use aiplane_core::server::capped_read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -24,6 +25,8 @@ const UPDATE_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// A real DB11 BIN is tens of MB; anything tiny is an error/quota page
 /// returned with a 200, not a database.
 const MIN_PLAUSIBLE_BYTES: usize = 1024 * 1024;
+/// The largest download accepted. The DB11 LITE archive is well under it.
+const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Spawn the background updater. No-op (logs and returns without
 /// spawning) when no token is configured — the explicit "works without a
@@ -84,7 +87,7 @@ async fn update_once(db_path: &Path, token: &str) -> anyhow::Result<()> {
         .send()
         .await?
         .error_for_status()?;
-    let bytes = resp.bytes().await?;
+    let bytes = capped_read::read_capped(resp, MAX_DOWNLOAD_BYTES).await?;
     // IP2Location answers quota/auth problems with a short text body and a
     // 200, so size-guard before treating the payload as an archive.
     anyhow::ensure!(

@@ -9,6 +9,7 @@
 //! model on the primary model's capability row. The fallback model must be
 //! routable via the normal upstream registry.
 
+use crate::server::capped_read;
 use serde_json::Value;
 
 use crate::server::db::model_defaults;
@@ -128,7 +129,7 @@ async fn describe_image(
         req = req.bearer_auth(key);
     }
     let resp = req.send().await?.error_for_status()?;
-    let json: Value = resp.json().await?;
+    let json: Value = capped_read::read_capped_json(resp, capped_read::MODEL_ANSWER_BYTES).await?;
     let text = json
         .get("choices")
         .and_then(|c| c.get(0))

@@ -26,6 +26,7 @@
 //! `rama_server::sandbox_api`). With no `[chat.s3]` configured, files are
 //! reported as metadata only.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -208,7 +209,12 @@ impl SandboxClient {
         use std::sync::atomic::Ordering;
         let url = format!("{}/healthz", self.cfg.runner_url.trim_end_matches('/'));
         let health = match self.http.get(&url).send().await {
-            Ok(resp) => resp.json::<shared::sandbox::RunnerHealth>().await.ok(),
+            Ok(resp) => capped_read::read_capped_json::<shared::sandbox::RunnerHealth>(
+                resp,
+                capped_read::API_ANSWER_BYTES,
+            )
+            .await
+            .ok(),
             Err(e) => {
                 tracing::warn!(error = %e,
                     "sandbox runner health probe failed; assuming egress is available \
@@ -269,8 +275,7 @@ impl SandboxClient {
             .await
             .map_err(|e| ToolError::Failed(format!("sandbox runner unreachable: {e}")))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
+        let bytes = capped_read::read_capped(resp, MAX_RUNNER_RESPONSE_BYTES)
             .await
             .map_err(|e| ToolError::Failed(format!("reading runner response: {e}")))?;
         if !status.is_success() {
@@ -801,6 +806,11 @@ fn urlencode_segment(s: &str) -> String {
 /// files past the budget are skipped with a note rather than silently
 /// dropping the model's inputs.
 const STAGE_TOTAL_MAX_BYTES: usize = 50 * 1024 * 1024;
+
+/// The largest runner answer read. Artifacts ride in it as base64 and are
+/// bounded only by the sandbox's `/work` size (512 MiB by default), so this
+/// is that, inflated, with room to spare.
+const MAX_RUNNER_RESPONSE_BYTES: u64 = 768 * 1024 * 1024;
 
 // A full staging budget, base64-inflated, must still fit the runner's `/run`
 // limit with room for the code and inline files.

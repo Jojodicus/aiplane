@@ -21,6 +21,7 @@
 //! PKCE verifier / DCR client between [`build_authorization`] and
 //! [`exchange_code`] (see `db::user_mcp::pending_mcp_oauth`).
 
+use crate::server::capped_read;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -342,7 +343,9 @@ async fn get_json<T: for<'de> Deserialize<'de>>(http: &reqwest::Client, url: &st
     if !resp.status().is_success() {
         return None;
     }
-    resp.json::<T>().await.ok()
+    capped_read::read_capped_json::<T>(resp, capped_read::API_ANSWER_BYTES)
+        .await
+        .ok()
 }
 
 /// SSRF guard for every URL the gateway itself fetches/POSTs during the OAuth
@@ -410,7 +413,9 @@ pub async fn register_client(
         .await
         .map_err(|e| OauthError::Registration(format!("POST {registration_url}: {e}")))?;
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let text = capped_read::read_capped_text(resp, capped_read::API_ANSWER_BYTES)
+        .await
+        .unwrap_or_default();
     if !status.is_success() {
         return Err(OauthError::Registration(format!(
             "{registration_url} returned {status}: {}",
@@ -568,7 +573,9 @@ async fn post_token(
         .await
         .map_err(|e| OauthError::Exchange(format!("POST {token_url}: {e}")))?;
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let text = capped_read::read_capped_text(resp, capped_read::API_ANSWER_BYTES)
+        .await
+        .unwrap_or_default();
     // Surface a structured OAuth error first — some providers return it with a
     // 200 *and* an error body, so don't gate this on the status code (RFC 6749
     // §5.2 error shape: {"error": "...", "error_description": "..."}).

@@ -24,6 +24,7 @@ by tests that read the workspace's own source, in
 |---|---|---|
 | `outbound_http_clients_are_built_only_at_the_vetted_sites` | a reqwest client (`Client::new`/`builder`, `ClientBuilder::new`, `reqwest::get`, under any `use` alias) is built only in the listed files | the net_guard-checked, pinned client in `aiplane-core/src/server/outbound_guard.rs` for destinations a user, model or agent owner chooses; `AppState::http` for operator-configured backends |
 | `request_bodies_are_read_only_through_the_capped_readers` | nothing outside `session_core::chrome` names `BodyExt` or drains a body with `into_data_stream` (the sandbox runner, outside the stack, has its own capped `/run` reader); `read_body_to_bytes`/`read_json` appear only behind `BodyLimitLayer` (`aiplane/src/rama_server/`, `aiplane-api/src/`) and never in the modules serving a prefix the layer passes through (`HANDLER_CAPPED_PREFIXES`) | `read_body_capped`, `read_body_prefix`, `read_json_capped`, `BodyLimitLayer` |
+| `response_bodies_are_read_only_through_the_capped_reader` | no `.bytes()`, `.text()`, `.json()` or `.json::<T>()` is awaited outside the listed files — the inbound multipart readers (`aiplane-api` chat and skill uploads, `aiplane/src/rama_server/multipart.rs`), whose bodies `BodyLimitLayer` already bounded | `capped_read::read_capped` / `read_capped_json` / `read_capped_text` / `read_error_text`, with a cap per use (`API_ANSWER_BYTES`, `MODEL_ANSWER_BYTES`, or the caller's own) |
 | `agent_spec_json_is_read_only_by_the_validator` | no JSON accessor (`.get`, `.get_mut`, `.remove`, `.pointer`, `[..]`) names a spec key (`publish`, `routes`, `main`, …) outside the validator | the typed `AgentSpec` from `CompiledSpec::agent()` |
 | `workspace_crates_depend_only_down_the_stack` | every dependency between workspace members (normal, build, dev; from `cargo metadata --no-deps --offline`) points to a lower level of the AGENTS.md stack; siblings (`-features`/`-agents`, `-tools`/`-api`) never depend on each other; `sandbox-runner` uses only `shared` and nothing uses it; every member has a level | the stack in AGENTS.md → "The gateway crate stack" |
 | `model_tool_calls_dispatch_only_through_the_grant` | only the chat/agent driver, its resume path and the `/v1` loops hand calls to the runner, and each still builds its gate (`GrantedToolSource`, `DiscoverableToolSource`); `Tool::run` is called directly only by the runner and the listed wrappers/verifiers | `GrantedToolSource` (+ `RunToolSource` over it), `DiscoverableToolSource` |
@@ -42,11 +43,6 @@ The allow-lists are deliberately short, and every entry carries its reason.
 An entry marked **KNOWN GAP** would be a real violation that predates its
 test, listed so the test can land green and stop the next one; fixing it
 removes the entry. There are none at the moment.
-
-Not covered yet: outbound *response* bodies read with reqwest's
-`.bytes()`/`.text()`/`.json()` instead of `capped_read::read_capped` — about 40
-files do, most against operator-configured upstreams, which is too many to
-allow-list file by file.
 
 **Adding one.** Write it in `architecture.rs` next to the others: the needles,
 the view (`code` with literals blanked, or `text` with them kept), an

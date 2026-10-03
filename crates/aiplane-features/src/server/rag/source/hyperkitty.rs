@@ -65,6 +65,7 @@
 //! else to get wrong. Public archives need no credentials, which is why this
 //! provider declares none.
 
+use aiplane_core::server::capped_read;
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -413,13 +414,17 @@ impl Hyperkitty {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(status_error(status.as_u16(), url, resp.text().await));
+            return Err(status_error(
+                status.as_u16(),
+                url,
+                capped_read::read_error_text(resp).await,
+            ));
         }
         Ok(resp)
     }
 }
 
-fn status_error(status: u16, url: &str, body: Result<String, reqwest::Error>) -> ProviderError {
+fn status_error(status: u16, url: &str, body: String) -> ProviderError {
     match status {
         401 => ProviderError::Unauthorized {
             provider: KIND,
@@ -443,7 +448,7 @@ fn status_error(status: u16, url: &str, body: Result<String, reqwest::Error>) ->
         _ => ProviderError::Status {
             provider: KIND,
             status,
-            body: body.unwrap_or_default().chars().take(400).collect(),
+            body: body.chars().take(400).collect(),
         },
     }
 }

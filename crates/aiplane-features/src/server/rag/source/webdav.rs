@@ -28,6 +28,7 @@
 //! etag proves an unchanged subtree. That is a guarantee of *those* servers,
 //! not of WebDAV, which is exactly why it is gated behind detection.
 
+use aiplane_core::server::capped_read;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -43,6 +44,10 @@ use super::{
 };
 
 const KIND: &str = "webdav";
+
+/// The largest PROPFIND listing read. A folder of tens of thousands of
+/// entries stays well under it.
+const MAX_LISTING_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The PROPFIND body. Requests the ownCloud extension properties alongside
 /// the standard ones; a server that doesn't know them answers with a 404
@@ -286,22 +291,17 @@ impl WebdavProvider {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(self.status_error(status.as_u16(), url, resp.text().await));
+            return Err(self.status_error(
+                status.as_u16(),
+                url,
+                capped_read::read_error_text(resp).await,
+            ));
         }
-        resp.text()
-            .await
-            .map_err(|source| ProviderError::Transport {
-                provider: KIND,
-                source,
-            })
+        let listing = super::read_capped(KIND, url, resp, MAX_LISTING_BYTES).await?;
+        Ok(String::from_utf8_lossy(&listing).into_owned())
     }
 
-    fn status_error(
-        &self,
-        status: u16,
-        url: &str,
-        body: Result<String, reqwest::Error>,
-    ) -> ProviderError {
+    fn status_error(&self, status: u16, url: &str, body: String) -> ProviderError {
         match status {
             401 => ProviderError::Unauthorized {
                 provider: KIND,
@@ -324,7 +324,7 @@ impl WebdavProvider {
             _ => ProviderError::Status {
                 provider: KIND,
                 status,
-                body: body.unwrap_or_default().chars().take(400).collect(),
+                body: body.chars().take(400).collect(),
             },
         }
     }
@@ -446,7 +446,11 @@ impl FileProvider for WebdavProvider {
             })?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(self.status_error(status.as_u16(), &url, resp.text().await));
+            return Err(self.status_error(
+                status.as_u16(),
+                &url,
+                capped_read::read_error_text(resp).await,
+            ));
         }
         // Capped while reading, not after: a server that lied about
         // content-length (or a file that grew between listing and fetch)
