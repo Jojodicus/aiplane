@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use super::{DbError, Pool};
+use super::{DbError, Pool, parse_ts};
 use crate::server::crypto::{Crypto, Sealed};
 
 /// Lifecycle of an indexable source from the indexer's point of view.
@@ -205,13 +205,6 @@ pub struct NewCollection {
     pub refresh_interval_mins: i64,
 }
 
-fn parse_ts(s: &str, column: &'static str) -> Result<Timestamp, DbError> {
-    s.parse().map_err(|e: jiff::Error| DbError::Decode {
-        column,
-        source: e.into(),
-    })
-}
-
 fn decode_globs(s: &str, column: &'static str) -> Result<Vec<String>, DbError> {
     serde_json::from_str(s).map_err(|e| DbError::Decode {
         column,
@@ -285,8 +278,8 @@ fn map_collection_row(row: &SqliteRow) -> Result<Collection, DbError> {
                 source: anyhow::Error::from(e),
             })?
         },
-        created_at: parse_ts(&created_at_s, "created_at")?,
-        updated_at: parse_ts(&updated_at_s, "updated_at")?,
+        created_at: parse_ts(created_at_s, "created_at")?,
+        updated_at: parse_ts(updated_at_s, "updated_at")?,
     })
 }
 
@@ -704,7 +697,7 @@ const REF_COLUMNS: &str = "id, collection_id, git_ref, git_url, is_primary, data
 fn map_ref_row(row: &SqliteRow) -> Result<CollectionRef, DbError> {
     let last_indexed_at: Option<String> = row.try_get("last_indexed_at")?;
     let last_indexed_at = last_indexed_at
-        .map(|s| parse_ts(&s, "last_indexed_at"))
+        .map(|s| parse_ts(s, "last_indexed_at"))
         .transpose()?;
     let created_at_s: String = row.try_get("created_at")?;
     let updated_at_s: String = row.try_get("updated_at")?;
@@ -729,8 +722,8 @@ fn map_ref_row(row: &SqliteRow) -> Result<CollectionRef, DbError> {
         },
         force_full_rebuild: row.try_get::<i64, _>("force_full_rebuild")? != 0,
         extractor_fingerprint: row.try_get("extractor_fingerprint")?,
-        created_at: parse_ts(&created_at_s, "created_at")?,
-        updated_at: parse_ts(&updated_at_s, "updated_at")?,
+        created_at: parse_ts(created_at_s, "created_at")?,
+        updated_at: parse_ts(updated_at_s, "updated_at")?,
     })
 }
 
@@ -1111,7 +1104,7 @@ pub async fn queue_due_refs(pool: &Pool) -> Result<u64, DbError> {
         let id: i64 = row.try_get("id")?;
         let mins: i64 = row.try_get("mins")?;
         let since: String = row.try_get("since")?;
-        let since = parse_ts(&since, "last_indexed_at")?;
+        let since = parse_ts(since, "last_indexed_at")?;
         let elapsed = now.as_second().saturating_sub(since.as_second());
         if elapsed >= mins.saturating_mul(60) {
             due.push(id);
@@ -1252,7 +1245,7 @@ fn map_log_row(row: &SqliteRow) -> Result<IndexLogEntry, DbError> {
         id: row.try_get("id")?,
         ref_id: row.try_get("ref_id")?,
         collection_id: row.try_get("collection_id")?,
-        created_at: parse_ts(&created_at_s, "created_at")?,
+        created_at: parse_ts(created_at_s, "created_at")?,
         level: LogLevel::from_db(&level_s),
         phase: row.try_get("phase")?,
         message: row.try_get("message")?,
@@ -1394,7 +1387,7 @@ fn map_file_row(row: &SqliteRow) -> Result<IndexedFile, DbError> {
         collection_id: row.try_get("collection_id")?,
         path: row.try_get("path")?,
         content_hash: row.try_get("content_hash")?,
-        indexed_at: parse_ts(&indexed_at_s, "indexed_at")?,
+        indexed_at: parse_ts(indexed_at_s, "indexed_at")?,
     })
 }
 

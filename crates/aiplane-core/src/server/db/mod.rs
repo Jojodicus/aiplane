@@ -99,10 +99,11 @@ pub enum DbError {
 
 /// Parse a stored timestamp string from column `column`, mapping a parse
 /// failure to [`DbError::Decode`]. The single home for timestamp decoding
-/// across the gateway's `db` submodules — mirrors the same helper in
-/// `session-core::db`, but returns the gateway's own [`DbError`] (the two
-/// crates have distinct error types, so the helper can't be shared directly).
-pub(crate) fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestamp, DbError> {
+/// across the gateway's `db` submodules and the runtime's own tables —
+/// mirrors the same helper in `session-core::db`, but returns the gateway's
+/// own [`DbError`] (the two crates have distinct error types, so the helper
+/// can't be shared directly).
+pub fn parse_ts(s: String, column: &'static str) -> Result<jiff::Timestamp, DbError> {
     s.parse().map_err(|e: jiff::Error| DbError::Decode {
         column,
         source: e.into(),
@@ -120,7 +121,7 @@ pub(crate) fn window_key(t: jiff::Timestamp) -> String {
 }
 
 /// [`parse_ts`] for a nullable column: `None` stays `None`, `Some` is parsed.
-pub(crate) fn parse_optional_ts(
+pub fn parse_optional_ts(
     s: Option<String>,
     column: &'static str,
 ) -> Result<Option<jiff::Timestamp>, DbError> {

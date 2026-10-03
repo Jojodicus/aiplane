@@ -99,11 +99,7 @@ pub struct UpstreamConfigSnapshot {
 // ---------------------------------------------------------------------------
 
 fn parse_ts(col: &'static str, row: &SqliteRow) -> Result<Timestamp, DbError> {
-    let s: String = row.try_get(col)?;
-    s.parse().map_err(|e: jiff::Error| DbError::Decode {
-        column: col,
-        source: e.into(),
-    })
+    super::parse_ts(row.try_get::<String, _>(col)?, col)
 }
 
 fn now_rfc3339() -> String {
