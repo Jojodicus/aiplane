@@ -234,7 +234,7 @@ impl World {
         metered: bool,
         tools: crate::server::tools::ToolRegistry,
         db_path: Option<&std::path::Path>,
-        agents: aiplane_core::server::config::AgentsConfig,
+        network: aiplane_core::server::config::NetworkConfig,
     ) -> Self {
         let db =
             aiplane_core::server::db::open(db_path.unwrap_or(std::path::Path::new(":memory:")))
@@ -289,7 +289,7 @@ impl World {
                 upstream_wait_secs: 0,
                 ..Default::default()
             },
-            agents,
+            network,
             ..Default::default()
         };
         let app = crate::server::AppState::new(

@@ -544,7 +544,7 @@ mod tests {
         // previously-core tools like get_current_timestamp.
         let reg = ToolRegistry::new()
             .with(CurrentTimestamp)
-            .with(FetchUrl)
+            .with(FetchUrl::default())
             .with(SearchWeb);
         let et = EnableTools::from_registry(&reg);
         let keys: Vec<&str> = et.catalog.iter().map(|t| t.key.as_str()).collect();
@@ -559,7 +559,7 @@ mod tests {
         // stays granted via RBAC but must never appear as an enableable key
         // (same gate the `/tools` page applies).
         use aiplane_runtime::server::tools::echo::Echo;
-        let reg = ToolRegistry::new().with(Echo).with(FetchUrl);
+        let reg = ToolRegistry::new().with(Echo).with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let keys: Vec<&str> = et.catalog.iter().map(|t| t.key.as_str()).collect();
         assert!(keys.contains(&"fetch_url"));
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn schema_lists_keys_in_description_without_an_enum() {
-        let reg = ToolRegistry::new().with(FetchUrl);
+        let reg = ToolRegistry::new().with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let def = et.schema();
         assert!(def.function.description.contains("fetch_url"));
@@ -628,7 +628,7 @@ mod tests {
         // model must still be able to enable a connected integration.
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg = ToolRegistry::new().with(FetchUrl);
+        let reg = ToolRegistry::new().with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -655,7 +655,9 @@ mod tests {
     async fn run_writes_a_row_for_each_known_key() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg = ToolRegistry::new().with(FetchUrl).with(SearchWeb);
+        let reg = ToolRegistry::new()
+            .with(FetchUrl::default())
+            .with(SearchWeb);
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -684,7 +686,9 @@ mod tests {
         aiplane_core::server::db::chat_session_tools::set(&pool, "s1", "fetch_url", false, "user")
             .await
             .unwrap();
-        let reg = ToolRegistry::new().with(FetchUrl).with(SearchWeb);
+        let reg = ToolRegistry::new()
+            .with(FetchUrl::default())
+            .with(SearchWeb);
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -721,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn run_refuses_without_a_session() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
-        let reg = ToolRegistry::new().with(FetchUrl);
+        let reg = ToolRegistry::new().with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let err = et
             .run(ctx(pool, None).await, json!({"keys": ["fetch_url"]}))
@@ -734,7 +738,7 @@ mod tests {
     async fn unknown_keys_land_in_skipped_not_enabled() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg = ToolRegistry::new().with(FetchUrl);
+        let reg = ToolRegistry::new().with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -759,7 +763,9 @@ mod tests {
     async fn a_key_outside_the_principals_grant_is_skipped_and_never_written() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg = ToolRegistry::new().with(FetchUrl).with(SearchWeb);
+        let reg = ToolRegistry::new()
+            .with(FetchUrl::default())
+            .with(SearchWeb);
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -790,7 +796,7 @@ mod tests {
     async fn an_unresolved_grant_enables_nothing() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let et = EnableTools::from_registry(&ToolRegistry::new().with(FetchUrl));
+        let et = EnableTools::from_registry(&ToolRegistry::new().with(FetchUrl::default()));
         let ctx = ToolContext {
             granted_tools: None,
             ..ctx(pool, Some("s1".into())).await
@@ -818,13 +824,14 @@ mod tests {
         use aiplane_runtime::server::state::AppState;
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg =
-            ToolRegistry::new()
-                .with(FetchUrl)
-                .with(SearchWeb)
-                .with(EnableTools::from_registry(
-                    &ToolRegistry::new().with(FetchUrl).with(SearchWeb),
-                ));
+        let reg = ToolRegistry::new()
+            .with(FetchUrl::default())
+            .with(SearchWeb)
+            .with(EnableTools::from_registry(
+                &ToolRegistry::new()
+                    .with(FetchUrl::default())
+                    .with(SearchWeb),
+            ));
         let config = Config::default();
         // Groups live in the database now, so the grants a fixture wants are
         // built straight into the resolver rather than through a config block.
@@ -884,7 +891,7 @@ mod tests {
     async fn the_result_never_tells_the_model_to_wait_for_another_turn() {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         seed_session(&pool, "s1").await;
-        let reg = ToolRegistry::new().with(FetchUrl);
+        let reg = ToolRegistry::new().with(FetchUrl::default());
         let et = EnableTools::from_registry(&reg);
         let out = et
             .run(
@@ -910,7 +917,9 @@ mod tests {
 
     #[test]
     fn the_schema_description_never_defers_to_a_later_turn() {
-        let reg = ToolRegistry::new().with(FetchUrl).with(SearchWeb);
+        let reg = ToolRegistry::new()
+            .with(FetchUrl::default())
+            .with(SearchWeb);
         let et = EnableTools::from_registry(&reg);
         let desc = et.schema().function.description.to_ascii_lowercase();
         assert!(

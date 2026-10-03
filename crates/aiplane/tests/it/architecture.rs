@@ -323,9 +323,9 @@ fn scan(needles: &[&str], view: fn(&Source) -> &str) -> Vec<(String, usize, Stri
 /// the crate; its destinations are the admin-curated connector catalog.
 const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
-        path: "aiplane-runtime/src/agents/a2a_client/guard.rs",
-        why: "guarded: resolve-and-pin with net_guard, no redirects — the one client for \
-              destinations an agent's owner chooses",
+        path: "aiplane-core/src/server/outbound_guard.rs",
+        why: "guarded: resolve-and-pin with net_guard, every redirect hop re-checked — the one \
+              client for destinations a user, a model or an agent's owner chooses",
     },
     Allowed {
         path: "aiplane-core/src/server/auth/mcp_oauth.rs",
@@ -375,16 +375,6 @@ const OUTBOUND_CLIENTS: &[Allowed] = &[
     Allowed {
         path: "aiplane-tools/src/netcheck.rs",
         why: "fixed hosts: Cloudflare DoH and rdap.org (redirects followed for RDAP bootstrap)",
-    },
-    Allowed {
-        path: "aiplane-tools/src/fetch_url.rs",
-        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
-              to be moved onto the a2a guard's resolve-and-pin client",
-    },
-    Allowed {
-        path: "aiplane-tools/src/load_image_url.rs",
-        why: "KNOWN GAP: the model chooses the URL and nothing checks it against net_guard; \
-              to be moved onto the a2a guard's resolve-and-pin client",
     },
 ];
 
@@ -441,7 +431,7 @@ fn outbound_http_clients_are_built_only_at_the_vetted_sites() {
         "A reqwest client is built outside the vetted sites. A new client is a new place \
          the gateway connects from: a destination a user, a model or an agent's owner can \
          choose must go through the net_guard-checked, pinned client \
-         (aiplane-runtime agents/a2a_client/guard.rs), and one only the operator configures \
+         (aiplane-core server/outbound_guard.rs), and one only the operator configures \
          should reuse AppState::http.",
         OUTBOUND_CLIENTS,
         &hits,

@@ -202,8 +202,11 @@ async fn main() -> anyhow::Result<()> {
             _ => None,
         };
 
-    let mut tool_registry =
-        aiplane::tool_registry::base_registry(rbac.clone(), sandbox_client.clone());
+    let mut tool_registry = aiplane::tool_registry::base_registry(
+        rbac.clone(),
+        sandbox_client.clone(),
+        config.network.allow_private_networks,
+    );
     // `lookup_ip` is GeoIP-only — unlike `get_user_location` (which also has
     // the browser-GPS path), it can do nothing without a database. Register
     // it only when `[geoip]` is configured, so the model is never offered a

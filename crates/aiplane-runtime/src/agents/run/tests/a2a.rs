@@ -15,7 +15,7 @@ use super::suspend::{answer, every_stored_text};
 use super::*;
 use crate::agents::a2a_client as a2a;
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
-use aiplane_core::server::config::AgentsConfig;
+use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
 use session_core::i18n::Lang;
 
@@ -185,8 +185,8 @@ async fn world(main: &MockServer) -> World {
         false,
         base_tools(),
         None,
-        AgentsConfig {
-            a2a_allow_private_networks: true,
+        NetworkConfig {
+            allow_private_networks: true,
         },
     )
     .await
@@ -464,7 +464,7 @@ async fn a_loopback_peer_is_refused_unless_the_operator_allows_private_networks(
     let outcome = forwarded(&main).await["outcome"].clone();
     let message = incomplete_message(&outcome);
     assert!(
-        message.contains("AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS"),
+        message.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS"),
         "{message}"
     );
     assert!(

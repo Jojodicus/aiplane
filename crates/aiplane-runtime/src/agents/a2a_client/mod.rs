@@ -37,6 +37,8 @@ use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agent_a2a_tasks::{self, PendingTask};
 use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_core::server::capped_read;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use serde_json::{Value, json};
 use session_core::i18n::t;
@@ -425,7 +427,7 @@ impl<'a> Remote<'a> {
         target: &A2aTarget,
         timeout: Duration,
     ) -> Result<Self, String> {
-        let allow_private = state.config().agents.a2a_allow_private_networks;
+        let allow_private = state.config().network.allow_private_networks;
         let card = card::fetch(&target.card_url, allow_private).await?;
         same_origin(&target.card_url, &card.endpoint, "endpoint")?;
         let mut remote = Self {
@@ -542,7 +544,8 @@ impl<'a> Remote<'a> {
         {
             return Ok(token);
         }
-        let pinned = guard::pin(token_url, self.allow_private, self.timeout).await?;
+        let pinned =
+            outbound_guard::pin(token_url, Policy::agent(self.allow_private), self.timeout).await?;
         let mut form = vec![
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id),
@@ -563,7 +566,8 @@ impl<'a> Remote<'a> {
         if !status.is_success() {
             return Err(format!("the OAuth token endpoint answered {status}"));
         }
-        let bytes = guard::read_capped(resp, MAX_TOKEN_BYTES, "the OAuth token answer").await?;
+        let bytes =
+            capped_read::read_capped_for(resp, MAX_TOKEN_BYTES, "the OAuth token answer").await?;
         let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the OAuth token answer is not JSON ({e})"))?;
         let token = body
@@ -592,7 +596,12 @@ impl<'a> Remote<'a> {
         if let Some(tenant) = &self.card.tenant {
             params["tenant"] = json!(tenant);
         }
-        let pinned = guard::pin(&self.card.endpoint, self.allow_private, self.timeout).await?;
+        let pinned = outbound_guard::pin(
+            &self.card.endpoint,
+            Policy::agent(self.allow_private),
+            self.timeout,
+        )
+        .await?;
         let mut req = pinned
             .client
             .post(pinned.url)
@@ -616,7 +625,8 @@ impl<'a> Remote<'a> {
             return Err(format!("the external agent answered {status}"));
         }
         let bytes =
-            guard::read_capped(resp, MAX_RESPONSE_BYTES, "the external agent's answer").await?;
+            capped_read::read_capped_for(resp, MAX_RESPONSE_BYTES, "the external agent's answer")
+                .await?;
         let body: Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("the external agent's answer is not JSON ({e})"))?;
         if let Some(error) = body.get("error") {

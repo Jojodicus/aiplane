@@ -1850,13 +1850,11 @@ verifiers:
   required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
   agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
   five minutes per URL and refetched for an unknown `kid`. The JWKS URL is
-  chosen by the agent's owner, so it is fetched through the A2A client's SSRF
-  guard (`a2a_client::guard`, [below](#what-101-built)): resolved and pinned,
-  no redirects, at most 64 KiB, link-local always refused, and loopback,
-  private addresses and plain `http` only under
-  `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true`. The switch kept its name: it
-  governs every URL an agent's owner points the gateway at, the JWKS one
-  included. Answers: `200 {slots}`, `401
+  chosen by the agent's owner, so it is fetched through the same SSRF guard
+  as an A2A route (`outbound_guard`, `Policy::agent`, [below](#what-101-built)):
+  resolved and pinned, no redirects, at most 64 KiB, link-local always
+  refused, and loopback, private addresses and plain `http` only under
+  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true`. Answers: `200 {slots}`, `401
   identity_token_invalid` (the message says what is wrong, never a claim
   value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
   identity_keys_unavailable`. The `503` message is generic — no URL, status
@@ -2314,14 +2312,16 @@ routes:
   only an admin may make it (`403 grant_exceeds_manager` otherwise); the ref
   must pass `check_card_url` (https, or http to a loopback host; no
   credentials or fragment in it).
-- **SSRF** (`guard.rs`). The card URL, the endpoint the card names and the
-  OAuth token URL are each resolved before every connection; every address
+- **SSRF** (`aiplane_core::server::outbound_guard`, `Policy::agent`; the
+  same guard `fetch_url` and `load_image_url` use). The card URL, the
+  endpoint the card names and the OAuth token URL are each resolved before
+  every connection; every address
   must pass, and the request goes out on a client pinned to exactly those
   addresses (`resolve_to_addrs`), with redirects off, so a second DNS answer
   cannot swap in a private one. Always refused: unspecified, link-local
   (169.254.0.0/16 with the metadata endpoint, fe80::/10), broadcast,
   multicast, and their IPv4-mapped forms. Refused unless
-  `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS=true` (`Config.agents`, environment
+  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true` (`Config.network`, environment
   only like `$AIPLANE_TRUSTED_PROXIES`): loopback, RFC 1918, 100.64.0.0/10,
   fc00::/7 and plain `http`. `mcp_oauth::validate_outbound_url` was not
   reused: it allows private ranges on purpose (an admin curates the MCP
@@ -2331,7 +2331,7 @@ routes:
   `incomplete` before anything is sent. The grant names the card URL, so a
   card that points elsewhere — a compromised CDN, a stale host taken over —
   must not collect the route's credential or the task's bound values.
-- **Size caps** (`guard::read_capped`). Every body read from outside — the
+- **Size caps** (`capped_read::read_capped_for`). Every body read from outside — the
   card (256 KiB), the JSON-RPC answer (1 MiB), the OAuth token answer
   (64 KiB) — is refused when its `Content-Length` is over the cap, before a
   byte is read, and otherwise read chunk by chunk and dropped the moment the
@@ -2533,7 +2533,7 @@ use `regex`, and hashing uses the token helpers.
 | #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |
-| #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
+| #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
 | #97 later | — | unchanged |
 

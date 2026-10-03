@@ -14,13 +14,15 @@
 //!   note. The caller knows the bytes exist but can't read them
 //!   inline.
 //!
-//! No SSRF guard by design — anything reachable from the gateway
-//! is fair game; if you have internal services on the same network
-//! that don't authenticate, that's a deployment problem, not a
-//! gateway one (per the operator's explicit policy decision).
+//! The model chooses the URL, so it is fetched through
+//! `outbound_guard`: every hop of a redirect chain is resolved, checked
+//! and pinned, link-local (cloud metadata) is never reached, and the
+//! gateway's own network only with `$AIPLANE_ALLOW_PRIVATE_NETWORKS`.
 
 use std::time::Duration;
 
+use aiplane_core::server::capped_read;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
@@ -43,8 +45,25 @@ const HARD_MAX_BYTES_DEFAULT: usize = HARD_MAX_BYTES;
 /// `kind: "image-too-large"` metadata response.
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// The most raw bytes read for one fetch. Above the image ceiling, so an
+/// image a little too large still comes back as `image-too-large` metadata,
+/// and far above the text ceiling, which applies after HTML extraction.
+const MAX_FETCH_BYTES: usize = 32 * 1024 * 1024;
 
-pub struct FetchUrl;
+#[derive(Default)]
+pub struct FetchUrl {
+    allow_private_networks: bool,
+}
+
+impl FetchUrl {
+    /// `allow_private_networks` is the operator's
+    /// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`.
+    pub fn new(allow_private_networks: bool) -> Self {
+        Self {
+            allow_private_networks,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct FetchArgs {
@@ -135,20 +154,14 @@ impl Tool for FetchUrl {
                 .unwrap_or(HARD_MAX_BYTES_DEFAULT)
                 .min(HARD_MAX_BYTES);
 
-            // KNOWN GAP (architecture test OUTBOUND_CLIENTS): the model picks
-            // this URL and nothing checks it against net_guard yet.
-            #[allow(clippy::disallowed_methods)]
-            let client = reqwest::Client::builder()
-                .timeout(FETCH_TIMEOUT)
-                .user_agent(concat!("aiplane/", env!("CARGO_PKG_VERSION"), " fetch_url"))
-                .build()
-                .map_err(|e| ToolError::Failed(format!("HTTP client build: {e}")))?;
-
-            let resp = client
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| ToolError::Failed(format!("fetch failed: {e}")))?;
+            let resp = outbound_guard::get(
+                url.as_str(),
+                Policy::web(self.allow_private_networks),
+                FETCH_TIMEOUT,
+                concat!("aiplane/", env!("CARGO_PKG_VERSION"), " fetch_url"),
+            )
+            .await
+            .map_err(ToolError::Failed)?;
             let status = resp.status().as_u16();
             let content_type = resp
                 .headers()
@@ -161,11 +174,9 @@ impl Tool for FetchUrl {
                 .trim()
                 .to_string();
             let final_url = resp.url().to_string();
-            let bytes = resp
-                .bytes()
+            let bytes = capped_read::read_capped_for(resp, MAX_FETCH_BYTES, "the response")
                 .await
-                .map_err(|e| ToolError::Failed(format!("read body: {e}")))?
-                .to_vec();
+                .map_err(ToolError::Failed)?;
 
             // HTML gets reduced to readable text *before* the byte cap is
             // applied. The other order is actively harmful: capping raw
@@ -288,6 +299,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// The tool as an operator who allows private networks runs it: every
+    /// test peer listens on loopback.
+    fn local() -> FetchUrl {
+        FetchUrl::new(true)
+    }
+
     async fn ctx() -> ToolContext {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
         ToolContext::for_test(pool)
@@ -313,10 +330,7 @@ mod tests {
             "text/html; charset=utf-8",
         )
         .await;
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["status"], 200);
         assert_eq!(out["kind"], "text");
         assert_eq!(out["content_type"], "text/html");
@@ -334,10 +348,7 @@ mod tests {
                     <body><nav><a href=\"/home\">Home</a></nav>\
                     <h1>Install</h1><p>Run the installer.</p></body></html>";
         let url = serve(&server, "/doc", page, "text/html").await;
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         let content = out["content"].as_str().unwrap();
         assert!(content.contains("# Install"), "{content}");
         assert!(content.contains("Run the installer."), "{content}");
@@ -354,7 +365,7 @@ mod tests {
         let server = MockServer::start().await;
         let page = "<html><head><script>keep_me()</script></head><body>hi</body></html>";
         let url = serve(&server, "/raw", page, "text/html").await;
-        let out = FetchUrl
+        let out = local()
             .run(ctx().await, json!({"url": url, "raw": true}))
             .await
             .unwrap();
@@ -374,7 +385,7 @@ mod tests {
         page.push_str(&"x".repeat(5_000));
         page.push_str("</style></head><body><p>The actual answer.</p></body></html>");
         let url = serve(&server, "/big", &page, "text/html").await;
-        let out = FetchUrl
+        let out = local()
             .run(ctx().await, json!({"url": url, "max_bytes": 1_000}))
             .await
             .unwrap();
@@ -388,7 +399,7 @@ mod tests {
         let server = MockServer::start().await;
         let page = format!("<p>{}</p>", "word ".repeat(1_000));
         let url = serve(&server, "/long", &page, "text/html").await;
-        let out = FetchUrl
+        let out = local()
             .run(ctx().await, json!({"url": url, "max_bytes": 100}))
             .await
             .unwrap();
@@ -405,10 +416,7 @@ mod tests {
         let page = "<html><body><div id=\"root\"></div>\
                     <script>render()</script></body></html>";
         let url = serve(&server, "/spa", page, "text/html").await;
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["content"], "");
         let note = out["note"].as_str().unwrap_or_default();
         assert!(note.contains("raw"), "{note}");
@@ -425,10 +433,7 @@ mod tests {
             "application/xhtml+xml",
         )
         .await;
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["extraction"], "html-text");
         assert_eq!(out["content"], "text");
     }
@@ -445,10 +450,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/api", server.uri());
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["kind"], "text");
         assert!(out["content"].as_str().unwrap().contains("\"ok\":true"));
         // Extraction is HTML-only — JSON must not be rewritten.
@@ -477,10 +479,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/logo.png", server.uri());
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         // tool_content_parts envelope: the driver detects this and
         // splices the parts into the upstream `role:"tool"` message
         // as an array — what gets bridged to the LLM as an actual
@@ -507,10 +506,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/doc.pdf", server.uri());
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["kind"], "binary");
         assert_eq!(out["content_type"], "application/pdf");
         // The model gets a clear "you can't read this" signal
@@ -543,10 +539,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/huge.png", server.uri());
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         // Not a content-parts envelope — the image branch refused
         // to inline a 25 MB+ PNG and gave the model a metadata
         // record with a precise `kind`.
@@ -562,11 +555,51 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_http_scheme() {
-        let err = FetchUrl
+        let err = FetchUrl::default()
             .run(ctx().await, json!({"url": "file:///etc/passwd"}))
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArgs(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn the_gateways_own_network_is_refused_before_connecting() {
+        for url in [
+            "http://127.0.0.1:9/",
+            "http://localhost:9/",
+            "http://10.0.0.1/",
+            "http://[::ffff:127.0.0.1]:9/",
+            "http://169.254.169.254/latest/meta-data/",
+        ] {
+            let err = FetchUrl::default()
+                .run(ctx().await, json!({"url": url}))
+                .await
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS") || msg.contains("never reached"),
+                "{url}: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_redirect_into_link_local_is_refused() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/bounce"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "http://169.254.169.254/latest/meta-data/"),
+            )
+            .mount(&server)
+            .await;
+        let url = format!("{}/bounce", server.uri());
+        let err = local()
+            .run(ctx().await, json!({"url": url}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("link-local"), "{err}");
     }
 
     #[tokio::test]
@@ -579,7 +612,7 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/big", server.uri());
-        let out = FetchUrl
+        let out = local()
             .run(ctx().await, json!({"url": url, "max_bytes": 1024}))
             .await
             .unwrap();
@@ -597,15 +630,12 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/missing", server.uri());
-        let out = FetchUrl
-            .run(ctx().await, json!({"url": url}))
-            .await
-            .unwrap();
+        let out = local().run(ctx().await, json!({"url": url})).await.unwrap();
         assert_eq!(out["status"], 404);
     }
 
     #[test]
     fn schema_names_match_id() {
-        assert_eq!(FetchUrl.id(), FetchUrl.schema().function.name);
+        assert_eq!(local().id(), local().schema().function.name);
     }
 }

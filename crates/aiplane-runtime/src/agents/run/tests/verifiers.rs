@@ -1012,8 +1012,8 @@ async fn private_world() -> World {
         false,
         base_tools(),
         None,
-        aiplane_core::server::config::AgentsConfig {
-            a2a_allow_private_networks: true,
+        aiplane_core::server::config::NetworkConfig {
+            allow_private_networks: true,
         },
     )
     .await

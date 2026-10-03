@@ -585,7 +585,7 @@ async fn main() -> anyhow::Result<()> {
     let skill_store = Arc::new(SkillStore::load(skills_dir));
     let typst_family = aiplane::tool_families::typst();
     let typst_metas = aiplane_runtime::server::state::typst_template_metas(&config);
-    let base_tools = aiplane::tool_registry::base_registry(rbac.clone(), None)
+    let base_tools = aiplane::tool_registry::base_registry(rbac.clone(), None, true)
         .with(aiplane_tools::generate_image::GenerateImage)
         .with(aiplane_tools::edit_image::EditImage)
         .with_family_replaced(

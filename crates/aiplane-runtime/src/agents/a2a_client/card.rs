@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The remote agent's card (A2A v1.0, section 8): fetched through the
-//! [`guard`](super::guard), validated, and cached for [`CARD_TTL`].
+//! The remote agent's card (A2A v1.0, section 8): fetched through
+//! `outbound_guard`, validated, and cached for [`CARD_TTL`].
 //!
 //! What the gateway needs from a card, and therefore checks:
 //! - `name`;
@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::guard;
+use aiplane_core::server::capped_read;
+use aiplane_core::server::outbound_guard::{self, Policy};
 
 /// How long a fetched card is reused.
 pub const CARD_TTL: Duration = Duration::from_secs(5 * 60);
@@ -112,7 +113,7 @@ pub async fn fetch(card_url: &str, allow_private: bool) -> Result<AgentCard, Str
     {
         return Ok(card);
     }
-    let pinned = guard::pin(card_url, allow_private, CARD_TIMEOUT).await?;
+    let pinned = outbound_guard::pin(card_url, Policy::agent(allow_private), CARD_TIMEOUT).await?;
     let resp = pinned
         .client
         .get(pinned.url)
@@ -124,7 +125,7 @@ pub async fn fetch(card_url: &str, allow_private: bool) -> Result<AgentCard, Str
     if !status.is_success() {
         return Err(format!("the agent card answered {status}"));
     }
-    let bytes = guard::read_capped(resp, MAX_CARD_BYTES, "the agent card").await?;
+    let bytes = capped_read::read_capped_for(resp, MAX_CARD_BYTES, "the agent card").await?;
     let doc: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("the agent card is not JSON ({e})"))?;
     let card = AgentCard::parse(&doc).map_err(|why| format!("the agent card is invalid: {why}"))?;

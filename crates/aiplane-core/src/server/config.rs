@@ -144,26 +144,28 @@ pub struct Config {
     /// `[push] enabled = false` to turn the feature (and its endpoints) off.
     #[serde(default)]
     pub push: PushConfig,
-    /// Agent builder knobs that belong to the operator, not to an agent's
-    /// spec, set from the environment by [`Config::load`]; the defaults are
-    /// the safe ones. See `docs/agents.md` → "What #101 built".
+    /// Where the gateway may connect on behalf of a user, a model or an
+    /// agent's owner, set from the environment by [`Config::load`]; the
+    /// default is the safe one. See `outbound_guard`.
     #[serde(default)]
-    pub agents: AgentsConfig,
+    pub network: NetworkConfig,
 }
 
-/// What agent runs may reach outside the gateway.
+/// What a URL someone other than the operator chose may reach.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct AgentsConfig {
-    /// Let an A2A route (agent card, endpoint, OAuth token URL) and a
-    /// `host_jwt` verifier's JWKS URL reach a host that resolves to a
-    /// private, loopback or carrier-grade NAT address, and over plain `http`.
-    /// Off by default: a route then reaches only public `https` hosts, so a
-    /// spec cannot point the gateway at its own network. Set by
-    /// `$AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS`. Link-local
-    /// (including the cloud metadata address), unspecified, broadcast and
-    /// multicast addresses stay refused either way.
-    pub a2a_allow_private_networks: bool,
+pub struct NetworkConfig {
+    /// Let a URL a user, a model or an agent's owner chooses — `fetch_url`,
+    /// `load_image_url`, `tls_cert`, an A2A route (agent card, endpoint,
+    /// OAuth token URL), a `host_jwt` verifier's JWKS URL — reach a host
+    /// that resolves to a private, loopback or carrier-grade NAT address
+    /// (and, for the agent destinations, plain `http`). Off by default: they
+    /// then reach public hosts only, so nobody but the operator can point
+    /// the gateway at its own network. Set by
+    /// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`. Link-local (including the cloud
+    /// metadata address), unspecified, broadcast and multicast addresses
+    /// stay refused either way.
+    pub allow_private_networks: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1258,10 +1260,20 @@ impl Config {
         {
             config.gateway.public_url_import_only = url;
         }
-        config.agents.a2a_allow_private_networks = flag_from(
-            A2A_PRIVATE_VAR,
-            crate::server::env::var(A2A_PRIVATE_VAR).ok().as_deref(),
+        config.network.allow_private_networks = flag_from(
+            PRIVATE_NETWORKS_VAR,
+            crate::server::env::var(PRIVATE_NETWORKS_VAR)
+                .ok()
+                .as_deref(),
         )?;
+        if std::env::var_os(RETIRED_A2A_PRIVATE_VAR).is_some() {
+            tracing::warn!(
+                "${RETIRED_A2A_PRIVATE_VAR} is no longer read; the switch is now \
+                 ${PRIVATE_NETWORKS_VAR} and governs every URL a user, a model or an agent's \
+                 owner chooses (fetch_url and load_image_url included). Set that one if this \
+                 deployment still needs to reach private addresses"
+            );
+        }
         Ok(config)
     }
 }
@@ -1269,7 +1281,11 @@ impl Config {
 /// Environment only, like `$AIPLANE_TRUSTED_PROXIES`: whether the gateway may
 /// reach its own network is a fact about where it runs, not a setting an
 /// admin screen should be able to flip.
-pub const A2A_PRIVATE_VAR: &str = "AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS";
+pub const PRIVATE_NETWORKS_VAR: &str = "AIPLANE_ALLOW_PRIVATE_NETWORKS";
+
+/// The switch's name while it governed the A2A routes alone. Read only to
+/// warn an operator who still sets it.
+const RETIRED_A2A_PRIVATE_VAR: &str = "AIPLANE_A2A_ALLOW_PRIVATE_NETWORKS";
 
 /// A boolean environment variable: unset or empty is `false`; anything other
 /// than the usual spellings stops the boot rather than guess.
@@ -1333,16 +1349,16 @@ mod tests {
     #[test]
     fn the_private_network_switch_is_off_unless_spelled_on() {
         for off in [None, Some(""), Some("0"), Some("false"), Some(" OFF ")] {
-            assert!(!flag_from(A2A_PRIVATE_VAR, off).unwrap(), "{off:?}");
+            assert!(!flag_from(PRIVATE_NETWORKS_VAR, off).unwrap(), "{off:?}");
         }
         for on in ["1", "true", "Yes", "on"] {
-            assert!(flag_from(A2A_PRIVATE_VAR, Some(on)).unwrap(), "{on}");
+            assert!(flag_from(PRIVATE_NETWORKS_VAR, Some(on)).unwrap(), "{on}");
         }
-        let refused = flag_from(A2A_PRIVATE_VAR, Some("maybe"))
+        let refused = flag_from(PRIVATE_NETWORKS_VAR, Some("maybe"))
             .unwrap_err()
             .to_string();
         assert!(
-            refused.contains(A2A_PRIVATE_VAR) && refused.contains("true"),
+            refused.contains(PRIVATE_NETWORKS_VAR) && refused.contains("true"),
             "{refused}"
         );
     }

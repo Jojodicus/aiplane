@@ -38,6 +38,19 @@ pub async fn read_capped(
     Ok(body)
 }
 
+/// [`read_capped`] with its errors worded for whoever reads the message;
+/// `what` names the body (`the agent card`).
+pub async fn read_capped_for(
+    resp: reqwest::Response,
+    max: usize,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    read_capped(resp, max as u64).await.map_err(|e| match e {
+        CappedReadError::TooLarge { .. } => format!("{what} is larger than {} KiB", max / 1024),
+        CappedReadError::Transport(e) => format!("reading {what} failed: {e}"),
+    })
+}
+
 #[cfg(test)]
 // Tests build plain clients and drain bodies to talk to their in-process
 // mocks; the outbound and body rules are about production paths.
@@ -114,5 +127,9 @@ mod tests {
         ));
         let body = read_capped(get(&server.uri()).await, 2048).await.unwrap();
         assert_eq!(body.len(), 2048);
+        let why = read_capped_for(get(&server.uri()).await, 1024, "the answer")
+            .await
+            .unwrap_err();
+        assert!(why.contains("the answer is larger than 1 KiB"), "{why}");
     }
 }
