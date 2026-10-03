@@ -384,6 +384,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_get("/api/v0/embed/events", pages::embed::events)
         .with_post("/api/v0/embed/resume", pages::embed::resume)
         .with_post("/api/v0/embed/identity", pages::embed::identity)
+        .with_post("/api/v0/embed/agent", pages::embed::describe)
+        .with_post("/api/v0/embed/transcribe", pages::embed::transcribe)
+        .with_post("/api/v0/embed/speak", pages::embed::speak)
+        .with_get("/api/v0/embed/recorder.js", pages::embed::recorder)
         // Agents served over A2A (docs/agents.md "What #102 built"): the
         // public agent card of an opted-in agent, and its JSON-RPC endpoint
         // for `gws_` callers granted `a2a_caller` on it.

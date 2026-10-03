@@ -84,8 +84,24 @@ pub(crate) async fn fixture_with(
     tools: ToolRegistry,
     everyone: &[&str],
 ) -> Fx {
+    fixture_with_pools(upstream, tools, everyone, Vec::new()).await
+}
+
+/// [`fixture_with`] plus `extra` pools beside `pool`, open to everyone; each
+/// backend of an extra pool serves the models it is given.
+pub(crate) async fn fixture_with_pools(
+    upstream: Option<&str>,
+    tools: ToolRegistry,
+    everyone: &[&str],
+    extra: Vec<(String, UpstreamPoolConfig, Vec<String>)>,
+) -> Fx {
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
+    let mut served = HashMap::new();
+    for (name, config, models) in extra {
+        served.insert(name.clone(), models);
+        pools.insert(name, config);
+    }
     pools.insert(
         "pool".to_string(),
         UpstreamPoolConfig {
@@ -105,8 +121,10 @@ pub(crate) async fn fixture_with(
         },
     );
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
-    if upstream.is_some() {
-        for p in registry.pools() {
+    for p in registry.pools() {
+        if let Some(models) = served.get(&p.name) {
+            p.backends[0].set_models(models.iter().cloned().collect());
+        } else if upstream.is_some() {
             p.backends[0].set_models(["m".to_string()].into());
         }
     }

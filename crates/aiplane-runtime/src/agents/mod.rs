@@ -38,3 +38,4 @@ pub mod spec_cache;
 pub mod state;
 pub mod topic_guard;
 pub mod verifier;
+pub mod voice;
