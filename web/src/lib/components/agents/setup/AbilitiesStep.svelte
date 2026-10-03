@@ -2,7 +2,8 @@
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import type { Spec } from '$lib/agents';
-	import { RAG_LIST, RAG_SEARCH, abilities, humanize, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
+	import { RAG_LIST, RAG_SEARCH, abilities, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
+	import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from '$lib/ability-list';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
@@ -16,10 +17,18 @@
 	 */
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
+	const suggested = $derived(ws.suggestion?.steps.abilities ?? []);
+	const suggestedIds = $derived(suggested.map((s) => s.id));
 
 	const cards = $derived(abilities(spec, ws.grants, ws.resources));
 	const knowledge = $derived(cards.filter((c) => c.kind === 'rag_collection'));
 	const others = $derived(cards.filter((c) => c.kind !== 'rag_collection'));
+	let query = $state('');
+	let showAll = $state(false);
+	const ordered = $derived(orderAbilities(others, suggestedIds));
+	const matching = $derived(filterAbilities(ordered, query));
+	const shown = $derived(visibleAbilities(matching, suggestedIds, showAll || query.trim() !== ''));
+	const hidden = $derived(matching.length - shown.length);
 	const offers = (id: string) => !!ws.resources?.tools.some((x) => x.id === id);
 
 	let error = $state<string | null>(null);
@@ -31,7 +40,7 @@
 		if (c.kind === 'rag_collection') return t('agents-setup-knowledge-desc', { name: c.name });
 		if (c.kind === 'connector') return t('agents-setup-connector-desc', { name: c.name, count: c.tools.length });
 		if (c.kind === 'skill') return t('agents-setup-skill-desc', { name: c.name });
-		return c.description ? firstSentence(c.description) : null;
+		return c.description ? firstSentence(plainText(c.description)) : null;
 	}
 	/** A tool's description is written for the model and can run to a paragraph; the card shows its first sentence. */
 	function firstSentence(text: string): string {
@@ -39,7 +48,7 @@
 		const sentence = end > 0 ? text.slice(0, end + 1) : text;
 		return sentence.length > 140 ? `${sentence.slice(0, 139).trimEnd()}…` : sentence;
 	}
-	const title = (c: Ability) => (c.kind === 'tool' && c.name === c.ref ? humanize(c.name) : c.name);
+	const title = abilityTitle;
 
 	function collectionNames(): string[] {
 		return ws.grants
@@ -47,7 +56,6 @@
 			.map((g) => ws.resources?.rag_collections.find((c) => String(c.id) === g.ref)?.name ?? g.ref);
 	}
 
-	const suggested = $derived(ws.suggestion?.steps.abilities ?? []);
 
 	/** Every proposed tool, staged for granting and put into the spec like a switched-on card. */
 	function applySuggested() {
@@ -129,9 +137,16 @@
 	{#if others.length}
 		<section class="flex flex-col gap-2">
 			<h3 class="m-0 text-sm font-semibold uppercase tracking-wider text-base-content/60">{t('agents-setup-abilities')}</h3>
+			<input class="input w-full max-w-sm" type="search" bind:value={query} placeholder={t('agents-setup-abilities-search')} aria-label={t('agents-setup-abilities-search')} />
 			<div class="grid gap-2.5 sm:grid-cols-2" role="group" aria-label={t('agents-setup-abilities')}>
-				{#each others as c (cardId(c))}{@render card(c)}{/each}
+				{#each shown as c (cardId(c))}{@render card(c)}{/each}
 			</div>
+			{#if query.trim() && !matching.length}
+				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-none-found')}</p>
+			{/if}
+			{#if hidden > 0}
+				<button class="btn btn-sm self-start" type="button" onclick={() => (showAll = true)}>{t('agents-setup-abilities-show-all', { count: matching.length })}</button>
+			{/if}
 		</section>
 	{/if}
 
