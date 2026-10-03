@@ -77,7 +77,7 @@ services:
     env_file:
       - aiplane.env
     environment:
-      RUST_LOG: info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info
+      RUST_LOG: info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_agents=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info
     volumes:
       # The image's AIPLANE_DATA_DIR=/var/lib/gateway already puts the SQLite
       # database and the RAG index store on this volume — mounting it is all

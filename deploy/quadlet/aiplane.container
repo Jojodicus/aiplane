@@ -73,7 +73,7 @@ EnvironmentFile=/etc/aiplane/aiplane.env
 # because Podman creates named volumes root-owned by default.
 Volume=aiplane.volume:/var/lib/gateway:z,U
 
-Environment=RUST_LOG=info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info
+Environment=RUST_LOG=info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_agents=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info
 
 # There is no config file. Pools, backends, models, groups, OIDC, search and
 # every operator setting — OCR, compaction, attachment storage, sandbox,

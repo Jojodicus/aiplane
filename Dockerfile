@@ -162,7 +162,7 @@ ENV IP=0.0.0.0 \
     PORT=8080 \
     AIPLANE_VERSION=${AIPLANE_VERSION} \
     AIPLANE_DATA_DIR=/var/lib/gateway \
-    RUST_LOG=info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info \
+    RUST_LOG=info,aiplane=info,aiplane_core=info,aiplane_features=info,aiplane_agents=info,aiplane_runtime=info,aiplane_tools=info,aiplane_api=info \
     PDFIUM_LIB_PATH=/usr/local/lib/libpdfium.so \
     AIPLANE_STATIC_DIR=/usr/share/gateway/ui
 

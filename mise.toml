@@ -62,7 +62,7 @@ gitleaks = "8.30"
 
 [env]
 RUST_BACKTRACE = "1"
-RUST_LOG = "info,aiplane=debug,aiplane_core=debug,aiplane_features=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug"
+RUST_LOG = "info,aiplane=debug,aiplane_core=debug,aiplane_features=debug,aiplane_agents=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug"
 # Secrets (API keys, tokens) go in the gitignored `mise.local.toml`, not
 # here. Web-search settings are the exception in the other direction: they
 # live in the DB and are set under "Web search" on /admin/models (the legacy
