@@ -1475,19 +1475,11 @@ async fn require_admin(state: &RamaState, req: &Request) -> Result<Session, Resp
 
 async fn read_json<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T, Response> {
     let (_, body) = req.into_parts();
-    let bytes = match body_to_bytes(body).await {
+    let bytes = match session_core::chrome::read_body_to_bytes(body).await {
         Ok(b) => b,
         Err(msg) => return Err(invalid_request(&msg)),
     };
     serde_json::from_slice(&bytes).map_err(|err| invalid_request(&format!("invalid body: {err}")))
-}
-
-async fn body_to_bytes(body: rama::http::Body) -> Result<rama::bytes::Bytes, String> {
-    use rama::http::body::util::BodyExt;
-    body.collect()
-        .await
-        .map(|c| c.to_bytes())
-        .map_err(|e| format!("reading request body: {e}"))
 }
 
 fn json_ok<T: Serialize>(value: &T) -> Response {

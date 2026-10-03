@@ -21,6 +21,7 @@ use rama::http::service::web::extract::State;
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{HeaderMap, HeaderName, Method, Request, Response, StatusCode};
 use serde_json::{Value, json};
+use session_core::chrome::read_body_to_bytes;
 
 use std::time::Instant;
 
@@ -1448,17 +1449,6 @@ fn build_multipart(fields: &[MultipartField]) -> Result<(Bytes, String), String>
     out.extend_from_slice(b"--\r\n");
     let content_type = format!("multipart/form-data; boundary={boundary}");
     Ok((Bytes::from(out), content_type))
-}
-
-/// Drains a rama HTTP body into a single `Bytes`. The upstream relay
-/// works on whole buffers right now; SSE streaming will need a different
-/// shape that consumes the body progressively.
-pub(crate) async fn read_body_to_bytes(body: rama::http::Body) -> Result<Bytes, String> {
-    use rama::http::body::util::BodyExt;
-    body.collect()
-        .await
-        .map(|c| c.to_bytes())
-        .map_err(|e| format!("reading request body: {e}"))
 }
 
 /// `POST /v1/embeddings` — OpenAI-compatible text embeddings. Byte-dumb
@@ -3877,7 +3867,7 @@ fn model_not_found_response(model: &str) -> Response {
 
 /// OpenAI-shaped error envelope. Matches the axum side so existing
 /// clients don't need to special-case the rama path.
-fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
+pub(crate) fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
     let body = json!({
         "error": {
             "message": message,

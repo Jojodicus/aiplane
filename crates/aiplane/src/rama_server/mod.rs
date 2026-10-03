@@ -14,6 +14,7 @@
 //! router and the integration tests keep a single import path.
 
 pub mod api;
+pub mod body_limit;
 pub mod comfyui_api;
 #[cfg(debug_assertions)]
 pub mod dev_seed;

@@ -221,7 +221,7 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 async fn translated_request(
     body: rama::http::Body,
 ) -> Result<anthropic::request::TranslatedRequest, Response> {
-    let bytes = proxy::read_body_to_bytes(body)
+    let bytes = session_core::chrome::read_body_to_bytes(body)
         .await
         .map_err(|msg| error_response(StatusCode::BAD_REQUEST, &msg))?;
     let request: Value = serde_json::from_slice(&bytes).map_err(|err| {

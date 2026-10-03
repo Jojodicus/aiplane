@@ -176,6 +176,7 @@ The binary and its routing glue — deliberately thin:
 - `rag_api.rs`, `sandbox_api.rs`, `comfyui_api.rs`, `setup_api.rs` — the remaining JSON surfaces. (`setup_api.rs` lives here rather than in `aiplane-api` so the first-run wizard's API survived the removal of the page stack.)
 - `spa.rs` — serves the built SvelteKit SPA from `AIPLANE_STATIC_DIR`: content-type map, cache policy, traversal guard, and the `index.html` history fallback. Its `GET /` + `GET /{*name}` catch-all is registered **last**, because rama matches in registration order.
 - `first_run.rs` — the layer that redirects everything to `/setup` until setup completes, with an allowlist for the SPA's static shell.
+- `body_limit.rs` — the request body cap every route sits behind. The layer reads the body itself (a declared length over the cap is refused before anything is read; otherwise reading stops as the running total passes it) and hands the handler buffered bytes, so no handler can drain an unbounded body: 1 MiB by default, 64 MiB on the large-body routes (`/v1/*`, `/api/v0/chat/*`, transcription, feedback, skill uploads), `413 payload_too_large` past it. `/hooks`, `/a2a` and `/api/v0/embed` read through their own tighter caps and are passed through; a new route under those prefixes must cap its own read.
 - `vad.rs` — neural voice-activity detection, trimming silence off uploaded voice notes before Whisper sees them.
 
 `main.rs` wires it all: config → db → upstreams → tools → rbac → SessionStore →
