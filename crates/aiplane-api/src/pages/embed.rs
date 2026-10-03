@@ -22,7 +22,6 @@
 //! turn is terminal (`OutputPolicy::Buffered`).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use jiff::Timestamp;
 use rama::http::service::web::extract::State;
@@ -33,12 +32,15 @@ use session_core::chat_json::{ChatEvent, SseTx, json_stream_response, sse_json};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 use session_core::i18n::{self, Lang, t, t_args};
 
+use super::turn_wait::{TurnWait, Waited};
 use super::{bad_request, internal, json_error, json_ok};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::agents::{self as agents_db, AgentRow};
 use aiplane_core::server::db::embed_keys::{self, EmbedKey};
 use aiplane_core::server::db::visitor_sessions::{self, Lookup, NewVisitorSession, VisitorSession};
-use aiplane_runtime::agents::embed::{self as embed_rt, Admission, OpenedTurn, Refusal, TurnWork};
+use aiplane_runtime::agents::embed::{
+    self as embed_rt, Admission, OpenedTurn, Refusal, ReleaseWatch, TurnWork,
+};
 use aiplane_runtime::agents::resume::{
     AgentResume, AgentResumeError, ResumedBy, claim as claim_resume,
 };
@@ -61,19 +63,6 @@ const MAX_MESSAGE_CHARS: usize = 8_000;
 /// [`MAX_MESSAGE_CHARS`]; this leaves room for JSON escaping and an identity
 /// token, and stops an anonymous client from making the gateway buffer more.
 const MAX_BODY_BYTES: usize = 64 * 1024;
-
-/// How often the event stream re-reads the running turn when no claim
-/// release woke it. A backstop only: the answer is delivered whole, and the
-/// release of the turn's claim is what ends the wait.
-const FALLBACK_POLL: Duration = Duration::from_secs(2);
-
-/// An SSE comment at this interval keeps proxies and the widget from
-/// treating a long-running turn as a dead connection.
-const KEEPALIVE: Duration = Duration::from_secs(15);
-
-/// A stream ends with `idle` after this long even if the turn is still
-/// running; the widget re-attaches and gets a fresh snapshot.
-const STREAM_LIMIT: Duration = Duration::from_secs(600);
 
 /// What a visitor reads when a turn errored, in their language — the same
 /// Fluent message an A2A caller gets for a failed task. The real message (an
@@ -535,15 +524,12 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
 
 /// The user turn waiting behind the conversation's pending decision, if the
 /// visitor already sent one. It runs once the decision is settled.
-async fn queued_message(state: &RamaState, session_id: &str) -> Result<Option<String>, Response> {
-    let turns = chat::list_turns(&state.db, session_id)
-        .await
-        .map_err(internal)?;
-    Ok(turns
+fn queued_message(turns: &[TurnWithTools]) -> Option<String> {
+    turns
         .last()
         .filter(|t| t.turn.role == TurnRole::User)
         .filter(|_| turns.iter().any(|t| t.turn.status == TurnStatus::Suspended))
-        .map(|t| t.turn.id.clone()))
+        .map(|t| t.turn.id.clone())
 }
 
 /// A message sent while the conversation waits for a decision is stored and
@@ -556,16 +542,16 @@ async fn queue_behind_decision(
     text: &str,
     lang: Lang,
 ) -> Response {
-    match queued_message(state, session_id).await {
-        Ok(Some(_)) => {
+    match chat::turn_before(&state.db, session_id, i64::MAX).await {
+        Ok(Some(last)) if last.role == TurnRole::User => {
             return json_error(
                 StatusCode::CONFLICT,
                 "turn_in_progress",
                 &t(lang, "agent-embed-message-waiting"),
             );
         }
-        Ok(None) => {}
-        Err(resp) => return resp,
+        Ok(_) => {}
+        Err(err) => return internal(err),
     }
     let user_turn_id = uuid::Uuid::new_v4().to_string();
     if let Err(err) = chat::create_user_turn(&state.db, session_id, &user_turn_id, text).await {
@@ -751,7 +737,7 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let turns = or_return!(visitor_turns(&state, &session_id, lang).await);
     let live = live_turn_id(&turns);
     let waiting = suspended_frame(&turns);
-    let queued = or_return!(queued_message(&state, &session_id).await);
+    let queued = queued_message(&turns);
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
     let snapshot = ChatEvent::Snapshot {
         live_turn_id: live.clone(),
@@ -795,30 +781,23 @@ fn suspended_frame(turns: &[TurnWithTools]) -> Option<ChatEvent> {
     })
 }
 
-/// Until a turn claim is released, or `fallback` has passed.
-pub(crate) async fn await_release(
-    releases: &mut aiplane_runtime::agents::embed::ReleaseWatch,
-    fallback: Duration,
-) {
-    if let Ok(Err(_)) = tokio::time::timeout(fallback, releases.changed()).await {
-        tokio::time::sleep(fallback).await;
-    }
-}
-
 async fn tail_buffered(
     state: Arc<RamaState>,
     session_id: String,
     turn_id: String,
     lang: Lang,
-    mut releases: aiplane_runtime::agents::embed::ReleaseWatch,
+    releases: ReleaseWatch,
     tx: SseTx,
 ) {
-    let started = tokio::time::Instant::now();
-    let mut last_sent = started;
+    let mut wait = TurnWait::new(releases);
     loop {
-        await_release(&mut releases, FALLBACK_POLL).await;
-        if tx.is_closed() {
-            return;
+        match wait.next(&tx).await {
+            Waited::Reread => {}
+            Waited::Expired => {
+                let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
+                return;
+            }
+            Waited::Gone => return,
         }
         match chat::get_turn(&state.db, &session_id, &turn_id).await {
             Ok(Some(t)) if t.status.is_terminal() && !state.agent_turns.is_running(&session_id) => {
@@ -851,14 +830,6 @@ async fn tail_buffered(
                 let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
                 return;
             }
-        }
-        if started.elapsed() >= STREAM_LIMIT {
-            let _ = tx.unbounded_send(Ok(sse_json(&ChatEvent::Idle)));
-            return;
-        }
-        if last_sent.elapsed() >= KEEPALIVE {
-            let _ = tx.unbounded_send(Ok(rama::bytes::Bytes::from_static(b": working\n\n")));
-            last_sent = tokio::time::Instant::now();
         }
     }
 }

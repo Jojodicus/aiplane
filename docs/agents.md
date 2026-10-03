@@ -1503,7 +1503,7 @@ untrusted audiences.
 - **Event stream, buffered.** `snapshot` first, with `live_turn_id` when a
   turn runs. Without one, `idle` and the stream ends. With one, the stream
   re-reads that one turn (never the conversation) whenever a turn claim is
-  released (`AgentTurns::releases`), at the latest every 2 s, and — the A2A
+  released (`AgentTurns::releases`; a 30 s safety re-read covers a release that never comes; `pages::turn_wait`), and — the A2A
   task streams alike — once it is terminal, sends its whole
   answer as one `turn_delta` with `full: true` and then `turn_finalized`.
   *Deviation:* the "`status` events" above are SSE comment lines (`:

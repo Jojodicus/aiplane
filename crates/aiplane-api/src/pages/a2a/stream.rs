@@ -4,7 +4,6 @@
 //! `SendStreamingMessage` and `SubscribeToTask`: a task's events over SSE.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use rama::http::Response;
 use serde_json::{Value, json};
@@ -14,17 +13,10 @@ use session_core::i18n::Lang;
 use super::Call;
 use super::envelope::{RpcError, rpc_body};
 use super::tasks::{TaskView, task_view};
+use crate::pages::turn_wait::{TurnWait, Waited};
 use aiplane_runtime::agents::a2a::TaskState;
 use aiplane_runtime::agents::embed::ReleaseWatch;
 use aiplane_runtime::rama_server::state::RamaState;
-
-/// How often a stream re-reads its task when no claim release woke it — a
-/// backstop only; the release of the turn's claim is what ends the wait.
-const FALLBACK_POLL: Duration = Duration::from_secs(2);
-const KEEPALIVE: Duration = Duration::from_secs(15);
-/// A stream closes after this long even if the task still runs; the client
-/// polls `GetTask` or calls `SubscribeToTask` again.
-const STREAM_LIMIT: Duration = Duration::from_secs(600);
 
 fn sse_frame(id: &Value, result: Value) -> rama::bytes::Bytes {
     rama::bytes::Bytes::from(format!("data: {}\n\n", rpc_body(id, ("result", result))))
@@ -78,13 +70,12 @@ impl Tail {
         .await
     }
 
-    async fn run(self, mut releases: ReleaseWatch, tx: SseTx) {
-        let started = tokio::time::Instant::now();
-        let mut last_sent = started;
+    async fn run(self, releases: ReleaseWatch, tx: SseTx) {
+        let mut wait = TurnWait::new(releases);
         loop {
-            crate::pages::embed::await_release(&mut releases, FALLBACK_POLL).await;
-            if tx.is_closed() {
-                return;
+            match wait.next(&tx).await {
+                Waited::Reread => {}
+                Waited::Expired | Waited::Gone => return,
             }
             match self.view().await {
                 Ok(v) if v.state != TaskState::Working => {
@@ -96,13 +87,6 @@ impl Tail {
                     tracing::warn!(error = ?err, task = %self.task_id, "a2a stream: reading the task");
                     return;
                 }
-            }
-            if started.elapsed() >= STREAM_LIMIT {
-                return;
-            }
-            if last_sent.elapsed() >= KEEPALIVE {
-                let _ = tx.unbounded_send(Ok(rama::bytes::Bytes::from_static(b": working\n\n")));
-                last_sent = tokio::time::Instant::now();
             }
         }
     }

@@ -1092,17 +1092,15 @@ async fn notify_turn_complete(
 
     // Only notify on a real end state. `Cancelled` means the user pressed stop
     // (they're present), and `InProgress` shouldn't reach here.
-    let turns = match session_core::db::list_turns(&state.db, session_id).await {
-        Ok(t) => t,
+    let turn = match session_core::db::get_turn(&state.db, session_id, assistant_turn_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return,
         Err(err) => {
             tracing::warn!(error = %err, "push: reading finalized turn");
             return;
         }
     };
-    let Some(view) = turns.iter().find(|t| t.turn.id == assistant_turn_id) else {
-        return;
-    };
-    let errored = match view.turn.status {
+    let errored = match turn.status {
         TurnStatus::Completed => false,
         TurnStatus::Errored => true,
         _ => return,

@@ -26,7 +26,6 @@ use aiplane_runtime::suspend::ResumeRefused;
 
 /// How long `CancelTask` waits for a running turn to notice.
 const CANCEL_WAIT: Duration = Duration::from_secs(15);
-const CANCEL_POLL: Duration = Duration::from_millis(50);
 
 async fn admit(call: &Call, context: Option<&str>) -> Result<(), RpcError> {
     let who = Admission {
@@ -525,13 +524,18 @@ pub(super) async fn cancel_task(call: &Call, params: &Value) -> Result<Response,
     match TaskState::of(turn.status, turns.holds(session_id, &id)) {
         s if s.is_terminal() => return Err(not_cancelable(&id, s)),
         TaskState::Working => {
+            let mut releases = turns.releases(session_id);
             if !turns.cancel(session_id, &id) {
                 return Err(not_cancelable(&id, TaskState::Working));
             }
-            let started = tokio::time::Instant::now();
-            while turns.holds(session_id, &id) && started.elapsed() < CANCEL_WAIT {
-                tokio::time::sleep(CANCEL_POLL).await;
-            }
+            let _ = tokio::time::timeout(CANCEL_WAIT, async {
+                while turns.holds(session_id, &id) {
+                    if releases.changed().await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            })
+            .await;
         }
         _ => {
             let Some(_hold) = turns.claim(session_id, &id) else {

@@ -420,6 +420,7 @@ pub mod json_skills;
 pub mod json_tokens;
 pub mod json_workspace;
 pub mod tools;
+mod turn_wait;
 
 // ---------------------------------------------------------------------------
 // Memory
