@@ -41,6 +41,7 @@ use super::spec::model::Route;
 use super::spec_cache::CompiledSpec;
 use super::state::{self, StateSchema, StateSnapshot, render_view};
 use super::verifier::{self, VerifierRun, Verifiers};
+use crate::agent_run::{Actor, AgentRun, MismatchedRun};
 use crate::budget::{Budget, SpendMeter};
 use crate::finish::FinishContract;
 use crate::rama_server::state::RamaState;
@@ -85,6 +86,8 @@ pub enum AgentRunError {
          that turn's resume route (or let it expire) before sending the next message"
     )]
     DecisionPending { session: String, turn: String },
+    #[error(transparent)]
+    Mismatched(#[from] MismatchedRun),
     #[error("reading or writing the agent run failed: {0}")]
     Db(#[from] DbError),
 }
@@ -135,7 +138,7 @@ pub struct RunProfile {
     pub budget: Budget,
     pub finish: Option<FinishContract>,
     pub injection: InjectionScan,
-    pub run: Arc<AgentRun>,
+    pub surface: Arc<AgentSurface>,
     /// `None` when the spec configures no identifier patterns.
     pub output_filter: Option<OutputFilter>,
 }
@@ -285,7 +288,7 @@ impl RunProfile {
             Role::Main => ToolBinds::from_spec(spec),
             Role::SubAgent { route_binds } => ToolBinds::from_spec(spec).with_route(route_binds),
         };
-        let run = AgentRun {
+        let surface = AgentSurface {
             name: principal.name.clone(),
             instructions: spec.main.instructions.text(),
             conversation,
@@ -305,8 +308,21 @@ impl RunProfile {
             model,
             finish,
             injection: InjectionScan::new(InjectionPolicy::Flag),
-            run: Arc::new(run),
+            surface: Arc::new(surface),
             output_filter,
+        })
+    }
+
+    /// The run of this profile in `chain`, whose running frame must be this
+    /// profile's principal.
+    pub fn agent_run(&self, chain: Arc<RunChain>) -> Result<AgentRun, MismatchedRun> {
+        let run = AgentRun::new(self.principal.clone(), chain)?
+            .with_surface(self.surface.clone())
+            .with_budget(self.budget)
+            .with_injection(self.injection.clone());
+        Ok(match &self.finish {
+            Some(contract) => run.with_contract(contract.clone()),
+            None => run,
         })
     }
 
@@ -316,20 +332,15 @@ impl RunProfile {
         session_id: &str,
         assistant_turn_id: &str,
         chain: Arc<RunChain>,
-    ) -> DriveParams {
-        DriveParams {
-            principal: aiplane_core::server::principal::Principal::System(self.principal.clone()),
-            run: Some(chain),
+    ) -> Result<DriveParams, MismatchedRun> {
+        Ok(DriveParams {
+            actor: Actor::Agent(Arc::new(self.agent_run(chain)?)),
             session_id: session_id.to_string(),
             assistant_turn_id: assistant_turn_id.to_string(),
             model: self.model.clone(),
             source: UsageSource::Scheduled,
             history_limit: None,
-            finish: self.finish.clone(),
-            budget: Some(self.budget),
-            injection: self.injection.clone(),
-            agent: Some(self.run.clone()),
-        }
+        })
     }
 }
 
@@ -357,15 +368,20 @@ struct Conversation {
     now: state::Clock,
 }
 
-/// A run-scoped tool, and when it runs among the calls of its round: the one
-/// place a tool is tagged with a [`ToolPhase`] other than the default.
+/// A run-scoped tool of the spec, and when it runs among the calls of its
+/// round. With the run's `finish` tool ([`ToolPhase::Terminal`], from
+/// [`AgentRun::terminal_tool`]) the only tools tagged with a phase other than
+/// the default.
 struct Synthetic {
     tool: Arc<dyn Tool>,
     phase: ToolPhase,
 }
 
-/// What the driver consults on every round of an agent run.
-pub struct AgentRun {
+/// What an agent's spec puts in front of the model on every round of its run:
+/// the system message, the offered and synthetic tools, bound arguments and
+/// permissions, the conversation state, and the pools its model calls use.
+/// Part of the run's [`AgentRun`].
+pub struct AgentSurface {
     name: String,
     instructions: String,
     conversation: Option<Conversation>,
@@ -380,7 +396,7 @@ pub struct AgentRun {
     spend: Option<Arc<SpendMeter>>,
 }
 
-impl AgentRun {
+impl AgentSurface {
     /// Count `tokens` this run's round spent against the allowance it runs
     /// inside, if any.
     pub fn record_spend(&self, tokens: u64) {
@@ -471,6 +487,7 @@ impl AgentRun {
         RunToolSource {
             inner,
             run: Some(self),
+            terminal: None,
         }
     }
 }
@@ -513,23 +530,55 @@ fn route_summary(
     out
 }
 
-/// A turn's tool source with an agent run layered over it. With no run it is
+/// A turn's tool source with an agent run layered over it: the spec's
+/// surface, and the run's `finish` tool under a contract. With no run it is
 /// `inner` unchanged.
 pub struct RunToolSource<'a> {
     inner: &'a dyn ToolSource,
-    run: Option<&'a AgentRun>,
+    run: Option<&'a AgentSurface>,
+    terminal: Option<Arc<dyn Tool>>,
 }
 
 impl<'a> RunToolSource<'a> {
     pub fn new(inner: &'a dyn ToolSource, run: Option<&'a AgentRun>) -> Self {
-        Self { inner, run }
+        Self {
+            inner,
+            run: run.and_then(AgentRun::surface),
+            terminal: run.and_then(AgentRun::terminal_tool),
+        }
+    }
+
+    fn terminal(&self, id: &str) -> Option<&Arc<dyn Tool>> {
+        self.terminal.as_ref().filter(|t| t.id() == id)
+    }
+
+    fn def_for(&self, id: &str) -> Option<ToolDef> {
+        if let Some(terminal) = self.terminal(id) {
+            return Some(terminal.schema());
+        }
+        let ids = [id.to_string()];
+        let Some(run) = self.run else {
+            return self.inner.defs_for(&ids).into_iter().next();
+        };
+        match run.synthetic.get(id) {
+            Some(synthetic) => Some(synthetic.tool.schema()),
+            None => self
+                .inner
+                .defs_for(&ids)
+                .into_iter()
+                .next()
+                .and_then(|def| {
+                    let binds = run.binds.for_tool(id, &def).ok()?;
+                    Some(without_bound(def, &binds))
+                }),
+        }
     }
 
     /// A granted tool as this run offers it: its bound arguments filled in,
     /// behind an approval when its permission asks for one. A withheld tool
     /// is refused outright, so nobody is asked to approve a call that could
     /// not run.
-    fn bound(&self, run: &AgentRun, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
+    fn bound(&self, run: &AgentSurface, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
         let bound: Arc<dyn Tool> = match run.binds.for_tool(tool.id(), &tool.schema()) {
             Ok(binds) if binds.is_empty() => tool,
             Ok(binds) => Arc::new(BoundTool::new(
@@ -546,6 +595,9 @@ impl<'a> RunToolSource<'a> {
 
 impl ToolSource for RunToolSource<'_> {
     fn get(&self, id: &str) -> Option<Arc<dyn Tool>> {
+        if let Some(terminal) = self.terminal(id) {
+            return Some(terminal.clone());
+        }
         let Some(run) = self.run else {
             return self.inner.get(id);
         };
@@ -556,24 +608,10 @@ impl ToolSource for RunToolSource<'_> {
     }
 
     fn defs_for(&self, allowed: &[String]) -> Vec<ToolDef> {
-        let Some(run) = self.run else {
+        if self.run.is_none() && self.terminal.is_none() {
             return self.inner.defs_for(allowed);
-        };
-        allowed
-            .iter()
-            .filter_map(|id| match run.synthetic.get(id) {
-                Some(synthetic) => Some(synthetic.tool.schema()),
-                None => self
-                    .inner
-                    .defs_for(std::slice::from_ref(id))
-                    .into_iter()
-                    .next()
-                    .and_then(|def| {
-                        let binds = run.binds.for_tool(id, &def).ok()?;
-                        Some(without_bound(def, &binds))
-                    }),
-            })
-            .collect()
+        }
+        allowed.iter().filter_map(|id| self.def_for(id)).collect()
     }
 
     fn ids(&self) -> Vec<String> {
@@ -581,14 +619,20 @@ impl ToolSource for RunToolSource<'_> {
         if let Some(run) = self.run {
             ids.extend(run.synthetic.keys().cloned());
         }
+        ids.extend(self.terminal.iter().map(|t| t.id().to_string()));
         ids
     }
 
     fn contains(&self, id: &str) -> bool {
-        self.run.is_some_and(|r| r.synthetic.contains_key(id)) || self.inner.contains(id)
+        self.terminal(id).is_some()
+            || self.run.is_some_and(|r| r.synthetic.contains_key(id))
+            || self.inner.contains(id)
     }
 
     fn phase(&self, id: &str) -> ToolPhase {
+        if self.terminal(id).is_some() {
+            return ToolPhase::Terminal;
+        }
         self.run
             .and_then(|r| r.synthetic.get(id))
             .map_or(ToolPhase::Concurrent, |s| s.phase)
@@ -609,11 +653,11 @@ mod tests {
 
     /// A run whose `lookup` tool binds `message` from the route: `message`
     /// is then a subject parameter, and `company_echo` declares it unbound.
-    fn run() -> AgentRun {
+    fn run() -> AgentSurface {
         let spec = json!({ "main": { "tool_resources": {
             "lookup": { "bind": { "message": "route.customer" } }
         } } });
-        AgentRun {
+        AgentSurface {
             name: "billing".into(),
             instructions: String::new(),
             conversation: None,

@@ -961,7 +961,7 @@ async fn execute_tool_call(
     );
     // Most tools finish well within TOOL_TIMEOUT; a few (the sandbox
     // family) declare a longer ceiling via `max_duration`.
-    let (principal, db, chain) = (ctx.principal.clone(), ctx.db.clone(), ctx.run.clone());
+    let (principal, db, agent) = (ctx.principal.clone(), ctx.db.clone(), ctx.agent.clone());
     let tool_timeout = tool.max_duration().unwrap_or(TOOL_TIMEOUT);
     let outcome = tokio::time::timeout(tool_timeout, tool.run(ctx, args)).await;
     let elapsed_ms = started.elapsed().as_millis();
@@ -1003,7 +1003,7 @@ async fn execute_tool_call(
             error_to_tool_message(&format!("tool execution timed out after {tool_timeout:?}"))
         }
     };
-    let body = screen_result(scan, &principal, chain.as_deref(), &db, &call, body).await;
+    let body = screen_result(scan, &principal, agent.as_deref(), &db, &call, body).await;
     ToolResultRecord {
         call_id: call.id,
         body,
@@ -1016,7 +1016,7 @@ async fn execute_tool_call(
 async fn screen_result(
     scan: &InjectionScan,
     principal: &Principal,
-    chain: Option<&aiplane_core::server::run_chain::RunChain>,
+    agent: Option<&crate::agent_run::AgentRun>,
     db: &Pool,
     call: &ToolCallRef,
     body: Value,
@@ -1033,13 +1033,13 @@ async fn screen_result(
         ?signals,
         "tool result matched prompt-injection signals"
     );
-    if principal.system().is_some() {
+    if let Some(agent) = agent {
         crate::agents::audit::record(
             db,
             AuditKind::InjectionDetected,
             principal.subject_id(),
             None,
-            chain,
+            Some(agent.chain().as_ref()),
             json!({
                 "tool": call.name,
                 "call_id": call.id,
@@ -1789,14 +1789,24 @@ mod tests {
         }]
     }
 
-    fn system_ctx(pool: aiplane_core::server::db::Pool) -> ToolContext {
-        use aiplane_core::server::principal::{GrantSet, Principal, SystemPrincipal};
+    /// The context of a call inside the agent `support`'s run.
+    fn agent_ctx(pool: aiplane_core::server::db::Pool) -> ToolContext {
+        use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
+        use aiplane_core::server::run_chain::{Frame, RunChain};
+        let principal = SystemPrincipal {
+            id: "p1".into(),
+            name: "support".into(),
+            grants: Arc::new(GrantSet::default()),
+        };
+        let chain = Arc::new(RunChain::root(
+            "s1",
+            None,
+            Frame::for_principal(&principal, None),
+        ));
+        let run = crate::agent_run::AgentRun::new(principal, chain).unwrap();
         ToolContext {
-            principal: Principal::System(SystemPrincipal {
-                id: "p1".into(),
-                name: "support".into(),
-                grants: Arc::new(GrantSet::default()),
-            }),
+            principal: run.principal(),
+            agent: Some(Arc::new(run)),
             ..ToolContext::for_test(pool)
         }
     }
@@ -1852,7 +1862,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_system_principal_gets_an_audit_row_for_a_hit() {
+    async fn an_agent_run_gets_an_audit_row_for_a_hit() {
         use crate::server::tools::injection::InjectionPolicy;
         use aiplane_core::server::db::agent_audit;
         let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
@@ -1860,7 +1870,7 @@ mod tests {
             .unwrap();
         execute_tool_calls(
             &registry(),
-            &system_ctx(pool.clone()),
+            &agent_ctx(pool.clone()),
             &echo_call(ATTACK),
             &InjectionScan::new(InjectionPolicy::Flag),
         )
@@ -1888,7 +1898,7 @@ mod tests {
         let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
             .await
             .unwrap();
-        let ctx = system_ctx(pool.clone());
+        let ctx = agent_ctx(pool.clone());
         execute_tool_calls(
             &registry(),
             &ctx,

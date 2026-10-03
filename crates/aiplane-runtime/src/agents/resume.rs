@@ -423,7 +423,7 @@ pub async fn run_claimed(
             &level.session.id,
             &level.suspension.turn_id,
             chains[i].clone(),
-        );
+        )?;
         let outcome = drive_resumed(state, params, resume).await;
         let route = level
             .suspension

@@ -10,13 +10,18 @@
 //! with a [`FinishContract`] instead ends in exactly one of two ways:
 //!
 //! - the model calls [`FINISH_TOOL_NAME`] with a `result` that validates
-//!   against the contract's schema → [`RunOutcome::Finished`];
+//!   against the contract's schema → [`RunOutcome::Finished`]. `finish` is an
+//!   ordinary run-scoped [`FinishTool`] in the
+//!   [`ToolPhase::Terminal`](crate::server::tools::ToolPhase::Terminal) phase:
+//!   an invalid call is answered with the validation error like any failed
+//!   tool, and a valid one ends the run;
 //! - anything else stops it first (the round budget, the output ceiling, a
 //!   cancel, an error) → [`RunOutcome::Incomplete`], saying why and what was
 //!   done.
 //!
-//! The round loop that enforces this lives in `openai_driver`; this module is
-//! the contract itself, kept free of the driver so the rules are testable on
+//! The round loop that enforces this lives in `openai_driver` and knows
+//! nothing of `finish` by name, only of the terminal phase; this module is the
+//! contract and its tool, kept free of the driver so the rules are testable on
 //! their own. See docs/tools-rbac.md → "Finish contract".
 //!
 //! # Schema subset
@@ -30,10 +35,13 @@
 //! contract is built, so a schema never *looks* enforced while part of it is
 //! silently skipped.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use shared::api::ToolDef;
+
+use crate::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
 /// The tool name the model ends a contracted run with.
 pub const FINISH_TOOL_NAME: &str = "finish";
@@ -119,22 +127,18 @@ impl FinishContract {
     }
 
     /// The OpenAI tool definition offered to the model on every round.
-    pub fn tool_definition(&self) -> Value {
-        json!({
-            "type": "function",
-            "function": {
-                "name": FINISH_TOOL_NAME,
-                "description": "End this run and hand back its result. Call it exactly once, on \
-                                its own, when the task is complete. `result` must match the \
-                                schema; a result that does not is returned to you with the \
-                                reason, and the run continues.",
-                "parameters": {
-                    "type": "object",
-                    "properties": { "result": self.schema },
-                    "required": ["result"],
-                },
-            }
-        })
+    pub fn tool_definition(&self) -> ToolDef {
+        ToolDef::function(
+            FINISH_TOOL_NAME,
+            "End this run and hand back its result. Call it exactly once, on its own, when the \
+             task is complete. `result` must match the schema; a result that does not is \
+             returned to you with the reason, and the run continues.",
+            json!({
+                "type": "object",
+                "properties": { "result": self.schema },
+                "required": ["result"],
+            }),
+        )
     }
 
     /// The standing instruction folded into the run's leading system message.
@@ -144,20 +148,11 @@ impl FinishContract {
          answer as text does not end it. Do the work with your tools, then call `finish`."
     }
 
-    /// Check one `finish` call's raw arguments. `Ok` is the accepted result;
+    /// Check one `finish` call's arguments. `Ok` is the accepted result;
     /// `Err` is the message to answer the call with, so the model can fix it.
-    pub fn check_call(&self, arguments_raw: &str) -> Result<Value, String> {
-        let raw = if arguments_raw.trim().is_empty() {
-            "{}"
-        } else {
-            arguments_raw
-        };
-        let args: Value = serde_json::from_str(raw).map_err(|e| {
-            format!(
-                "finish was not accepted: its arguments are not valid JSON ({e}). Call finish \
-                 again with {{\"result\": …}} matching the schema."
-            )
-        })?;
+    /// Arguments that are not a JSON object reach here as `{}` (the runner
+    /// normalises them), and so read as a missing `result`.
+    pub fn check_args(&self, args: &Value) -> Result<Value, String> {
         let Some(result) = args.get("result") else {
             return Err(
                 "finish was not accepted: it needs a `result` argument. Call finish \
@@ -177,10 +172,12 @@ impl FinishContract {
         }
     }
 
-    /// Shape the last round the budget allows: only `finish` may still run,
-    /// and the model is told to either call it or say what is left undone.
+    /// Tell the model the round it is about to answer is the last the budget
+    /// allows: only `finish` can still run, so it either calls it or says
+    /// what is left undone.
     ///
-    /// `finish` replaces the whole tool list instead of riding along with
+    /// The driver has already narrowed the round's tools to the terminal
+    /// phase, so `finish` stays offered instead of riding along with
     /// `tool_choice: "none"`: `none` would forbid the one call that matters,
     /// and backends that ignore `tool_choice` (see
     /// `runner::configure_final_tool_round`) would run on with every tool. A
@@ -193,25 +190,10 @@ impl FinishContract {
                               write a short account of what you did and what is left undone, \
                               and the run will be recorded as incomplete.";
         if let Some(obj) = body.as_object_mut() {
-            obj.insert("tools".into(), json!([self.tool_definition()]));
             obj.remove("tool_choice");
         }
         if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
             crate::server::tools::runner::merge_into_leading_system_message(messages, NOTICE);
-        }
-    }
-
-    /// Add the `finish` definition to a round's request.
-    pub fn inject(&self, body: &mut Value) {
-        let Some(obj) = body.as_object_mut() else {
-            return;
-        };
-        let tools = obj.entry("tools").or_insert_with(|| json!([]));
-        if let Some(list) = tools.as_array_mut() {
-            list.retain(|t| {
-                t.pointer("/function/name").and_then(Value::as_str) != Some(FINISH_TOOL_NAME)
-            });
-            list.push(self.tool_definition());
         }
     }
 }
@@ -238,40 +220,51 @@ pub fn gateway_summary(rounds: u32, tools_run: &[String]) -> String {
     )
 }
 
-/// The outcome slot one contracted run settles into. The driver writes it; the
-/// caller that started the run takes it afterwards.
+/// The `finish` tool of one contracted run: a run-scoped tool in the terminal
+/// phase. A call whose `result` fits the contract is accepted, and the run
+/// keeps that result; any other is answered with what to fix.
 #[derive(Debug)]
-pub struct FinishRun {
+pub struct FinishTool {
     contract: FinishContract,
-    outcome: Mutex<Option<RunOutcome>>,
+    result: Mutex<Option<Value>>,
 }
 
-impl FinishRun {
-    pub fn new(contract: FinishContract) -> Arc<Self> {
-        Arc::new(Self {
+impl FinishTool {
+    pub fn new(contract: FinishContract) -> Self {
+        Self {
             contract,
-            outcome: Mutex::new(None),
-        })
+            result: Mutex::new(None),
+        }
     }
 
     pub fn contract(&self) -> &FinishContract {
         &self.contract
     }
 
-    /// Record how the run ended. The first outcome wins: once a run has
-    /// finished, nothing that happens on its way out can overwrite that.
-    pub fn settle(&self, outcome: RunOutcome) {
-        let mut slot = self.outcome.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_none() {
-            *slot = Some(outcome);
-        }
-    }
-
-    pub fn take(&self) -> Option<RunOutcome> {
-        self.outcome
+    /// The result of the run's accepted `finish` call, once one was made.
+    pub fn result(&self) -> Option<Value> {
+        self.result
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .take()
+            .clone()
+    }
+}
+
+impl Tool for FinishTool {
+    fn id(&self) -> &str {
+        FINISH_TOOL_NAME
+    }
+
+    fn schema(&self) -> ToolDef {
+        self.contract.tool_definition()
+    }
+
+    fn run<'a>(&'a self, _ctx: ToolContext, args: Value) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let result = self.contract.check_args(&args).map_err(ToolError::Failed)?;
+            let mut slot = self.result.lock().unwrap_or_else(|p| p.into_inner());
+            Ok(slot.get_or_insert(result).clone())
+        })
     }
 }
 
@@ -532,7 +525,7 @@ mod tests {
     #[test]
     fn a_valid_call_yields_its_result() {
         let result = contract()
-            .check_call(r#"{"result": {"status": "escalated"}}"#)
+            .check_args(&json!({"result": {"status": "escalated"}}))
             .unwrap();
         assert_eq!(result, json!({"status": "escalated"}));
     }
@@ -540,86 +533,74 @@ mod tests {
     #[test]
     fn an_invalid_call_explains_what_to_fix() {
         let msg = contract()
-            .check_call(r#"{"result": {"status": "done"}}"#)
+            .check_args(&json!({"result": {"status": "done"}}))
             .unwrap_err();
         assert!(msg.contains("does not match the required schema"), "{msg}");
         assert!(msg.contains("/status"), "{msg}");
         assert!(msg.contains("call finish again"), "{msg}");
 
         let msg = contract()
-            .check_call(r#"{"status": "resolved"}"#)
+            .check_args(&json!({"status": "resolved"}))
             .unwrap_err();
         assert!(msg.contains("needs a `result` argument"), "{msg}");
 
-        let msg = contract().check_call("{not json").unwrap_err();
-        assert!(msg.contains("not valid JSON"), "{msg}");
-
-        let msg = contract().check_call("").unwrap_err();
+        let msg = contract().check_args(&json!({})).unwrap_err();
         assert!(msg.contains("needs a `result` argument"), "{msg}");
     }
 
     #[test]
     fn the_tool_definition_wraps_the_schema_as_result() {
         let def = contract().tool_definition();
-        assert_eq!(def["function"]["name"], FINISH_TOOL_NAME);
-        assert_eq!(def["function"]["parameters"]["required"], json!(["result"]));
+        assert_eq!(def.function.name, FINISH_TOOL_NAME);
+        assert_eq!(def.function.parameters["required"], json!(["result"]));
         assert_eq!(
-            def["function"]["parameters"]["properties"]["result"],
+            def.function.parameters["properties"]["result"],
             ticket_schema()
         );
     }
 
-    #[test]
-    fn inject_adds_finish_once() {
-        let mut body = json!({"tools": [{"type": "function", "function": {"name": "echo"}}]});
-        contract().inject(&mut body);
-        contract().inject(&mut body);
-        let names: Vec<&str> = body["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["function"]["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, ["echo", FINISH_TOOL_NAME]);
+    #[tokio::test]
+    async fn the_tool_keeps_the_first_accepted_result_and_answers_the_rest() {
+        let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let ctx = ToolContext::for_test(db);
+        let tool = FinishTool::new(contract());
+        assert_eq!(tool.schema(), contract().tool_definition());
 
-        let mut bare = json!({"messages": []});
-        contract().inject(&mut bare);
-        assert_eq!(bare["tools"].as_array().unwrap().len(), 1);
+        let refused = tool
+            .run(ctx.clone(), json!({"result": {"status": "done"}}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("/status"), "{refused}");
+        assert_eq!(tool.result(), None);
+
+        let accepted = tool
+            .run(ctx.clone(), json!({"result": {"status": "resolved"}}))
+            .await
+            .unwrap();
+        assert_eq!(accepted, json!({"status": "resolved"}));
+        tool.run(ctx, json!({"result": {"status": "escalated"}}))
+            .await
+            .unwrap();
+        assert_eq!(tool.result(), Some(json!({"status": "resolved"})));
     }
 
     #[test]
-    fn the_final_round_offers_only_finish_and_says_so() {
+    fn the_final_round_says_so() {
         let mut body = json!({
             "messages": [{"role": "system", "content": "rules"}, {"role": "user", "content": "go"}],
-            "tools": [{"type": "function", "function": {"name": "echo"}}],
+            "tools": [{"type": "function", "function": {"name": "finish"}}],
             "tool_choice": "auto",
         });
         contract().prepare_final_round(&mut body);
-        assert_eq!(body["tools"], json!([contract().tool_definition()]));
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1);
         assert!(body.get("tool_choice").is_none());
         let system = body["messages"][0]["content"].as_str().unwrap();
         assert!(system.starts_with("rules"), "{system}");
         assert!(system.contains("FINAL round"), "{system}");
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn the_first_settled_outcome_wins() {
-        let run = FinishRun::new(contract());
-        run.settle(RunOutcome::Finished {
-            result: json!({"status": "resolved"}),
-        });
-        run.settle(RunOutcome::Incomplete {
-            reason: IncompleteReason::Cancelled,
-            summary: String::new(),
-        });
-        assert_eq!(
-            run.take(),
-            Some(RunOutcome::Finished {
-                result: json!({"status": "resolved"})
-            })
-        );
-        assert_eq!(run.take(), None);
     }
 
     #[test]

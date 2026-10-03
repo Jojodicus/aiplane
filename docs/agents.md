@@ -570,14 +570,15 @@ registered for that run, need no grant, and do not exist anywhere else.
 | `forward_request()` | main agent | evaluates the router over open gates (§4). On no open route it returns the failing conditions as a structured list. Otherwise it runs the sub-agent and returns its `finish` result |
 | `request_human(question)` | main agent, when a `human` route exists | hands the conversation to a person on an open human route and waits for their answer ([#96](#what-96-built)) |
 | `verify_<id>_request_code()`, `verify_<id>_submit_code()`, `verify_<id>()` | main agent | the verifier flows ([#95](#what-95-built)); no arguments |
-| `finish(result)` | sub-agents, and headless runs that opt in | ends the run. `result` is checked against the finish schema |
+| `finish(result)` | agent runs under a finish contract (routed sub-agents) | ends the run. `result` is checked against the finish schema |
 
 **Order within a round.** A model batches calls, so `set_issue` and
 `forward_request` often arrive in one round. A round's calls normally run
 concurrently, which would let the forward read the state before the write
 landed. Each synthetic tool is therefore tagged with a `ToolPhase` where the run
-builds it (`AgentRun` in `agents/profile.rs`, the only place a tool leaves the
-default), and the runner (`execute_tool_calls`) runs the phases in turn:
+builds it (`AgentSurface` in `agents/profile.rs`; the run's `finish` tool is
+the one other tool that leaves the default), and the runner
+(`execute_tool_calls`) runs the phases in turn:
 
 1. **Writes state**: `set_<slot>` and every verifier tool, one at a time in the
    order the model made the calls (a lookup reads the slots a `set_<slot>`
@@ -586,6 +587,9 @@ default), and the runner (`execute_tool_calls`) runs the phases in turn:
    be read from state, so these too run after the writers.
 3. **Acts on state**: `forward_request` and `request_human`, one at a time in
    call order, on the state the round left.
+4. **Terminal**: `finish`. The driver runs it only as the one call of its
+   round, and a call that succeeds ends the run ([finish
+   contract](tools-rbac.md#finish-contract)).
 
 Each result still answers its own `tool_call_id`, in call order. Outside an
 agent run every tool is `Concurrent`, so chat and `/v1` are unchanged.
@@ -653,7 +657,7 @@ pub struct RunChain {
 pub struct Frame { pub principal_id: String, pub version: i64, pub via_tool_call: Option<String> }
 ```
 
-`RunChain` rides in `ToolContext.run`. These records carry the serialized chain:
+`RunChain` rides in the run's `AgentRun` (`ToolContext::chain()`). These records carry the serialized chain:
 - every `mcp_tool_audit` row,
 - every usage row,
 - a new `agent_audit` table (columns `kind`, `principal_id`, `chain`, `detail`,
@@ -674,10 +678,22 @@ not only the call. `version` is `Option<i64>` until agent versions exist (#84).
 fourth level (`EnterError::TooDeep`). Since #88 it also refuses an agent
 that is already in the chain (`EnterError::Cycle`).
 
-- `ToolContext.run: Option<Arc<RunChain>>`; `ToolContext::agent_active()` is
-  `run.is_some()`. Its running frame must be `ToolContext.principal`:
-  `headless::drive` refuses a run whose chain names a different principal
-  before any round.
+- **One `AgentRun` value** (`aiplane_runtime::agent_run`). Everything that sets
+  an agent's run apart from a person's turn travels together: the
+  `SystemPrincipal` it acts as, its `Arc<RunChain>`, its finish contract,
+  budget and injection scan, and the spec's `AgentSurface`. `AgentRun::new(
+  principal, chain)` is the only constructor and returns `MismatchedRun` when
+  the chain's running frame is not that principal, so a run that acts as one
+  agent and audits as another cannot be built; `with_contract`,
+  `with_budget`, `with_injection` and `with_surface` add the rest. A turn's
+  `Actor` is `Person { id, roles }` or `Agent(Arc<AgentRun>)`: `DriveParams`
+  and `TurnFacts` take one, and `build_tool_context` derives
+  `ToolContext.principal` from it, so the principal and the run cannot
+  disagree. The run then lives in `ToolContext.agent: Option<Arc<AgentRun>>`
+  (the driver reads it back through `OpenAiDriver::agent()`), and every
+  question "is this an agent run" asks that one value: `agent_active()`, the
+  call policy, the injection audit, the usage row's chain (`ctx.chain()`), and
+  whether `headless::drive` announces a person's pause.
 - **Every tool call in an agent run is decided and audited** in
   `openai_driver/call_policy.rs`: one `agent_audit` row of kind `tool_call`
   per call, attributed to the running principal, `actor_id` `NULL`, `chain`
@@ -769,10 +785,12 @@ grants.
   chat is #90.
 - **`RunProfile::load(state, agent_id, Role, options)`** reads the live version
   and the principal (`load_active`, so a disabled one is refused). It returns
-  `{principal, version, model, budget, finish, injection, run: Arc<AgentRun>}`,
-  and `drive_params` turns that into `DriveParams`. `DriveParams.agent` and
-  `OpenAiDriver.agent` carry the `AgentRun` into the ordinary headless loop.
-  There is no second driver.
+  `{principal, version, model, budget, finish, injection, surface:
+  Arc<AgentSurface>}`. `agent_run(chain)` builds the run's `AgentRun` from it,
+  and `drive_params` wraps that in `DriveParams { actor: Actor::Agent(..) }`;
+  both fail with `MismatchedRun` for a chain whose running frame is another
+  agent. The `AgentRun` rides the tool context into the ordinary headless
+  loop. There is no second driver.
   - *Compiled once*: a published version is immutable, so its typed spec
     ([`AgentSpec`](#the-typed-spec-107)), `StateSchema`, `RouteGates` and
     `OutputFilter` are built once per
@@ -789,7 +807,7 @@ grants.
     validator requires the schema when publishing a route to the agent, and a
     dispatch to one without it fails with `BadSpec`.
   - *Injection*: `Flag` for both.
-- **System message** (`AgentRun::system_message`). It holds a line naming the
+- **System message** (`AgentSurface::system_message`). It holds a line naming the
   agent, `orchestration` and `response`, `render_view()`, one line per route
   (`- billing (description): open` or `closed — <each unmet message>`), and
   the compaction summary if any. It has no chat rules, no request context, no
@@ -1047,8 +1065,8 @@ agent runs pause and resume durably, sub-agent runs included.
   `SuspendRequest::approval(timeout)` and `SuspendRequest::secure_input(message,
   timeout)` build the requests; #95/#96 need no new kind.
 - **Which runs pause.** `ToolContext.suspend` is `Available` on the chat path
-  and on every agent run (`headless::drive` turns it on when `DriveParams.agent`
-  is set), in both `drive_opened` entry points: the public endpoint's runner
+  and on every agent run (`headless::drive` turns it on when `DriveParams.actor`
+  is an agent), in both `drive_opened` entry points: the public endpoint's runner
   and the test chat. Since #96 a person's scheduled and webhook runs pause
   too ([below](#what-96-built)).
 - **The main agent's turn.** `drive_opened` (and `drive_opened_from`, the

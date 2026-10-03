@@ -471,20 +471,12 @@ async fn a_persons_paused_run_is_their_own_inbox_item() {
     crate::server::headless::drive(
         &world.state,
         crate::server::headless::DriveParams {
-            principal: aiplane_core::server::principal::Principal::User {
-                id: "u1".into(),
-                roles: vec!["everyone".into()],
-            },
-            run: None,
+            actor: crate::agent_run::Actor::person("u1", vec!["everyone".into()]),
             session_id: session.clone(),
             assistant_turn_id: turn.clone(),
             model: "support-model".into(),
             source: aiplane_core::server::db::usage::UsageSource::Scheduled,
             history_limit: None,
-            finish: None,
-            budget: None,
-            injection: Default::default(),
-            agent: None,
         },
     )
     .await;

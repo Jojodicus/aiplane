@@ -171,10 +171,10 @@ pub struct ToolContext {
     /// `None` where nothing resolved it (the `/v1` paths, tests) and reads as
     /// nothing granted.
     pub granted_tools: Option<std::sync::Arc<std::collections::HashSet<String>>>,
-    /// The agent call chain when this call runs inside an agent run, `None`
-    /// for a person's chat, a scheduled action or a `/v1` request. Its
-    /// running frame is `principal`; see [`Self::agent_active`].
-    pub run: Option<std::sync::Arc<aiplane_core::server::run_chain::RunChain>>,
+    /// The agent run this call is part of, `None` for a person's chat, a
+    /// scheduled action or a `/v1` request. `principal` is then its
+    /// principal; see [`Self::agent_active`].
+    pub agent: Option<std::sync::Arc<crate::agent_run::AgentRun>>,
     /// The id of the tool call this run answers. The runner sets it on the
     /// copy of the context it hands each call; `None` outside a call. A
     /// sub-agent dispatch records it as the call site of the run it starts.
@@ -217,7 +217,7 @@ impl ToolContext {
             model: None,
             suspend: crate::suspend::Suspend::Unavailable,
             granted_tools: None,
-            run: None,
+            agent: None,
             call_id: None,
         }
     }
@@ -237,7 +237,12 @@ impl ToolContext {
     /// agent's system principal and nobody else: no person's memory,
     /// connectors or skills, and every call is audited with the chain.
     pub fn agent_active(&self) -> bool {
-        self.run.is_some()
+        self.agent.is_some()
+    }
+
+    /// The agent call chain this call runs in, inside an agent run.
+    pub fn chain(&self) -> Option<&aiplane_core::server::run_chain::RunChain> {
+        self.agent.as_deref().map(|run| run.chain().as_ref())
     }
 
     /// The person this tool acts for, or the refusal to hand the model when

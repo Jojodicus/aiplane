@@ -843,11 +843,7 @@ async fn spawn_assistant_worker(
     let tool_ctx = aiplane_runtime::openai_driver::build_tool_context(
         state,
         aiplane_runtime::openai_driver::TurnFacts {
-            principal: aiplane_core::server::principal::Principal::User {
-                id: user.id.clone(),
-                roles: user.roles.clone(),
-            },
-            run: None,
+            actor: aiplane_runtime::agent_run::Actor::person(user.id.clone(), user.roles.clone()),
             session_id: session_id.to_string(),
             assistant_turn_id: assistant_turn_id.to_string(),
             client_ip: req.client_ip,
@@ -875,10 +871,6 @@ async fn spawn_assistant_worker(
         source: aiplane_core::server::db::usage::UsageSource::Chat,
         history_limit: None,
         voice_mode: req.voice_mode,
-        finish: None,
-        budget: None,
-        injection: Default::default(),
-        agent: None,
         clock: aiplane_runtime::budget::system_clock(),
         resume,
     });

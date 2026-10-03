@@ -80,9 +80,10 @@ dependency doesn't change the trait signature:
   `notify_user`, `schedule_action`, `get_user_location`, `browser_control`) goes
   through `ctx.person(tool_id)`, which refuses with a message naming the
   principal when there is no person behind the call.
-- **Agent run** — `run: Option<Arc<RunChain>>`, the call chain when the call
-  is part of an agent run (`ctx.agent_active()`); `None` everywhere else. See
-  [`agents.md`](agents.md#the-call-chain).
+- **Agent run** — `agent: Option<Arc<AgentRun>>`, the one value an agent run
+  carries (its principal, call chain, finish contract, budget and injection
+  scan) when the call is part of one (`ctx.agent_active()`, `ctx.chain()`);
+  `None` everywhere else. See [`agents.md`](agents.md#the-call-chain).
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -383,10 +384,10 @@ does not is `not_granted` for a system principal (audited as such in an agent
 run) and `unknown_tool` for a person — one check, so the audit row and what
 actually ran can never disagree.
 
-Run-scoped synthetic tools are not grants and sit outside the filter: `finish`
-is intercepted by name before dispatch, and an agent run's `set_<slot>` and
-`forward_request` tools come from `RunToolSource`, which the driver layers
-*over* the `GrantedToolSource`, never inside it. Their existence for the run is
+Run-scoped synthetic tools are not grants and sit outside the filter: an agent
+run's `set_<slot>`, `forward_request` and `finish` tools come from
+`RunToolSource`, which the driver layers *over* the `GrantedToolSource`, never
+inside it. Their existence for the run is
 the permission; nothing a person or principal is granted can reach them, and
 they reach nothing outside the run. A bound tool is still a granted tool: the
 binding wraps what the grant filter returned and can only narrow its arguments.
@@ -556,8 +557,9 @@ client tool in one turn.
   `ToolSource::phase` tags each call with a `ToolPhase`, and the runner runs the
   state writers (`set_<slot>`, verifiers) first and one at a time, then the
   concurrent rest, then the tools that act on state (`forward_request`,
-  `request_human`) one at a time. Only `RunToolSource` returns anything but
-  `Concurrent`. Results keep call order whatever order the calls ran in
+  `request_human`) one at a time, then the `Terminal` one (`finish`), which
+  the driver only lets run as the round's sole call. Only `RunToolSource`
+  returns anything but `Concurrent`. Results keep call order whatever order the calls ran in
   ([`agents.md`](agents.md#synthetic-tools)).
 - **Tool-result context budget** — once cumulative `role:"tool"` content passes
   128 KB (`/v1` loop) or the turn's allowance derived from the model's context
@@ -576,8 +578,8 @@ client tool in one turn.
 Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
 seconds, tokens }`. A chat turn derives it from the conversation's effort level
 (`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
-so interactive behaviour is unchanged. A headless run may pass one in
-`DriveParams::budget`; `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
+so interactive behaviour is unchanged. An agent run may carry one
+(`AgentRun::with_budget`); `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
 `seconds` and `tokens` are optional (`None` = unlimited). An agent run takes
 its budget from `main.budget` in its spec (rounds default to the `standard`
 effort cap). A sub-agent run gets its own budget from its own spec, never a
@@ -611,8 +613,9 @@ of `execute_tool_calls`, so the chat driver, the headless runs, the resume path
 and both `/v1` loops share it. Client-owned calls never pass through the
 gateway and are not scanned. `server/tools/injection.rs` holds the rest.
 
-A run carries an `InjectionScan { policy, classifier }`: `OpenAiDriver::injection`
-and `DriveParams::injection`. `RunProfile` sets `Flag` for every agent run,
+An agent run carries an `InjectionScan { policy, classifier }`
+(`AgentRun::with_injection`); every other turn runs with the default.
+`RunProfile` sets `Flag` for every agent run,
 main agent and sub-agent alike, so a sub-agent's `finish` result reaches the
 main agent screened like any other tool result. The
 default is `Off`, which skips scanning entirely, so the result reaches the model
@@ -664,11 +667,21 @@ not a result for a run nobody watches, so a non-interactive run can be given a
 `aiplane_runtime::finish::FinishContract` — a JSON schema — and then ends in
 exactly one of two ways: a schema-valid `finish(result)` call
 (`RunOutcome::Finished { result }`), or a structured
-`RunOutcome::Incomplete { reason, summary }`. `headless::drive` takes the
-contract in `DriveParams::finish` and returns the outcome; it is the entry
-point for scheduled actions, webhooks, and later sub-agents. Runs without a
-contract — every chat turn, every `/v1` request — are unchanged, and no
-`finish` tool is offered to them.
+`RunOutcome::Incomplete { reason, summary }`. The contract belongs to an
+agent run (`AgentRun::with_contract`; `RunProfile` gives one to every routed
+sub-agent), and `headless::drive` returns the outcome. Runs without a
+contract — every chat turn, every scheduled action and webhook, every `/v1`
+request — are unchanged, and no `finish` tool is offered to them.
+
+`finish` is a real tool: `finish::FinishTool`, owned by the run's `AgentRun`
+and offered through `RunToolSource` in the `ToolPhase::Terminal` phase. It is
+dispatched, audited, guarded against repeats and recorded on the turn's tool
+rows like any other call. The driver has no name-based case for it; it knows
+the terminal phase:
+
+- A terminal call made next to other calls is refused ("call it on its own").
+- A terminal call that succeeds ends the turn.
+- A contracted run's final round offers only terminal tools.
 
 Inside the chat driver, with a contract:
 
@@ -676,14 +689,17 @@ Inside the chat driver, with a contract:
   system message says the run ends only through it.
 - A round of text without `finish` does not end the run. The text is replayed
   with a user-role nudge, and the round counts against the budget.
-- A `finish` call on its own is validated. A valid one ends the run. An
-  invalid one is answered in its tool slot with every validation error
-  (location and cause), and the run continues. A `finish` made in the same
+- A `finish` call on its own is validated (`FinishContract::check_args`). A
+  valid one ends the run, and the tool keeps its result. An invalid one fails
+  like any tool, so its tool slot is answered with every validation error
+  (location and cause), and the run continues. Arguments that are not a JSON
+  object reach the tool as `{}` (the runner normalises them) and read as a
+  missing `result`. A `finish` made in the same
   round as other calls is refused ("call it on its own"), because ending
   there would throw away the other calls' results unread.
-- The final round offers *only* `finish` (the rest of the tool list is
-  replaced, `tool_choice` dropped: `"none"` would forbid the one call that
-  matters). The model is told to call it or write what is left undone.
+- The final round offers *only* `finish` (the round's tool list is narrowed
+  to the terminal phase and `tool_choice` dropped: `"none"` would forbid the
+  one call that matters). Any other call the model makes there never runs. The model is told to call it or write what is left undone.
   Anything but a valid `finish` there ends the run as
   `Incomplete { reason: round_budget_exhausted { rounds } }` (or the
   `seconds_exhausted` / `tokens_exhausted` of a [run budget](#run-budgets)), with the model's
@@ -691,9 +707,30 @@ Inside the chat driver, with a contract:
   when it wrote none. No closing round follows. The turn carries a notice.
 - A contracted run still passes through the repeated-call guard. A guard stop
   settles as `repeated_tool_call { tool }`, with the stop message as `summary`.
-- An output-token cutoff settles as `output_truncated`. A cancel, an upstream
-  error, or a crash leaves the slot empty, and `drive` reads the turn row:
-  `cancelled` or `failed { message }`.
+- An output-token cutoff settles as `output_truncated`.
+
+**One conversion.** No exit path settles the run itself. The round loop
+(`run_one_turn`) returns a `TurnEnd`: `Ran(TurnOutcome)` when it ran its
+course (an answer, an accepted terminal call, a pause, a cancel), or
+`CutShort { reason, summary, turn }` when a limit stopped the run early (the
+final round, an output cutoff, a repeated-call stop), where `turn` is what the
+worker records. `OpenAiDriver::run_turn` turns that, or the `TurnError`, into
+the `RunOutcome` in one place (`run_outcome`) and settles it on the
+`AgentRun`:
+
+| How the turn ended | `RunOutcome` |
+|---|---|
+| a `finish` call was accepted, whatever followed | `finished { result }` |
+| `CutShort` | `incomplete` with its `reason` and `summary` |
+| any `TurnError` | `failed { message }`, the error as the turn row shows it |
+| `Ran`, cancelled | `cancelled` |
+| `Ran` otherwise (e.g. a pause) | `failed { message: "the run ended without a finish call" }` |
+
+So a new exit path settles by construction: returning an error or a plain
+`TurnOutcome` already maps to an outcome, and only a richer reason needs a
+`CutShort`. `drive` takes the settled outcome (`AgentRun::take_outcome`); a
+run whose turn panicked before `run_turn` returned was never settled and reads
+as `failed` ("interrupted").
 
 `RunOutcome` serialises as `{"status": "finished", "result": …}` /
 `{"status": "incomplete", "reason": {"kind": …}, "summary": …}`, so a later
