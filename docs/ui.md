@@ -62,6 +62,9 @@ web/
 │   │   ├── voice.svelte.ts    voice-conversation orchestration
 │   │   ├── voice-recorder.ts  PCM capture + analyser
 │   │   ├── markdown.ts        marked → DOMPurify → {@html}
+│   │   ├── ui-variants.ts     class strings for components/ui/ (see Theming)
+│   │   ├── components/ui/     Modal, ChoiceCard, SegmentedControl, ChipToggle,
+│   │   │                      AiSuggestion, StatusPill, StepIndicator
 │   │   └── usage-types.ts
 │   └── routes/
 │       ├── +layout.svelte     app shell: nav, sidebar, theme, sign-out, feedback
@@ -631,6 +634,20 @@ The theme is stored in a `theme` cookie (`light` / `dark`) and applied **before 
 - Override daisyUI focus/borders in `@layer utilities` **unlayered** (`@layer utilities { … }` with no nested sub-layer name). daisyUI emits its components inside `@layer utilities { @layer daisyui.l1.l2.l3 { … } }`, so anything in `@layer components` loses regardless of specificity; per the Cascade Layers spec, unlayered content in a layer comes after its sub-layers, which is the slot we need.
 - **Mobile-first.** Target ~360 px first and use `sm:` to enhance. Touch targets ≥44 px. `dvh`/`dvw`, never `vh`/`vw`. Stack via a parent `gap`, not child `margin-top`.
 - `form-control` and `label-text-alt` do **not** exist in daisyUI 5. The house pattern for a labelled control is a `flex flex-col gap-1` label with the help `<span>` after the input.
+
+### Shared UI components
+
+Where daisyUI has no component for a pattern the mockup uses, `web/src/lib/components/ui/` has one, built from daisyUI classes and Tailwind utilities only. Their state-to-class mapping lives in `lib/ui-variants.ts` (unit-tested), so "selected" looks the same on every one of them. Reach for these before composing the classes by hand.
+
+| Component | Use it for | Not for |
+|---|---|---|
+| `Modal` | Any centred dialog: bindable `open`, title, optional description, `size` (`sm`–`xl`), body, optional `footer` snippet. Escape, backdrop and the ✕ all close it; nothing renders while closed. `EditModal` is `Modal` plus the admin rows' Cancel/Save footers. | Full-screen pickers (`CapabilityPicker`) and the feedback sheet, which are bottom sheets on mobile. |
+| `ChoiceCard` | A single pick between options that each need a sentence ("on the website" / "by e-mail"). Several in a `role="radiogroup"` grid. | Two or three short words — use `SegmentedControl`. |
+| `SegmentedControl` | A small closed enum (2–4 options) shown at once, as a daisyUI `join` of radio buttons. | Long or data-driven lists — `SearchableSelect`. |
+| `ChipToggle` | Multi-pick from a short visible set (channels, tags); with `onremove` a removable token. | A grant field over a closed server-known set — `SearchableSelect multiple`. |
+| `AiSuggestion` | Anything the model proposed that the user has not accepted yet; the dashed primary edge is reserved for this. `actions` holds Apply / Dismiss. | Settled configuration or help text — `alert alert-info`. |
+| `StatusPill` | A state word next to a name: `ok` / `warn` / `bad` / `info` / `neutral` as a soft, round daisyUI badge ("Live v3", "Needs setup"). | Counts and kinds (`badge badge-outline`). |
+| `StepIndicator` | Where the user is in a multi-step flow; pills are current (primary), done (green) or upcoming; `onselect` makes them jump. | Page sections — `SectionTabs` / daisyUI `tabs`. |
 
 ## PWA and Web Push
 
