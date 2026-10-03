@@ -49,7 +49,6 @@ async fn run_event(pool: &Pool, chain: &RunChain, kind: AuditKind, detail: Value
                 turn_id: Some("t-main".into()),
                 round: Some(1),
                 call_id: Some("call-1".into()),
-                conversation_id: None,
             }),
     )
     .await

@@ -2545,7 +2545,14 @@ serialized `RunChain`), `created_at`, `kind` and `detail`.
 **Hash chains.** *Chosen:* one chain per conversation, sub-agent runs
 included (`chain_key = conversation:<root session>`), and one per agent for
 everything outside a conversation (`agent:<principal id>`: management
-changes, refused visitors, sweeps). Per conversation rather than per agent
+changes, refused visitors, sweeps). **No writer picks the chain:**
+`agent_audit::append` resolves it from the event's own `session_id`,
+following a child session's `parent_turn_id` up to the root conversation
+(whose owner is also the event's `agent_id` when no run chain says so), so
+a state write, a host identity or an A2A task names only the session it
+happened in and lands where the rest of the conversation is; an event with
+no session belongs to its run chain's root, or else to the agent's own
+chain. Per conversation rather than per agent
 because retention removes conversations, and a chain must go whole or not
 at all; and because parallel conversations then never contend for one
 chain head. Within a chain events count up from 1 (`seq`); each stores the
@@ -2643,7 +2650,7 @@ logged and the request goes on as it would have.
 | `llm_exchange` | the route classifier (`router::PoolClassifier`) | `purpose: route_classifier`, `pool`, `model`, `backend`, `request`, `response`, `picked`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
-| `state_written` | `agent_state::put`, on the write's transaction, in the chain of the writing run's root conversation (a sub-agent's slot in its child session included) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
+| `state_written` | `agent_state::put`, on the write's transaction, in the chain of the written session's root conversation (a sub-agent's slot in its child session included, whichever door wrote it) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance`, `writer`, `set_at` |
 | `turn_started` / `turn_finished` | `headless::drive`, for every agent turn (main and sub-agent, resumed too) | the message the turn answers (a visitor's, or a sub-agent's task), or `resumed: true`; `status`, `answer`, `error`, `outcome` (a contracted run's `RunOutcome`: budget, rounds, repeated call …) |
 | `route_decision`, `sub_agent_dispatched`/`_finished`, `loop_iteration`/`_finished` | the router (#87/#88/#103) | as before (every route's gate, the route picked), plus the `method` that picked it (`rules`, `only_open`, `classifier`); an A2A dispatch also records the `message` it sent (`{secure_input_sent: true}` for an answer to the peer's `input-required`) |
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |

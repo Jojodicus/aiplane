@@ -476,7 +476,6 @@ pub async fn accept(
         Ok(_) => {
             let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
                 session_id: Some(session_id.to_string()),
-                conversation_id: Some(session_id.to_string()),
                 ..Correlation::default()
             });
             let _ = crate::agents::audit::record_event(&state.db, event).await;
@@ -540,7 +539,6 @@ async fn accept_inner(
         &values,
         TrustedWriter::Host,
         now,
-        None,
     )
     .await
     .map_err(|e| storage(&e))?;

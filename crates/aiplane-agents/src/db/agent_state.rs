@@ -9,7 +9,6 @@
 //! [`put`] directly would skip both the validator and the `set_by` check, so
 //! nothing else may.
 
-use aiplane_core::server::run_chain::RunChain;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -32,9 +31,9 @@ pub struct StoredSlot {
 /// in the activity log on the same transaction: the slot, its old and new
 /// value, the provenance, and when. The write and its event commit together
 /// or not at all. A slot of a person's conversation is written without an
-/// event; only an agent's conversation has a log. `run` is the run that
-/// wrote it: its root conversation's chain takes the event, so a sub-agent's
-/// write in its child session lands where the rest of the run is.
+/// event; only an agent's conversation has a log. The log finds the
+/// conversation's chain from `session_id` itself, so a sub-agent's write in
+/// its child session lands where the rest of the run is.
 pub async fn put(
     conn: &mut WriteTx,
     session_id: &str,
@@ -42,7 +41,6 @@ pub async fn put(
     value: &Value,
     provenance: &str,
     set_at: Timestamp,
-    run: Option<&RunChain>,
 ) -> Result<(), DbError> {
     let old: Option<(String, String, String)> = sqlx::query_as(
         "SELECT value, provenance, set_at FROM agent_state WHERE session_id = ? AND slot = ?",
@@ -96,10 +94,8 @@ pub async fn put(
                 "set_at": set_at,
             }),
         )
-        .in_run(run)
         .at(Correlation {
             session_id: Some(session_id.to_string()),
-            conversation_id: Some(session_id.to_string()),
             ..Correlation::default()
         }),
     )
@@ -175,10 +171,9 @@ pub(crate) mod tests {
         value: &Value,
         provenance: &str,
         set_at: Timestamp,
-        run: Option<&RunChain>,
     ) -> Result<(), DbError> {
         let mut tx = WriteTx::begin(pool).await?;
-        put(&mut tx, session_id, slot, value, provenance, set_at, run).await?;
+        put(&mut tx, session_id, slot, value, provenance, set_at).await?;
         tx.commit().await
     }
 
@@ -193,7 +188,6 @@ pub(crate) mod tests {
             &json!({"customer_id": "K-12345"}),
             "verifier:otp",
             at("2026-10-02T10:00:00Z"),
-            None,
         )
         .await
         .unwrap();
@@ -204,7 +198,6 @@ pub(crate) mod tests {
             &json!("a@b.example"),
             "llm",
             at("2026-10-02T10:01:00Z"),
-            None,
         )
         .await
         .unwrap();
@@ -239,7 +232,6 @@ pub(crate) mod tests {
             &json!("sales"),
             "llm",
             at("2026-10-02T10:00:00Z"),
-            None,
         )
         .await
         .unwrap();
@@ -250,7 +242,6 @@ pub(crate) mod tests {
             &json!("billing"),
             "host",
             at("2026-10-02T11:00:00Z"),
-            None,
         )
         .await
         .unwrap();
@@ -266,17 +257,9 @@ pub(crate) mod tests {
         let pool = fresh().await;
         seed_session(&pool, "s1").await;
         seed_session(&pool, "s2").await;
-        put_committed(
-            &pool,
-            "s1",
-            "name",
-            &json!("Ada"),
-            "llm",
-            Timestamp::now(),
-            None,
-        )
-        .await
-        .unwrap();
+        put_committed(&pool, "s1", "name", &json!("Ada"), "llm", Timestamp::now())
+            .await
+            .unwrap();
         assert!(for_session(&pool, "s2").await.unwrap().is_empty());
 
         sqlx::query("DELETE FROM chat_sessions WHERE id = 's1'")
@@ -292,7 +275,7 @@ pub(crate) mod tests {
         seed_session(&pool, "s1").await;
         for bad in ["model", "verifier:", "LLM", ""] {
             assert!(
-                put_committed(&pool, "s1", "x", &json!(1), bad, Timestamp::now(), None)
+                put_committed(&pool, "s1", "x", &json!(1), bad, Timestamp::now())
                     .await
                     .is_err(),
                 "{bad:?} was accepted"
@@ -304,17 +287,9 @@ pub(crate) mod tests {
     async fn a_row_for_a_session_that_does_not_exist_is_refused() {
         let pool = fresh().await;
         assert!(
-            put_committed(
-                &pool,
-                "ghost",
-                "x",
-                &json!(1),
-                "llm",
-                Timestamp::now(),
-                None
-            )
-            .await
-            .is_err()
+            put_committed(&pool, "ghost", "x", &json!(1), "llm", Timestamp::now())
+                .await
+                .is_err()
         );
     }
 
@@ -350,7 +325,7 @@ pub(crate) mod tests {
             .map(|n| {
                 let pool = pool.clone();
                 tokio::spawn(async move {
-                    put_committed(&pool, "s1", "n", &json!(n), "llm", Timestamp::now(), None)
+                    put_committed(&pool, "s1", "n", &json!(n), "llm", Timestamp::now())
                         .await
                         .unwrap();
                 })

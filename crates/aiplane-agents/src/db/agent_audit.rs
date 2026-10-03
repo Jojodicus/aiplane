@@ -16,7 +16,10 @@
 //!
 //! **Chains.** Every event belongs to one chain: the conversation it happened
 //! in (`conversation:<root session>`, sub-agent runs below it included), or,
-//! outside any conversation, its agent (`agent:<principal>`). Within a chain
+//! outside any conversation, its agent (`agent:<principal>`). [`append`]
+//! finds the conversation from the event's own session (`at.session_id`),
+//! following a child session's parent turn up to the root, so no writer
+//! picks a chain. Within a chain
 //! events are numbered from 1 (`seq`), and each stores the hash of the one
 //! before it (`prev_hash`) and its own `hash`: HMAC-SHA256 over its canonical
 //! JSON ([`StoredEvent::canonical`]), which covers every column, under a key
@@ -253,10 +256,6 @@ pub struct Correlation {
     /// The model round within the turn, from 0.
     pub round: Option<u32>,
     pub call_id: Option<String>,
-    /// The root conversation of an event that has no run chain but belongs
-    /// to a conversation all the same (a host identity, an A2A task). With
-    /// a chain, the chain's root wins.
-    pub conversation_id: Option<String>,
 }
 
 /// One event to append.
@@ -305,14 +304,36 @@ impl<'a> NewEvent<'a> {
         self.duration_ms = Some(duration_ms);
         self
     }
+}
 
-    /// The conversation this event's chain is: the run's root, else the
-    /// one the caller named.
-    fn conversation_id(&self) -> Option<String> {
-        self.chain
-            .map(|c| c.root_session.clone())
-            .or_else(|| self.at.conversation_id.clone())
+/// The conversation a session belongs to: the session itself, or — for a
+/// sub-agent's child session — the conversation its parent turn ran in,
+/// followed up to the top. With the root's owning principal, when it has
+/// one. A session that no longer exists is its own root.
+async fn root_conversation(
+    conn: &mut sqlx::SqliteConnection,
+    session_id: &str,
+) -> Result<(String, Option<String>), DbError> {
+    // A sub-agent nests at most a few levels; the bound only stops a cycle
+    // that a hand-edited database could hold.
+    const MAX_DEPTH: usize = 64;
+    let mut id = session_id.to_string();
+    for _ in 0..MAX_DEPTH {
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT s.principal_id, t.session_id
+               FROM chat_sessions s LEFT JOIN chat_turns t ON t.id = s.parent_turn_id
+              WHERE s.id = ?",
+        )
+        .bind(&id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        match row {
+            Some((_, Some(parent))) => id = parent,
+            Some((owner, None)) => return Ok((id, owner)),
+            None => return Ok((id, None)),
+        }
     }
+    Ok((id, None))
 }
 
 /// The `key_id` of an event written with no key ring installed — only by a
@@ -518,7 +539,14 @@ const SWEEP_SQL: &str = "SELECT chain_key, conversation_id, MAX(rtrim(created_at
 /// extended under it, so two writers cannot both take the same place. The
 /// unique index on `(chain_key, seq)` refuses a fork should one try.
 pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appended, DbError> {
-    let conversation_id = event.conversation_id();
+    let root = match &event.at.session_id {
+        Some(session) => Some(root_conversation(conn, session).await?),
+        None => None,
+    };
+    let conversation_id = root
+        .as_ref()
+        .map(|(id, _)| id.clone())
+        .or_else(|| event.chain.map(|c| c.root_session.clone()));
     let chain_key = match &conversation_id {
         Some(c) => conversation_chain(c),
         None => agent_chain(event.principal_id),
@@ -555,7 +583,9 @@ pub async fn append(conn: &mut WriteTx, mut event: NewEvent<'_>) -> Result<Appen
         agent_id: Some(
             event
                 .chain
-                .map_or(event.principal_id, |c| c.agent().principal_id.as_str())
+                .map(|c| c.agent().principal_id.as_str())
+                .or_else(|| root.as_ref().and_then(|(_, owner)| owner.as_deref()))
+                .unwrap_or(event.principal_id)
                 .to_string(),
         ),
         version: event.chain.and_then(|c| c.current().version),

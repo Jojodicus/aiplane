@@ -126,10 +126,7 @@ pub const LOG_UNAVAILABLE: &str = "The agent's activity log could not be written
 pub async fn record_event(db: &Pool, event: NewEvent<'_>) -> Result<String, LogError> {
     let kind = event.kind.as_str();
     let principal = event.principal_id.to_string();
-    let conversation = event
-        .chain
-        .map(|c| c.root_session.clone())
-        .or_else(|| event.at.conversation_id.clone());
+    let session = event.at.session_id.clone();
     let turn = event.at.turn_id.clone();
     let written = match tokio::time::timeout(WRITE_BOUND, agent_audit::append_now(db, event)).await
     {
@@ -141,7 +138,7 @@ pub async fn record_event(db: &Pool, event: NewEvent<'_>) -> Result<String, LogE
         error = %written,
         kind,
         principal = %principal,
-        conversation = ?conversation,
+        session = ?session,
         turn = ?turn,
         "an agent activity event could not be written"
     );
@@ -314,7 +311,6 @@ impl ToolContext {
             turn_id: self.assistant_turn_id.clone(),
             round: self.agent.as_deref().map(AgentRun::round),
             call_id: self.call_id.clone(),
-            conversation_id: None,
         }
     }
 

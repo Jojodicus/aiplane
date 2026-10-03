@@ -376,17 +376,9 @@ pub(crate) async fn apply_writes(
     let mut tx = WriteTx::begin(&run.state.db)
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;
-    write_trusted_all(
-        &mut tx,
-        &run.schema,
-        session_id,
-        &resolved,
-        writer,
-        now,
-        ctx.chain(),
-    )
-    .await
-    .map_err(refused)?;
+    write_trusted_all(&mut tx, &run.schema, session_id, &resolved, writer, now)
+        .await
+        .map_err(refused)?;
     tx.commit()
         .await
         .map_err(|e| ToolError::Failed(format!("storing the verifier's slots: {e}")))?;

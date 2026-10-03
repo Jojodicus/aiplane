@@ -412,7 +412,6 @@ async fn refusal_event(
 ) {
     let event = NewEvent::new(kind, agent_id, detail).at(Correlation {
         session_id: conversation_id.map(str::to_string),
-        conversation_id: conversation_id.map(str::to_string),
         ..Correlation::default()
     });
     let _ = super::audit::record_event(db, event).await;

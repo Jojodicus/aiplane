@@ -76,7 +76,7 @@ async fn audit(call: &Call, action: &str, context: &A2aContext, task: &str) {
         NewEvent::new(AuditKind::A2aTask, &call.served.agent.principal.id, detail).at(
             Correlation {
                 turn_id: Some(task.to_string()),
-                conversation_id: Some(context.session_id.clone()),
+                session_id: Some(context.session_id.clone()),
                 ..Correlation::default()
             },
         ),
