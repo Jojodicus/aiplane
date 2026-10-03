@@ -23,12 +23,13 @@ use serde_json::Value;
 use super::{OpenAiDriver, TurnEnd, VOICE_DIRECTIVE, build_request_context, run_outcome};
 use crate::agent_run::AgentRun;
 use crate::agents::profile::{AgentSurface, RunToolSource};
+use crate::agents::topic_guard::Decision;
 use crate::budget::Budget;
 use crate::finish::{FINISH_NUDGE, FinishTool};
 use crate::server::tools::injection::InjectionScan;
 use crate::server::tools::mcp::manager::UserMcpLayer;
 use crate::server::tools::runner::{self, ToolCallAcc};
-use crate::server::tools::{ToolPhase, ToolSource};
+use crate::server::tools::{ToolContext, ToolPhase, ToolSource};
 use aiplane_core::server::db::chat_session_tools;
 use aiplane_core::server::reasoning::Effort;
 use aiplane_core::server::upstreams::PoolAccess;
@@ -183,6 +184,28 @@ impl<'a> TurnPolicy<'a> {
             );
         }
         leading.swap_remove(0)
+    }
+
+    /// The topic guard's decision on the visitor's message: for a main
+    /// agent with a strict scope only, `None` for every other turn. Asked
+    /// once, before the turn's first model call, and never on a resume —
+    /// the message was judged when the turn began.
+    pub(super) async fn guard_topic(
+        self,
+        d: &OpenAiDriver,
+        tool_ctx: &ToolContext,
+        messages: &[Value],
+    ) -> Option<Decision> {
+        if d.resume.is_some() {
+            return None;
+        }
+        let run = self.agent()?;
+        let guard = run.surface()?.topic_guard()?;
+        Some(
+            guard
+                .judge(d.state.clone(), run.system_principal(), tool_ctx, messages)
+                .await,
+        )
     }
 
     /// Bring `messages[0]` up to date at the top of a round that is not the

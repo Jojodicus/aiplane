@@ -1538,4 +1538,5 @@ mod hil;
 mod loop_route;
 mod output_filter;
 mod suspend;
+mod topic_guard;
 mod verifiers;

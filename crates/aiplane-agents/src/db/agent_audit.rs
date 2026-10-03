@@ -68,6 +68,9 @@ pub enum AuditKind {
     InjectionDetected,
     /// `forward_request`: every route's gate, and the route picked if any.
     RouteDecision,
+    /// The topic guard of a strict scope judged a visitor message: its
+    /// verdict, the topics, the pool, and the error when it could not decide.
+    ScopeDecision,
     /// A sub-agent run started from a route.
     SubAgentDispatched,
     /// A sub-agent run ended, with its outcome.
@@ -152,6 +155,7 @@ impl AuditKind {
         Self::ToolCall,
         Self::InjectionDetected,
         Self::RouteDecision,
+        Self::ScopeDecision,
         Self::SubAgentDispatched,
         Self::SubAgentFinished,
         Self::OutputBlocked,
@@ -199,6 +203,7 @@ impl AuditKind {
             Self::ToolCall => "tool_call",
             Self::InjectionDetected => "injection_detected",
             Self::RouteDecision => "route_decision",
+            Self::ScopeDecision => "scope_decision",
             Self::SubAgentDispatched => "sub_agent_dispatched",
             Self::SubAgentFinished => "sub_agent_finished",
             Self::OutputBlocked => "output_blocked",

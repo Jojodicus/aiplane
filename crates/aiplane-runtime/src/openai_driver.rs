@@ -1244,6 +1244,20 @@ async fn run_one_turn(
             &from.decision,
         ));
     }
+    // A strict scope's guard answers an off-topic message with the owner's
+    // refusal, before the main model sees it (`agents::topic_guard`).
+    if let Some(decision) = policy.guard_topic(d, &tool_ctx, &messages).await {
+        tokens_used += decision.tokens;
+        policy.record_spend(decision.tokens);
+        fail_closed(d)?;
+        if let Some(refusal) = decision.refusal {
+            chat::append_content(&d.state.db, &ctx.assistant_turn_id, &refusal)
+                .await
+                .map_err(persist_err("append_content", &ctx.assistant_turn_id))?;
+            let _ = ctx.broadcast.send(TurnUpdate::Tick);
+            return Ok(TurnOutcome::default().into());
+        }
+    }
     let exchange_log = exchange::ExchangeLog::new(&tool_source);
     let mut start_round = 0;
     if let Some(from) = d.resume.as_ref() {
