@@ -865,6 +865,20 @@ async fn a_valid_host_token_writes_its_claims_as_host() {
     let events = world.audit(&agent).await;
     let accepted = events.iter().find(|e| e.kind == "host_identity").unwrap();
     assert_eq!(accepted.detail["outcome"], "accepted");
+    let (chain_key, conversation): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT chain_key, conversation_id FROM agent_audit WHERE kind = 'host_identity'",
+    )
+    .fetch_one(world.db())
+    .await
+    .unwrap();
+    assert_eq!(
+        (chain_key, conversation),
+        (
+            Some(format!("conversation:{session}")),
+            Some(session.clone())
+        ),
+        "the identity is part of the conversation's chain"
+    );
     assert!(
         !accepted.detail.to_string().contains("K-1"),
         "no claim value"

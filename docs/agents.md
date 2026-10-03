@@ -1885,8 +1885,9 @@ verifiers:
   assurance, session_id, turn_id, …}`; outcomes `code_sent`, `verified`,
   `wrong_code`, `locked`, `expired`, `email_changed`, `rate_limited`,
   `not_confirmed`, `too_many_attempts`, `write_failed`) and `host_identity`
-  (`{session_id, outcome, reason | slots}`). Never a code, an address or a
-  claim value.
+  (`{session_id, outcome, reason | slots}`, in the chain of the conversation
+  the token was presented for, with its `conversation_id`). Never a code,
+  an address or a claim value.
 - **The system message after a resume.** The driver now rebuilds an agent's
   system message on the first round after a resume too, so a slot the
   resumed call just wrote (the verifier's) shows on the next request and

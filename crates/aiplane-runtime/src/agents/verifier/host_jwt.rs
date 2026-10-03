@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use aiplane_agents::db::agent_audit::AuditKind;
+use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_agents::db::agent_verifiers;
 use aiplane_core::server::capped_read;
 use aiplane_core::server::crypto::sha256_hex;
@@ -447,7 +447,8 @@ fn slot_values(
 
 /// Accept `token` for conversation `session_id` of agent `agent_id`, whose
 /// version runs `spec`: verify it and write its mapped slots as `host`.
-/// Returns the slots written.
+/// Returns the slots written. The outcome is a `host_identity` event of the
+/// conversation's chain.
 pub async fn accept(
     state: &RamaState,
     agent_id: &str,
@@ -469,15 +470,12 @@ pub async fn accept(
         Err(e) => json!({ "session_id": session_id, "outcome": "refused", "reason": e.code() }),
     };
     if !matches!(outcome, Err(IdentityError::NotConfigured)) {
-        crate::agents::audit::record(
-            &state.db,
-            AuditKind::HostIdentity,
-            agent_id,
-            None,
-            None,
-            detail,
-        )
-        .await;
+        let event = NewEvent::new(AuditKind::HostIdentity, agent_id, detail).at(Correlation {
+            session_id: Some(session_id.to_string()),
+            conversation_id: Some(session_id.to_string()),
+            ..Correlation::default()
+        });
+        let _ = crate::agents::audit::record_event(&state.db, event).await;
     }
     outcome
 }
