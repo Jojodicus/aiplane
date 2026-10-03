@@ -47,9 +47,14 @@ mod tests {
 
     use super::*;
 
-    /// A peer that answers with a chunked body and no `Content-Length`, one
-    /// 64 KiB chunk after another until the client hangs up. A raw socket
-    /// because wiremock always sends a length.
+    /// A peer that answers with a chunked body and no `Content-Length`: 8 MiB
+    /// in 64 KiB chunks, far over any cap the tests set. A raw socket because
+    /// wiremock always sends a length.
+    ///
+    /// Finite on purpose: were `read_capped` to lose its cap, a truly endless
+    /// peer would have the test buffer until the machine runs out of memory
+    /// (docs/dev-workflow.md → "Size-probe tests"); this one makes it fail
+    /// with an `Ok` of 8 MiB instead.
     async fn endless_chunked_peer() -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -64,7 +69,12 @@ mod tests {
                 return;
             }
             let chunk = format!("10000\r\n{}\r\n", " ".repeat(0x10000));
-            while sock.write_all(chunk.as_bytes()).await.is_ok() {}
+            for _ in 0..128 {
+                if sock.write_all(chunk.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+            let _ = sock.write_all(b"0\r\n\r\n").await;
         });
         format!("http://{addr}/")
     }
