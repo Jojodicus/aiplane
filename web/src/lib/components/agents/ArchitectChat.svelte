@@ -141,9 +141,9 @@
 					<div class="chat-bubble flex w-full max-w-full flex-col gap-2 border border-base-300 bg-base-200 text-base-content">
 						{#if live.tool_calls.length}
 							<ToolCalls calls={live.tool_calls} />
+							{@const path = agentId ? null : live.tool_calls.map(setupPath).findLast((p) => p !== null)}
 							<div class="flex flex-wrap gap-2">
 								{#each live.tool_calls as call (call.id)}
-									{@const path = setupPath(call)}
 									{#if undoTarget(call)}
 										{#if undone[call.id]}
 											<span class="badge badge-outline">{t('architect-undone')}</span>
@@ -151,10 +151,8 @@
 											<button class="btn btn-xs" type="button" onclick={() => void undo(call)}>↶ {t('architect-undo')}</button>
 										{/if}
 									{/if}
-									{#if path && !agentId}
-										<a class="btn btn-xs btn-ghost" href="{base}{path}">{t('architect-open-setup')}</a>
-									{/if}
 								{/each}
+								{#if path}<a class="btn btn-xs btn-ghost" href="{base}{path}">{t('architect-open-setup')}</a>{/if}
 							</div>
 						{/if}
 						{#if live.turn.content}<Markdown content={live.turn.content} />{/if}

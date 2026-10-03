@@ -3077,6 +3077,104 @@ scenario; improve; the rate refusing with `Retry-After` and per manager; bad
 input and missing shares refused before the model is asked; a failed model
 call recorded and answered `502`).
 
+### What #118 built
+
+The agent architect: a conversation in which a built-in assistant plans an
+agent with a manager — asks questions, proposes a structure, explains
+trade-offs — and creates or changes the draft as it goes. The UI is in
+[`ui.md`](ui.md#agent-architect).
+
+**Chosen: a persona of the person's chat, not an agent.** The architect is
+not a system principal and holds no grants. Its conversation is an ordinary
+chat of the signed-in person's (`chat_sessions.user_id`), marked in
+`agent_architect_sessions` (session, person, the agent it plans), and every
+turn runs on the person chat driver as `TurnPolicy::Persona`
+(`aiplane_runtime::persona::ChatPersona`): the person's pools, budget, usage
+and history, but the architect's fixed system prompt and only its tools,
+offered every round. The person's own chat tools are neither offered nor run
+(a call to one is refused as an unknown tool). The prompt is English and
+tells the model to answer in the person's language.
+
+**Tools** (`aiplane-api::pages::architect::tools`). Each acts as the person
+through the function the matching route uses, so the share, the validator
+and the grant cap decide exactly as for a click in the setup UI, and a
+refusal reaches the model — and the chat — as the route's own message and
+code. Each checks `can_manage_agents` again when it runs.
+
+| Tool | Does | Through |
+|---|---|---|
+| `list_agents` | the agents shared with the person | `visible_agents` (as `GET /api/v0/agents`) |
+| `read_agent(agent_id)` | draft, grants, what blocks publishing | `agent_by_id` (`read` share), `SpecWorld`, `publish_issues` |
+| `list_grantable` | pools, model choices, tools, connectors, skills, collections | `resources_for` (as `GET /api/v0/agent-resources`) |
+| `propose_setup(agent_id, scenario, template?)` | the #117 proposal; writes nothing | `suggest_for` (as `…/assist/suggest`: its rate, usage row and `assist_suggested` event) |
+| `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName` | `create_agent` (as `POST /api/v0/agents`) |
+| `update_agent_draft(agent_id, changes)` | changes the draft step by step | `assist::apply_changes`, then `add_capped_grant` per needed grant, then `save_draft` |
+| `run_test_turn(agent_id, message, conversation_id?)` | one test-chat turn of the draft | `draft_test_turn` (as `…/test-turn`) |
+
+There is **no publish tool**: the prompt tells the model to send the person
+to the setup page (`setup_url`), where Publish stays a click. An agent may
+be named by its id or its name.
+
+**`changes`** is the prompt assistant's step shape without tests and
+identity (`assist::changes_schema`): `display`, `pool`, `task`, `tone`,
+`scope`, `abilities`, `slots`, `handoffs`. `apply_changes` runs the same
+`Reviewer` as `review`: each piece is applied to the stored draft and kept
+when it adds no validator issue, else dropped with the reason. An ability is
+offered only when it is one of the person's grantable tools, and `pool` only
+when it is a chat pool the person may use — both are then granted through
+the capped grant route before the draft is saved, so a grant the person
+lacks is never made (`grant_exceeds_manager` would refuse it anyway). When
+nothing at all is applied the call fails with the reasons, so the chat shows
+it as an error. Identity checks need a connector or a key only the setup's
+identity step asks for, and test cases are saved from its last step; both
+are left to the UI. Hand-offs are written in the proposal's route shape,
+which the setup shows as "set up in the advanced editor".
+
+**Undo: draft revisions.** Every draft save (the UI's and the architect's)
+keeps the draft it replaced in `agent_draft_revisions` (newest
+`MAX_DRAFT_REVISIONS` = 50 per agent; an unchanged save keeps none), and
+answers with that `revision`. `update_agent_draft` returns it, and the
+window's *Undo* calls `POST /api/v0/agents/{id}/draft/restore {revision}`,
+which validates and saves it like any draft (so the undo is itself
+undoable). Grants an undone change made stay: they are the person's capped
+grants and unused by the restored draft; the setup offers to revoke them.
+
+**API.**
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| POST | `/api/v0/agent-architect` | `{agent_id?, title, fresh?}` | `{session_id, model, agent_id, resumed}` |
+| POST | `/api/v0/agents/{id}/draft/restore` | `{revision}` | `{draft_spec, live_version, revision}` |
+
+`agent-architect` needs `can_manage_agents` (403 otherwise) and a `write`
+share on `agent_id`. It reopens the person's newest architect conversation
+about that agent (or about no agent yet) unless `fresh`; otherwise it
+creates one titled `title` (the client sends "Agent architect: <name>" in the
+person's language). `model` is what to send messages with: the pool choice
+of the prompt assistant (`assist::choose_pool`: the admin's *Balanced* pool
+when the person may use it, else their first chat pool), `503
+architect_no_model` when none serves one. Messages then go through the
+ordinary `POST /api/v0/chat/sessions/{id}/messages` and stream on its events
+endpoint; `spawn_assistant_worker` looks the session up and builds the
+persona for it.
+
+**Chosen: the conversations stay in the chat history.** They are the
+person's chats, titled "Agent architect: …", and are not hidden from the
+chat list: hiding would need a filter in the session list and the sidebar
+for no safety gain, and opened from `/chat` they still run as the architect,
+since the persona belongs to the session, not to the page.
+
+**Tests.** `agents/assist/review/tests.rs` (changes applied with their
+grants; a pool or tool the person may not grant dropped);
+`openai_driver/resume.rs` (`a_personas_turn_offers_only_its_tools_and_refuses_the_persons`);
+`persona.rs`; `db/agents.rs` (revisions kept, capped, unchanged saves
+skipped); `db/architect_sessions.rs`; `pages/architect/tools.rs` (the id from
+a name, no publish tool); `tests/it/agent_architect.rs` (a scripted
+conversation lists, creates, proposes, updates, is refused an ability the
+person lacks, tests the draft and cannot publish, every call recorded; the
+offered tools; undo through `draft/restore`; reopening and `fresh`; 403 for a
+non-manager); `web/src/lib/architect.test.ts`.
+
 ### What #119 built
 
 Voice in the embed widget: a visitor may speak a message and hear answers.
@@ -3176,6 +3274,7 @@ upward.
 | The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-agents` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
 | The prompt assistant: the structured call (`pool_choice::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
+| The agent architect: the persona hook (`persona`, `TurnPolicy::Persona`) and `assist::apply_changes`; its tools, the start route and `draft/restore` (`pages::architect`); `agent_architect_sessions` and draft revisions (`db::architect_sessions`, `db::agents`) | `aiplane-runtime`; `aiplane-api`; `aiplane-agents` | the driver only knows "a prompt and a tool source"; the tools need the route functions (share checks, grant cap, test chat), which live in the API layer, so the API builds the persona per turn and hands it down |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
 
@@ -3216,6 +3315,7 @@ use `regex`, and hashing uses the token helpers.
 | #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
 | #116 setup assistant | §2 | overview, routed step assistant and single-step modal over the same spec; admin-mapped model choices (`agents.pool_*`, `tiers` on `agent-resources`); five starter templates validated in six languages ([built](#what-116-built)) |
 | #117 prompt assistant | §2, §5 | `POST …/assist/suggest` and `…/assist/improve`: a proposal per setup step and test cases, each piece checked against the draft and dropped with a reason; writes nothing; a usage row of the manager's and an `assist_suggested` event ([built](#what-117-built)) |
+| #118 agent architect | §2, §6 | a persona of the person's chat (`TurnPolicy::Persona`), not an agent; seven tools through the routes' own functions, no publish; `apply_changes` for step-wise draft edits; draft revisions and `draft/restore` for undo; `POST /api/v0/agent-architect` ([built](#what-118-built)) |
 | #119 widget voice | §5 | `publish.voice` with a named, granted pool per direction; `POST /api/v0/embed/{transcribe,speak,agent}`; transcript returned to the visitor, never sent for them; only a final stored answer is spoken; audio never stored; widget colour from `profile.color` ([built](#what-119-built)) |
 | #97 later | — | unchanged |
 
