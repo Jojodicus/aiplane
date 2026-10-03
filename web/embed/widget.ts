@@ -233,7 +233,8 @@ export class Widget {
 		this.syncInput();
 		this.renderLog();
 		try {
-			const { restarted } = await this.o.api.send(text);
+			const { restarted, agent } = await this.o.api.send(text);
+			if (agent) this.setTitle(agent.display);
 			if (restarted) {
 				this.state.messages = this.state.messages.slice(-1);
 				this.notice = this.o.t('embed-session-restarted');

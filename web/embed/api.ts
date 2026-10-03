@@ -160,11 +160,13 @@ export class EmbedApi {
 	/**
 	 * Sends one message, starting a session first when there is none. When the
 	 * stored one has timed out it starts a fresh one and sends there; `restarted`
-	 * tells the caller the earlier conversation is gone.
+	 * tells the caller the earlier conversation is gone. `agent` is the agent of
+	 * a session this call started, `null` when it reused the stored one.
 	 */
-	async send(text: string): Promise<{ restarted: boolean }> {
+	async send(text: string): Promise<{ restarted: boolean; agent: { display: string } | null }> {
 		let restarted = false;
-		if (!this.hasToken()) await this.start();
+		let agent: { display: string } | null = null;
+		if (!this.hasToken()) ({ agent } = await this.start());
 		for (let attempt = 0; ; attempt++) {
 			try {
 				await this.call('/api/v0/embed/messages', {
@@ -172,11 +174,11 @@ export class EmbedApi {
 					headers: { ...this.auth(), 'content-type': 'application/json' },
 					body: JSON.stringify({ text })
 				});
-				return { restarted };
+				return { restarted, agent };
 			} catch (error) {
 				if (attempt > 0 || !(error instanceof EmbedError) || !error.sessionLost) throw error;
 				this.forget();
-				await this.start();
+				({ agent } = await this.start());
 				restarted = true;
 			}
 		}
