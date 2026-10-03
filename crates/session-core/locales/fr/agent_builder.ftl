@@ -3,14 +3,16 @@
 # tabs, and the internal test chat with its debug view.
 
 agents-heading = Agents
-agents-intro = Créez un agent : un agent principal conversationnel avec un état typé, des portes strictes et des sous-agents spécialisés, prêt à être intégré là où les visiteurs lui parlent. Testez chaque brouillon ici avant de le publier.
+agents-intro = Les agents sont des assistants IA dédiés à une tâche précise, par exemple répondre aux questions des clients sur votre site. Configurez-en un ici, essayez-le et publiez-le quand il vous convient.
 agents-create = Nouvel agent
 agents-create-name = Nom
 agents-create-name-hint = Minuscules, chiffres et tirets. C'est aussi le nom du principal système de l'agent et il ne peut plus être modifié.
-agents-create-name-help = Comment l’agent doit-il s’appeler ? Les visiteurs voient ce nom, par exemple « Harald » ou « croit Support ».
+agents-create-name-help = Comment l’agent doit-il s’appeler ? Les visiteurs voient ce nom, par exemple « Assistant support » ou « croit Support ».
+agents-create-name-placeholder = p. ex. Assistant support
 agents-create-id = Identifiant
 agents-create-id-change = Modifier
-agents-create-description = Description
+agents-create-description = Description (facultative)
+agents-create-description-help = Une courte note sur le rôle de cet agent. Elle apparaît sur la carte de l’agent dans cette liste, pas dans le chat avec les visiteurs.
 agents-create-submit = Créer l'agent
 agents-list-empty = Aucun agent partagé avec vous pour l'instant. Créez-en un avec le bouton ci-dessus.
 agents-updated = Mis à jour { $date }

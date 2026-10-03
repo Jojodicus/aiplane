@@ -2,14 +2,16 @@
 # tabs, and the internal test chat with its debug view.
 
 agents-heading = Agents
-agents-intro = Build an agent: a conversational main agent with typed state, hard gates and specialised sub-agents, ready to be embedded where visitors talk to it. Test every draft here before you publish it.
+agents-intro = Agents are AI assistants for one specific job, such as answering customer questions on your website. Set one up here, try it out, and publish it when you are happy with it.
 agents-create = New agent
 agents-create-name = Name
 agents-create-name-hint = Lowercase letters, digits and dashes. It is also the name of the agent's system principal and cannot be changed later.
-agents-create-name-help = What should the agent be called? Visitors see this name, for example "Harald" or "croit Support".
+agents-create-name-help = What should the agent be called? Visitors see this name, for example "Support assistant" or "croit Support".
+agents-create-name-placeholder = e.g. Support assistant
 agents-create-id = ID
 agents-create-id-change = Change
-agents-create-description = Description
+agents-create-description = Description (optional)
+agents-create-description-help = A short note about what this agent is for. It appears on the agent's card in this list, not in the chat with visitors.
 agents-create-submit = Create agent
 agents-list-empty = No agents shared with you yet. Create one with the button above.
 agents-updated = Updated { $date }

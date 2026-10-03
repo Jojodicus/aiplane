@@ -4,7 +4,7 @@
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { agentsApi } from '$lib/agents';
-	import { checklist } from '$lib/agent-setup';
+	import { checklist, publishState } from '$lib/agent-setup';
 	import { AgentWorkspace, provideWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 
@@ -20,7 +20,9 @@
 
 	onMount(() => void ws.load());
 
-	const open = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])).filter((x) => x.blocking).length);
+	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
+	const open = $derived(todos.filter((x) => x.blocking).length);
+	const state = $derived(publishState(todos));
 
 	async function publish() {
 		try {
@@ -60,7 +62,13 @@
 				<StatusPill tone="ok">{t('agents-live-badge', { version: ws.detail.live_version })}</StatusPill>
 			{/if}
 			{#if ws.writable}
-				<StatusPill tone={open ? 'warn' : 'ok'}>{open ? t('agents-setup-open-count', { count: open }) : t('agents-setup-ready-pill')}</StatusPill>
+				{#if state === 'blocked'}
+					<StatusPill tone="warn">{t('agents-setup-open-count', { count: open })}</StatusPill>
+				{:else if state === 'recommended'}
+					<StatusPill tone="ok">{t('agents-setup-ready-recommended-pill')}</StatusPill>
+				{:else}
+					<StatusPill tone="ok">{t('agents-setup-ready-pill')}</StatusPill>
+				{/if}
 			{/if}
 			{#if ws.dirty}<StatusPill tone="warn">{t('agents-unsaved')}</StatusPill>{/if}
 			{#if !ws.writable}<StatusPill>{t('agents-read-only')}</StatusPill>{/if}
@@ -87,7 +95,9 @@
 				</div>
 			</div>
 		{/if}
-		{#if ws.notice}<div class="alert alert-success text-sm"><span>{t(ws.notice.key, ws.notice.args)}</span></div>{/if}
+		{#if ws.notice}
+			<div class="toast toast-end z-50"><div class="alert alert-success text-sm" role="status"><span>{t(ws.notice.key, ws.notice.args)}</span></div></div>
+		{/if}
 
 		{@render children()}
 	{/if}

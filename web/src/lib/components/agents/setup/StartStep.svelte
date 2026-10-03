@@ -77,6 +77,7 @@
 		</button>
 		<span class="text-sm text-base-content/60">{t('agents-setup-or-template')}</span>
 	</div>
+	{#if proposing}<p class="m-0 text-sm text-base-content/70" role="status">{t('agents-setup-proposing')}</p>{/if}
 	{#if proposeError}<div class="alert alert-error text-sm" role="alert"><span>{proposeError}</span></div>{/if}
 	{#if ws.suggestion}
 		<div class="alert alert-info flex-col items-start text-sm" role="status">

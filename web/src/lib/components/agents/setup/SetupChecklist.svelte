@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Spec } from '$lib/agents';
-	import { readScope, type StepKey, type Todo } from '$lib/agent-setup';
+	import { publishState, readScope, type StepKey, type Todo } from '$lib/agent-setup';
 	import { t } from '$lib/i18n.svelte';
 
 	/**
@@ -10,6 +10,7 @@
 	let { todos, spec, onfix }: { todos: Todo[]; spec: Spec; onfix: (step: StepKey | null) => void } = $props();
 
 	const scope = $derived(readScope(spec));
+	const state = $derived(publishState(todos));
 	const text = (todo: Todo) => (todo.key ? t(todo.key, todo.args) : (todo.message ?? ''));
 </script>
 
@@ -31,10 +32,10 @@
 			<span>{t(scope.strict ? 'agents-setup-check-scope-strict' : 'agents-setup-check-scope', { count: scope.topics.length })}</span>
 		</li>
 	{/if}
-	{#if !todos.some((x) => x.blocking)}
+	{#if state !== 'blocked'}
 		<li class="flex items-start gap-2">
 			<span class="badge badge-soft badge-success rounded-full px-1.5" aria-hidden="true">✓</span>
-			<span>{t('agents-setup-ready')}</span>
+			<span>{t(state === 'ready' ? 'agents-setup-ready' : 'agents-setup-ready-recommended')}</span>
 		</li>
 	{/if}
 </ul>

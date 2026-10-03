@@ -110,7 +110,7 @@
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-name')}</span>
 			<!-- svelte-ignore a11y_autofocus -->
-			<input class="input w-full" bind:value={display} required maxlength="80" placeholder="Harald" autofocus />
+			<input class="input w-full" bind:value={display} required maxlength="80" placeholder={t('agents-create-name-placeholder')} autofocus />
 			<span class="text-xs text-base-content/60">{t('agents-create-name-help')}</span>
 		</label>
 		{#if customId === null}
@@ -128,6 +128,7 @@
 		<label class="flex flex-col gap-1">
 			<span class="label-text">{t('agents-create-description')}</span>
 			<textarea class="textarea w-full" bind:value={description}></textarea>
+			<span class="text-xs text-base-content/60">{t('agents-create-description-help')}</span>
 		</label>
 		<button class="btn btn-ghost btn-sm self-start" type="button" onclick={planInstead}>🎙 {t('architect-create-option')}</button>
 	</form>

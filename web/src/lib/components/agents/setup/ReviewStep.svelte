@@ -18,14 +18,23 @@
 	const tests = $derived(ws.suggestion?.steps.tests ?? []);
 	let saved = $state<string[]>([]);
 	let testError = $state<string | null>(null);
-	async function saveTest(test: (typeof tests)[number]) {
+	const unsaved = $derived(tests.filter((x) => !saved.includes(x.name)));
+	let savingAll = $state(false);
+	async function saveTest(test: (typeof tests)[number]): Promise<boolean> {
 		testError = null;
 		try {
 			await agentsApi.createTest(ws.id, { name: test.name, script: test.script, expect: test.expect, rubric: null });
 			saved = [...saved, test.name];
+			return true;
 		} catch (err) {
 			testError = setupErrorMessage(err as AgentError, t);
+			return false;
 		}
+	}
+	async function saveAll() {
+		savingAll = true;
+		for (const test of unsaved) if (!(await saveTest(test))) break;
+		savingAll = false;
 	}
 	const sayings = (test: (typeof tests)[number]) =>
 		test.script.flatMap((s) => ('say' in s ? [s.say] : [])).join(' · ');
@@ -45,6 +54,12 @@
 	</section>
 	{#if tests.length}
 		<AiSuggestion label={t('agents-setup-suggest-tests')}>
+			{#if unsaved.length > 1}
+				<button class="btn btn-sm btn-primary mb-2" type="button" disabled={!ws.writable || savingAll} onclick={() => void saveAll()}>
+					{#if savingAll}<span class="loading loading-spinner loading-xs"></span>{/if}
+					{t('agents-setup-test-save-all')}
+				</button>
+			{/if}
 			<ul class="m-0 flex list-none flex-col gap-2 p-0">
 				{#each tests as test (test.name)}
 					<li class="flex flex-wrap items-center gap-2">
@@ -54,7 +69,7 @@
 						{#if saved.includes(test.name)}
 							<span class="text-success">✓ {t('agents-setup-test-saved')}</span>
 						{:else}
-							<button class="btn btn-sm" type="button" disabled={!ws.writable} onclick={() => void saveTest(test)}>{t('agents-setup-test-save')}</button>
+							<button class="btn btn-sm" type="button" disabled={!ws.writable || savingAll} onclick={() => void saveTest(test)}>{t('agents-setup-test-save')}</button>
 						{/if}
 					</li>
 				{/each}

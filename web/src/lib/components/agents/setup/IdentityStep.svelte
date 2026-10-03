@@ -71,7 +71,7 @@
 
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-identity-lead')}</p>
-	{#if suggested && suggestedCard}
+	{#if suggested && suggestedCard && suggestedCard !== model.method}
 		<SuggestionBox part="identity" onapply={() => { if (suggestedCard && !(suggestedCard === 'none' && blockers.length)) choose(suggestedCard); }}>
 			<p class="m-0 font-semibold">{t(`agents-setup-identity-${suggestedCard}`)}</p>
 			<p class="m-0 mt-1 text-base-content/70">{suggested.why}</p>

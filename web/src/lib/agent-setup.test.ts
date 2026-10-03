@@ -15,6 +15,7 @@ import {
 	identFrom,
 	identityWriter,
 	isBlank,
+	publishState,
 	liveUses,
 	newSecret,
 	originOf,
@@ -547,4 +548,12 @@ test('a draft the agent architect wrote reads as hand-off sentences and friendly
 	writeHandoffs(again, h);
 	assert.deepEqual(sortKeys(again.routes), sortKeys(draft.routes), 'writing the rules back changes nothing');
 	assert.deepEqual(sortKeys(again.state), sortKeys(draft.state));
+});
+
+test('publishState tells blocked, recommended-only and ready apart', () => {
+	const blocking = { step: 'basics', key: 'k', blocking: true } as const;
+	const advice = { step: 'site', key: 'k', blocking: false } as const;
+	assert.equal(publishState([]), 'ready');
+	assert.equal(publishState([advice]), 'recommended');
+	assert.equal(publishState([advice, blocking]), 'blocked');
 });

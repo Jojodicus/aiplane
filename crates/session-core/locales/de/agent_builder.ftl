@@ -3,14 +3,16 @@
 # tabs, and the internal test chat with its debug view.
 
 agents-heading = Agenten
-agents-intro = Erstellen Sie einen Agenten: einen Hauptagenten mit typisiertem Zustand, harten Gates und spezialisierten Unteragenten, bereit zum Einbetten, wo Besucher mit ihm sprechen. Testen Sie jeden Entwurf hier, bevor Sie ihn veröffentlichen.
+agents-intro = Agenten sind KI-Assistenten für eine bestimmte Aufgabe, zum Beispiel Kundenfragen auf Ihrer Website zu beantworten. Richten Sie hier einen ein, testen Sie ihn und veröffentlichen Sie ihn, wenn er Ihnen gefällt.
 agents-create = Neuer Agent
 agents-create-name = Name
 agents-create-name-hint = Kleinbuchstaben, Ziffern und Bindestriche. Es ist zugleich der Name des Systemprinzipals des Agenten und lässt sich später nicht ändern.
-agents-create-name-help = Wie soll der Agent heißen? Diesen Namen sehen Besucher, zum Beispiel „Harald“ oder „croit Support“.
+agents-create-name-help = Wie soll der Agent heißen? Diesen Namen sehen Besucher, zum Beispiel „Support-Assistent“ oder „croit Support“.
+agents-create-name-placeholder = z. B. Support-Assistent
 agents-create-id = Kennung
 agents-create-id-change = Ändern
-agents-create-description = Beschreibung
+agents-create-description = Beschreibung (optional)
+agents-create-description-help = Eine kurze Notiz, wofür dieser Agent da ist. Sie erscheint auf der Karte des Agenten in dieser Liste, nicht im Chat mit Besuchern.
 agents-create-submit = Agent erstellen
 agents-list-empty = Noch keine Agenten mit Ihnen geteilt. Erstellen Sie einen über die Schaltfläche oben.
 agents-updated = Aktualisiert { $date }
