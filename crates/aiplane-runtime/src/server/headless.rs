@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use crate::agent_run::Actor;
 use crate::budget::Clock;
-use crate::finish::{IncompleteReason, RunOutcome};
+use crate::finish::RunOutcome;
 use crate::rama_server::state::RamaState;
 use crate::suspend::ResumeFrom;
 use aiplane_core::server::db::usage::UsageSource;
@@ -171,7 +171,6 @@ async fn drive_inner(
         .as_ref()
         .and_then(|run| state.agent_turns.cancel_flag(&run.chain().root_session))
         .unwrap_or_default();
-    let session_id = p.session_id.clone();
     let person = p.actor.person_id().map(str::to_string);
     let assistant_turn_id = p.assistant_turn_id.clone();
     let tool_ctx = crate::openai_driver::build_tool_context(
@@ -226,11 +225,8 @@ async fn drive_inner(
         return None;
     };
 
-    let run = agent.finish()?;
-    Some(match run.take() {
-        Some(outcome) => outcome,
-        None => unsettled_outcome(&state.db, &session_id, &assistant_turn_id).await,
-    })
+    agent.contract()?;
+    Some(agent.take_outcome())
 }
 
 /// Tell a person's run's owner that it waits for them, when it paused.
@@ -241,30 +237,6 @@ async fn announce_if_waiting(state: &Arc<RamaState>, turn_id: &str) {
         }
         Ok(None) => {}
         Err(err) => tracing::warn!(error = %err, turn = %turn_id, "reading a run's pause"),
-    }
-}
-
-/// The outcome of a contracted run the driver never settled: it errored,
-/// was cancelled, or crashed on the way, and only the turn row knows which.
-async fn unsettled_outcome(db: &Pool, session_id: &str, turn_id: &str) -> RunOutcome {
-    let turn = chat::get_turn(db, session_id, turn_id).await;
-    let reason = match turn {
-        Ok(Some(t)) if t.status == chat::TurnStatus::Cancelled => IncompleteReason::Cancelled,
-        Ok(Some(t)) => IncompleteReason::Failed {
-            message: t
-                .error_message
-                .unwrap_or_else(|| "the run ended without a finish call".into()),
-        },
-        Ok(None) => IncompleteReason::Failed {
-            message: format!("the run's turn `{turn_id}` no longer exists"),
-        },
-        Err(e) => IncompleteReason::Failed {
-            message: format!("reading the run's turn `{turn_id}` after it ended: {e}"),
-        },
-    };
-    RunOutcome::Incomplete {
-        reason,
-        summary: String::new(),
     }
 }
 

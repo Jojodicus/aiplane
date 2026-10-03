@@ -707,9 +707,30 @@ Inside the chat driver, with a contract:
   when it wrote none. No closing round follows. The turn carries a notice.
 - A contracted run still passes through the repeated-call guard. A guard stop
   settles as `repeated_tool_call { tool }`, with the stop message as `summary`.
-- An output-token cutoff settles as `output_truncated`. A cancel, an upstream
-  error, or a crash leaves the slot empty, and `drive` reads the turn row:
-  `cancelled` or `failed { message }`.
+- An output-token cutoff settles as `output_truncated`.
+
+**One conversion.** No exit path settles the run itself. The round loop
+(`run_one_turn`) returns a `TurnEnd`: `Ran(TurnOutcome)` when it ran its
+course (an answer, an accepted terminal call, a pause, a cancel), or
+`CutShort { reason, summary, turn }` when a limit stopped the run early (the
+final round, an output cutoff, a repeated-call stop), where `turn` is what the
+worker records. `OpenAiDriver::run_turn` turns that, or the `TurnError`, into
+the `RunOutcome` in one place (`run_outcome`) and settles it on the
+`AgentRun`:
+
+| How the turn ended | `RunOutcome` |
+|---|---|
+| a `finish` call was accepted, whatever followed | `finished { result }` |
+| `CutShort` | `incomplete` with its `reason` and `summary` |
+| any `TurnError` | `failed { message }`, the error as the turn row shows it |
+| `Ran`, cancelled | `cancelled` |
+| `Ran` otherwise (e.g. a pause) | `failed { message: "the run ended without a finish call" }` |
+
+So a new exit path settles by construction: returning an error or a plain
+`TurnOutcome` already maps to an outcome, and only a richer reason needs a
+`CutShort`. `drive` takes the settled outcome (`AgentRun::take_outcome`); a
+run whose turn panicked before `run_turn` returned was never settled and reads
+as `failed` ("interrupted").
 
 `RunOutcome` serialises as `{"status": "finished", "result": …}` /
 `{"status": "incomplete", "reason": {"kind": …}, "summary": …}`, so a later

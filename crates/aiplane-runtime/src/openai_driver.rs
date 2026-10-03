@@ -28,7 +28,7 @@ use session_core::workers::{SteerNote, TurnUpdate};
 
 use crate::agent_run::{Actor, AgentRun};
 use crate::budget::{Budget, Clock, Limit};
-use crate::finish::{FINISH_NUDGE, FinishTool, IncompleteReason, RunOutcome, gateway_summary};
+use crate::finish::{FINISH_NUDGE, IncompleteReason, RunOutcome, gateway_summary};
 use crate::rama_server::state::RamaState;
 use crate::server::tools::{ToolContext, ToolPhase, ToolSource, runner};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
@@ -623,7 +623,14 @@ pub fn build_tool_context(state: &Arc<RamaState>, facts: TurnFacts) -> ToolConte
 #[async_trait]
 impl SessionDriver for OpenAiDriver {
     async fn run_turn(&self, ctx: SessionContext) -> Result<TurnOutcome, TurnError> {
-        let result = run_one_turn(self, ctx.clone()).await;
+        let end = run_one_turn(self, ctx.clone()).await;
+        if let Some(agent) = self.agent()
+            && let Some(finish) = agent.finish()
+        {
+            let cancelled = ctx.cancel.load(Ordering::SeqCst);
+            agent.settle(run_outcome(finish.result(), &end, cancelled));
+        }
+        let result = end.and_then(TurnEnd::into_turn);
         // Free the turn's sandbox container (if any) here, the single choke
         // point that covers every way `run_one_turn` exits — success, error,
         // and the several early cancel returns inside it. The
@@ -715,12 +722,11 @@ const INCOMPLETE_MESSAGE: &str = "This run spent its round budget without the mo
 /// follows.
 fn incomplete_on_final_round(
     model: &str,
-    run: &FinishTool,
     round_content: &str,
     gateway_account: String,
     reason: IncompleteReason,
     rejection: Option<String>,
-) -> TurnOutcome {
+) -> TurnEnd {
     let text = round_content.trim();
     let mut summary = if text.is_empty() {
         gateway_account
@@ -735,10 +741,79 @@ fn incomplete_on_final_round(
         ?reason,
         "contracted run spent its budget without a valid finish; recording it as incomplete"
     );
-    run.settle(RunOutcome::Incomplete { reason, summary });
-    TurnOutcome {
-        notice: Some(INCOMPLETE_MESSAGE.to_string()),
+    TurnEnd::CutShort(CutShort {
+        reason,
+        summary,
+        turn: Ok(TurnOutcome {
+            notice: Some(INCOMPLETE_MESSAGE.to_string()),
+        }),
+    })
+}
+
+/// How one turn's round loop ended. [`SessionDriver::run_turn`] reads an
+/// agent run's [`RunOutcome`] from it ([`run_outcome`]) — the one place that
+/// conversion happens, so no exit path has to settle the run itself — and
+/// hands the worker the turn's own result.
+enum TurnEnd {
+    /// The loop ran its course: the model answered, a terminal call ended
+    /// the run, the turn paused, or it was cancelled.
+    Ran(TurnOutcome),
+    /// Something stopped the run before the model was done.
+    CutShort(CutShort),
+}
+
+/// A run stopped short: why, what was done, and how the turn ends.
+struct CutShort {
+    reason: IncompleteReason,
+    summary: String,
+    turn: Result<TurnOutcome, TurnError>,
+}
+
+impl From<TurnOutcome> for TurnEnd {
+    fn from(outcome: TurnOutcome) -> Self {
+        Self::Ran(outcome)
     }
+}
+
+impl TurnEnd {
+    fn into_turn(self) -> Result<TurnOutcome, TurnError> {
+        match self {
+            Self::Ran(outcome) => Ok(outcome),
+            Self::CutShort(cut) => cut.turn,
+        }
+    }
+}
+
+/// How a contracted run ended, from how its turn did. `finished` is the
+/// result of an accepted `finish` call, which wins over anything that
+/// happened on the way out. Every other end is incomplete, with the reason
+/// the loop gave — or, for an end that gives none, the error, the cancel, or
+/// the plain fact that no `finish` came.
+fn run_outcome(
+    finished: Option<serde_json::Value>,
+    end: &Result<TurnEnd, TurnError>,
+    cancelled: bool,
+) -> RunOutcome {
+    if let Some(result) = finished {
+        return RunOutcome::Finished { result };
+    }
+    let (reason, summary) = match end {
+        Ok(TurnEnd::CutShort(cut)) => (cut.reason.clone(), cut.summary.clone()),
+        Err(err) => (
+            IncompleteReason::Failed {
+                message: err.to_string(),
+            },
+            String::new(),
+        ),
+        Ok(TurnEnd::Ran(_)) if cancelled => (IncompleteReason::Cancelled, String::new()),
+        Ok(TurnEnd::Ran(_)) => (
+            IncompleteReason::Failed {
+                message: "the run ended without a finish call".into(),
+            },
+            String::new(),
+        ),
+    };
+    RunOutcome::Incomplete { reason, summary }
 }
 
 async fn classify_and_dispatch_tool_calls(
@@ -877,7 +952,7 @@ async fn classify_and_dispatch_tool_calls(
     Ok((assistant_tool_calls, call_refs, refused))
 }
 
-async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutcome, TurnError> {
+async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnEnd, TurnError> {
     // Build the upstream message list from DB. We include every
     // completed turn before the in-progress one. Tool calls aren't
     // included in the prior-history payload — the old client-side
@@ -1201,7 +1276,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         )
         .await?
         {
-            resume::Resumed::Paused => return Ok(TurnOutcome::default()),
+            resume::Resumed::Paused => return Ok(TurnOutcome::default().into()),
             resume::Resumed::Continue { start_round: next } => start_round = next,
         }
         seen_tool_call_ids.extend(resume::tool_call_ids(&messages[prefix_len..]));
@@ -1217,7 +1292,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             break;
         }
         if ctx.cancel.load(Ordering::SeqCst) {
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
 
         // Anything the user typed since the last round goes into the prompt
@@ -1496,7 +1571,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 };
             if ctx.cancel.load(Ordering::SeqCst) {
                 drop(acquired);
-                return Ok(TurnOutcome::default());
+                return Ok(TurnOutcome::default().into());
             }
             let Ok(chunk) = chunk else { break 'chunks };
             byte_buf.extend_from_slice(&chunk);
@@ -1729,7 +1804,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             && cut_written_out_call(d, &ctx, &mut round_content, &mut wrote_any_content).await?;
 
         if ctx.cancel.load(Ordering::SeqCst) {
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
 
         // The model was cut off mid-generation at its output-token ceiling.
@@ -1754,25 +1829,22 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 completion_tokens = ?round_tokens.1,
                 "upstream stopped at the output-token limit; finalizing the turn as truncated"
             );
-            if let Some(run) = finish {
-                run.settle(RunOutcome::Incomplete {
-                    reason: IncompleteReason::OutputTruncated,
-                    summary: round_content.trim().to_string(),
-                });
-            }
-            return Ok(TurnOutcome {
-                notice: Some(TRUNCATED_MESSAGE.to_string()),
-            });
+            return Ok(TurnEnd::CutShort(CutShort {
+                reason: IncompleteReason::OutputTruncated,
+                summary: round_content.trim().to_string(),
+                turn: Ok(TurnOutcome {
+                    notice: Some(TRUNCATED_MESSAGE.to_string()),
+                }),
+            }));
         }
 
         // On a contracted run's final round only a terminal call can still
         // run; anything else the model called there never does.
-        if final_round && let Some(run) = finish {
+        if final_round && finish.is_some() {
             tool_acc.retain(|_, acc| tool_source.phase(&acc.name) == ToolPhase::Terminal);
             if tool_acc.is_empty() {
                 return Ok(incomplete_on_final_round(
                     &ctx.model,
-                    run,
                     &round_content,
                     gateway_summary(round + 1, &tools_run),
                     budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
@@ -1790,9 +1862,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 if !wrote_any_content {
                     return Ok(TurnOutcome {
                         notice: Some(EMPTY_AFTER_TOOLS_MESSAGE.to_string()),
-                    });
+                    }
+                    .into());
                 }
-                return Ok(TurnOutcome::default());
+                return Ok(TurnOutcome::default().into());
             }
             tracing::warn!(
                 model = %ctx.model,
@@ -1856,9 +1929,10 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                     } else {
                         EMPTY_REPLY_MESSAGE.to_string()
                     }),
-                });
+                }
+                .into());
             }
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
 
         // Tool calls fired. Insert each as 'running' and broadcast,
@@ -1893,7 +1967,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
         )
         .await?;
         if call_refs.is_empty() && refused.is_empty() {
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
 
         let mut results = match runner::execute_tool_calls_guarded(
@@ -1926,15 +2000,13 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                     .map_err(persist_err("complete_tool_call", &ctx.assistant_turn_id))?;
                 }
                 let _ = ctx.broadcast.send(TurnUpdate::Tick);
-                if let Some(run) = finish {
-                    run.settle(RunOutcome::Incomplete {
-                        reason: IncompleteReason::RepeatedToolCall {
-                            tool: stop.tool.clone(),
-                        },
-                        summary: message.clone(),
-                    });
-                }
-                return Err(TurnError::Aborted { message });
+                return Ok(TurnEnd::CutShort(CutShort {
+                    reason: IncompleteReason::RepeatedToolCall {
+                        tool: stop.tool.clone(),
+                    },
+                    summary: message.clone(),
+                    turn: Err(TurnError::Aborted { message }),
+                }));
             }
         };
         tools_run.extend(
@@ -2050,21 +2122,15 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             .filter(|(call, _)| tool_source.phase(&call.name) == ToolPhase::Terminal)
             .collect();
         if terminal.iter().any(|(_, result)| !result.failed) {
-            if let Some(run) = finish
-                && let Some(result) = run.result()
-            {
-                run.settle(RunOutcome::Finished { result });
-            }
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
-        if final_round && let Some(run) = finish {
+        if final_round && finish.is_some() {
             let rejection = terminal.last().map(|(call, result)| {
                 let reason = result.body["error"].as_str().unwrap_or_default();
                 format!("The last {} call was rejected: {reason}", call.name)
             });
             return Ok(incomplete_on_final_round(
                 &ctx.model,
-                run,
                 &round_content,
                 gateway_summary(round + 1, &tools_run),
                 budget.incomplete_reason(limit_hit.unwrap_or(Limit::Rounds), round + 1),
@@ -2086,7 +2152,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
                 },
             )
             .await?;
-            return Ok(TurnOutcome::default());
+            return Ok(TurnOutcome::default().into());
         }
 
         // Round over. Evict the older, bulky tool results the same way the
@@ -2116,7 +2182,7 @@ async fn run_one_turn(d: &OpenAiDriver, ctx: SessionContext) -> Result<TurnOutco
             );
         }
     }
-    Ok(TurnOutcome::default())
+    Ok(TurnOutcome::default().into())
 }
 
 /// Build the auto-provided request-context system message: the signed-in
@@ -4591,5 +4657,91 @@ mod tool_budget_tests {
         assert!(!context_overflow(500, "internal error"));
         // "too long" about something that isn't tokens.
         assert!(!context_overflow(400, "field `name` is too long"));
+    }
+}
+
+#[cfg(test)]
+mod run_outcome_tests {
+    use serde_json::json;
+    use session_core::driver::{TurnError, TurnOutcome};
+
+    use super::{CutShort, TurnEnd, run_outcome};
+    use crate::finish::{IncompleteReason, RunOutcome};
+
+    fn incomplete(reason: IncompleteReason) -> RunOutcome {
+        RunOutcome::Incomplete {
+            reason,
+            summary: String::new(),
+        }
+    }
+
+    /// An exit path nobody wrote outcome handling for — here a storage error
+    /// — still settles, with the error as the reason.
+    #[test]
+    fn a_driver_error_ends_the_run_incomplete_with_its_message() {
+        let end = Err(TurnError::Persistence {
+            message: "set_content on turn t1: disk full".into(),
+        });
+        assert_eq!(
+            run_outcome(None, &end, false),
+            incomplete(IncompleteReason::Failed {
+                message: "storage: set_content on turn t1: disk full".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_turn_that_ran_its_course_without_finish_is_cancelled_or_failed() {
+        let ran = Ok(TurnEnd::Ran(TurnOutcome::default()));
+        assert_eq!(
+            run_outcome(None, &ran, true),
+            incomplete(IncompleteReason::Cancelled)
+        );
+        assert_eq!(
+            run_outcome(None, &ran, false),
+            incomplete(IncompleteReason::Failed {
+                message: "the run ended without a finish call".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_cut_short_run_keeps_its_reason_and_account_whatever_the_turn_records() {
+        let end = Ok(TurnEnd::CutShort(CutShort {
+            reason: IncompleteReason::RepeatedToolCall {
+                tool: "search".into(),
+            },
+            summary: "stopped: identical calls".into(),
+            turn: Err(TurnError::Aborted {
+                message: "stopped: identical calls".into(),
+            }),
+        }));
+        assert_eq!(
+            run_outcome(None, &end, true),
+            RunOutcome::Incomplete {
+                reason: IncompleteReason::RepeatedToolCall {
+                    tool: "search".into()
+                },
+                summary: "stopped: identical calls".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_accepted_finish_wins_over_how_the_turn_ended() {
+        let result = json!({"status": "resolved"});
+        for end in [
+            Ok(TurnEnd::Ran(TurnOutcome::default())),
+            Err(TurnError::Upstream {
+                message: "late failure".into(),
+            }),
+        ] {
+            assert_eq!(
+                run_outcome(Some(result.clone()), &end, true),
+                RunOutcome::Finished {
+                    result: result.clone()
+                }
+            );
+        }
     }
 }

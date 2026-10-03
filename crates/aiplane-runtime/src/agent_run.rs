@@ -18,14 +18,14 @@
 //!
 //! [`ToolContext`]: crate::server::tools::ToolContext
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aiplane_core::server::principal::{Principal, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
 
 use crate::agents::profile::AgentSurface;
 use crate::budget::Budget;
-use crate::finish::{FinishContract, FinishTool};
+use crate::finish::{FinishContract, FinishTool, IncompleteReason, RunOutcome};
 use crate::server::tools::Tool;
 use crate::server::tools::injection::InjectionScan;
 
@@ -49,6 +49,7 @@ pub struct AgentRun {
     budget: Option<Budget>,
     injection: InjectionScan,
     surface: Option<Arc<AgentSurface>>,
+    outcome: Mutex<Option<RunOutcome>>,
 }
 
 impl std::fmt::Debug for AgentRun {
@@ -81,6 +82,7 @@ impl AgentRun {
             budget: None,
             injection: InjectionScan::default(),
             surface: None,
+            outcome: Mutex::new(None),
         })
     }
 
@@ -144,6 +146,27 @@ impl AgentRun {
 
     pub fn surface(&self) -> Option<&AgentSurface> {
         self.surface.as_deref()
+    }
+
+    /// Record how a contracted run ended. Only the driver's `run_turn` calls
+    /// it, once per turn, from how the turn ended.
+    pub fn settle(&self, outcome: RunOutcome) {
+        *self.outcome.lock().unwrap_or_else(|p| p.into_inner()) = Some(outcome);
+    }
+
+    /// How the run ended. A run the driver never settled — its turn panicked
+    /// before `run_turn` returned — was interrupted, and is incomplete.
+    pub fn take_outcome(&self) -> RunOutcome {
+        self.outcome
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .unwrap_or_else(|| RunOutcome::Incomplete {
+                reason: IncompleteReason::Failed {
+                    message: "the run was interrupted before it ended".into(),
+                },
+                summary: String::new(),
+            })
     }
 }
 
@@ -236,6 +259,26 @@ mod tests {
             }
         );
         assert!(err.to_string().contains("refusing to run it"), "{err}");
+    }
+
+    #[test]
+    fn a_run_that_never_settled_reads_as_interrupted() {
+        let billing = principal("p2", "billing");
+        let run = AgentRun::new(billing.clone(), chain_of(&billing)).unwrap();
+        let RunOutcome::Incomplete {
+            reason: IncompleteReason::Failed { message },
+            ..
+        } = run.take_outcome()
+        else {
+            panic!("expected an interrupted run");
+        };
+        assert!(message.contains("interrupted"), "{message}");
+
+        let finished = RunOutcome::Finished {
+            result: serde_json::json!({"ok": true}),
+        };
+        run.settle(finished.clone());
+        assert_eq!(run.take_outcome(), finished);
     }
 
     #[test]

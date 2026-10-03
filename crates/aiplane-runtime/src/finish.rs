@@ -227,7 +227,6 @@ pub fn gateway_summary(rounds: u32, tools_run: &[String]) -> String {
 pub struct FinishTool {
     contract: FinishContract,
     result: Mutex<Option<Value>>,
-    outcome: Mutex<Option<RunOutcome>>,
 }
 
 impl FinishTool {
@@ -235,7 +234,6 @@ impl FinishTool {
         Self {
             contract,
             result: Mutex::new(None),
-            outcome: Mutex::new(None),
         }
     }
 
@@ -249,22 +247,6 @@ impl FinishTool {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone()
-    }
-
-    /// Record how the run ended. The first outcome wins: once a run has
-    /// finished, nothing that happens on its way out can overwrite that.
-    pub fn settle(&self, outcome: RunOutcome) {
-        let mut slot = self.outcome.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_none() {
-            *slot = Some(outcome);
-        }
-    }
-
-    pub fn take(&self) -> Option<RunOutcome> {
-        self.outcome
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
     }
 }
 
@@ -619,25 +601,6 @@ mod tests {
         assert!(system.starts_with("rules"), "{system}");
         assert!(system.contains("FINAL round"), "{system}");
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn the_first_settled_outcome_wins() {
-        let run = FinishTool::new(contract());
-        run.settle(RunOutcome::Finished {
-            result: json!({"status": "resolved"}),
-        });
-        run.settle(RunOutcome::Incomplete {
-            reason: IncompleteReason::Cancelled,
-            summary: String::new(),
-        });
-        assert_eq!(
-            run.take(),
-            Some(RunOutcome::Finished {
-                result: json!({"status": "resolved"})
-            })
-        );
-        assert_eq!(run.take(), None);
     }
 
     #[test]

@@ -562,10 +562,15 @@ impl<'a> RunToolSource<'a> {
         };
         match run.synthetic.get(id) {
             Some(synthetic) => Some(synthetic.tool.schema()),
-            None => self.inner.defs_for(&ids).into_iter().next().and_then(|def| {
-                let binds = run.binds.for_tool(id, &def).ok()?;
-                Some(without_bound(def, &binds))
-            }),
+            None => self
+                .inner
+                .defs_for(&ids)
+                .into_iter()
+                .next()
+                .and_then(|def| {
+                    let binds = run.binds.for_tool(id, &def).ok()?;
+                    Some(without_bound(def, &binds))
+                }),
         }
     }
 
