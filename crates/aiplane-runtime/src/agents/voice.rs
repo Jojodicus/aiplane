@@ -198,10 +198,10 @@ pub async fn speak(
         return Ok(None);
     }
     let access = PoolAccess::for_system_models(conversation.principal, [model]);
-    let voice = voice
-        .map(str::to_string)
-        .or_else(|| state.upstreams.speech_voice(model, lang.code()));
-    let cache_key = format!("{turn_id}|{model}|{}", voice.as_deref().unwrap_or(""));
+    let cache_key = format!(
+        "{turn_id}|{model}|{}",
+        voice.map_or_else(|| format!("lang:{}", lang.code()), str::to_string)
+    );
     if let Some(audio) = SPOKEN.lock().ok().and_then(|c| c.get(&cache_key)) {
         return Ok(Some(audio));
     }
@@ -223,7 +223,7 @@ pub async fn speak(
             "input": spoken,
             "response_format": "mp3",
         });
-        if let Some(v) = &voice {
+        if let Some(v) = voice.or_else(|| acquired.voice_for(lang.code())) {
             body["voice"] = json!(v);
         }
         exchange.model = Some(real_model.clone());

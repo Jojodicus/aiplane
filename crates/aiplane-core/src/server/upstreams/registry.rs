@@ -607,7 +607,7 @@ pub struct Pool {
     pub enforce_limits: bool,
     /// Language → voice-id map (speech pools only). See
     /// [`UpstreamPoolConfig::voices`] / [`UpstreamPoolConfig::voice_for_language`].
-    pub voices: std::collections::HashMap<String, String>,
+    pub voices: Arc<std::collections::HashMap<String, String>>,
     /// Voices this pool offers users to choose from, in the operator's order
     /// (speech pools only). See [`UpstreamPoolConfig::offer_voices`] — this is
     /// the menu, `voices` is the resolution.
@@ -898,7 +898,7 @@ impl Pool {
             backends,
             compliance: cfg.compliance,
             enforce_limits: cfg.enforce_limits,
-            voices: cfg.voices.clone(),
+            voices: Arc::new(cfg.voices.clone()),
             offer_voices: cfg.offer_voices.clone(),
             configured_models: cfg.models.clone(),
             fallback_offline: cfg.fallback_offline.clone(),
@@ -1002,6 +1002,7 @@ impl Pool {
                 return Ok(Acquired {
                     backend: Arc::clone(backend),
                     resolved_model,
+                    voices: Arc::clone(&self.voices),
                 });
             }
         }
@@ -1281,6 +1282,8 @@ pub struct Acquired {
     /// write into the forwarded body's `model` field. Equal to the requested
     /// model for a direct hit; the alias's target when routed via an alias.
     resolved_model: String,
+    /// The language → voice map of the pool the slot is in (speech pools).
+    voices: Arc<std::collections::HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for Acquired {
@@ -1294,6 +1297,17 @@ impl std::fmt::Debug for Acquired {
 }
 
 impl Acquired {
+    /// The voice the acquired backend's pool speaks `language` in (its
+    /// default voice when the language has none). What a synthesis on this
+    /// slot should ask for when the caller names no voice: it is the voice
+    /// this backend is configured with, wherever routing landed.
+    pub fn voice_for(&self, language: &str) -> Option<&str> {
+        self.voices
+            .get(language)
+            .or_else(|| self.voices.get(""))
+            .map(String::as_str)
+    }
+
     pub fn backend(&self) -> &Backend {
         &self.backend
     }
@@ -1839,21 +1853,6 @@ impl UpstreamRegistry {
             .or_else(|| pool.voices.get(""))
             .cloned();
         Some((model, voice))
-    }
-
-    /// The voice the speech pool serving `model` maps `language` to (its
-    /// default voice when the language has none), if a speech pool serves
-    /// `model` and maps anything.
-    pub fn speech_voice(&self, model: &str, language: &str) -> Option<String> {
-        let d = self.data();
-        let pool = d.pools.values().find(|p| {
-            p.kind == PoolKind::Speech
-                && (p.configured_models.iter().any(|c| c == model) || p.serves_model(model))
-        })?;
-        pool.voices
-            .get(language)
-            .or_else(|| pool.voices.get(""))
-            .cloned()
     }
 
     /// Every distinct voice advertised by the speech pools `access` permits,
@@ -4003,6 +4002,35 @@ mod tests {
             reg.acquire_for_access("other-model", PoolKind::Chat, &agent)
                 .is_err()
         );
+    }
+
+    /// Two speech pools serve the same model with different voices: the
+    /// voice comes from the pool whose backend the synthesis acquired.
+    #[test]
+    fn a_synthesis_speaks_in_the_voice_of_the_pool_it_landed_on() {
+        let speech = |b: &str, voice: &str| UpstreamPoolConfig {
+            voices: HashMap::from([("de".to_string(), voice.to_string())]),
+            ..pool_config(
+                PoolKind::Speech,
+                PickerStrategy::RoundRobin,
+                vec![backend(b, 16)],
+            )
+        };
+        let reg = build(vec![
+            ("one", speech("one-b", "anna")),
+            ("two", speech("two-b", "bernd")),
+        ]);
+        seed_models(&reg, "one", 0, &["tts"]);
+        seed_models(&reg, "two", 0, &["tts"]);
+        for (scope, backend, voice) in [("one", "one-b", "anna"), ("two", "two-b", "bernd")] {
+            let access = PoolAccess::for_system(&principal_on(&[("tts", Some(&[scope]))]));
+            let acquired = reg
+                .acquire_for_access("tts", PoolKind::Speech, &access)
+                .unwrap();
+            assert_eq!(acquired.backend().name, backend);
+            assert_eq!(acquired.voice_for("de"), Some(voice));
+            assert_eq!(acquired.voice_for("fr"), None);
+        }
     }
 
     /// The allowlist has to bind at the same seam pool groups bind at:

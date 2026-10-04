@@ -3285,8 +3285,8 @@ without either is refused (`422`, at `publish.voice.transcription_model` /
 `speech_model`, naming the setup's *Website* step). Either way an agent
 reaches only models granted to it, and the embed endpoints answer `503
 voice_unavailable` when the grant is gone. `voice` is the TTS voice; unset,
-the voice the serving speech pool maps the visitor's language to
-(`UpstreamRegistry::speech_voice`) applies. `VoiceSpec::{input_model,
+the voice the pool of the backend that synthesises it maps the visitor's
+language to (`Acquired::voice_for`) applies. `VoiceSpec::{input_model,
 output_model}` return the named model only for a direction that is on. `profile.color`
 is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
 itself in it.
