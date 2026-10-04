@@ -22,7 +22,6 @@
 use std::sync::Arc;
 
 use rama::http::service::web::extract::{Path, State};
-use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde_json::json;
 
@@ -174,17 +173,26 @@ pub async fn webhook_trigger(
             error.as_deref(),
         )
         .await;
-        let code = if status == "ok" {
-            StatusCode::OK
-        } else {
-            StatusCode::BAD_GATEWAY
-        };
-        let mut envelope = json!({ "status": status, "session_id": session_id });
-        match status {
-            "ok" => envelope["output"] = json!(output.unwrap_or_default()),
-            _ => envelope["error"] = json!(error.unwrap_or_else(|| "run failed".to_string())),
+        if status != "ok" {
+            // A run that did not finish is a failed upstream; the conversation
+            // it opened is named so the owner can look at what happened.
+            return super::json_error_with(
+                StatusCode::BAD_GATEWAY,
+                "run_failed",
+                error.as_deref().unwrap_or("the run failed"),
+                serde_json::Map::from_iter([
+                    ("session_id".to_string(), json!(session_id)),
+                    ("status".to_string(), json!(status)),
+                ]),
+            );
         }
-        json_response(code, envelope)
+        super::json_ok(
+            StatusCode::OK,
+            TriggerAnswer {
+                session_id,
+                output: output.unwrap_or_default(),
+            },
+        )
     } else {
         let state = state.clone();
         let hook_id = hook.id.clone();
@@ -202,10 +210,7 @@ pub async fn webhook_trigger(
             )
             .await;
         });
-        json_response(
-            StatusCode::ACCEPTED,
-            json!({ "status": "accepted", "session_id": session_id }),
-        )
+        super::json_ok(StatusCode::ACCEPTED, TriggerAccepted { session_id })
     }
 }
 
@@ -321,26 +326,33 @@ async fn reuse_session(db: &aiplane_core::server::db::Pool, hook: &Webhook) -> O
     }
 }
 
-fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        value.to_string(),
-    )
-        .into_response()
+/// A synchronous run's answer: the conversation it ran in and the model's
+/// final text.
+#[derive(serde::Serialize)]
+struct TriggerAnswer {
+    session_id: String,
+    output: String,
+}
+
+/// An asynchronous run, accepted: the conversation it runs in.
+#[derive(serde::Serialize)]
+struct TriggerAccepted {
+    session_id: String,
 }
 
 /// A miss looks identical whether the secret is malformed, unknown, or paused
 /// — we never confirm a webhook exists to an unauthenticated caller.
 fn trigger_not_found() -> Response {
-    json_response(
-        StatusCode::NOT_FOUND,
-        json!({ "status": "error", "error": "no such webhook" }),
-    )
+    super::not_found("no such webhook")
 }
 
 fn trigger_error(status: StatusCode, message: &str) -> Response {
-    json_response(status, json!({ "status": "error", "error": message }))
+    let code = if status.is_client_error() {
+        "invalid_request"
+    } else {
+        "internal_error"
+    };
+    super::json_error(status, code, message)
 }
 
 // ===========================================================================
