@@ -21,49 +21,92 @@
  */
 
 import * as cdp from './cdp.js';
-import { evaluateBatch, isPairedGateway, permissionsFor } from './policy.js';
+import {
+	BROAD_ORIGINS,
+	evaluateBatch,
+	isPairedGateway,
+	pendingArm,
+	permissionsFor,
+	showsOn
+} from './policy.js';
 
 const MAX_ACTIVITY = 50;
 
 /**
- * Toolbar state: green while the extension may act, grey while it may not.
+ * Toolbar state: green where the extension may act, grey everywhere else.
  *
  * Worth its own code because "is this thing on?" is the question the user asks
  * every single time, and until now the only way to answer it was to open the
  * popup. The colour carries the state; the badge repeats it in words for anyone
  * who cannot rely on the colour, and the title spells out which gateway it is
  * armed for.
+ *
+ * Painted per tab (`showsOn`): arming is browser-wide, but the extension only
+ * acts for the gateway that armed it and in the assistant's own window, so a
+ * green icon over any other page would claim something that is not happening
+ * there. The global state is the grey one, which is what a new tab starts with
+ * until `paintTab` reaches it.
  */
-async function showState(armed) {
-	const state = armed ? 'on' : 'off';
-	const sizes = [16, 32, 48, 128];
+async function showState() {
+	const state = await session();
+	await chrome.action.setBadgeText({ text: '' }).catch(() => {});
+	await chrome.action.setBadgeBackgroundColor({ color: '#16a34a' }).catch(() => {});
+	await setIcon(false);
+	await chrome.action.setTitle({ title: titleFor(state.armed, false) }).catch(() => {});
+	const tabs = await chrome.tabs.query({}).catch(() => []);
+	await Promise.all(tabs.map((tab) => paintTab(tab, state)));
+}
 
-	// Every call is best-effort. The icon is a convenience; arming is not, and
-	// the two used to share a fate — `setIcon` rejecting (an extension package
-	// loaded before the icons existed, which is exactly what a developer
-	// reloading sees) threw straight out of the message handler and the switch
-	// never flipped.
+async function paintTab(tab, state) {
+	const tabId = tab.id;
+	if (tabId === undefined) return;
+	const on = showsOn(state, tab);
+	await setIcon(on, tabId);
+	await chrome.action.setBadgeText({ tabId, text: on ? 'on' : null }).catch(() => {});
+	// Its own colour too: the global one turns amber while a question waits.
+	if (on) await chrome.action.setBadgeBackgroundColor({ tabId, color: '#16a34a' }).catch(() => {});
+	await chrome.action.setTitle({ tabId, title: titleFor(state.armed, on) }).catch(() => {});
+}
+
+function titleFor(armed, on) {
+	if (!armed) return 'Browser control — off';
+	if (on) return `Browser control — on for ${armed.origin}`;
+	return `Browser control — on for ${armed.origin}, not on this page`;
+}
+
+/**
+ * Every call is best-effort. The icon is a convenience; arming is not, and the
+ * two used to share a fate — `setIcon` rejecting (an extension package loaded
+ * before the icons existed, which is exactly what a developer reloading sees)
+ * threw straight out of the message handler and the switch never flipped.
+ */
+async function setIcon(on, tabId) {
+	const sizes = [16, 32, 48, 128];
+	const state = on ? 'on' : 'off';
 	const path = Object.fromEntries(sizes.map((n) => [n, `icons/${state}-${n}.png`]));
 	const ok = await chrome.action
-		.setIcon({ path })
+		.setIcon({ path, tabId })
 		.then(() => true)
 		.catch(() => false);
 	if (!ok) {
 		// Draw it instead of fetching it. Works whatever is or is not in the
 		// package, and costs nothing for two rounded squares.
 		await chrome.action
-			.setIcon({ imageData: Object.fromEntries(sizes.map((n) => [n, drawIcon(n, armed)])) })
+			.setIcon({ imageData: Object.fromEntries(sizes.map((n) => [n, drawIcon(n, on)])), tabId })
 			.catch(() => {});
 	}
-
-	await chrome.action.setBadgeText({ text: armed ? 'on' : '' }).catch(() => {});
-	await chrome.action.setBadgeBackgroundColor({ color: '#16a34a' }).catch(() => {});
-	await chrome.action
-		.setTitle({
-			title: armed ? `Browser control — on for ${armed.origin}` : 'Browser control — off'
-		})
-		.catch(() => {});
 }
+
+// A tab's page decides its icon, so it is repainted whenever that can change:
+// a navigation, or a tab moving into or out of the assistant's window.
+chrome.tabs.onUpdated.addListener(async (_tabId, change, tab) => {
+	if (change.url === undefined && change.status === undefined) return;
+	await paintTab(tab, await session());
+});
+chrome.tabs.onAttached.addListener(async (tabId) => {
+	const tab = await chrome.tabs.get(tabId).catch(() => null);
+	if (tab) await paintTab(tab, await session());
+});
 
 /**
  * The same mark the PNGs show, drawn in the worker.
@@ -140,8 +183,7 @@ chrome.runtime.onUpdateAvailable.addListener(async ({ version }) => {
 });
 
 async function revive() {
-	const { armed } = await session();
-	await showState(armed);
+	await showState();
 	// A reload gets to ask again. `chrome.storage.session` survives an
 	// extension reload — it is cleared when the *browser* closes, not when we
 	// do — so without this an offer spent before the reload stays spent, and
@@ -443,7 +485,7 @@ async function handleMessage(message, sender) {
 		// `chrome-extension://` — always read "off", so there was no way to
 		// switch the extension off short of closing the browser.
 		const origin = message.origin ?? senderOrigin(sender);
-		await showState(armed);
+		await showState();
 		return {
 			armed: armed !== null && armed.origin === origin,
 			armedFor: armed?.origin ?? null,
@@ -453,14 +495,16 @@ async function handleMessage(message, sender) {
 		};
 	}
 	if (message?.type === 'arm') {
-		await chrome.storage.session.set({
-			armed: { origin: message.origin, at: Date.now() },
-			workingTabId: null,
-			workingWindowId: null
-		});
-		await showState({ origin: message.origin });
-		await note({ event: 'armed', origin: message.origin });
-		await broadcastState(message.origin, true);
+		await armFor(message.origin);
+		return { ok: true };
+	}
+	if (message?.type === 'arm_pending') {
+		if (!isPairedGateway(message.origin, await settings())) return { ok: false };
+		await chrome.storage.session.set({ armPending: { origin: message.origin, at: Date.now() } });
+		return { ok: true };
+	}
+	if (message?.type === 'arm_cancel') {
+		await chrome.storage.session.remove('armPending');
 		return { ok: true };
 	}
 	if (message?.type === 'disarm') {
@@ -469,7 +513,8 @@ async function handleMessage(message, sender) {
 		const { armed, workingTabId } = await session();
 		if (workingTabId !== null) await cdp.detach(workingTabId);
 		await chrome.storage.session.set({ armed: null, workingTabId: null, workingWindowId: null });
-		await showState(null);
+		await chrome.storage.session.remove('armPending');
+		await showState();
 		await note({ event: 'disarmed' });
 		if (armed) await broadcastState(armed.origin, false);
 		// The moment an update was waiting for. Last thing done here, so the
@@ -494,6 +539,43 @@ async function handleMessage(message, sender) {
 	}
 	return { error: 'unknown message' };
 }
+
+/**
+ * Switch on for `origin`. A no-op when already on for it: the popup and the
+ * permission listener can both finish the same click.
+ */
+async function armFor(origin) {
+	await chrome.storage.session.remove('armPending');
+	const { armed } = await session();
+	if (armed?.origin === origin) return;
+	await chrome.storage.session.set({
+		armed: { origin, at: Date.now() },
+		workingTabId: null,
+		workingWindowId: null
+	});
+	await showState();
+	await note({ event: 'armed', origin });
+	await broadcastState(origin, true);
+}
+
+/**
+ * Finish a switch-on that Chrome's permission dialog interrupted.
+ *
+ * The dialog takes the focus, a toolbar popup closes when it loses the focus,
+ * and its script dies with it — so the popup asked, the user granted, and
+ * nothing was switched on until a second click. The popup now records the
+ * click first (`arm_pending`) and the grant completes it here. Both halves are
+ * the user's own: a click in the extension's UI and an answer in Chrome's
+ * dialog, neither of which a page can produce.
+ */
+chrome.permissions.onAdded.addListener(async () => {
+	const { armPending } = await chrome.storage.session.get(['armPending']);
+	const origin = pendingArm(armPending, Date.now());
+	if (!origin) return;
+	if (!(await chrome.permissions.contains({ origins: BROAD_ORIGINS }))) return;
+	if (!isPairedGateway(origin, await settings())) return;
+	await armFor(origin);
+});
 
 function senderOrigin(sender) {
 	try {
@@ -626,6 +708,7 @@ async function ensureTab() {
 	}
 
 	await chrome.storage.session.set({ workingTabId: tab.id, workingWindowId: win.id });
+	await paintTab(tab, await session());
 	return tab;
 }
 

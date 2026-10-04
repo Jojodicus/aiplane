@@ -4,7 +4,8 @@
  * This popup is the only place the extension can be switched on. That is the
  * point: the click is a user gesture delivered to the extension, which no web
  * page can synthesise — so "armed" is a state a compromised gateway cannot
- * enter on the user's behalf.
+ * enter on the user's behalf. Switching off works from any tab, since it only
+ * takes rights away.
  *
  * It is also where the **host permission** is taken, for the same reason:
  * `chrome.permissions.request` only works inside a gesture. Asking from the
@@ -12,7 +13,7 @@
  * grant has to be collected here, at the moment the user says "yes, act in my
  * browser".
  */
-import { BROAD_ORIGINS, withDefaults } from './policy.js';
+import { BROAD_ORIGINS, popupSwitch, withDefaults } from './policy.js';
 
 const titleEl = document.getElementById('title');
 const statusEl = document.getElementById('status');
@@ -49,24 +50,28 @@ async function render() {
 	const status = await chrome.runtime.sendMessage({ type: 'status', origin }).catch(() => null);
 	const activity = status?.activity ?? [];
 
-	if (gateways.length === 0) {
+	const armedFor = status?.armedFor ?? null;
+	const view = popupSwitch({ gateways, origin, armedFor });
+	toggleEl.hidden = view === 'unpaired' || view === 'not_gateway';
+
+	if (view === 'unpaired') {
 		titleEl.textContent = 'Not paired yet';
 		statusEl.textContent = 'Add your gateway in Settings before this can do anything.';
-		toggleEl.hidden = true;
-	} else if (!origin || !gateways.includes(origin)) {
+	} else if (view === 'not_gateway') {
 		titleEl.textContent = 'Not your gateway';
 		statusEl.textContent =
 			`This page is ${origin ?? 'not a paired gateway'}. Open ` +
 			`${gateways.join(' or ')} and switch it on there.`;
-		toggleEl.hidden = true;
 	} else {
-		const armedHere = status?.armed === true;
-		titleEl.textContent = armedHere ? 'On for this conversation' : 'Off';
-		statusEl.textContent = armedHere
-			? `${origin} may act in this browser until you switch it off or close Chrome.`
-			: `${origin} is paired. Switch on to let it act in this browser.`;
-		toggleEl.hidden = false;
-		toggleEl.textContent = armedHere ? 'Switch off' : 'Switch on';
+		const on = view === 'switch_off';
+		titleEl.textContent = on ? 'On for this conversation' : 'Off';
+		statusEl.textContent = !on
+			? `${origin} is paired. Switch on to let it act in this browser.`
+			: origin === armedFor
+				? `${armedFor} may act in this browser until you switch it off or close Chrome.`
+				: `Nothing happens on this page. ${armedFor} may act in the assistant's ` +
+					`window until you switch it off or close Chrome.`;
+		toggleEl.textContent = on ? 'Switch off' : 'Switch on';
 		if (repair?.repaired?.length) {
 			// Worth saying out loud: the user just watched it not work. No reload
 			// is asked for — the worker injects into the open tabs itself.
@@ -74,8 +79,8 @@ async function render() {
 				statusEl.textContent
 			}`;
 		}
-		toggleEl.classList.toggle('on', !armedHere);
-		toggleEl.onclick = () => (armedHere ? disarm() : arm(origin, conf));
+		toggleEl.classList.toggle('on', !on);
+		toggleEl.onclick = () => (on ? disarm() : arm(origin, conf));
 	}
 
 	activityEl.replaceChildren(
@@ -99,10 +104,14 @@ async function render() {
  */
 async function arm(origin, conf) {
 	if (conf.siteAccess !== 'approved_sites') {
+		// Recorded first: if Chrome shows its dialog, this popup closes before
+		// the answer arrives and the worker finishes the switch-on instead.
+		await chrome.runtime.sendMessage({ type: 'arm_pending', origin });
 		const granted = await chrome.permissions
 			.request({ origins: BROAD_ORIGINS })
 			.catch(() => false);
 		if (!granted) {
+			await chrome.runtime.sendMessage({ type: 'arm_cancel' });
 			statusEl.textContent =
 				'Chrome did not grant access to websites, so nothing was switched on. ' +
 				'You can instead approve individual sites under Settings.';
