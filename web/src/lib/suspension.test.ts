@@ -9,6 +9,7 @@ import {
 	slotLine,
 	slotText,
 	waitingFrom,
+	waitingLead,
 	type SuspensionView
 } from './suspension.ts';
 
@@ -28,6 +29,15 @@ test('a card offers exactly the decisions it was offered', () => {
 		{ decision: 'deny', key: 'suspension-decline', primary: false }
 	]);
 	assert.deepEqual(decisionButtons({ kind: 'secure_input', options: ['value'] }), []);
+});
+
+test('the lead says what the conversation waits for, in the chat and in the test chat', () => {
+	assert.equal(waitingLead('approval', 'chat'), 'chat-waiting-approval');
+	assert.equal(waitingLead('secure_input', 'chat'), 'chat-waiting-value');
+	assert.equal(waitingLead('human_answer', 'chat'), 'chat-waiting-answer');
+	assert.equal(waitingLead('secure_input', 'test'), 'agents-test-waiting-secure-input');
+	assert.equal(waitingLead('approval', 'test'), 'agents-test-waiting-approval');
+	assert.equal(waitingLead('human_answer', 'test'), 'agents-test-waiting-human');
 });
 
 test('a staff answer is typed in the clear, a visitor secret masked', () => {

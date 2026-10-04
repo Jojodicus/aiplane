@@ -804,7 +804,8 @@ pausing is impossible. Nothing in the shipped registry is wrapped; an agent's
 spec wraps its own tools with `tool_resources.<tool>.permission: always_ask`,
 and a tool whose `Tool::changes_state()` is true (an MCP tool marked
 destructive and not read-only) asks by default
-([`agents.md`](agents.md#what-96-built)). Scheduled and webhook runs pause
+([`agents.md`](agents.md#what-96-built)). A person's connector tool in `ask`
+mode is wrapped in chat ([`connectors.md`](connectors.md#tool-modes-always-ask-off)). Scheduled and webhook runs pause
 like a chat since #96, and their owner answers from the inbox.
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which

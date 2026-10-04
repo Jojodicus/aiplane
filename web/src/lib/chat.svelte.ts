@@ -4,7 +4,7 @@
  * (the pure fold) plus the EventSource lifecycle around it.
  *
  * Stream lifecycle: open on mount, apply every event, and CLOSE on
- * `turn_finalized`/`idle` — the server ends the stream there, and letting
+ * `turn_finalized`/`suspended`/`idle` — the server ends the stream there, and letting
  * EventSource auto-reconnect would loop snapshot/idle forever on a quiet
  * session. After a submit (or any suspected change) `attach()` reopens:
  * the fresh snapshot is the replay, so nothing is lost between streams.
@@ -24,7 +24,10 @@ export interface ConversationController {
 	readonly state: ReturnType<typeof newConversationState>;
 	/** Set by the view; fired whenever the session list may have changed. */
 	onSidebarChanged: SidebarChangedCallback | null;
-	/** Set by the view; fired after the authoritative final turn state lands. */
+	/**
+	 * Set by the view; fired once a turn stops running: its authoritative final
+	 * state landed, or it paused for a decision.
+	 */
 	onTurnFinalized: SidebarChangedCallback | null;
 	/** (Re)open the events stream. Safe to call repeatedly. */
 	attach(): void;
@@ -40,6 +43,7 @@ const EVENT_NAMES = [
 	'tool_call_started',
 	'tool_call_done',
 	'turn_finalized',
+	'suspended',
 	'steer',
 	'sidebar_changed',
 	'info',
@@ -117,7 +121,7 @@ export function createConversationController(sessionId: string): ConversationCon
 				void handleBrowserAction(event, { post: api.browserFeedback });
 			}
 			if (event.type === 'sidebar_changed') controller.onSidebarChanged?.();
-			if (event.type === 'turn_finalized') controller.onTurnFinalized?.();
+			if (event.type === 'turn_finalized' || event.type === 'suspended') controller.onTurnFinalized?.();
 			// A turn that finishes before the re-attach lands — a cached reply,
 			// a tool-only round, a fast backend — is reported as nothing but a
 			// snapshot and `idle`. Without this the transcript caught up (the
@@ -127,7 +131,7 @@ export function createConversationController(sessionId: string): ConversationCon
 			// Skipped on the first attach only, because the page load that
 			// created this controller is already reading all of it.
 			if (event.type === 'idle' && attaches > 1) controller.onTurnFinalized?.();
-			if (event.type === 'turn_finalized' || event.type === 'idle') closeCurrent();
+			if (event.type === 'turn_finalized' || event.type === 'suspended' || event.type === 'idle') closeCurrent();
 		},
 
 		closeStream: closeCurrent,

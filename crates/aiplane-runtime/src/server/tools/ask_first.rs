@@ -22,6 +22,10 @@ use shared::api::ToolDef;
 use super::{Tool, ToolContext, ToolError, ToolFuture};
 use crate::suspend::{Suspend, SuspendRequest, tool_suspend};
 
+/// How long an approval may take when nobody chose a deadline: an agent spec
+/// without `approval_timeout`, a connector tool in `ask` mode.
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
 pub struct AskFirst {
     inner: Arc<dyn Tool>,
     timeout: Duration,

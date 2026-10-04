@@ -25,7 +25,6 @@ import {
 	slotValueFromText,
 	splitList,
 	slotInfos,
-	suspensionLabel,
 	testTurnLabel,
 	shareSubjectOptions,
 	shareSubjectLabel,
@@ -191,12 +190,6 @@ test('a closed gate is said with the slot’s label, a condition without a slot 
 	);
 	assert.equal(gateHint({ path: '', slot: 'plan', kind: 'not_in', expected: ['a', 1], message: '' }, 'Plan', tr), 'agents-gate-not-in(slot=Plan,expected=“a”, 1)');
 	assert.equal(gateHint({ path: '', kind: 'unknown_route', message: 'there is no route `x`' }, 'x', tr), 'there is no route `x`');
-});
-
-test('a paused test turn says what it waits for', () => {
-	assert.equal(suspensionLabel('secure_input'), 'agents-test-waiting-secure-input');
-	assert.equal(suspensionLabel('approval'), 'agents-test-waiting-approval');
-	assert.equal(suspensionLabel('human_answer'), 'agents-test-waiting-human');
 });
 
 test('renaming a key keeps its place and refuses a taken name', () => {

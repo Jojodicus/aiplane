@@ -1,7 +1,6 @@
 <script lang="ts">
 	import {
 		agentsApi,
-		suspensionLabel,
 		testTurnLabel,
 		type AgentError,
 		type Spec,
@@ -9,7 +8,7 @@
 		type TestDebug,
 		type TestTurn
 	} from '$lib/agents';
-	import { waitingFrom, type Answer } from '$lib/suspension';
+	import { waitingFrom, waitingLead, type Answer } from '$lib/suspension';
 	import { t } from '$lib/i18n.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
@@ -170,7 +169,7 @@
 								<SuspensionCard
 									class="col-start-2 mt-1 w-full max-w-md"
 									waiting={waitingFrom(waiting, [], waiting.context ?? null)}
-									lead={t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}
+									lead={t(waitingLead(waiting.kind, 'test'), { tool: waiting.tool ?? '' })}
 									note={waiting.kind === 'human_answer' ? t('agents-test-handoff-inbox-hint') : null}
 									{busy}
 									onanswer={(decision) => answer(i, decision)}

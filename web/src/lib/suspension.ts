@@ -77,6 +77,20 @@ export function waitingFrom(
 	};
 }
 
+/**
+ * The Fluent key of the line that leads a card: in a person's own chat, what
+ * their conversation waits for; in the test chat, what the agent waits for
+ * and from whom.
+ */
+export function waitingLead(kind: SuspensionKind, where: 'chat' | 'test'): string {
+	const keys: Record<SuspensionKind, [string, string]> = {
+		approval: ['chat-waiting-approval', 'agents-test-waiting-approval'],
+		secure_input: ['chat-waiting-value', 'agents-test-waiting-secure-input'],
+		human_answer: ['chat-waiting-answer', 'agents-test-waiting-human']
+	};
+	return keys[kind][where === 'chat' ? 0 : 1];
+}
+
 /** The buttons a card offers, exactly the decisions it was offered; `value` is the answer form's own button. */
 export function decisionButtons(waiting: Pick<Waiting, 'kind' | 'options'>): { decision: DecisionKind; key: string; primary: boolean }[] {
 	const buttons: { decision: DecisionKind; key: string; primary: boolean }[] = [];

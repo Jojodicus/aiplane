@@ -13,6 +13,13 @@
 //! [`UserMcpLayer`] — a [`ToolSource`] overlay of the user's connected-connector
 //! tools (minus the ones they set to `off`), which [`CompositeToolSource`]
 //! unions on top of the static [`ToolRegistry`] for the tool-call runner.
+//!
+//! A tool in `ask` mode is offered in chat behind [`AskFirst`]: each call
+//! pauses the turn until the person approves it, through the same durable
+//! suspension every approval uses (`docs/agents.md` "Suspend and resume").
+//! Over `/v1` nobody can answer a pause, so there the token's policy decides
+//! instead: a token allowed `ask` tools runs them unasked, any other never
+//! sees them.
 
 use aiplane_agents::db::agent_audit::redaction::redacted_arguments;
 use std::collections::HashMap;
@@ -26,6 +33,7 @@ use tokio::sync::Mutex;
 use serde_json::Value;
 
 use super::{ConnectedServer, McpTool, connect_http_server};
+use crate::server::tools::ask_first::{AskFirst, DEFAULT_APPROVAL_TIMEOUT};
 use crate::server::tools::{Tool, ToolContext, ToolFuture, ToolRegistry, ToolSource};
 use aiplane_core::server::auth::mcp_oauth;
 use aiplane_core::server::crypto::Crypto;
@@ -83,15 +91,27 @@ impl From<TokenError> for String {
     }
 }
 
-/// How `ask`-mode tools are treated when building a user's overlay.
+/// Where a user's overlay is built for, which decides what `ask` means.
 #[derive(Clone, Copy)]
 pub enum AskContext<'a> {
-    /// Chat UI: no per-call approval surface yet, so `ask` tools are hidden
-    /// (the user opts them in by setting them to `always` in the store).
+    /// A conversation that can pause: `ask` tools are offered behind
+    /// [`AskFirst`], and the person approves each call in the chat or inbox.
     Chat,
-    /// `/v1` API for a specific token: `ask` tools are exposed iff that
-    /// token's policy allows them (`token_mcp_policy`).
+    /// `/v1` API for a specific token, where nothing can pause: `ask` tools
+    /// are offered, unasked, iff that token's policy allows them
+    /// (`token_mcp_policy`), a standing pre-authorisation by the person.
     Api { token_id: &'a str },
+}
+
+/// What an `ask`-mode tool becomes in one overlay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AskOffer {
+    /// Not offered.
+    Hide,
+    /// Offered, and each call waits for an approval.
+    AskFirst,
+    /// Offered and run without asking: the token's owner allowed it.
+    Unasked,
 }
 
 /// Process-wide manager. Cheap to clone the `Arc` in `AppState`.
@@ -228,9 +248,9 @@ impl McpConnectionManager {
             if !self.role_allows(&connector, role_ids, is_admin) {
                 return None;
             }
-            let (allow_ask, modes) = self.ask_and_modes(user_id, &key, ask).await;
+            let (asks, modes) = self.ask_and_modes(user_id, &key, ask).await;
             match self.ensure(user_id, &connector).await {
-                Ok(tools) => Some((key, tools, modes, allow_ask, connector.audit)),
+                Ok(tools) => Some((key, tools, modes, asks, connector.audit)),
                 Err(err) => {
                     tracing::warn!(user = %user_id, connector = %key, error = %err,
                         "MCP connector unavailable this turn");
@@ -254,9 +274,9 @@ impl McpConnectionManager {
             if !self.role_allows(&connector, role_ids, is_admin) {
                 return None;
             }
-            let (allow_ask, modes) = self.ask_and_modes(user_id, &key, ask).await;
+            let (asks, modes) = self.ask_and_modes(user_id, &key, ask).await;
             match self.ensure_global(&connector).await {
-                Ok(tools) => Some((key, tools, modes, allow_ask, connector.audit)),
+                Ok(tools) => Some((key, tools, modes, asks, connector.audit)),
                 Err(err) => {
                     tracing::warn!(connector = %key, error = %err,
                         "global MCP connector unavailable this turn");
@@ -271,13 +291,13 @@ impl McpConnectionManager {
         )
         .await;
         let mut layer = UserMcpLayer::default();
-        for (key, tools, modes, allow_ask, audit) in resolved
+        for (key, tools, modes, asks, audit) in resolved
             .into_iter()
             .flatten()
             .chain(global_resolved.into_iter().flatten())
         {
             let audit_db = audit.then(|| self.db.clone());
-            layer.add(&key, &tools, &modes, allow_ask, audit_db.as_ref());
+            layer.add(&key, &tools, &modes, asks, audit_db.as_ref());
         }
         layer
     }
@@ -288,8 +308,9 @@ impl McpConnectionManager {
     /// `user_mcp` — every person's own connections and tool preferences — is
     /// never read, so a principal cannot reach anyone's OAuth tokens even when
     /// granted a per-user connector's key. Connector `allowed_groups` does not
-    /// apply: the grant is the whole decision. `ask`-mode tools stay hidden;
-    /// there is no one to approve a call.
+    /// apply: the grant is the whole decision. `ask`-mode tools stay hidden:
+    /// an agent's approvals are its spec's (`tool_resources.<tool>.permission`),
+    /// never a person's store setting.
     pub async fn layer_for_principal(
         &self,
         principal: &aiplane_core::server::principal::SystemPrincipal,
@@ -322,7 +343,13 @@ impl McpConnectionManager {
             .flatten()
         {
             let audit_db = audit.then(|| self.db.clone());
-            layer.add(&key, &tools, &HashMap::new(), false, audit_db.as_ref());
+            layer.add(
+                &key,
+                &tools,
+                &HashMap::new(),
+                AskOffer::Hide,
+                audit_db.as_ref(),
+            );
         }
         layer
     }
@@ -336,27 +363,30 @@ impl McpConnectionManager {
         connector.allows(role_ids, is_admin)
     }
 
-    /// Resolve, for one connector, whether `ask`-mode tools are exposed in this
+    /// Resolve, for one connector, what its `ask`-mode tools become in this
     /// context and the user's per-tool mode overrides.
     async fn ask_and_modes(
         &self,
         user_id: &str,
         key: &str,
         ask: AskContext<'_>,
-    ) -> (bool, HashMap<String, ToolMode>) {
-        let allow_ask = match ask {
-            AskContext::Chat => false,
-            AskContext::Api { token_id } => matches!(
-                user_mcp::token_ask_policy(&self.db, token_id, key)
+    ) -> (AskOffer, HashMap<String, ToolMode>) {
+        let asks = match ask {
+            AskContext::Chat => AskOffer::AskFirst,
+            AskContext::Api { token_id } => {
+                match user_mcp::token_ask_policy(&self.db, token_id, key)
                     .await
-                    .unwrap_or(user_mcp::AskOverApi::Block),
-                user_mcp::AskOverApi::Allow
-            ),
+                    .unwrap_or(user_mcp::AskOverApi::Block)
+                {
+                    user_mcp::AskOverApi::Allow => AskOffer::Unasked,
+                    user_mcp::AskOverApi::Block => AskOffer::Hide,
+                }
+            }
         };
         let modes = user_mcp::tool_modes(&self.db, user_id, key)
             .await
             .unwrap_or_default();
-        (allow_ask, modes)
+        (asks, modes)
     }
 
     /// Ensure a live connection for `(user, connector)`, returning its tools.
@@ -753,8 +783,7 @@ pub struct ToolInfo {
 /// destructive non-read tool defaults to `ask`; everything else (reads,
 /// queries, and un-annotated tools) defaults to `always`, so a connector the
 /// user explicitly connected actually works in chat without pre-authorizing
-/// every tool. Destructive tools stay gated (hidden in chat until set to
-/// `always`).
+/// every tool. Destructive tools stay gated: each call asks first in chat.
 fn default_mode(read_only: bool, destructive: bool) -> ToolMode {
     if destructive && !read_only {
         ToolMode::Ask
@@ -763,15 +792,13 @@ fn default_mode(read_only: bool, destructive: bool) -> ToolMode {
     }
 }
 
-/// Whether a tool with effective `mode` is exposed to the model in a context
-/// where `ask`-mode tools are permitted (`allow_ask`). `off` is never exposed;
-/// `ask` only when permitted (API token policy — chat hides it for lack of a
-/// per-call approval UI); `always` always.
-fn expose(mode: ToolMode, allow_ask: bool) -> bool {
-    match mode {
-        ToolMode::Off => false,
-        ToolMode::Ask => allow_ask,
-        ToolMode::Always => true,
+/// Whether a tool with effective `mode` is offered, and if so whether each
+/// call asks first. `off` is never offered, `always` always and unasked.
+fn offer(mode: ToolMode, asks: AskOffer) -> Option<bool> {
+    match (mode, asks) {
+        (ToolMode::Off, _) | (ToolMode::Ask, AskOffer::Hide) => None,
+        (ToolMode::Always, _) | (ToolMode::Ask, AskOffer::Unasked) => Some(false),
+        (ToolMode::Ask, AskOffer::AskFirst) => Some(true),
     }
 }
 
@@ -898,6 +925,8 @@ pub struct UserMcpLayer {
     modes: HashMap<String, ToolMode>,
     /// id → connector key (for the per-token /v1 ask policy).
     connector_of: HashMap<String, String>,
+    /// The ids whose every call waits for an approval.
+    ask_first: std::collections::HashSet<String>,
 }
 
 impl UserMcpLayer {
@@ -906,7 +935,7 @@ impl UserMcpLayer {
         connector_key: &str,
         tools: &[Arc<McpTool>],
         modes: &HashMap<String, ToolMode>,
-        allow_ask: bool,
+        asks: AskOffer,
         audit_db: Option<&Pool>,
     ) {
         for tool in tools {
@@ -914,10 +943,13 @@ impl UserMcpLayer {
                 .get(tool.remote_name())
                 .copied()
                 .unwrap_or_else(|| default_mode(tool.read_only(), tool.destructive()));
-            if !expose(mode, allow_ask) {
+            let Some(ask_first) = offer(mode, asks) else {
                 continue;
-            }
+            };
             let id = tool.def().function.name.clone();
+            if ask_first {
+                self.ask_first.insert(id.clone());
+            }
             // When the connector is audited, store an audit-wrapping tool in
             // place of the raw one; it delegates everything and records the call.
             let stored: Arc<dyn Tool> = match audit_db {
@@ -950,16 +982,25 @@ impl UserMcpLayer {
     /// records the redaction marker for them, and the runner never logs
     /// them.
     pub fn get_with_sensitive_args(&self, id: &str) -> Option<Arc<dyn Tool>> {
-        if let Some((inner, connector_key, db)) = self.audited.get(id) {
-            return Some(Arc::new(AuditedTool {
+        let sensitive: Arc<dyn Tool> = match self.audited.get(id) {
+            Some((inner, connector_key, db)) => Arc::new(AuditedTool {
                 inner: inner.clone(),
                 connector_key: connector_key.clone(),
                 db: db.clone(),
                 sensitive: true,
-            }));
+            }),
+            None => Arc::new(SensitiveArgs(self.tools.get(id)?.clone())),
+        };
+        Some(self.gated(id, sensitive))
+    }
+
+    /// `tool`, behind an approval when `id` asks first.
+    fn gated(&self, id: &str, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
+        if self.ask_first.contains(id) {
+            Arc::new(AskFirst::wrap(tool, DEFAULT_APPROVAL_TIMEOUT))
+        } else {
+            tool
         }
-        let raw = self.tools.get(id)?.clone();
-        Some(Arc::new(SensitiveArgs(raw)))
     }
 
     /// Effective permission mode for a tool id, if this layer owns it.
@@ -1018,7 +1059,7 @@ impl UserMcpLayer {
 
 impl ToolSource for UserMcpLayer {
     fn get(&self, id: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(id).cloned()
+        Some(self.gated(id, self.tools.get(id)?.clone()))
     }
 
     fn defs_for(&self, allowed: &[String]) -> Vec<ToolDef> {
@@ -1282,6 +1323,144 @@ mod tests {
         assert!(bob_result.to_string().contains("bob"), "{bob_result}");
     }
 
+    /// A shared-identity connector whose one tool its server marks
+    /// destructive, so it defaults to `ask`. Counts the calls that reach it.
+    async fn destructive_connector(
+        pool: &Pool,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                let result = match body["method"].as_str() {
+                    Some("initialize") => serde_json::json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "fixture", "version": "1"},
+                    }),
+                    Some("tools/list") => serde_json::json!({
+                        "tools": [{"name": "delete_contact", "description": "Delete a contact",
+                            "inputSchema": {"type": "object"},
+                            "annotations": {"destructiveHint": true, "readOnlyHint": false}}]
+                    }),
+                    Some("tools/call") => {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        serde_json::json!({
+                            "content": [{"type": "text", "text": "deleted"}], "isError": false
+                        })
+                    }
+                    Some("notifications/initialized") => return ResponseTemplate::new(202),
+                    other => panic!("unexpected MCP method: {other:?}"),
+                };
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": body["id"], "result": result
+                    }))
+            })
+            .mount(&server)
+            .await;
+        mcp_catalog::create(
+            pool,
+            mcp_catalog::ConnectorInput {
+                key: "crm".into(),
+                name: "CRM".into(),
+                description: None,
+                icon: None,
+                category: None,
+                url: server.uri(),
+                auth: AuthKind::None,
+                scope: Scope::Global,
+                audit: false,
+                use_dcr: false,
+                client_id: None,
+                client_secret_ct: None,
+                client_secret_nonce: None,
+                authorize_url: None,
+                token_url: None,
+                registration_url: None,
+                scopes: vec![],
+                allowed_groups: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        mcp_catalog::set_enabled(pool, "crm", true).await.unwrap();
+        server
+    }
+
+    #[tokio::test]
+    async fn in_chat_an_ask_tool_is_offered_and_runs_only_after_an_approval() {
+        use crate::suspend::{Suspend, extract_suspend};
+        use session_core::db::{Decision, SuspensionKind};
+        let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _server = destructive_connector(&pool, calls.clone()).await;
+        let mgr = McpConnectionManager::new(pool.clone(), Arc::new(Crypto::ephemeral()));
+
+        let layer = mgr.layer_for_user("u1", &[], true, AskContext::Chat).await;
+        assert_eq!(layer.tool_ids(), ["mcp__crm__delete_contact"]);
+        assert_eq!(
+            layer.mode_of("mcp__crm__delete_contact"),
+            Some(ToolMode::Ask)
+        );
+        let tool = layer.get("mcp__crm__delete_contact").unwrap();
+        let ctx = |suspend| ToolContext {
+            suspend,
+            ..ToolContext::for_test(pool.clone())
+        };
+
+        let asked = tool
+            .run(ctx(Suspend::Available), serde_json::json!({}))
+            .await
+            .unwrap();
+        let request = extract_suspend(&asked).expect("the call waits for an approval");
+        assert_eq!(request.kind, SuspensionKind::Approval);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(
+            tool.run(ctx(Suspend::Unavailable), serde_json::json!({}))
+                .await
+                .is_err(),
+            "where nobody can be asked, it never runs"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let ran = tool
+            .run(
+                ctx(Suspend::Decided(
+                    SuspensionKind::Approval,
+                    Decision::AllowOnce,
+                )),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(ran.to_string().contains("deleted"), "{ran}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn over_the_api_an_ask_tool_is_hidden_unless_the_token_allows_it() {
+        let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let _server = destructive_connector(&pool, calls).await;
+        let mgr = McpConnectionManager::new(pool, Arc::new(Crypto::ephemeral()));
+        let layer = mgr
+            .layer_for_user("u1", &[], true, AskContext::Api { token_id: "t1" })
+            .await;
+        assert!(layer.is_empty(), "{:?}", layer.tool_ids());
+    }
+
+    #[test]
+    fn what_an_ask_tool_becomes_in_each_context() {
+        assert_eq!(offer(ToolMode::Off, AskOffer::AskFirst), None);
+        assert_eq!(offer(ToolMode::Always, AskOffer::Hide), Some(false));
+        assert_eq!(offer(ToolMode::Ask, AskOffer::AskFirst), Some(true));
+        assert_eq!(offer(ToolMode::Ask, AskOffer::Unasked), Some(false));
+        assert_eq!(offer(ToolMode::Ask, AskOffer::Hide), None);
+    }
+
     #[tokio::test]
     async fn global_oauth2_is_rejected_without_touching_network() {
         // OAuth2 is per-user; a global connector can't use it. ensure_global
@@ -1431,17 +1610,6 @@ mod tests {
         assert_eq!(default_mode(true, true), ToolMode::Always); // read-only wins
         assert_eq!(default_mode(false, true), ToolMode::Ask);
         assert_eq!(default_mode(false, false), ToolMode::Always); // un-annotated → usable
-    }
-
-    #[test]
-    fn expose_matrix() {
-        // off: never; ask: only when allowed; always: always.
-        assert!(!expose(ToolMode::Off, true));
-        assert!(!expose(ToolMode::Off, false));
-        assert!(expose(ToolMode::Ask, true));
-        assert!(!expose(ToolMode::Ask, false));
-        assert!(expose(ToolMode::Always, true));
-        assert!(expose(ToolMode::Always, false));
     }
 
     /// A fake MCP-bridged tool whose id is namespaced `mcp__demo__echo`, so its

@@ -19,6 +19,9 @@ chat-error-turn-interrupted = Une erreur interne a interrompu cette réponse. Ve
 # turn-status line the server never renders itself.
 chat-list-empty = Aucune conversation pour l'instant. Lancez-en une ci-dessus.
 chat-turn-stopped = arrêté
+chat-waiting-approval = N’exécute { $tool } qu’une fois que vous l’avez approuvé.
+chat-waiting-value = Attend une valeur que vous seul pouvez saisir. Elle va à l’outil, jamais au modèle.
+chat-waiting-answer = Attend la réponse d’une personne.
 chat-prompt-heading = L'assistant demande
 chat-prompt-placeholder = Saisissez une réponse…
 chat-prompt-answer = Répondre

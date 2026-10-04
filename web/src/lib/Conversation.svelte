@@ -24,6 +24,8 @@
 	import ToolCalls from '$lib/components/chat/ToolCalls.svelte';
 	import ConversationCanvas from '$lib/components/chat/ConversationCanvas.svelte';
 	import MessageAttachments from '$lib/components/chat/MessageAttachments.svelte';
+	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
+	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
 	import { feedback, openDialog as openFeedback } from '$lib/feedback.svelte';
 	import { clearPageTitleOverride, setPageTitleOverride } from '$lib/page-title';
 	import { page } from '$app/state';
@@ -636,6 +638,25 @@
 		await loadMeta();
 	}
 
+	let answering = $state<string | null>(null);
+	let answerErrors = $state<Record<string, string>>({});
+
+	/** Answer what a paused turn waits for; the rest of the turn streams in on a fresh attach. */
+	async function answerSuspension(turnId: string, waiting: SuspensionView, answer: Answer) {
+		answering = turnId;
+		delete answerErrors[turnId];
+		try {
+			await api.resumeChatTurn(id, turnId, waiting.request_id, answer);
+			followEnd();
+			controller?.attach();
+		} catch (err) {
+			answerErrors[turnId] = err instanceof ApiError ? (err.serverMessage ?? err.message) : String(err);
+			if (err instanceof ApiError && err.code === 'not_suspended') controller?.attach();
+		} finally {
+			answering = null;
+		}
+	}
+
 	async function stop() {
 		try {
 			await api.cancelChatTurn(id);
@@ -907,6 +928,17 @@
 							</div>
 						{/if}
 
+						{#if entry.turn.status === 'suspended' && entry.suspension}
+							{@const waiting = entry.suspension}
+							<SuspensionCard
+								waiting={waitingFrom({ ...waiting, options: isOwner ? waiting.options : [] }, entry.tool_calls)}
+								lead={t(waitingLead(waiting.kind, 'chat'), { tool: waiting.tool ?? '' })}
+								busy={answering === entry.turn.id}
+								error={answerErrors[entry.turn.id] ?? null}
+								onanswer={(answer) => answerSuspension(entry.turn.id, waiting, answer)}
+							/>
+						{/if}
+
 						{#if shownAttachments.length > 0}<MessageAttachments attachments={shownAttachments} removable={isOwner && !streaming} onremove={(filename) => removeAttachment(entry.turn.id, filename)} />{/if}
 						<Markdown
 							content={parsed.text}
@@ -921,7 +953,7 @@
 							<div class="text-xs text-base-content/50">{t('chat-turn-stopped')}</div>
 						{/if}
 						<div class="text-xs opacity-50">{time(entry.turn.created_at)}</div>
-						{#if isOwner && entry.turn.status !== 'in_progress' && !streaming}
+						{#if isOwner && entry.turn.status !== 'in_progress' && entry.turn.status !== 'suspended' && !streaming}
 							<div class="flex gap-1 mt-1">
 								<button class="btn btn-ghost btn-xs" onclick={() => retry(entry.turn.id)}>
 									{t('render-retry-button')}

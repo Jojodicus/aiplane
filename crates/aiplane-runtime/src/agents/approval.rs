@@ -21,10 +21,7 @@ use std::time::Duration;
 use super::spec::AgentSpec;
 use super::spec::model::Permission as Setting;
 use crate::server::tools::Tool;
-use crate::server::tools::ask_first::AskFirst;
-
-/// How long an approval may take when the spec sets no `approval_timeout`.
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+use crate::server::tools::ask_first::{AskFirst, DEFAULT_APPROVAL_TIMEOUT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Permission {

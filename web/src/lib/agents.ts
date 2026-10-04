@@ -552,7 +552,6 @@ export function describeBindSource(source: unknown): string {
 
 /* ---- the test chat -------------------------------------------------- */
 
-/** The Fluent key that says what a suspended test turn waits for. */
 const GATE_HINTS: Record<string, string> = {
 	missing: 'agents-gate-missing',
 	invalid: 'agents-gate-invalid',
@@ -575,17 +574,6 @@ export function gateHint(unmet: Unmet, label: string, tr: (key: string, args?: R
 	if (!key || !unmet.slot) return unmet.message;
 	const expected = Array.isArray(unmet.expected) ? unmet.expected.map(shown).join(', ') : shown(unmet.expected);
 	return tr(key, { slot: label, expected, required: unmet.required ?? '', age: unmet.max_age ?? '' });
-}
-
-export function suspensionLabel(kind: Suspension['kind']): string {
-	switch (kind) {
-		case 'secure_input':
-			return 'agents-test-waiting-secure-input';
-		case 'approval':
-			return 'agents-test-waiting-approval';
-		default:
-			return 'agents-test-waiting-human';
-	}
 }
 
 export function testTurnLabel(status: string): string {
