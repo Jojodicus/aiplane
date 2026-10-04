@@ -644,16 +644,18 @@
 	let answerErrors = $state<Record<string, string>>({});
 
 	/** Answer what a paused turn waits for; the rest of the turn streams in on a fresh attach. */
-	async function answerSuspension(turnId: string, waiting: SuspensionView, answer: Answer) {
+	async function answerSuspension(turnId: string, waiting: SuspensionView, answer: Answer): Promise<boolean> {
 		answering = turnId;
 		delete answerErrors[turnId];
 		try {
 			await api.resumeChatTurn(id, turnId, waiting.request_id, answer);
 			followEnd();
 			controller?.attach();
+			return true;
 		} catch (err) {
 			answerErrors[turnId] = err instanceof ApiError ? (err.serverMessage ?? err.message) : String(err);
 			if (err instanceof ApiError && err.code === 'not_suspended') controller?.attach();
+			return false;
 		} finally {
 			answering = null;
 		}

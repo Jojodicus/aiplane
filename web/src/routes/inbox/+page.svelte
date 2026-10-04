@@ -48,17 +48,19 @@
 		}
 	});
 
-	async function decide(item: InboxItem, answer: Answer) {
+	async function decide(item: InboxItem, answer: Answer): Promise<boolean> {
 		busy = item.id;
 		delete itemErrors[item.id];
 		try {
 			await inboxApi.answer(item.id, answer);
 			sent[item.id] = true;
 			await load();
+			return true;
 		} catch (err) {
 			const { code, message } = errorMessage(err);
 			itemErrors[item.id] = code === 'not_suspended' || code === 'inbox_item_not_found' ? t('inbox-already-settled') : message;
 			if (code === 'not_suspended' || code === 'inbox_item_not_found') await load();
+			return false;
 		} finally {
 			busy = null;
 		}

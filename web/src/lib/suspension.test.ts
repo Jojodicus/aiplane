@@ -9,6 +9,7 @@ import {
 	slotLine,
 	slotText,
 	pausedTurn,
+	submitAnswer,
 	waitingFrom,
 	waitingLead,
 	type SuspensionView
@@ -117,4 +118,16 @@ test('the deadline counts down', () => {
 	assert.equal(minutesLeft('2026-10-02T10:30:00Z', now), 30);
 	assert.equal(minutesLeft('2026-10-02T09:00:00Z', now), 0);
 	assert.equal(minutesLeft('garbage', now), null);
+});
+
+test('a typed answer is kept when sending it failed, and cleared once it went out', async () => {
+	const sent: unknown[] = [];
+	const ok = async (answer: unknown) => (sent.push(answer), true);
+	const failed = async () => false;
+	assert.deepEqual(await submitAnswer('value', ' 4711 ', ok), { text: '', missing: false });
+	assert.deepEqual(sent, [{ decision: 'value', value: '4711' }]);
+	assert.deepEqual(await submitAnswer('value', ' 4711 ', failed), { text: ' 4711 ', missing: false });
+	assert.deepEqual(await submitAnswer('value', '  ', ok), { text: '  ', missing: true }, 'nothing to send');
+	assert.equal(sent.length, 1);
+	assert.deepEqual(await submitAnswer('deny', 'draft', failed), { text: 'draft', missing: false });
 });

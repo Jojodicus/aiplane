@@ -98,8 +98,8 @@
 		}
 	}
 
-	async function answer(turnId: string, waiting: SuspensionView, decision: Answer) {
-		if (!controller) return;
+	async function answer(turnId: string, waiting: SuspensionView, decision: Answer): Promise<boolean> {
+		if (!controller) return false;
 		answering = turnId;
 		error = null;
 		try {
@@ -107,8 +107,10 @@
 			answered[turnId] = waiting.request_id;
 			delete views[turnId];
 			controller.attach();
+			return true;
 		} catch (err) {
 			error = (err as AgentError).message;
+			return false;
 		} finally {
 			answering = null;
 		}

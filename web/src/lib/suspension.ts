@@ -153,6 +153,21 @@ export function minutesLeft(expiresAt: string, now = Date.now()): number | null 
 	return Math.max(0, Math.ceil((at - now) / 60000));
 }
 
+/**
+ * Send `decision` with the typed `text` through `send`, which resolves
+ * whether it went out. What the field holds afterwards: cleared once sent,
+ * kept when sending failed or there was nothing to send (`missing`).
+ */
+export async function submitAnswer(
+	decision: DecisionKind,
+	text: string,
+	send: (answer: Answer) => Promise<boolean>
+): Promise<{ text: string; missing: boolean }> {
+	const answer = answerFor(decision, text);
+	if (!answer) return { text, missing: true };
+	return { text: (await send(answer)) ? '' : text, missing: false };
+}
+
 /** The answer a decision sends; `null` when a `value` answer has no text. */
 export function answerFor(decision: DecisionKind, text: string): Answer | null {
 	if (decision !== 'value') return { decision };

@@ -3,11 +3,11 @@
 	import { t } from '$lib/i18n.svelte';
 	import {
 		answerField,
-		answerFor,
 		decisionButtons,
 		minutesLeft,
 		prettyArguments,
 		slotLine,
+		submitAnswer,
 		type Answer,
 		type DecisionKind,
 		type Waiting
@@ -37,7 +37,8 @@
 		error?: string | null;
 		class?: string;
 		id?: string;
-		onanswer: (answer: Answer) => void | Promise<void>;
+		/** Send the answer; resolves whether it went out, so a failed one keeps what was typed. */
+		onanswer: (answer: Answer) => Promise<boolean>;
 		children?: Snippet;
 	} = $props();
 
@@ -49,11 +50,7 @@
 	const left = $derived(minutesLeft(waiting.expires_at));
 
 	async function decide(decision: DecisionKind) {
-		const answer = answerFor(decision, text);
-		missing = answer === null;
-		if (!answer) return;
-		await onanswer(answer);
-		text = '';
+		({ text, missing } = await submitAnswer(decision, text, onanswer));
 	}
 </script>
 
