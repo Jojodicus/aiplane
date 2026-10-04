@@ -46,6 +46,7 @@ validation:
     anchors: warn
 nav:
   - Home: README.md
+  - Product comparison: product-comparison.md
   - Getting started:
       - Install and configure: getting-started.md
       - Start using AIplane: guide/getting-started.md
