@@ -762,9 +762,10 @@ that is already in the chain (`EnterError::Cycle`).
   call inside an agent run. Since #92 usage rows carry it too, plus the
   main agent as `agent_id` ([§5](#what-92-built)).
 - An agent run gets none of its owner's identity, memory, private skills or
-  MCP connections: the request context reads the user row, memories and
-  private skills only through `Principal::user_id()`, which is `None` for a
-  system principal. Usage rows from such a run carry `principal_kind =
+  MCP connections: the request context is built for `Audience::Agent`, which
+  carries only the operator skills the principal is granted, and it reads the
+  user row, memories and private skills only through `Principal::user_id()`,
+  which is `None` for a system principal. Usage rows from such a run carry `principal_kind =
   'system'` and the principal's name.
 
 ### Sub-agent dispatch
@@ -796,10 +797,21 @@ pub struct RunProfile {
 }
 ```
 
-**Agent system message.** It is the agent's `orchestration` and `response`
-instructions plus the slot status and the granted skill listing. It has no
-built-in chat rules, no user memory, no location and no MCP listing beyond the
-grants.
+**Agent system message.** Built by the same `leading_system_message` as a
+person's turn (#120): the turn-discipline rule first, then the owner's brief
+(Role, Task, Scope, Tone), the slot status and the open routes, the operator
+skills its principal is granted (the `read_skill` listing, plus the guidance
+of skills loaded in the conversation), and the compaction summary. What a
+person's turn adds is withheld by the builder's input
+(`openai_driver::Audience::Agent`), not by a second builder: no owner
+identity, memory or preferences, private skills or MCP connections, no
+visitor IP or location, no `enable_tools` overlay, no hand-edited documents
+and no voice directive. Like a person's, it carries no date — the current
+time is a tool (`get_current_timestamp`) — and the timezone a person's
+message names is the person's own (`users.timezone`), which an agent run has
+none of. `read_skill` is offered whenever the principal is granted it and at
+least one skill, the rule a person's chat follows; the spec need not list it
+in `main.tools`.
 
 **The finish contract.**
 - A sub-agent that writes text without calling `finish` gets one nudge.
@@ -943,8 +955,11 @@ grants.
 
   The sub-agent's own tool calls carry the extended chain.
 - **Deviations.**
-  - `main.skills` is not listed in the system message, and `read_skill` is
-    offered only if granted and listed in `main.tools`.
+  - ~~`main.skills` is not listed in the system message, and `read_skill` is
+    offered only if granted and listed in `main.tools`~~ — since #120 the
+    system message lists every skill the principal is granted and offers
+    `read_skill` with them (see "Agent system message"); `main.skills` is
+    still checked against the grants only when the spec is validated.
   - Usage rows of the classifier call were not written; #92 added them.
   - Whether a tool *declares* a subject parameter is known only from its
     schema, and MCP schemas exist only once the connector is connected. The

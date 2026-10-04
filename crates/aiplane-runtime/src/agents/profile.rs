@@ -31,7 +31,7 @@ use aiplane_core::server::db::{DbError, Pool};
 use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::PoolAccess;
-use serde_json::{Value, json};
+use serde_json::Value;
 use shared::api::ToolDef;
 
 use super::approval::Permissions;
@@ -455,13 +455,10 @@ impl AgentSurface {
         self.conversation.is_some()
     }
 
-    /// The run's leading system message.
-    pub async fn system_message(
-        &self,
-        db: &Pool,
-        session_id: &str,
-        summary: Option<&str>,
-    ) -> Value {
+    /// The run's own sections of its leading system message
+    /// (`openai_driver::leading_system_message`): the owner's brief, then
+    /// the conversation's slots and open routes.
+    pub async fn system_sections(&self, db: &Pool, session_id: &str) -> Vec<String> {
         let mut parts = vec![self.brief.render()];
         if let Some(c) = &self.conversation {
             let state = self
@@ -486,12 +483,7 @@ impl AgentSurface {
                 parts.push(routes);
             }
         }
-        if let Some(summary) = summary {
-            parts.push(format!(
-                "Summary of the earlier part of this conversation:\n\n{summary}"
-            ));
-        }
-        json!({ "role": "system", "content": parts.join("\n\n---\n\n") })
+        parts
     }
 
     /// `inner` with this run's synthetic tools over it and its bound
@@ -719,6 +711,7 @@ mod tests {
     use super::*;
     use crate::server::tools::echo::Echo;
     use crate::server::tools::{ToolContext, ToolRegistry};
+    use serde_json::json;
 
     /// A run whose `lookup` tool binds `message` from the route: `message`
     /// is then a subject parameter, and `company_echo` declares it unbound.

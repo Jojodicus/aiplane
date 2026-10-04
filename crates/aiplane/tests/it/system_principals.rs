@@ -1001,6 +1001,73 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
     );
 }
 
+/// An agent run's system message comes from the same builder as a person's:
+/// it carries the turn-discipline rule and lists the operator skills its
+/// principal is granted, with the loader to read them. Its owner's identity
+/// and preferences stay out — the builder is told this is an agent's turn.
+#[tokio::test]
+async fn an_agent_run_is_told_the_turn_rule_and_its_granted_skills() {
+    use aiplane_core::server::run_chain::{Frame, RunChain};
+    use aiplane_runtime::server::headless::Owner;
+    let fx = fixture().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+            "text/event-stream",
+        ))
+        .with_priority(1)
+        .mount(&fx.upstream)
+        .await;
+    db::user_memories::insert(
+        &fx.state.db,
+        "alice",
+        db::user_memories::MemoryKind::Preference,
+        "always answer in pirate speak",
+    )
+    .await
+    .unwrap();
+    let (id, _) = fx.principal_with_model("support-website").await;
+    for (kind, reference) in [("skill", "brand"), ("tool", "read_skill")] {
+        let (status, body) = fx.grant(&fx.admin, &id, kind, reference).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let chain = Arc::new(RunChain::root(
+        "s-visitor",
+        None,
+        Frame::for_principal(&principal, Some(1)),
+    ));
+
+    let sent = headless_run(
+        &fx,
+        Owner::Run {
+            principal_id: &id,
+            parent_turn_id: None,
+            agent_version: Some(1),
+        },
+        aiplane_runtime::agent_run::Actor::Agent(Arc::new(
+            aiplane_runtime::agent_run::AgentRun::new(principal, chain).unwrap(),
+        )),
+    )
+    .await;
+
+    let system = sent["messages"][0]["content"].as_str().unwrap();
+    assert!(system.starts_with("How a turn works here:"), "{system}");
+    assert!(system.contains("- brand: Enforce the brand."), "{system}");
+    assert!(system.contains("read_skill(name)"), "{system}");
+    assert!(fx.offered_tools().await.contains(&"read_skill".to_string()));
+    for personal in ["alice", "pirate", "Automatically provided context"] {
+        assert!(
+            !system.contains(personal),
+            "`{personal}` reached the agent: {system}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_audit_trail_shows_a_run_events_call_chain() {
     use aiplane_agents::db::agent_audit::{self, AuditKind};

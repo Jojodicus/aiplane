@@ -9,6 +9,7 @@
 use aiplane_agents::db::agent_audit::{ActivityQuery, AuditKind, Order};
 
 use super::*;
+use crate::openai_driver::TURN_DISCIPLINE;
 
 const REFUSAL: &str = "I can only help with croit products and Ceph storage.";
 const DIESEL: &str = "How does the injection pump of a diesel engine work?";
@@ -187,11 +188,14 @@ async fn an_in_scope_question_reaches_the_main_model_under_the_structured_prompt
     assert_eq!(sent.len(), 1);
     assert_eq!(
         system(&sent[0]),
-        "## Role\n\nYou are croit Website Assistant. The sections below are your owner's \
-         instructions.\n\n## Task\n\nAnswer questions about croit and Ceph.\n\n## Scope\n\nYou \
-         cover only these topics:\n- croit products\n- Ceph storage\nIf asked about anything \
-         else, reply exactly: I can only help with croit products and Ceph storage.\n\n## \
-         Tone\n\nFriendly and short."
+        format!(
+            "{TURN_DISCIPLINE}\n\n---\n\n## Role\n\nYou are croit Website Assistant. The \
+             sections below are your owner's instructions.\n\n## Task\n\nAnswer questions \
+             about croit and Ceph.\n\n## Scope\n\nYou cover only these topics:\n- croit \
+             products\n- Ceph storage\nIf asked about anything else, reply exactly: I can only \
+             help with croit products and Ceph storage.\n\n## Tone\n\nFriendly and short."
+        ),
+        "the shared leading message: the turn rule, then the owner's brief"
     );
     assert_eq!(
         site.events(AuditKind::ScopeDecision).await[0]["verdict"],
@@ -255,7 +259,9 @@ async fn a_scope_that_is_not_strict_is_guidance_in_the_prompt_and_nothing_more()
         "{prompt}"
     );
     assert!(
-        prompt.starts_with("## Role\n\nYou are croit Website Assistant."),
+        prompt.starts_with(&format!(
+            "{TURN_DISCIPLINE}\n\n---\n\n## Role\n\nYou are croit Website Assistant."
+        )),
         "{prompt}"
     );
     assert!(
