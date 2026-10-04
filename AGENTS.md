@@ -299,7 +299,12 @@ Start in [`docs/README.md`](docs/README.md) for the index. The topical docs:
 - **When you discover a missing piece** — an undocumented invariant, a non-obvious gotcha — add it to the relevant doc. Don't rely on conversation history.
 - **Tests live next to the code.** Unit tests in `#[cfg(test)] mod tests`, integration tests in `crates/aiplane/tests/`. Every test input and loop is finite.
 - **Verify cheaply, then once for real.** Compiling dominates this workspace: a full `mise run verify` is ~20 minutes, of which ~19 are linking test binaries. Iterate with `mise run test-crate <crate>` (seconds), then run the full gate **once**, at the end, after every fix you already know about is in. Don't kill a cargo process to unstick a parallel mise task — they share one `target/` lock. See [`docs/dev-workflow.md`](docs/dev-workflow.md) → "The feedback ladder".
-- **Review before every merge; fix findings before the merge.** `/code-review` always; `/security-review` as well for anything reachable without login (`/hooks`, `/a2a`, `/api/v0/embed`, OAuth callbacks, `/setup`, the public probes), anything touching rights, grants, tokens or sharing, anything that fetches a URL someone other than the operator chose, and anything exposing personal data. Merged is not done; reviewed and verified is.
+- **Review once per branch, before the merge; fix findings before the merge.** Reviews cost real tokens and time, so they are spent where they find things.
+  - **When:** once, on the whole branch diff, after every change you already know about is in. Follow-up work lands on the branch first and is reviewed with it, not in a review of its own.
+  - **Fixes:** fixing what a review found does not trigger another review — tests and `mise run verify` cover the fix. Re-review only when the fix changes the design.
+  - **Effort by risk:** `/code-review` at medium by default; high only for a large diff (roughly >2k lines) or one touching rights, money or data exposure; low is enough for docs, catalogs and compose/config.
+  - **Security:** `/security-review` as well, once per branch, only when the change touches anything reachable without login (`/hooks`, `/a2a`, `/api/v0/embed`, OAuth callbacks, `/setup`, the public probes), rights, grants, tokens or sharing, a URL someone other than the operator chose, or personal data.
+  - Merged is not done; reviewed and verified is.
 - **Evidence before hypotheses.** On a failure or crash, read the logs and reports first (for a memory crash: the newest JetsamEvent, see docs/dev-workflow.md), then name a cause.
 
 **Working with agents and the maintainer's machine**
