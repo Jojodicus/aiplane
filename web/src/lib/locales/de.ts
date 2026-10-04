@@ -2609,6 +2609,7 @@ export const de: Catalog = {
  "tools-needs-sandbox": "Sandbox-Runner erforderlich.",
  "tools-needs-sandbox-network": "Netzwerkzugang für die Sandbox erforderlich.",
  "tools-needs-storage": "Dateispeicher erforderlich.",
+ "tools-no-description": "Keine Beschreibung",
  "tools-none-granted": "Ihre Rollen gewähren keine Werkzeuge.",
  "tools-toggle-aria": "{name} umschalten",
  "ui-ai-suggestion": "KI-Vorschlag",

@@ -412,6 +412,16 @@ category rail becomes a labelled category select on narrow screens. Changes
 save immediately; category-level controls use the same mutation path as an
 individual tool and preserve `can_disable` by falling back to `auto`.
 
+The list itself — group rail, search, one row per resource — is
+`components/capabilities/CapabilityBrowser.svelte` (logic in
+`capability-picker.ts`), shared with the agent setup's *Knowledge &
+abilities* step. The caller brings each row's control (the chat: off / auto /
+on; an agent: an on/off toggle), what shows under it, a filter and the order.
+A row shows the resource's own title and description and nothing in place of
+a missing description: who may maintain the resource (`editable`) sees "No
+description" and a *Configure* link to its `config_url`, everyone else only
+the name.
+
 `GET /api/v0/usage` is the complete usage-dashboard read model. Period,
 scope, source, backend, and token filters are query parameters so a view is
 reconstructable from its URL. The response includes the effective scope and
@@ -651,7 +661,7 @@ that every step round-trips through the advanced editor's
   | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field with *Suggest a setup* (below) | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
   | Task & tone | name, what the agent does, tone chips, answer language, free text, *Model* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.model` (unset = the gateway default) |
   | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_model` kept |
-  | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
+  | Knowledge & abilities | the chat picker's `CapabilityBrowser` over the `items` of `GET /api/v0/agent-resources` (knowledge bases, tools, connectors, skills with their own titles and descriptions, linked to their edit pages for who may edit them), an on/off toggle each; switched-on and AI-suggested rows first; what the agent holds but the manager does not is listed by its reference under "Granted by someone else" | grants (below; every tool id of a catalog entry) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
   | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`, the row's position as `order` (the server hands object keys back sorted, so the list order lives there); a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
   | Hand-offs | sentences: "When it is about [topic] and [always / all details are collected / the identity is confirmed / both], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]"; the topic field grows with its text | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: <detail>, set: true} per slot of the details step; a route whose `set` leaves name only some of the details is not a rule but a kept route), ({slot: verified, provenance})]}` — saving the details step, or the identity step adding the slots it reads, regates a rule that waits for them (`withDetails`) — `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted |

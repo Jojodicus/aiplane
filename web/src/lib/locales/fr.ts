@@ -2609,6 +2609,7 @@ export const fr: Catalog = {
  "tools-needs-sandbox": "Exécuteur sandbox requis.",
  "tools-needs-sandbox-network": "Accès réseau requis pour la sandbox.",
  "tools-needs-storage": "Stockage de fichiers requis.",
+ "tools-no-description": "Aucune description",
  "tools-none-granted": "Vos rôles n'accordent aucun outil.",
  "tools-toggle-aria": "Activer/désactiver {name}",
  "ui-ai-suggestion": "Suggestion de l’IA",

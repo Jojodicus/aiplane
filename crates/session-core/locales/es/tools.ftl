@@ -15,6 +15,7 @@ tools-location-unavailable = No se pudo acceder a tu ubicación. Comprueba el pe
 
 # SPA-only: the Svelte /tools toggle list.
 tools-toggle-aria = Activar o desactivar { $name }
+tools-no-description = Sin descripción
 
 # Section headings for the tool catalog, shared by /tools, the per-token
 # capability panel, the chat capability picker and the admin grant matrix.

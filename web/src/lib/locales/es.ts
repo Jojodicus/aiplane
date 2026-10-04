@@ -2609,6 +2609,7 @@ export const es: Catalog = {
  "tools-needs-sandbox": "Se necesita un ejecutor sandbox.",
  "tools-needs-sandbox-network": "Se necesita acceso de red para el sandbox.",
  "tools-needs-storage": "Se necesita almacenamiento de archivos.",
+ "tools-no-description": "Sin descripción",
  "tools-none-granted": "Tus roles no conceden ninguna herramienta.",
  "tools-toggle-aria": "Activar o desactivar {name}",
  "ui-ai-suggestion": "Sugerencia de la IA",

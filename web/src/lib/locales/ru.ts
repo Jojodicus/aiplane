@@ -2626,6 +2626,7 @@ export const ru: Catalog = {
  "tools-needs-sandbox": "Требуется сервер для песочницы.",
  "tools-needs-sandbox-network": "Требуется доступ к сети из песочницы.",
  "tools-needs-storage": "Требуется файловое хранилище.",
+ "tools-no-description": "Нет описания",
  "tools-none-granted": "Ваши роли не предоставляют доступ ни к одному инструменту.",
  "tools-toggle-aria": "Переключить {name}",
  "ui-ai-suggestion": "Предложение ИИ",

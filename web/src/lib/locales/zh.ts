@@ -2578,6 +2578,7 @@ export const zh: Catalog = {
  "tools-needs-sandbox": "需要沙盒运行服务。",
  "tools-needs-sandbox-network": "需要沙盒网络访问权限。",
  "tools-needs-storage": "需要文件存储。",
+ "tools-no-description": "无描述",
  "tools-none-granted": "您的角色未授予任何工具。",
  "tools-toggle-aria": "切换 {name}",
  "ui-ai-suggestion": "AI 建议",

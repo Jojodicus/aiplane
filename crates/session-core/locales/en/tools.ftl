@@ -17,6 +17,8 @@ tools-location-unavailable = Couldn't access your location. Check your browser's
 
 # SPA-only: the Svelte /tools toggle list.
 tools-toggle-aria = Toggle { $name }
+# A capability row (chat picker, agent setup) whose resource has no description of its own.
+tools-no-description = No description
 
 # Section headings for the tool catalog, shared by /tools, the per-token
 # capability panel, the chat capability picker and the admin grant matrix.

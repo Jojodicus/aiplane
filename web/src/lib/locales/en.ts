@@ -2609,6 +2609,7 @@ export const en: Catalog = {
  "tools-needs-sandbox": "Needs a sandbox runner.",
  "tools-needs-sandbox-network": "Needs sandbox network access.",
  "tools-needs-storage": "Needs file storage.",
+ "tools-no-description": "No description",
  "tools-none-granted": "Your roles don't grant any tools.",
  "tools-toggle-aria": "Toggle {name}",
  "ui-ai-suggestion": "AI suggestion",
