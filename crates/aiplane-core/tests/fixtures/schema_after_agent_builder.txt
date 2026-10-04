@@ -67,7 +67,6 @@ index sqlite_autoindex_agent_embed_keys_2 on agent_embed_keys:
 index sqlite_autoindex_agent_identity_jtis_1 on agent_identity_jtis: 
 index sqlite_autoindex_agent_notify_channels_1 on agent_notify_channels: 
 index sqlite_autoindex_agent_notify_channels_2 on agent_notify_channels: 
-index sqlite_autoindex_agent_responders_1 on agent_responders: 
 index sqlite_autoindex_agent_shares_1 on agent_shares: 
 index sqlite_autoindex_agent_state_1 on agent_state: 
 index sqlite_autoindex_agent_test_cases_1 on agent_test_cases: 
@@ -180,8 +179,7 @@ table agent_draft_revisions on agent_draft_revisions: CREATE TABLE agent_draft_r
 table agent_embed_keys on agent_embed_keys: CREATE TABLE agent_embed_keys(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,key_hash TEXT NOT NULL UNIQUE,origins TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL,revoked_at TEXT)STRICT
 table agent_identity_jtis on agent_identity_jtis: CREATE TABLE agent_identity_jtis(principal_id TEXT NOT NULL REFERENCES system_principals(id)ON DELETE CASCADE,jti_hash TEXT NOT NULL,expires_at TEXT NOT NULL,PRIMARY KEY(principal_id,jti_hash))STRICT
 table agent_notify_channels on agent_notify_channels: CREATE TABLE agent_notify_channels(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,kind TEXT NOT NULL CHECK(kind IN('slack','discord')),name TEXT NOT NULL,url_nonce BLOB NOT NULL,url_ct BLOB NOT NULL,url_host TEXT NOT NULL,details INTEGER NOT NULL DEFAULT 0 CHECK(details IN(0,1)),lang TEXT NOT NULL DEFAULT 'en',created_by TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
-table agent_responders on agent_responders: CREATE TABLE agent_responders(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,subject_kind TEXT NOT NULL CHECK(subject_kind IN('user','group')),subject_id TEXT NOT NULL,added_by TEXT NOT NULL,added_at TEXT NOT NULL,PRIMARY KEY(principal_id,subject_kind,subject_id))STRICT
-table agent_shares on agent_shares: CREATE TABLE agent_shares(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,subject_kind TEXT NOT NULL CHECK(subject_kind IN('user','group')),subject_id TEXT NOT NULL,access TEXT NOT NULL CHECK(access IN('read','write')),PRIMARY KEY(principal_id,subject_kind,subject_id))STRICT
+table agent_shares on agent_shares: CREATE TABLE agent_shares(principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,subject_kind TEXT NOT NULL CHECK(subject_kind IN('user','group')),subject_id TEXT NOT NULL,access TEXT NOT NULL CHECK(access IN('respond','read','write')),PRIMARY KEY(principal_id,subject_kind,subject_id))STRICT
 table agent_state on agent_state: CREATE TABLE agent_state(session_id TEXT NOT NULL REFERENCES chat_sessions(id)ON DELETE CASCADE,slot TEXT NOT NULL,value TEXT NOT NULL,provenance TEXT NOT NULL CHECK(provenance IN('llm','host')OR provenance LIKE 'verifier:_%'),set_at TEXT NOT NULL,PRIMARY KEY(session_id,slot))STRICT
 table agent_test_cases on agent_test_cases: CREATE TABLE agent_test_cases(id TEXT PRIMARY KEY NOT NULL,principal_id TEXT NOT NULL REFERENCES agents(principal_id)ON DELETE CASCADE,name TEXT NOT NULL,script TEXT NOT NULL,expect TEXT NOT NULL,rubric TEXT,created_by TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(principal_id,name))STRICT
 table agent_test_results on agent_test_results: CREATE TABLE agent_test_results(run_id TEXT NOT NULL REFERENCES agent_test_runs(id)ON DELETE CASCADE,case_id TEXT NOT NULL,case_name TEXT NOT NULL,position INTEGER NOT NULL,passed INTEGER NOT NULL CHECK(passed IN(0,1)),report TEXT NOT NULL,session_id TEXT,PRIMARY KEY(run_id,case_id))STRICT
@@ -448,17 +446,6 @@ agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 1|u|0
 agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 0|1|principal_id|0|BINARY|1
 agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 1|3|name|0|BINARY|1
 agent_notify_channels index sqlite_autoindex_agent_notify_channels_2 2|-1|NULL|0|BINARY|0
-agent_responders column 0|principal_id|TEXT|1|NULL|1|0
-agent_responders column 1|subject_kind|TEXT|1|NULL|2|0
-agent_responders column 2|subject_id|TEXT|1|NULL|3|0
-agent_responders column 3|added_by|TEXT|1|NULL|0|0
-agent_responders column 4|added_at|TEXT|1|NULL|0|0
-agent_responders fk 0|0|agents|principal_id|principal_id|NO ACTION|CASCADE|NONE
-agent_responders index sqlite_autoindex_agent_responders_1 1|pk|0
-agent_responders index sqlite_autoindex_agent_responders_1 0|0|principal_id|0|BINARY|1
-agent_responders index sqlite_autoindex_agent_responders_1 1|1|subject_kind|0|BINARY|1
-agent_responders index sqlite_autoindex_agent_responders_1 2|2|subject_id|0|BINARY|1
-agent_responders index sqlite_autoindex_agent_responders_1 3|-1|NULL|0|BINARY|0
 agent_shares column 0|principal_id|TEXT|1|NULL|1|0
 agent_shares column 1|subject_kind|TEXT|1|NULL|2|0
 agent_shares column 2|subject_id|TEXT|1|NULL|3|0

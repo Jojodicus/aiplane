@@ -30,12 +30,6 @@ inbox-answer-required = Schreiben Sie zuerst eine Antwort.
 inbox-already-settled = Dieser Eintrag wurde bereits beantwortet oder ist abgelaufen.
 inbox-sent = Antwort gesendet; das Gespräch geht weiter.
 
-agents-responders-heading = Antwortende
-agents-responders-intro = Benutzer und Gruppen, die Freigaben und Fragen dieses Agenten im Posteingang beantworten dürfen. Sie sehen nur den wartenden Eintrag und seinen Kontext, nie die Spezifikation oder die Gespräche, und brauchen keine Berechtigung zur Agentenverwaltung.
-agents-responders-empty = Noch keine Antwortenden. Manager mit Schreibfreigabe können ebenfalls antworten.
-agents-responders-add = Antwortende hinzufügen
-agents-responders-remove = Entfernen
-
 agents-channels-heading = Benachrichtigungskanäle
 agents-channels-intro = Slack- oder Discord-Kanäle, die benachrichtigt werden, sobald ein Gespräch auf das Team wartet – zusätzlich zu Push-Benachrichtigungen an alle, die antworten dürfen.
 agents-channels-empty = Noch keine Kanäle.

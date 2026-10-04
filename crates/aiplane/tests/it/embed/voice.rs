@@ -724,6 +724,11 @@ async fn the_recorder_worklet_is_served_to_the_widget() {
     assert_eq!(resp.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], SITE);
     let body = String::from_utf8(common::read_body(resp).await.to_vec()).unwrap();
     assert!(body.contains("registerProcessor('pcm-recorder'"), "{body}");
+    assert_eq!(
+        body,
+        include_str!("../../../../../web/static/pcm-recorder.js"),
+        "the SPA's worklet, not a copy"
+    );
 }
 
 #[tokio::test]

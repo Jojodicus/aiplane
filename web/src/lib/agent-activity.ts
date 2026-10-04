@@ -73,8 +73,6 @@ export const KIND_GROUPS = {
 		'token_revoked',
 		'embed_key_created',
 		'embed_key_revoked',
-		'responder_added',
-		'responder_removed',
 		'channel_created',
 		'channel_deleted',
 		'conversations_swept',

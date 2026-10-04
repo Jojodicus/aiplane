@@ -238,12 +238,35 @@ CREATE TABLE agent_shares (
 - Rolling back means setting `live_version` to an older snapshot.
 
 **Shares**
+- Three levels, each including the ones below: `respond` < `read` < `write`
+  (`agents::Access`). One table (`agent_shares`), one matcher (`holder_clause`),
+  one rule (`aiplane_runtime::agents::access::effective_access`).
 - The creator gets a `write` share automatically.
-- Every share takes effect only for a holder of `can_manage_agents`.
-- *Chosen:* `read` shows the spec and the agent's conversations, and those
-  hold visitor data, so a read share needs the permission too. Support staff
-  who only answer handoffs use the HiL inbox (#96), which needs no share:
-  they are the agent's *responders* ([#96](#what-96-built)).
+- A `read` or `write` share takes effect only for a holder of
+  `can_manage_agents`. *Chosen:* `read` shows the spec and the agent's
+  conversations, and those hold visitor data, so it needs the permission too.
+- A `respond` share needs no permission: support staff who only answer
+  approvals and handoffs in the HiL inbox (#96) — the agent's *responders*
+  ([#96](#what-96-built)). It is the only level that survives losing the
+  permission, and only when held as `respond` itself (a `write` share of a
+  manager who lost the permission does not degrade to `respond`). Every agent
+  route treats it as no access (`404`), and `GET /api/v0/agents` does not list
+  the agent.
+- A share names a user or group that exists: a user id from `users`, a group
+  the RBAC resolver knows (`Resolver::has_group` — database groups, which the
+  `[rbac]` config seeds, and the bootstrap admin group). The sharing panel
+  picks them from a search, never as free text:
+  `GET /api/v0/agents/{id}/share-subjects?q=`, for whoever may change the
+  shares (`write`). *Chosen (privacy):* holding `can_manage_agents` must not
+  hand anyone the people directory, which only admins list
+  (`/api/v0/admin/users`). So it answers a search, never a roster: nothing
+  for a query under two characters, at most eight users and eight groups
+  (name or address contains it, case-insensitive; `users::search`), a user
+  as id and display name, their address only when the query is exactly it,
+  and no hint whether a subject holds the agent-management permission. The
+  share route says so when it does not (`422 share_needs_agent_manager`,
+  naming `respond` as what can still be given). A share in the list carries
+  the person's display name, for whoever may see the shares.
 
 **Grants are not versioned.** They belong to the principal and persist until
 reconfigured, as decided. If a live spec references a tool whose grant was
@@ -464,7 +487,7 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 
 | Method | Path | Share | Purpose |
 |---|---|---|---|
-| GET | `/api/v0/agents` | any | Agents shared with you (every agent for an admin), with your `access` |
+| GET | `/api/v0/agents` | any | Agents shared with you `read` or `write` (every agent for an admin), with your `access` |
 | POST | `/api/v0/agents` | — | Create `{name, display?, description?, spec?}`; 201, 409 on a taken principal name |
 | GET | `/api/v0/agents/{id}` | read | Agent, `draft_spec`, `live_spec`, `publish_issues`, grants, shares, audit |
 | PUT | `/api/v0/agents/{id}/draft` | write | Replace the draft `{spec}`; the live version is untouched |
@@ -472,8 +495,9 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 | GET | `/api/v0/agents/{id}/versions` | read | Every version, newest first, with its spec |
 | POST | `/api/v0/agents/{id}/live` | write | `{version}`: rollback (or forward); not re-validated, since grants are not versioned |
 | GET | `/api/v0/agents/{id}/shares` | read | The shares |
-| POST | `/api/v0/agents/{id}/shares` | write | `{subject_kind: user\|group, subject_id, access: read\|write}`; 422 `share_needs_agent_manager` if the holder lacks the permission |
+| POST | `/api/v0/agents/{id}/shares` | write | `{subject_kind: user\|group, subject_id, access: respond\|read\|write}`; 404 for a user or group that does not exist, 422 `share_needs_agent_manager` if a `read` or `write` holder lacks the permission |
 | POST | `/api/v0/agents/{id}/shares/revoke` | write | `{subject_kind, subject_id}` |
+| GET | `/api/v0/agents/{id}/share-subjects?q=` | write | `{users: [{id, name, email?}], groups: [name]}`: at most 8 of each matching `q`, nothing under 2 characters, `email` only on an exact address match (§2 Shares) |
 | DELETE | `/api/v0/agents/{id}` | write | Delete the agent and its principal |
 
 An invalid spec is `422` with `error.code = "invalid_agent_spec"`. The
@@ -1315,33 +1339,34 @@ runs. Migration `0077_agent_builder.sql`.
   ask the model: the waiting call is settled as unanswered and the turn ends
   with `agent-human-no-answer` in the conversation's recorded language (the
   visitor's `Accept-Language` on the public endpoint). A message queued behind it runs afterwards as usual.
-- **Responders** (`agent_responders`, `db::agent_responders`). Users or
-  groups who answer an agent's approvals and handoffs without a share — the
-  support staff of §2. They need no `can_manage_agents`. Managed with a share
-  like the rest of the agent; adding and removing one is audited
-  (`responder_added`, `responder_removed`).
+- **Responders** are `respond` shares (§2): users or groups who answer an
+  agent's approvals and handoffs and see nothing else of it. They need no
+  `can_manage_agents`. Managed on `/api/v0/agents/{id}/shares` like every
+  share, and audited as one (`agent_share_set`, `agent_share_removed`).
 - **The inbox** (`agents::inbox`). An item is a conversation's own pause
   (`run_sessions::pending_suspensions`; a sub-agent's pause shows through its
   conversation's, with the innermost call's tool and arguments for an
   approval):
   - an agent conversation's `approval` or `human_answer`, outside the test
-    chat (`agent_version = 0` stays in the test chat), for an admin, a manager
-    with a `write` share, or a responder (`standing: manager | responder`);
+    chat (`agent_version = 0` stays in the test chat), for whoever holds
+    access to the agent (`effective_access`): an admin or a manager with a
+    `read` or `write` share (`standing: manager`), or a `respond` share
+    (`standing: responder`);
   - a person's own paused conversation — a scheduled or webhook run — for its
     owner only (`standing: owner`).
 
   A responder gets the item and its minimal context: question, handoff
   context, an approval's tool and arguments, agent display name. Every other
-  agent route refuses them (`403`, no agent-management permission), and so
-  does the staff resume route.
+  agent route refuses them (`403` without the agent-management permission,
+  `404` with it), and so does the staff resume route.
 - **Notifications.** Once per pause (`chat_turn_suspensions.notified_at`,
   set with `WHERE notified_at IS NULL`; a new pause is a new row), off the
   turn's path (`inbox::announce_in_background`), when an agent conversation's
   turn pauses (`drive_opened_from`, so a resumed turn that pauses again
   notifies again) or a person's headless run does:
-  - **Web Push** to everyone who may answer: users holding a `write` share
-    directly or through a group, and responders (admins without a share are
-    not notified — they may answer everything and would be told everything),
+  - **Web Push** to everyone who may answer: users holding a share that
+    takes effect for them, directly or through a group (admins without a
+    share are not notified — they may answer everything and would be told everything),
     or the run's owner. Title and body from the catalog in each
     subscription's language, through the one fan-out (`push::send_to_user`,
     which also cuts and prunes); the link is `/inbox?item=<request_id>`.
@@ -1383,8 +1408,6 @@ runs. Migration `0077_agent_builder.sql`.
   | GET | `/api/v0/agents/inbox` | session | `{items, count}`: each `{id (request_id), kind, standing, agent?, session_id, turn_id, title?, question?, call?: {name, arguments}, context?, options, created_at, expires_at}` |
   | POST | `/api/v0/agents/inbox/{id}/answer` | who may answer it | `{decision, value?}`; `202 {turn_id}`, the turn runs in the background and the visitor gets it on their stream. `404 inbox_item_not_found` for anyone else, `409 not_suspended` / `turn_in_progress`, `400 decision_not_offered` |
   | GET | `/api/v0/agents/inbox/events` | session | SSE: `inbox {count}` on attach and whenever the set changes (checked every 3 s), keep-alive comments, ends after 10 minutes for `EventSource` to reconnect |
-  | GET/POST | `/api/v0/agents/{id}/responders` | read / write share | list; add `{subject_kind: user\|group, subject_id}` (`201`, `200` if already one, `404` for an unknown user or group) |
-  | POST | `/api/v0/agents/{id}/responders/revoke` | write share | `{subject_kind, subject_id}`; `204` |
   | GET/POST | `/api/v0/agents/{id}/channels` | read / write share | list without URL; add `{kind: slack\|discord, name, url, details?, lang?}`; `422 invalid_webhook_url`, `409 channel_name_taken` |
   | DELETE | `/api/v0/agents/{id}/channels/{channel_id}` | write share | `204` |
 
@@ -1394,8 +1417,8 @@ runs. Migration `0077_agent_builder.sql`.
 - **Widget and SPA.** The widget shows a waiting notice for a `suspended`
   frame with empty `options` and re-attaches every 10 s until the answer
   arrives ([`embed.md`](embed.md#when-the-agent-asks-a-person)); the SPA has
-  `/inbox` with a live sidebar badge and the Responders and Notification
-  channels cards in the workbench's Sharing tab ([`ui.md`](ui.md#inbox)).
+  `/inbox` with a live sidebar badge, the `respond` level in the sharing
+  panel and the Notification channels card in the workbench's Sharing tab ([`ui.md`](ui.md#inbox)).
 - **Tests.** `agents/run/tests/hil.rs`: an `always_ask` tool pauses, staff
   approve and it runs, staff deny and it is a tool error, nobody answers and
   it is denied; `always_allow`; `request_human` to a responder whose answer
@@ -1404,8 +1427,10 @@ runs. Migration `0077_agent_builder.sql`.
   through `forward_request`; one Slack post per pause, only on the channels
   the route names; a person's paused run in their own inbox only.
   `tests/it/embed/hil.rs`: the whole path over HTTP (visitor waits, responder
-  answers from the inbox, visitor receives), what a responder cannot reach,
-  who cannot answer, responder and channel management (no URL ever shown),
+  answers from the inbox, visitor receives), what a responder cannot reach
+  (with and without the manager permission), who cannot answer, `respond`
+  shares (unknown subjects refused, database and bootstrap groups accepted)
+  and channel management (no URL ever shown),
   and a scheduled run that paused, resumed from its owner's inbox.
 - **Not built.** Answering in a Slack or Discord thread (inbox only, as the
   issue left open), mail, and an approval card in a person's interactive chat
@@ -2914,8 +2939,9 @@ removing the checkpoint as a gap in the chain.
 
 **Access and API** (`aiplane-api::pages::json_agent_activity`): the
 agent-management permission plus a `read` share (admins hold one on every
-agent) — the log holds whole conversations, so a responder, who answers
-handoffs without a share, cannot read it (`403`).
+agent) — the log holds whole conversations, so a responder, whose `respond`
+share answers handoffs only, cannot read it (`403`, or `404` with the
+permission).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -3427,7 +3453,7 @@ chain as for messages):
 | POST | `/api/v0/embed/agent` | `{key}` → `{agent: {display, color, voice: {input, output}}}` before any conversation; not rate-gated (reads cost nothing). `start`/`session` return the same `agent` |
 | POST | `/api/v0/embed/transcribe` | body `audio/wav`, 16 kHz mono 16-bit PCM, at most **2 MiB** (`413 payload_too_large`), 0.4–60 s (`400 audio_too_short`, `413 audio_too_long`), anything else `415 unsupported_audio` → `{text}` (at most 8 000 characters). Not posted to the conversation: the widget puts it in the input for the visitor to read, change and send |
 | POST | `/api/v0/embed/speak` | `{turn_id}` → `audio/mpeg` (`204` when nothing is speakable). Only a `completed` assistant turn of *this* visitor's conversation that no worker holds any more (`404 turn_not_found`, `409 turn_not_final`): the content as stored after the output filter ruled, never text from the client; Markdown is turned into speakable prose, and at most 3 000 characters (to the last whole sentence) are spoken |
-| GET | `/api/v0/embed/recorder.js` | the audio worklet the widget records with — served under the embed CORS a cross-origin worklet needs |
+| GET | `/api/v0/embed/recorder.js` | the audio worklet the widget records with — the SPA's `web/static/pcm-recorder.js` (`include_str!`, one file), served under the embed CORS a cross-origin worklet needs |
 
 A direction that is off answers `404 voice_not_enabled`; a failing backend
 `503 voice_unavailable` (the real error is in the activity log and the server
@@ -3448,7 +3474,8 @@ event keeps the text sent and `{content_type, bytes}` of the audio. The
 chain is anchored after each call. **Audio is never stored**: a recording
 lives in memory for the request, and spoken audio only in the bounded cache.
 
-**Widget** (`web/embed/voice.ts`, `audio.ts`, `theme.ts`). A microphone
+**Widget** (`web/embed/voice.ts`, `audio.ts` — the speaker —, `theme.ts`;
+recording is `web/shared/voice-recorder.ts`, the SPA's recorder too). A microphone
 button when `voice.input`: held down it records until release, a short
 click starts a recording the next click (or Enter/Space) sends; a
 recording stops by itself at 60 s; Escape or *Cancel* throws it away; a
@@ -3473,7 +3500,7 @@ audio in the log, disabled → 404, body cap with a finite oversize and
 "endless" body, length and format, visitor rate, owner budget, only a final
 answer of this visitor spoken from the stored text, cache, owner's voice,
 `describe`, worklet, voice models); `spec.rs` and `spec/model.rs`;
-`web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color}.test.ts`,
+`web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color,voice-recorder}.test.ts`,
 `web/src/lib/agent-setup.test.ts`.
 
 ### Models
@@ -3593,7 +3620,7 @@ upward.
 | Piece | Crate | Why there |
 |---|---|---|
 | Migrations (one embedded set, agent tables included); the `can_manage_agents` resolver check; `Principal`, `GrantSet`, `RunChain`; the `agent_id` column of usage and the per-agent spend limits | `aiplane-core` | the migration history is never split; identity types are read by RBAC, the upstream registry and usage metering, all below the features |
-| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate and the one rate primitive (`rates`, over `rate_events`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
+| db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate and the one rate primitive (`rates`, over `rate_events`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol; it reads a conversation by `user_id` and treats any other owner as opaque |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
 | `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/model resolution; the one model list (`server::model_choices`) and the model routing a turn and an agent's own calls share (`server::model_route`) | `aiplane-runtime` | they are the loop and the tool machinery; every consumer of the model list (chat picker, agent resources, the grant cap) is here or above |
@@ -3634,7 +3661,7 @@ use `regex`, and hashing uses the token helpers.
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken`; verifier tools in `aiplane-runtime`, not `aiplane-tools` ([built](#what-95-built)) |
-| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; responders instead of a share for support staff; Slack and Discord incoming webhooks; answers in the inbox only |
+| #96 human in the loop | §3 suspend/resume | builds on `chat_turn_suspensions`; `human` route kind; `request_human` is a synthetic tool in `aiplane-runtime` (it needs the run's gates), not an `aiplane-tools` tool; a `respond` share for support staff (#120: was a separate responders table); Slack and Discord incoming webhooks; answers in the inbox only |
 | #99 evaluation | §5 | stored cases (script plus deterministic expectations), runs against the draft or a version through the test chat's door, a Goal-Plan-Action report, an optional rubric judged apart, `publish.require_passing_tests`; Tests tab |
 | #100 analytics | §5 | derived from `agent_audit`, `usage_events` and the chat tables; one index, no new store; Analytics tab |
 | #102 A2A server | §5 | per-agent opt-in `publish.a2a`; agent card and JSON-RPC endpoint under `/a2a/agents/{id}`, A2A v1.0; callers are `gws_` principals granted `a2a_caller` on the agent; a context is a principal-owned conversation recorded in `a2a_contexts`, a task one assistant turn ([built](#what-102-built)) |

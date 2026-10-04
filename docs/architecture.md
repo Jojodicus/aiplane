@@ -162,8 +162,8 @@ The agent builder's persistence and the pieces only agents need, on
 - `db/` — accessors for the agent tables: `agents` (versions, shares),
   `system_principals` (grants, system tokens), `agent_audit`, `embed_keys`,
   `visitor_sessions`, `a2a_contexts`, `agent_a2a_tasks`, `agent_state`,
-  `agent_tests`, `agent_analytics`, `agent_verifiers`, `agent_responders`,
-  `agent_channels`, `agent_retention`. They share `aiplane-core`'s pool, error
+  `agent_tests`, `agent_analytics`, `agent_verifiers`, `agent_channels`,
+  `agent_retention`. They share `aiplane-core`'s pool, error
   type and timestamp helpers; the DDL stays in `aiplane-core`'s migrations.
 - `db/run_sessions.rs` — conversations owned by a system principal: creating and
   reading them, decoding a conversation's owner, the sweep of an agent

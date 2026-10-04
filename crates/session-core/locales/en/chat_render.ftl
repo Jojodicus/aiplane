@@ -33,12 +33,12 @@ chat-render-effort-max = Max
 chat-render-tools-tooltip = Tools, integrations & skills for this conversation
 chat-render-tools-label = Tools
 chat-render-tools-search-placeholder = Search tools…
-chat-render-all-tools-label = All tools
+chat-render-all-label = All
 chat-render-no-tools-prefix = No tools are available to your account yet. Connect an integration under
 chat-render-no-tools-suffix = .
-chat-render-tool-count = { $count ->
-    [one] { $count } tool
-   *[other] { $count } tools
+chat-render-entry-count = { $count ->
+    [one] { $count } entry
+   *[other] { $count } entries
 }
 chat-render-active-count-title = Active tools — tap to manage
 chat-render-unpin-title = Unpin (back to automatic)

@@ -948,10 +948,6 @@ const ACTIVITY_LOG_WRITERS: &[Allowed] = &[
         why: "embed key create and revoke",
     },
     Allowed {
-        path: "aiplane-agents/src/db/agent_responders.rs",
-        why: "inbox responders added and removed",
-    },
-    Allowed {
         path: "aiplane-agents/src/db/agent_channels.rs",
         why: "notification channels created and deleted",
     },

@@ -28,6 +28,8 @@ import {
 	suspensionLabel,
 	answerField,
 	testTurnLabel,
+	shareSubjectOptions,
+	shareSubjectLabel,
 	type SpecIssue
 } from './agents.ts';
 
@@ -318,4 +320,24 @@ test('a grant option is labelled by its title, with the reference when one item 
 		{ value: 'recall', label: 'Memory: recall' }
 	]);
 	assert.deepEqual(grantOptions(resources, 'skill'), []);
+});
+
+test('a share subject is picked from what the search found, by name where there is one', () => {
+	const found = {
+		users: [
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: null, email: 'sam@example.com' },
+			{ id: 'u3', name: null }
+		],
+		groups: ['managers']
+	};
+	assert.deepEqual(shareSubjectOptions(found, 'user'), [
+		{ value: 'u1', label: 'Ada' },
+		{ value: 'u2', label: 'sam@example.com' },
+		{ value: 'u3', label: 'u3' }
+	]);
+	assert.deepEqual(shareSubjectOptions(found, 'group'), [{ value: 'managers', label: 'managers' }]);
+	assert.deepEqual(shareSubjectOptions(undefined, 'user'), []);
+	assert.equal(shareSubjectLabel({ subject_id: 'u1', name: 'Ada' }), 'Ada');
+	assert.equal(shareSubjectLabel({ subject_id: 'support' }), 'support');
 });

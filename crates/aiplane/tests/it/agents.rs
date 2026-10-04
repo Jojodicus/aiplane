@@ -386,7 +386,7 @@ async fn creating_an_agent_creates_a_principal_without_rights_and_a_write_share(
     assert_eq!(agent["grants"], json!([]));
     assert_eq!(
         agent["shares"],
-        json!([{ "subject_kind": "user", "subject_id": "alice", "access": "write" }])
+        json!([{ "subject_kind": "user", "subject_id": "alice", "access": "write", "name": null }])
     );
     assert_eq!(agent["publish_issues"][0]["path"], "main");
 
@@ -626,6 +626,122 @@ async fn a_share_with_the_bootstrap_admin_group_is_accepted() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
+async fn named(fx: &Fx, id: &str, name: &str) {
+    let now = jiff::Timestamp::now();
+    users::upsert(
+        &fx.state.db,
+        &users::User {
+            id: id.into(),
+            email: format!("{id}@example.com"),
+            name: Some(name.into()),
+            roles: vec![],
+            created_at: now,
+            updated_at: now,
+            timezone: None,
+            speech_voice: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Who a share may name is searched, never listed: a manager learns no more
+/// of the people and groups here than what they type already matches.
+#[tokio::test]
+async fn share_subjects_are_searched_not_listed() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.alice, "support").await;
+    for n in 0..12 {
+        named(&fx, &format!("sam{n}"), &format!("Sam {n}")).await;
+    }
+    let search = |who: &str, q: &str| {
+        let uri = format!("/api/v0/agents/{id}/share-subjects?q={q}");
+        let who = who.to_string();
+        let fx = &fx;
+        async move { fx.get(&who, &uri).await }
+    };
+
+    let (status, body) = fx.get(&fx.alice, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("subjects").is_none(), "no roster in the resources");
+    assert!(!body.to_string().contains("@example.com"), "{body}");
+
+    let (status, short) = search(&fx.alice, "s").await;
+    assert_eq!(status, StatusCode::OK, "{short}");
+    assert_eq!(
+        short,
+        json!({ "users": [], "groups": [] }),
+        "one character finds nothing"
+    );
+
+    let (_, found) = search(&fx.alice, "sam").await;
+    let users = found["users"].as_array().unwrap();
+    assert_eq!(users.len(), 8, "capped: {found}");
+    assert!(users.iter().all(|u| u.get("email").is_none()), "{found}");
+    assert_eq!(users[0]["name"], "Sam 0");
+    assert!(!found.to_string().contains("manager"), "{found}");
+
+    let (_, exact) = search(&fx.alice, "sam7@example.com").await;
+    assert_eq!(
+        exact["users"],
+        json!([{ "id": "sam7", "name": "Sam 7", "email": "sam7@example.com" }])
+    );
+
+    let (_, groups) = search(&fx.alice, "man").await;
+    assert_eq!(groups["groups"], json!(["managers"]));
+    let (_, groups) = search(&fx.alice, "m").await;
+    assert_eq!(groups["groups"], json!([]));
+
+    let (status, _) = search(&fx.root, "sam").await;
+    assert_eq!(status, StatusCode::OK, "an admin searches the same way");
+    assert_eq!(
+        search(&fx.bob, "sam").await.0,
+        StatusCode::NOT_FOUND,
+        "no share"
+    );
+    assert_eq!(
+        search(&fx.plain, "sam").await.0,
+        StatusCode::FORBIDDEN,
+        "no manager"
+    );
+    fx.share(&fx.alice, &id, "user", "bob", "read").await;
+    assert_eq!(
+        search(&fx.bob, "sam").await.0,
+        StatusCode::FORBIDDEN,
+        "searching is for who may change the shares"
+    );
+}
+
+/// A share subject is picked without knowing whether it may hold `read` or
+/// `write`; the share route says so when it may not.
+#[tokio::test]
+async fn an_ineligible_read_share_is_refused_in_words_and_respond_is_offered() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.alice, "support").await;
+    named(&fx, "sam", "Sam").await;
+    let (status, body) = fx.share(&fx.alice, &id, "user", "sam", "write").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], "share_needs_agent_manager");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("agent-management permission") && message.contains("`respond`"),
+        "{message}"
+    );
+    let (status, _) = fx.share(&fx.alice, &id, "user", "sam", "respond").await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, shares) = fx
+        .get(&fx.alice, &format!("/api/v0/agents/{id}/shares"))
+        .await;
+    let sam = shares["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["subject_id"] == "sam")
+        .unwrap()
+        .clone();
+    assert_eq!(sam["name"], "Sam", "a share names its person: {shares}");
+}
+
 /// A share outlives the permission it needs, but grants nothing without it.
 #[tokio::test]
 async fn a_manager_who_loses_the_permission_loses_the_agent_despite_the_share() {
@@ -649,6 +765,18 @@ async fn a_manager_who_loses_the_permission_loses_the_agent_despite_the_share() 
     assert_eq!(
         fx.get(&fx.alice, &format!("/api/v0/agents/{id}")).await.0,
         StatusCode::FORBIDDEN
+    );
+
+    let (status, body) = fx
+        .share(&fx.root, &id, "group", "managers", "respond")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        aiplane_runtime::agents::access::effective_access(&fx.state, &id, "alice", &groups)
+            .await
+            .unwrap(),
+        Some(aiplane_agents::db::agents::Access::Respond),
+        "only an explicit `respond` share outlives the permission, not the `write` one"
     );
 }
 

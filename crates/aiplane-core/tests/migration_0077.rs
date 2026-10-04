@@ -716,6 +716,44 @@ async fn grants_cascade_from_their_principal() {
     );
 }
 
+/// Who answers an agent's inbox is a share level, not a second table.
+#[tokio::test]
+async fn a_share_is_respond_read_or_write() {
+    let pool = fresh().await;
+    add_principal(&pool, "support").await;
+    exec(
+        &pool,
+        &format!(
+            "INSERT INTO agents (principal_id, draft_spec, created_at, updated_at)
+             VALUES ('support', '{{}}', '{NOW}', '{NOW}')"
+        ),
+    )
+    .await;
+    let share = |subject: &'static str, access: &'static str| {
+        sqlx::query(
+            "INSERT INTO agent_shares (principal_id, subject_kind, subject_id, access)
+             VALUES ('support', 'user', ?, ?)",
+        )
+        .bind(subject)
+        .bind(access)
+        .execute(&pool)
+    };
+    for (subject, access) in [("sam", "respond"), ("kim", "read"), ("ada", "write")] {
+        share(subject, access)
+            .await
+            .unwrap_or_else(|e| panic!("{access}: {e}"));
+    }
+    assert!(share("nora", "admin").await.is_err(), "the CHECK holds");
+    assert!(
+        strings(
+            &pool,
+            "SELECT name FROM sqlite_master WHERE name = 'agent_responders'"
+        )
+        .await
+        .is_empty()
+    );
+}
+
 async fn plan(pool: &SqlitePool, sql: &str) -> String {
     sqlx::query_as::<_, (i64, i64, i64, String)>(&format!("EXPLAIN QUERY PLAN {sql}"))
         .bind("x")

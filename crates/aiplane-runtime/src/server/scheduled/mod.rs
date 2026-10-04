@@ -434,8 +434,8 @@ pub async fn attach_run_session(
 /// Close every run still pending at startup: no worker survives a restart, so
 /// nothing will ever finish them, and left alone they read as running forever.
 /// An action whose newest run is one of them gets the same outcome on its list
-/// row, which would otherwise still describe the run before. Returns how many
-/// runs were closed.
+/// row, which would otherwise still describe the run before (newest as
+/// [`list_runs`] orders). Returns how many runs were closed.
 ///
 /// Only sound before the scheduler starts firing: a run pending *then* is
 /// necessarily a previous process's.
@@ -449,7 +449,8 @@ pub async fn sweep_interrupted_runs(pool: &Pool) -> Result<u64, DbError> {
                  WHERE r.status IS NULL
                    AND r.rowid = (SELECT rowid FROM scheduled_runs
                                   WHERE action_id = r.action_id
-                                  ORDER BY fired_at DESC, rowid DESC LIMIT 1)) AS newest
+                                  ORDER BY rtrim(fired_at, 'Z') DESC, rowid DESC
+                                  LIMIT 1)) AS newest
            WHERE scheduled_actions.id = newest.action_id"#,
     )
     .bind(RUN_INTERRUPTED)
@@ -489,9 +490,11 @@ pub async fn finish_run(
 
 /// An action's most recent runs, newest first, capped at `limit`.
 ///
-/// The tiebreaker is `rowid DESC` (SQLite's monotonic insertion order), NOT
-/// `id` — `id` is a random UUID, so two runs sharing a `fired_at` tick would
-/// otherwise come back in nondeterministic order.
+/// Ordered on `rtrim(fired_at, 'Z')`: the stored RFC 3339 text has only as
+/// many fractional digits as the instant needs and sorts wrongly within one
+/// second (`…00.1Z` after `…00.123Z`); without its `Z` it sorts right
+/// (`aiplane_core::server::db::window_key`). The tiebreaker is `rowid DESC`
+/// (SQLite's monotonic insertion order), not `id`, a random UUID.
 pub async fn list_runs(
     pool: &Pool,
     action_id: &str,
@@ -501,7 +504,7 @@ pub async fn list_runs(
         "SELECT {RUN_COLS} FROM scheduled_runs r \
          LEFT JOIN chat_sessions s ON s.id = r.session_id \
          WHERE r.action_id = ? \
-         ORDER BY r.fired_at DESC, r.rowid DESC LIMIT ?"
+         ORDER BY rtrim(r.fired_at, 'Z') DESC, r.rowid DESC LIMIT ?"
     );
     let rows = sqlx::query(&sql)
         .bind(action_id)
@@ -847,6 +850,47 @@ mod tests {
             sweep_interrupted_runs(&pool).await.unwrap(),
             0,
             "a second pass finds nothing left to close"
+        );
+    }
+
+    /// `fired_at` is RFC 3339 text with only as many fractional digits as the
+    /// instant needs, so within one second `…00.1Z` sorts after `…00.123Z`
+    /// although it is earlier. Two runs fired in the same second made
+    /// `startup_sweep_closes_runs_a_dead_process_left_pending` flaky.
+    #[tokio::test]
+    async fn the_newest_run_is_the_one_fired_last_even_within_one_second() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let a = create(&pool, sample("u1", None)).await.unwrap();
+        let earlier = record_run_start(&pool, &a.id).await.unwrap();
+        let later = record_run_start(&pool, &a.id).await.unwrap();
+        for (run, at) in [
+            (&earlier, "2026-10-04T10:00:00.1Z"),
+            (&later, "2026-10-04T10:00:00.123Z"),
+        ] {
+            sqlx::query("UPDATE scheduled_runs SET fired_at = ? WHERE id = ?")
+                .bind(at)
+                .bind(run)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        finish_run(&pool, &later, "ok", Some("sess"), None)
+            .await
+            .unwrap();
+        mark_ran(&pool, &a.id, "ok", Some("sess"), None, None)
+            .await
+            .unwrap();
+
+        let runs = list_runs(&pool, &a.id, 50).await.unwrap();
+        let order: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(order, [later.as_str(), earlier.as_str()]);
+        assert_eq!(sweep_interrupted_runs(&pool).await.unwrap(), 1);
+        let row = get(&pool, "u1", &a.id).await.unwrap().unwrap();
+        assert_eq!(
+            row.last_status.as_deref(),
+            Some("ok"),
+            "the row still describes the later run, which finished"
         );
     }
 

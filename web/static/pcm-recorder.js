@@ -1,11 +1,11 @@
-// croit AIplane — AudioWorklet PCM recorder processor (SPA copy).
+// croit AIplane — AudioWorklet PCM recorder processor, the only copy.
 //
-// Served at /app/pcm-recorder.js (web/static is copied verbatim by the
-// SvelteKit build) and loaded via `audioWorklet.addModule()` from
-// web/src/lib/voice-recorder.ts. This is the same processor the legacy UI
-// ships at /assets/pcm-recorder.js (compiled from ui/ts/pcm-recorder.ts) —
-// keep the two behaviour-compatible: the main-thread side (chunk
-// accumulation + WAV encode) only understands this message shape.
+// Loaded via `audioWorklet.addModule()` by web/shared/voice-recorder.ts. The
+// SPA serves it at `${base}/pcm-recorder.js` (web/static is copied verbatim
+// by the SvelteKit build); the gateway embeds it and serves it at
+// /api/v0/embed/recorder.js under the embed CORS the widget's cross-origin
+// load needs. The main-thread side (chunk accumulation + WAV encode) only
+// understands this message shape.
 
 class PcmRecorder extends AudioWorkletProcessor {
   process(inputs) {

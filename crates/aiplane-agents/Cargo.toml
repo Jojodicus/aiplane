@@ -8,7 +8,7 @@ publish.workspace = true
 
 # The agent builder's persistence: agents and their versions, system
 # principals, the agent audit trail, embed keys, visitor sessions, A2A
-# contexts, verifiers, tests, analytics, inbox responders and notify
+# contexts, verifiers, tests, analytics, the inbox's notify
 # channels, the principal-owned conversations, and the visitor rate gate.
 # Stands on `aiplane-core` beside `aiplane-features` (neither depends on the
 # other), so an agent DB edit rebuilds only this crate and what sits above

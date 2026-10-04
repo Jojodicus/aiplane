@@ -8,9 +8,9 @@
 //!
 //! The log holds whole conversations — what visitors wrote, what the model
 //! answered, every tool result — so it takes what reading the agent's
-//! conversations takes: the agent-management permission and a share on the
-//! agent (admins hold one on every agent). Responders, who answer handoffs
-//! without a share, cannot read it.
+//! conversations takes: the agent-management permission and a `read` or
+//! `write` share on the agent (admins hold one on every agent). A `respond`
+//! share, which answers handoffs only, cannot read it.
 //!
 //! An exchange stored as a delta, or with blobs, is served as the whole
 //! request it stood for (`agent_audit::Reconstructor`).

@@ -60,7 +60,7 @@ web/
 │   │   ├── feedback-annotator.ts   canvas annotator (rect/arrow/pen/text/redact)
 │   │   ├── push.svelte.ts     Web Push opt-in (device-local state)
 │   │   ├── voice.svelte.ts    voice-conversation orchestration
-│   │   ├── voice-recorder.ts  PCM capture + analyser
+│   │   ├── voice-recorder.ts  the shared recorder (web/shared/) as Blobs + worded errors
 │   │   ├── markdown.ts        marked → DOMPurify → {@html}
 │   │   ├── ui-variants.ts     class strings for components/ui/ (see Theming)
 │   │   ├── components/ui/     Modal, ChoiceCard, SegmentedControl, ChipToggle,
@@ -80,7 +80,9 @@ web/
 └── static/               copied verbatim into the build output
     ├── manifest.webmanifest, sw.js, robots.txt
     ├── favicon.svg, icons/*.png
-    └── pcm-recorder.js   AudioWorklet processor (its own JS realm — not bundled)
+    └── pcm-recorder.js   AudioWorklet processor (its own JS realm — not bundled);
+                          the gateway embeds the same file for the widget
+                          (/api/v0/embed/recorder.js)
 ```
 
 `+layout.ts` sets `prerender = false` and `ssr = false`. Prerendering would bake the anonymous shell into every route, and this is a private surface: the identity render would flash "signed out" on first paint anyway, and no per-route HTML should be emitted for an authed page.
@@ -471,8 +473,8 @@ are in `web/src/lib/components/agents/`.
     below — *Builder*, *Canvas*, *JSON*, *Grants* — on the same buffer.
   - **Try it**: *Test chat* and *Tests*.
   - **Insights**: *Analytics* and *Activity*.
-  - **Settings**: *Versions* and *Sharing* (shares, responders, notification
-    channels, embed keys).
+  - **Settings**: *Versions* and *Sharing* (shares at `respond`, `read` or
+    `write`, notification channels, embed keys).
 
   The panels:
   - *Builder*: collapsible sections. **Main agent** (model, orchestration and
@@ -784,8 +786,8 @@ while it is open.
 
 `/inbox` (sidebar: Workspace → Inbox, for every signed-in person) lists what
 waits for them: an agent's approvals and handoffs when they are an admin, a
-manager with a `write` share or one of the agent's responders, and their own
-paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
+manager with a `read` or `write` share, or hold a `respond` share (the
+agent's responders), and their own paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
@@ -803,12 +805,18 @@ paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
   sidebar badge (hidden at 0) and makes the open page refetch the list. The
   stream ends after ten minutes and `EventSource` reconnects on its own,
   which is what it is for here, unlike the chat stream.
-- **Workbench.** The agent workbench's Sharing panel (Settings tab) has two more cards:
-  *Responders* (users or groups who answer without a share; they need no
-  agent-management permission) and *Notification channels* (Slack or Discord
-  incoming webhooks; the URL is write-only, the list shows its host, whether
-  the message carries details, and its language). A `read` share sees both
-  read-only.
+- **Workbench.** The agent workbench's Sharing panel (Settings tab) offers
+  the `respond` level next to `read` and `write`: users or groups who answer
+  the inbox and need no agent-management permission. The subject is picked
+  with `SearchableSelect` in server-search mode (`onsearch`: the component
+  shows the caller's results unfiltered) from
+  `GET /api/v0/agents/{id}/share-subjects?q=` — a few matches from two
+  characters on, never the roster ([`agents.md`](agents.md) §2 Shares). A
+  subject that may not hold `read` or `write` is refused by the server, and
+  its message is shown. Below it, *Notification channels* (Slack or
+  Discord incoming webhooks; the URL is write-only, the list shows its host,
+  whether the message carries details, and its language). A `read` share sees
+  both read-only.
 
 ## Reactive state
 
@@ -882,7 +890,7 @@ Distinct from the composer's dictation button (transcript into the textarea), vo
 
 The turn pipeline is **half-duplex, push-to-talk**:
 
-1. Tap to record via `lib/voice-recorder.ts` (PCM capture through the `static/pcm-recorder.js` AudioWorklet, plus an `AnalyserNode` tap for the visualiser). Tap again to stop.
+1. Tap to record via `lib/voice-recorder.ts` (PCM capture through the `static/pcm-recorder.js` AudioWorklet, by `web/shared/voice-recorder.ts`, which the embed widget records with too). Tap again to stop.
 2. The WAV posts to `POST /api/v0/transcriptions`; the transcript is submitted as an ordinary chat turn with the `voice` flag set, so the server injects the voice directive (short spoken replies, no tool-use narration — see [`gateway-api.md`](gateway-api.md)).
 3. As the reply streams in, sentences are peeled off and posted to `POST /api/v0/speech`, played in order. While the assistant speaks the mic stays inert, so there is no echo loop.
 

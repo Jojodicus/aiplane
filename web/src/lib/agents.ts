@@ -46,18 +46,33 @@ export interface Grant {
 export type GrantKind = 'model' | 'tool' | 'connector' | 'skill' | 'rag_collection';
 export const GRANT_KINDS: GrantKind[] = ['model', 'tool', 'connector', 'skill', 'rag_collection'];
 
+/** `respond` answers the agent's inbox items and needs no agent-management permission; `read` and `write` include it and need it. */
+export type ShareAccess = 'respond' | 'read' | 'write';
+export const SHARE_ACCESS: ShareAccess[] = ['respond', 'read', 'write'];
+
 export interface Share {
 	subject_kind: 'user' | 'group';
 	subject_id: string;
-	access: 'read' | 'write';
+	access: ShareAccess;
+	/** A person's display name, when they have one. */
+	name?: string | null;
 }
 
-/** Someone who may answer the agent's inbox items without a share (#96). */
-export interface Responder {
-	subject_kind: 'user' | 'group';
-	subject_id: string;
-	added_by: string;
-	added_at: string;
+/** What `GET /api/v0/agents/{id}/share-subjects?q=` found: a search, never the roster (nothing under two characters, a few matches, an address only for an exact one). */
+export interface ShareSubjectMatches {
+	users: { id: string; name: string | null; email?: string }[];
+	groups: string[];
+}
+
+/** The matches of `kind`, for the picker: a person by name, else the address they were found by, else their id. */
+export function shareSubjectOptions(found: ShareSubjectMatches | null | undefined, kind: Share['subject_kind']): { value: string; label: string }[] {
+	if (kind === 'group') return (found?.groups ?? []).map((g) => ({ value: g, label: g }));
+	return (found?.users ?? []).map((u) => ({ value: u.id, label: u.name ?? u.email ?? u.id }));
+}
+
+/** A share's subject as the list shows it: a person's name, else the stored id. */
+export function shareSubjectLabel(share: Pick<Share, 'subject_id' | 'name'>): string {
+	return share.name ?? share.subject_id;
 }
 
 export type ChannelKind = 'slack' | 'discord';
@@ -354,12 +369,8 @@ export const agentsApi = {
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>
 		call<void>(`/api/v0/agents/${id}/shares/revoke`, json('POST', share)),
-	responders: (id: string) =>
-		call<{ responders: Responder[] }>(`/api/v0/agents/${id}/responders`).then((r) => r.responders),
-	addResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
-		call<unknown>(`/api/v0/agents/${id}/responders`, json('POST', r)),
-	removeResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
-		call<void>(`/api/v0/agents/${id}/responders/revoke`, json('POST', r)),
+	shareSubjects: (id: string, q: string) =>
+		call<ShareSubjectMatches>(`/api/v0/agents/${id}/share-subjects?q=${encodeURIComponent(q)}`),
 	channels: (id: string) =>
 		call<{ channels: NotifyChannel[] }>(`/api/v0/agents/${id}/channels`).then((r) => r.channels),
 	/** Whether this gateway sends Web Push at all (`GET /api/v0/push/config`). */

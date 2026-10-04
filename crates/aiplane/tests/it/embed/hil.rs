@@ -2,10 +2,10 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Human in the loop over HTTP (`docs/agents.md` "What #96 built"): a
-//! handoff a responder answers from the inbox and the visitor receives, what
-//! a responder can and cannot reach, someone who may not answer, the
-//! responder and channel management routes, and a scheduled run that paused
-//! and is resumed from its owner's inbox.
+//! handoff a responder (a `respond` share) answers from the inbox and the
+//! visitor receives, what a responder can and cannot reach, someone who may
+//! not answer, `respond` shares and channel management, and a scheduled run
+//! that paused and is resumed from its owner's inbox.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +22,7 @@ use crate::agents::{self, Fx, TIME, person};
 use crate::common;
 
 use aiplane_core::server::db::gateway_groups;
+use aiplane_core::server::rbac::BOOTSTRAP_ADMIN_GROUP;
 use aiplane_runtime::agents::embed::LiveAgentRunner;
 use aiplane_runtime::server::scheduled::{self, NewAction};
 use aiplane_runtime::server::tools::ToolRegistry;
@@ -176,12 +177,8 @@ async fn a_responder_answers_a_handoff_from_the_inbox_and_the_visitor_receives_i
     let e = handing_off(&llm).await;
     let people = staff(&e.fx).await;
     let (status, body) =
-        e.fx.post(
-            &e.fx.alice,
-            &format!("/api/v0/agents/{}/responders", e.agent),
-            json!({ "subject_kind": "group", "subject_id": "support" }),
-        )
-        .await;
+        e.fx.share(&e.fx.alice, &e.agent, "group", "support", "respond")
+            .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let token = e.visitor().await;
@@ -295,12 +292,8 @@ async fn a_german_responder_resumes_an_english_visitor_in_english() {
     let e = handing_off_with(&llm, spec).await;
     let people = staff(&e.fx).await;
     let (status, body) =
-        e.fx.post(
-            &e.fx.alice,
-            &format!("/api/v0/agents/{}/responders", e.agent),
-            json!({ "subject_kind": "group", "subject_id": "support" }),
-        )
-        .await;
+        e.fx.share(&e.fx.alice, &e.agent, "group", "support", "respond")
+            .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let token = e.visitor().await;
     let said = e.say_in(&token, "I was billed twice for RE-1.", "en").await;
@@ -337,12 +330,8 @@ async fn a_responder_sees_the_item_and_nothing_else_of_the_agent() {
     .await;
     let e = handing_off(&llm).await;
     let people = staff(&e.fx).await;
-    e.fx.post(
-        &e.fx.alice,
-        &format!("/api/v0/agents/{}/responders", e.agent),
-        json!({ "subject_kind": "user", "subject_id": "sam" }),
-    )
-    .await;
+    e.fx.share(&e.fx.alice, &e.agent, "user", "sam", "respond")
+        .await;
     let token = e.visitor().await;
     e.say(&token, "Refund please.").await;
     e.quiet(&token).await;
@@ -354,7 +343,7 @@ async fn a_responder_sees_the_item_and_nothing_else_of_the_agent() {
         "/api/v0/agents".to_string(),
         format!("/api/v0/agents/{}", e.agent),
         format!("/api/v0/agents/{}/versions", e.agent),
-        format!("/api/v0/agents/{}/responders", e.agent),
+        format!("/api/v0/agents/{}/shares", e.agent),
         format!("/api/v0/agents/{}/channels", e.agent),
     ] {
         let (status, _) = e.fx.get(&people.sam, &uri).await;
@@ -379,6 +368,71 @@ async fn a_responder_sees_the_item_and_nothing_else_of_the_agent() {
     assert!(
         !text.contains("Hand refunds to a person"),
         "nothing of the spec: {text}"
+    );
+}
+
+/// A manager whose only share is `respond` answers like any responder: the
+/// agent stays invisible to them, as if it were not shared at all.
+#[tokio::test]
+async fn a_manager_with_a_respond_share_answers_but_cannot_open_the_agent() {
+    let llm = upstream(vec![
+        call("s1", "set_issue", json!({"value": "refund"})),
+        call("h1", "request_human", json!({"question": QUESTION})),
+    ])
+    .await;
+    let e = handing_off(&llm).await;
+    let (status, body) =
+        e.fx.share(&e.fx.alice, &e.agent, "user", "bob", "respond")
+            .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let token = e.visitor().await;
+    e.say(&token, "Refund please.").await;
+    e.quiet(&token).await;
+    let session = e.conversation_of(&token).await;
+    let turns = chat::list_turns(&e.fx.state.db, &session).await.unwrap();
+    let turn = &turns.last().unwrap().turn.id;
+
+    let (_, inbox) = e.fx.get(&e.fx.bob, "/api/v0/agents/inbox").await;
+    assert_eq!(inbox["count"], 1, "{inbox}");
+    assert_eq!(inbox["items"][0]["standing"], "responder");
+    let (_, list) = e.fx.get(&e.fx.bob, "/api/v0/agents").await;
+    assert_eq!(list["agents"], json!([]), "a respond share lists no agent");
+    for uri in [
+        format!("/api/v0/agents/{}", e.agent),
+        format!("/api/v0/agents/{}/versions", e.agent),
+        format!("/api/v0/agents/{}/shares", e.agent),
+        format!("/api/v0/agents/{}/activity", e.agent),
+        format!("/api/v0/system-principals/{}", e.agent),
+    ] {
+        let (status, _) = e.fx.get(&e.fx.bob, &uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let (status, _) = e.fx.put_draft(&e.fx.bob, &e.agent, handoff_spec()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no edit");
+    let (status, _) =
+        e.fx.share(&e.fx.bob, &e.agent, "user", "bob", "write")
+            .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no share of their own");
+    let (status, _) =
+        e.fx.post(
+            &e.fx.bob,
+            &format!(
+                "/api/v0/agents/{}/conversations/{session}/turns/{turn}/resume",
+                e.agent
+            ),
+            json!({ "decision": "value", "value": "x" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "not through the staff route");
+
+    let (status, body) =
+        e.fx.share(&e.fx.alice, &e.agent, "user", "bob", "read")
+            .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, inbox) = e.fx.get(&e.fx.bob, "/api/v0/agents/inbox").await;
+    assert_eq!(
+        inbox["items"][0]["standing"], "manager",
+        "`read` includes `respond` and may open the agent"
     );
 }
 
@@ -429,46 +483,46 @@ async fn someone_who_may_not_answer_sees_nothing_and_cannot_answer() {
 }
 
 #[tokio::test]
-async fn responders_and_channels_are_managed_with_a_share_and_a_url_is_never_shown() {
+async fn respond_shares_and_channels_are_managed_with_a_share_and_a_url_is_never_shown() {
     let fx = agents::fixture().await;
     staff(&fx).await;
     let agent = fx.runnable("support").await;
     let base = format!("/api/v0/agents/{agent}");
 
-    let (status, _) = fx
-        .post(
-            &fx.alice,
-            &format!("{base}/responders"),
-            json!({ "subject_kind": "group", "subject_id": "nobody-has-this" }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = fx
-        .post(
-            &fx.bob,
-            &format!("{base}/responders"),
-            json!({ "subject_kind": "user", "subject_id": "nora" }),
-        )
-        .await;
+    for (kind, subject) in [("group", "nobody-has-this"), ("user", "nobody")] {
+        let (status, body) = fx.share(&fx.alice, &agent, kind, subject, "respond").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{kind} {subject}: {body}");
+    }
+    let (status, _) = fx.share(&fx.bob, &agent, "user", "nora", "respond").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "bob holds no share");
-    let (status, _) = fx
-        .post(
-            &fx.alice,
-            &format!("{base}/responders"),
-            json!({ "subject_kind": "user", "subject_id": "nora" }),
-        )
-        .await;
+    let (status, body) = fx.share(&fx.alice, &agent, "user", "nora", "read").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = fx.share(&fx.alice, &agent, "user", "nora", "respond").await;
     assert_eq!(
         status,
         StatusCode::CREATED,
-        "a responder needs no manager permission"
+        "a respond share needs no manager permission: {body}"
     );
-    let (_, listed) = fx.get(&fx.alice, &format!("{base}/responders")).await;
-    assert_eq!(listed["responders"][0]["subject_id"], "nora");
+    // `[rbac]` config groups reach the resolver through the database
+    // (`gateway_groups::seed_roles`), as `support` does here; the bootstrap
+    // admin group exists only in the resolver.
+    for group in ["support", BOOTSTRAP_ADMIN_GROUP] {
+        let (status, body) = fx.share(&fx.alice, &agent, "group", group, "respond").await;
+        assert_eq!(status, StatusCode::CREATED, "{group}: {body}");
+    }
+    let (_, listed) = fx.get(&fx.alice, &format!("{base}/shares")).await;
+    let respond: Vec<&str> = listed["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["access"] == "respond")
+        .map(|s| s["subject_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(respond, [BOOTSTRAP_ADMIN_GROUP, "support", "nora"]);
     let (status, _) = fx
         .post(
             &fx.alice,
-            &format!("{base}/responders/revoke"),
+            &format!("{base}/shares/revoke"),
             json!({ "subject_kind": "user", "subject_id": "nora" }),
         )
         .await;
@@ -541,8 +595,8 @@ async fn responders_and_channels_are_managed_with_a_share_and_a_url_is_never_sho
     assert_eq!(status, StatusCode::NO_CONTENT);
     let kinds = fx.audit_kinds(&agent).await;
     for kind in [
-        "responder_added",
-        "responder_removed",
+        "agent_share_set",
+        "agent_share_removed",
         "channel_created",
         "channel_deleted",
     ] {

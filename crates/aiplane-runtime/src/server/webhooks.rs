@@ -442,8 +442,8 @@ pub async fn finish_run(
 
 /// Close every run still pending at startup. An async fire runs detached from
 /// its request, so a restart mid-run leaves nothing that will ever finish it.
-/// A webhook whose newest run is one of them gets the same outcome on its
-/// list row. Returns how many runs were closed.
+/// A webhook whose newest run (as [`list_runs`] orders) is one of them gets
+/// the same outcome on its list row. Returns how many runs were closed.
 ///
 /// Only sound before the server accepts fires: a run pending *then* is
 /// necessarily a previous process's.
@@ -457,7 +457,8 @@ pub async fn sweep_interrupted_runs(pool: &Pool) -> Result<u64, DbError> {
                  WHERE r.status IS NULL
                    AND r.rowid = (SELECT rowid FROM webhook_runs
                                   WHERE webhook_id = r.webhook_id
-                                  ORDER BY fired_at DESC, rowid DESC LIMIT 1)) AS newest
+                                  ORDER BY rtrim(fired_at, 'Z') DESC, rowid DESC
+                                  LIMIT 1)) AS newest
            WHERE webhooks.id = newest.webhook_id"#,
     )
     .bind(RUN_INTERRUPTED)
@@ -478,12 +479,13 @@ pub async fn list_runs(
     webhook_id: &str,
     limit: i64,
 ) -> Result<Vec<WebhookRun>, DbError> {
-    // Newest-first. The tiebreaker is `rowid DESC` (SQLite's monotonic
-    // insertion order), NOT `id` — `id` is a random UUID, so two runs sharing a
-    // `fired_at` tick would otherwise come back in nondeterministic order.
+    // Newest-first on `rtrim(fired_at, 'Z')`: the stored RFC 3339 text sorts
+    // wrongly within one second (`…00.1Z` after `…00.123Z`), without its `Z`
+    // it sorts right (`db::window_key`). The tiebreaker is `rowid DESC`
+    // (SQLite's monotonic insertion order), not `id`, a random UUID.
     let sql = format!(
         "SELECT {RUN_COLS} FROM {RUN_FROM} WHERE r.webhook_id = ? \
-         ORDER BY r.fired_at DESC, r.rowid DESC LIMIT ?"
+         ORDER BY rtrim(r.fired_at, 'Z') DESC, r.rowid DESC LIMIT ?"
     );
     let rows = sqlx::query(&sql)
         .bind(webhook_id)
@@ -670,6 +672,44 @@ mod tests {
                 .as_deref(),
             Some("ok")
         );
+    }
+
+    /// `fired_at` sorts as text, and within one second `…00.1Z` sorts after
+    /// the later `…00.123Z`.
+    #[tokio::test]
+    async fn the_newest_run_is_the_one_fired_last_even_within_one_second() {
+        let pool = fresh_db().await;
+        seed_user(&pool, "u1").await;
+        let hook = create(&pool, sample("u1", "hash-order")).await.unwrap();
+        let chat = session_core::db::create_session(&pool, "u1").await.unwrap();
+        let earlier = record_run_start(&pool, &hook.id, &chat.id, "p", "{}", "fire")
+            .await
+            .unwrap();
+        let later = record_run_start(&pool, &hook.id, &chat.id, "p", "{}", "fire")
+            .await
+            .unwrap();
+        for (run, at) in [
+            (&earlier, "2026-10-04T10:00:00.1Z"),
+            (&later, "2026-10-04T10:00:00.123Z"),
+        ] {
+            sqlx::query("UPDATE webhook_runs SET fired_at = ? WHERE id = ?")
+                .bind(at)
+                .bind(run)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        finish_run(&pool, &later, "ok", None).await.unwrap();
+        mark_fired(&pool, &hook.id, "ok", Some(&chat.id), None)
+            .await
+            .unwrap();
+
+        let runs = list_runs(&pool, &hook.id, 50).await.unwrap();
+        let order: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(order, [later.as_str(), earlier.as_str()]);
+        assert_eq!(sweep_interrupted_runs(&pool).await.unwrap(), 1);
+        let row = get(&pool, "u1", &hook.id).await.unwrap().unwrap();
+        assert_eq!(row.last_status.as_deref(), Some("ok"));
     }
 
     #[tokio::test]

@@ -34,13 +34,13 @@ chat-render-effort-max = Максимум
 chat-render-tools-tooltip = Инструменты, интеграции и скиллы для этой беседы
 chat-render-tools-label = Инструменты
 chat-render-tools-search-placeholder = Поиск инструментов…
-chat-render-all-tools-label = Все инструменты
+chat-render-all-label = Все
 chat-render-no-tools-prefix = Для вашей учётной записи пока нет доступных инструментов. Подключите интеграцию в разделе
 chat-render-no-tools-suffix = .
-chat-render-tool-count = { $count ->
-    [one] { $count } инструмент
-    [few] { $count } инструмента
-   *[many] { $count } инструментов
+chat-render-entry-count = { $count ->
+    [one] { $count } запись
+    [few] { $count } записи
+   *[many] { $count } записей
 }
 chat-render-active-count-title = Активные инструменты — нажмите для управления
 chat-render-unpin-title = Открепить (вернуть в автоматический режим)

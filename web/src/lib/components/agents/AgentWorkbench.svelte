@@ -11,7 +11,6 @@
 	import TestsPanel from './TestsPanel.svelte';
 	import GrantsPanel from './GrantsPanel.svelte';
 	import SharingPanel from './SharingPanel.svelte';
-	import RespondersPanel from './RespondersPanel.svelte';
 	import ChannelsPanel from './ChannelsPanel.svelte';
 	import EmbedKeysPanel from './EmbedKeysPanel.svelte';
 	import SpecJsonEditor from './SpecJsonEditor.svelte';
@@ -23,9 +22,9 @@
 	 * One agent's page, in four tabs: **Setup** (the plain-language overview,
 	 * or behind a switch the advanced editor — form, canvas, JSON, grants —
 	 * on the same buffer), **Try it** (test chat, test cases), **Insights**
-	 * (analytics, activity) and **Settings** (versions, sharing, responders,
-	 * channels, embed keys). The choice lives in the URL: `?tab=`, `?view=advanced`,
-	 * `?sub=`.
+	 * (analytics, activity) and **Settings** (versions, sharing including who
+	 * answers the inbox, channels, embed keys). The choice lives in the URL:
+	 * `?tab=`, `?view=advanced`, `?sub=`.
 	 */
 	const ws = useWorkspace();
 
@@ -129,7 +128,6 @@
 	{:else if sub === 'sharing' && ws.detail}
 		<div class="space-y-6">
 			<SharingPanel agentId={ws.id} shares={ws.detail.shares} writable={ws.writable} onchanged={() => ws.refresh(true)} />
-			<RespondersPanel agentId={ws.id} writable={ws.writable} />
 			<ChannelsPanel agentId={ws.id} writable={ws.writable} />
 			<EmbedKeysPanel agentId={ws.id} writable={ws.writable} />
 		</div>

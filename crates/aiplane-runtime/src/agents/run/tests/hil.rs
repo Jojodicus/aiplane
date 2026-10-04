@@ -13,8 +13,7 @@ use super::*;
 use crate::agents::inbox::{self, Standing, Viewer};
 use crate::agents::resume::{AgentResume, claim, resume_expired, run_claimed};
 use aiplane_agents::db::agent_channels::{self, ChannelKind, NewChannel};
-use aiplane_agents::db::agent_responders;
-use aiplane_agents::db::agents::SubjectKind;
+use aiplane_agents::db::agents::{self as agents_db, Access, SubjectKind};
 use aiplane_agents::db::run_sessions;
 use session_core::db::{Decision, DecisionKind, DenyReason, SuspensionKind};
 
@@ -223,9 +222,16 @@ async fn request_human_hands_off_to_a_responder_whose_answer_reaches_the_visitor
         groups: vec![],
     };
     assert!(inbox::list(&world.state, &nobody).await.unwrap().is_empty());
-    agent_responders::add(world.db(), &agent, SubjectKind::Group, "support", "u1")
-        .await
-        .unwrap();
+    agents_db::set_share(
+        world.db(),
+        &agent,
+        SubjectKind::Group,
+        "support",
+        Access::Respond,
+        "u1",
+    )
+    .await
+    .unwrap();
     let sam = Viewer {
         user_id: "sam".into(),
         groups: vec!["support".into()],

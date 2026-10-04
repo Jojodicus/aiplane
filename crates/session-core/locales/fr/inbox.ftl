@@ -30,12 +30,6 @@ inbox-answer-required = Rédigez d'abord une réponse.
 inbox-already-settled = Cet élément a déjà reçu une réponse ou a expiré.
 inbox-sent = Réponse envoyée ; la conversation continue.
 
-agents-responders-heading = Répondants
-agents-responders-intro = Utilisateurs et groupes autorisés à répondre aux validations et questions de cet agent dans la boîte de réception. Ils ne voient que l'élément en attente et son contexte, jamais la spécification ni les conversations, et n'ont pas besoin du droit de gestion des agents.
-agents-responders-empty = Aucun répondant pour l'instant. Les gestionnaires avec un partage en écriture peuvent aussi répondre.
-agents-responders-add = Ajouter un répondant
-agents-responders-remove = Retirer
-
 agents-channels-heading = Canaux de notification
 agents-channels-intro = Canaux Slack ou Discord avertis dès qu'une conversation attend l'équipe, en plus des notifications push à toutes les personnes autorisées à répondre.
 agents-channels-empty = Aucun canal pour l'instant.

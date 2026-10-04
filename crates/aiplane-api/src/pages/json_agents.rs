@@ -6,9 +6,11 @@
 //!
 //! Every route needs the agent-management permission, and every route on one
 //! agent also needs a share on it: `read` to see it, `write` to change it.
-//! A share takes effect only for a holder of the permission, so a share is
+//! Such a share takes effect only for a holder of the permission, so it is
 //! refused for anyone who lacks it, and a holder who loses it loses access
-//! with it. An agent nobody shares is invisible: it answers 404, not 403.
+//! with it. A `respond` share answers the agent's inbox items and needs no
+//! permission; here it is no access at all. An agent nobody shares is
+//! invisible: it answers 404, not 403.
 //! Admins are the exception: they hold `write` on every agent without a
 //! share, so an agent whose last writer left can always be recovered.
 //!
@@ -49,7 +51,7 @@ fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
 }
 
 /// The caller's access to agent `id` ([`effective_access`]) — a 404 when
-/// they hold none, a 403 when it is weaker than `need`.
+/// they cannot see it, a 403 when they can read it but `need` more.
 async fn access(
     state: &RamaState,
     user: &users::User,
@@ -61,13 +63,13 @@ async fn access(
         .map_err(internal)?;
     match held {
         Some(a) if a >= need => Ok(Some(a)),
-        Some(_) => Err(json_error(
+        Some(a) if a >= Access::Read => Err(json_error(
             StatusCode::FORBIDDEN,
             "agent_write_required",
             "you can read this agent but not change it — ask someone with a `write` share to \
              upgrade yours",
         )),
-        None => Err(not_found(format!(
+        _ => Err(not_found(format!(
             "there is no agent `{id}` shared with you — ask its owner for a share"
         ))),
     }
@@ -154,12 +156,27 @@ pub(super) fn agent_json(a: &agents_db::AgentRow, access: Access) -> Value {
     })
 }
 
-fn share_json(s: &agents_db::ShareRow) -> Value {
-    json!({
-        "subject_kind": s.subject_kind.as_str(),
-        "subject_id": s.subject_id,
-        "access": s.access.as_str(),
-    })
+/// The shares as the API shows them: a person's share carries their display
+/// name, so the people an agent is shared with are recognisable by whoever
+/// may see its shares.
+async fn shares_json(state: &RamaState, rows: &[agents_db::ShareRow]) -> Result<Value, Response> {
+    let mut out = Vec::with_capacity(rows.len());
+    for s in rows {
+        let mut v = json!({
+            "subject_kind": s.subject_kind.as_str(),
+            "subject_id": s.subject_id,
+            "access": s.access.as_str(),
+        });
+        if s.subject_kind == SubjectKind::User
+            && let Some(u) = users::find_by_id(&state.db, &s.subject_id)
+                .await
+                .map_err(internal)?
+        {
+            v["name"] = json!(u.name);
+        }
+        out.push(v);
+    }
+    Ok(Value::Array(out))
 }
 
 fn version_json(v: &agents_db::VersionRow) -> Value {
@@ -445,7 +462,7 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         .iter()
         .map(super::json_principals::grant_json)
         .collect();
-    v["shares"] = shares.iter().map(share_json).collect();
+    v["shares"] = or_return!(shares_json(&state, &shares).await);
     v["audit"] = audit
         .iter()
         .map(|e| {
@@ -761,13 +778,58 @@ pub async fn set_live(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 pub async fn shares(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    match agents_db::shares(&state.db, &agent.principal.id).await {
-        Ok(rows) => json_ok(
-            StatusCode::OK,
-            json!({ "shares": rows.iter().map(share_json).collect::<Vec<_>>() }),
-        ),
-        Err(err) => internal(err),
+    let rows = match agents_db::shares(&state.db, &agent.principal.id).await {
+        Ok(rows) => rows,
+        Err(err) => return internal(err),
+    };
+    let shares = or_return!(shares_json(&state, &rows).await);
+    json_ok(StatusCode::OK, json!({ "shares": shares }))
+}
+
+/// The shortest query a share-subject search answers.
+const SUBJECT_QUERY_MIN_CHARS: usize = 2;
+/// The most users, and the most groups, one search returns.
+const SUBJECT_MATCHES: usize = 8;
+
+/// GET /api/v0/agents/{id}/share-subjects?q= — the users and groups matching
+/// `q`, for whoever may change the agent's shares. A search, never a roster:
+/// nothing for a query shorter than [`SUBJECT_QUERY_MIN_CHARS`], at most
+/// [`SUBJECT_MATCHES`] of each, a user as id and display name, their address
+/// only when `q` is exactly it. Whether a subject may hold `read` or `write`
+/// is not shown; the share route says so when it may not.
+pub async fn share_subjects(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let q = super::query_map(&req)
+        .get("q")
+        .map(|q| q.trim().to_string())
+        .unwrap_or_default();
+    if q.chars().count() < SUBJECT_QUERY_MIN_CHARS {
+        return json_ok(StatusCode::OK, json!({ "users": [], "groups": [] }));
     }
+    let found = match users::search(&state.db, &q, SUBJECT_MATCHES as i64).await {
+        Ok(found) => found,
+        Err(err) => return internal(err),
+    };
+    let users: Vec<Value> = found
+        .into_iter()
+        .map(|u| {
+            let mut v = json!({ "id": u.id, "name": u.name });
+            if u.email.eq_ignore_ascii_case(&q) {
+                v["email"] = json!(u.email);
+            }
+            v
+        })
+        .collect();
+    let needle = q.to_lowercase();
+    let groups: Vec<String> = state
+        .rbac
+        .group_names()
+        .into_iter()
+        .filter(|g| g.to_lowercase().contains(&needle))
+        .take(SUBJECT_MATCHES)
+        .collect();
+    json_ok(StatusCode::OK, json!({ "users": users, "groups": groups }))
 }
 
 #[derive(Deserialize)]
@@ -792,12 +854,14 @@ fn parse_subject(body: &ShareBody) -> Result<(SubjectKind, &str), Response> {
     Ok((kind, subject))
 }
 
-/// A share only takes effect for a holder of the agent-management
-/// permission, so one for anybody else is refused rather than stored inert.
-async fn require_manager_subject(
+/// A share names a user or a group that exists. A `read` or `write` share only
+/// takes effect for a holder of the agent-management permission, so one for
+/// anybody else is refused rather than stored inert.
+async fn require_share_subject(
     state: &RamaState,
     kind: SubjectKind,
     subject: &str,
+    access: Access,
 ) -> Result<(), Response> {
     let holds = match kind {
         SubjectKind::User => {
@@ -816,16 +880,17 @@ async fn require_manager_subject(
             state.rbac.can_manage_agents(&[subject.to_string()])
         }
     };
-    if holds {
+    if holds || !access.needs_agent_manager() {
         return Ok(());
     }
     Err(json_error(
         StatusCode::UNPROCESSABLE_ENTITY,
         "share_needs_agent_manager",
         &format!(
-            "cannot share with {} `{subject}`: a share only works for holders of the \
-             agent-management permission, because it shows the spec and the agent's \
-             conversations. Ask an admin to enable `can_manage_agents` on {}, then share again.",
+            "cannot share with {} `{subject}`: a `read` or `write` share only works for \
+             holders of the agent-management permission, because it shows the spec and the \
+             agent's conversations. Ask an admin to enable `can_manage_agents` on {}, or \
+             give a `respond` share to let them answer the agent's inbox only.",
             kind.as_str(),
             match kind {
                 SubjectKind::User => "one of their groups",
@@ -852,9 +917,9 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     let (kind, subject) = or_return!(parse_subject(&body));
     let access = match body.access.as_deref().map(Access::parse) {
         Some(Some(a)) => a,
-        _ => return bad_request("a share needs `access`: `read` or `write`"),
+        _ => return bad_request("a share needs `access`: `respond`, `read` or `write`"),
     };
-    or_return!(require_manager_subject(&state, kind, subject).await);
+    or_return!(require_share_subject(&state, kind, subject, access).await);
     let changed = agents_db::set_share(
         &state.db,
         &agent.principal.id,

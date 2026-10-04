@@ -102,13 +102,15 @@ CREATE TABLE agent_versions (
     PRIMARY KEY (principal_id, version)
 ) STRICT;
 
--- A share only takes effect for a holder of `can_manage_agents`; that is
--- checked when the share is written and again on every request, not here.
+-- A `read` or `write` share only takes effect for a holder of
+-- `can_manage_agents`; that is checked when the share is written and again on
+-- every request, not here. A `respond` share answers the agent's inbox items
+-- and needs no such permission.
 CREATE TABLE agent_shares (
     principal_id  TEXT NOT NULL REFERENCES agents(principal_id) ON DELETE CASCADE,
     subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('user', 'group')),
     subject_id    TEXT NOT NULL,
-    access        TEXT NOT NULL CHECK (access IN ('read', 'write')),
+    access        TEXT NOT NULL CHECK (access IN ('respond', 'read', 'write')),
     PRIMARY KEY (principal_id, subject_kind, subject_id)
 ) STRICT;
 
@@ -250,17 +252,6 @@ CREATE INDEX visitor_sessions_session ON visitor_sessions(session_id);
 -- ---------------------------------------------------------------------------
 -- Human in the loop
 -- ---------------------------------------------------------------------------
-
--- Who may answer an agent's approvals and handoffs in the inbox without a
--- share: they see the pending item and its minimal context, never the spec.
-CREATE TABLE agent_responders (
-    principal_id  TEXT NOT NULL REFERENCES agents(principal_id) ON DELETE CASCADE,
-    subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('user', 'group')),
-    subject_id    TEXT NOT NULL,
-    added_by      TEXT NOT NULL,
-    added_at      TEXT NOT NULL,
-    PRIMARY KEY (principal_id, subject_kind, subject_id)
-) STRICT;
 
 -- A Slack or Discord incoming webhook, sealed at rest: the URL is the
 -- credential.

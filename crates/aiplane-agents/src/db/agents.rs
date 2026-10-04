@@ -11,7 +11,7 @@
 //! below every consumer. Every mutation records an [`agent_audit`] row in the
 //! same transaction.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use aiplane_core::server::principal::GrantKind;
 use jiff::Timestamp;
@@ -23,27 +23,36 @@ use super::agent_audit::{self, AuditKind};
 use super::system_principals::{self as sp, NewPrincipal, PrincipalRow};
 use super::{DbError, Pool, WriteTx};
 
-/// What a share lets its holder do. `Write` includes `Read`.
+/// What a share lets its holder do; each level includes the ones below it.
+/// `Respond` answers the agent's pending inbox items from their minimal
+/// context and shows nothing else of the agent, so unlike `Read` and `Write`
+/// it needs no agent-management permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Access {
+    Respond,
     Read,
     Write,
 }
 
 impl Access {
+    pub const ALL: [Access; 3] = [Self::Respond, Self::Read, Self::Write];
+
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Respond => "respond",
             Self::Read => "read",
             Self::Write => "write",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "read" => Some(Self::Read),
-            "write" => Some(Self::Write),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|a| a.as_str() == s)
+    }
+
+    /// Whether a share of this level takes effect only for a holder of the
+    /// agent-management permission: it shows the spec and the conversations.
+    pub fn needs_agent_manager(self) -> bool {
+        self >= Self::Read
     }
 }
 
@@ -230,15 +239,15 @@ fn holder_clause(user_id: &str, group_ids: &[String]) -> (String, Vec<String>) {
     (sql, binds)
 }
 
-/// The strongest share a person holds on an agent, directly or through any of
-/// `group_ids`. Whether it takes effect (the holder must have
-/// `can_manage_agents`) is the caller's check.
-pub async fn access_for(
+/// Every share level a person holds on an agent, directly or through any of
+/// `group_ids`. Which of them take effect ([`Access::needs_agent_manager`])
+/// is the caller's check.
+pub async fn shares_held(
     pool: &Pool,
     id: &str,
     user_id: &str,
     group_ids: &[String],
-) -> Result<Option<Access>, DbError> {
+) -> Result<BTreeSet<Access>, DbError> {
     let (holder, binds) = holder_clause(user_id, group_ids);
     let sql = format!("SELECT s.access FROM agent_shares s WHERE s.principal_id = ? AND {holder}");
     let mut query = sqlx::query(&sql).bind(id);
@@ -246,16 +255,16 @@ pub async fn access_for(
         query = query.bind(b);
     }
     let rows = query.fetch_all(pool).await?;
-    let mut best = None;
+    let mut held = BTreeSet::new();
     for row in &rows {
         let access: String = row.try_get("access")?;
-        best = best.max(Access::parse(&access));
+        held.extend(Access::parse(&access));
     }
-    Ok(best)
+    Ok(held)
 }
 
-/// The agents a person holds any share on, by name, with their strongest
-/// access.
+/// The agents a person holds a `read` or `write` share on, by name, with
+/// their strongest access. A `respond` share shows no agent.
 pub async fn list_shared_with(
     pool: &Pool,
     user_id: &str,
@@ -267,7 +276,7 @@ pub async fn list_shared_with(
            FROM agents a
            JOIN system_principals p ON p.id = a.principal_id
            JOIN agent_shares s ON s.principal_id = a.principal_id
-          WHERE {holder}
+          WHERE s.access IN ('read', 'write') AND {holder}
           GROUP BY a.principal_id
           ORDER BY p.name",
         agent_cols()
@@ -802,7 +811,7 @@ mod tests {
 
     #[test]
     fn access_and_subject_kinds_round_trip_through_their_column_values() {
-        for a in [Access::Read, Access::Write] {
+        for a in Access::ALL {
             assert_eq!(Access::parse(a.as_str()), Some(a));
         }
         for k in [SubjectKind::User, SubjectKind::Group] {
@@ -810,7 +819,44 @@ mod tests {
         }
         assert_eq!(Access::parse("admin"), None);
         assert_eq!(SubjectKind::parse("role"), None);
-        assert!(Access::Write > Access::Read);
+        assert!(Access::Write > Access::Read && Access::Read > Access::Respond);
+        assert!(!Access::Respond.needs_agent_manager());
+        assert!(Access::Read.needs_agent_manager() && Access::Write.needs_agent_manager());
+    }
+
+    #[tokio::test]
+    async fn a_respond_share_is_held_but_lists_no_agent() {
+        let pool = pool().await;
+        let a = agent(&pool, "support", "alice").await;
+        let id = &a.principal.id;
+        assert_eq!(
+            set_share(
+                &pool,
+                id,
+                SubjectKind::Group,
+                "desk",
+                Access::Respond,
+                "alice"
+            )
+            .await
+            .unwrap(),
+            ShareChange::Changed
+        );
+        let desk = vec!["desk".to_string()];
+        assert_eq!(
+            shares_held(&pool, id, "sam", &desk).await.unwrap(),
+            BTreeSet::from([Access::Respond])
+        );
+        assert!(
+            list_shared_with(&pool, "sam", &desk)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            audit_kinds(&agent_audit::for_principal(&pool, id).await.unwrap()).last(),
+            Some(&"agent_share_set")
+        );
     }
 
     #[tokio::test]
@@ -946,16 +992,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn access_is_the_strongest_share_held_directly_or_through_a_group() {
+    async fn every_share_level_is_held_directly_or_through_a_group() {
         let pool = pool().await;
         let a = agent(&pool, "support", "alice").await;
         let id = &a.principal.id;
         let groups = |g: &[&str]| g.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            access_for(&pool, id, "alice", &[]).await.unwrap(),
+            shares_held(&pool, id, "alice", &[])
+                .await
+                .unwrap()
+                .last()
+                .copied(),
             Some(Access::Write)
         );
-        assert_eq!(access_for(&pool, id, "bob", &[]).await.unwrap(), None);
+        assert_eq!(
+            shares_held(&pool, id, "bob", &[])
+                .await
+                .unwrap()
+                .last()
+                .copied(),
+            None
+        );
 
         set_share(
             &pool,
@@ -971,16 +1028,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            access_for(&pool, id, "carol", &groups(&["support-team"]))
+            shares_held(&pool, id, "carol", &groups(&["support-team"]))
                 .await
                 .unwrap(),
-            Some(Access::Read)
+            BTreeSet::from([Access::Read])
         );
         assert_eq!(
-            access_for(&pool, id, "bob", &groups(&["support-team"]))
+            shares_held(&pool, id, "bob", &groups(&["support-team"]))
                 .await
                 .unwrap(),
-            Some(Access::Write)
+            BTreeSet::from([Access::Read, Access::Write])
         );
 
         let listed = list_shared_with(&pool, "carol", &groups(&["support-team", "x"]))

@@ -744,10 +744,10 @@ const DEV_ERP_CODE: &str = "123456";
 /// every agent flow can be clicked through against [`mount_agent_model`]:
 /// an `otp` verifier on the dev ERP connector, a `billing` route to a
 /// published sub-agent behind that verifier, and a `staff` handoff route
-/// answered by the `eng` user as a responder.
+/// answered by the `eng` user through a `respond` share.
 async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()> {
-    use aiplane_agents::db::agents::SubjectKind;
-    use aiplane_agents::db::{agent_responders, agents, embed_keys, system_principals};
+    use aiplane_agents::db::agents::{Access, SubjectKind};
+    use aiplane_agents::db::{agents, embed_keys, system_principals};
     use aiplane_core::server::auth::token;
     use aiplane_core::server::db::mcp_catalog;
     use aiplane_core::server::principal::GrantKind;
@@ -866,7 +866,15 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
         system_principals::add_grant(&state.db, id, GrantKind::Model, model, "dev").await?;
     }
     agents::publish(&state.db, id, &spec, "dev").await?;
-    agent_responders::add(&state.db, id, SubjectKind::User, "eng", "dev").await?;
+    agents::set_share(
+        &state.db,
+        id,
+        SubjectKind::User,
+        "eng",
+        Access::Respond,
+        "dev",
+    )
+    .await?;
     let key_hash = token::hash_embed_key(DEV_EMBED_KEY)
         .ok_or_else(|| anyhow::anyhow!("DEV_EMBED_KEY is not a well-formed embed key"))?;
     embed_keys::create(
