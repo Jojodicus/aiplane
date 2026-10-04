@@ -545,6 +545,37 @@ async fn the_owners_voice_is_used_when_the_spec_names_one() {
     assert_eq!(body["voice"], "thorsten");
 }
 
+/// A speech model's voices do not depend on its backends being up: during
+/// an outage the setup still lists them and a valid voice still publishes.
+#[tokio::test]
+async fn a_speech_models_voices_survive_an_outage_of_its_backends() {
+    let mock = upstream().await;
+    let e = voice_embed(&mock, both(), json!({})).await;
+    for pool in e.fx.state.upstreams.pools() {
+        for backend in &pool.backends {
+            backend.set_healthy(false);
+        }
+    }
+    let (_, body) = e.fx.get(&e.fx.alice, "/api/v0/agent-resources").await;
+    let tts = body["models"]["speech"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == TTS_MODEL)
+        .cloned()
+        .unwrap_or_else(|| panic!("{TTS_MODEL} is not offered: {body}"));
+    assert_eq!(tts["voices"], json!(["alloy", "thorsten"]), "{body}");
+
+    let mut s = spec("v2");
+    let mut voice = both();
+    voice["voice"] = json!("thorsten");
+    s["publish"]["voice"] = voice;
+    let (status, body) = e.fx.put_draft(&e.fx.alice, &e.agent, s).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = e.fx.publish(&e.fx.alice, &e.agent).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
 /// The setup offers a speech model's own voices, and publishing refuses
 /// one it does not offer, naming those it does.
 #[tokio::test]

@@ -1907,14 +1907,15 @@ impl UpstreamRegistry {
         )
     }
 
-    /// The voices of the speech pools serving `model`, ordered as
+    /// The voices of the speech pools that know `model` (health aside, so an
+    /// outage does not empty the list), ordered as
     /// [`Self::speech_voices_for`] orders them: what an agent's
     /// `publish.voice.voice` may name for that model.
     pub fn speech_voices_of(&self, model: &str) -> Vec<String> {
         let d = self.data();
         Self::voices_of(d.pools.values().filter(|p| {
             p.kind == PoolKind::Speech
-                && (p.configured_models.iter().any(|c| c == model) || p.serves_model(model))
+                && (p.configured_models.iter().any(|c| c == model) || p.knows_model(model))
         }))
     }
 
@@ -3628,6 +3629,32 @@ mod tests {
         assert_eq!(reg.speech_voices_of("tts-1"), vec!["marin", "alloy"]);
         assert_eq!(reg.speech_voices_of("kokoro"), vec!["af_heart"]);
         assert!(reg.speech_voices_of("unknown").is_empty());
+    }
+
+    #[test]
+    fn a_speech_model_keeps_its_voices_while_its_backends_are_down() {
+        let cfg: UpstreamPoolConfig = toml::from_str(
+            r#"
+            kind = "speech"
+            offer_voices = ["af_heart"]
+            [[backend]]
+            name = "kokoro"
+            base_url = "http://kokoro.example.com"
+        "#,
+        )
+        .unwrap();
+        let reg = build(vec![("local", cfg)]);
+        let pool = reg.data().pools.get("local").unwrap().clone();
+        let backend = &pool.backends[0];
+        backend.set_models(HashSet::from(["kokoro".to_string()]));
+        assert_eq!(reg.speech_voices_of("kokoro"), vec!["af_heart"]);
+
+        backend.set_healthy(false);
+        assert_eq!(
+            reg.speech_voices_of("kokoro"),
+            vec!["af_heart"],
+            "an outage does not take the model's voices away"
+        );
     }
 
     #[test]
