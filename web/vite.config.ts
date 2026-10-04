@@ -50,6 +50,10 @@ export default defineConfig({
 		// SvelteKit narrows Vite's allow list to its own folders; the widget and
 		// the SPA share `shared/`, which the dev server must serve too.
 		fs: { allow: ['shared'] },
+		// `mise run check-web` writes svelte-check's own tsconfig and a static
+		// build next to a running dev server; watching them made it clear its
+		// cache (leaving the SSR pre-bundle outdated) and reload the page.
+		watch: { ignored: ['**/.svelte-kit/.svelte-check/**', '**/build/**'] },
 		proxy: gatewayDevProxy(process.env.AIPLANE_DEV_BACKEND_ORIGIN ?? 'http://127.0.0.1:8081')
 	}
 });
