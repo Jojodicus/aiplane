@@ -302,6 +302,24 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
         })))
         .mount(&upstream)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "model": "embed-1",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/images/generations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "created": 1,
+            "data": [{"b64_json": "aGk="}]
+        })))
+        .mount(&upstream)
+        .await;
     let personal_mcp_hits = Arc::new(AtomicUsize::new(0));
     let mcp = mcp_server(personal_mcp_hits.clone()).await;
 
@@ -319,7 +337,18 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
             ..chat_pool(&upstream.uri(), vec![])
         },
     );
+    for (name, kind) in [("embed", PoolKind::Embedding), ("image", PoolKind::Image)] {
+        pools.insert(
+            name.to_string(),
+            UpstreamPoolConfig {
+                kind,
+                ..chat_pool(&upstream.uri(), vec![])
+            },
+        );
+    }
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
+    common::seed_pool_models(&registry, "embed", 0, &["embed-1"]);
+    common::seed_pool_models(&registry, "image", 0, &["img-1"]);
     common::seed_pool_models(&registry, "pool", 0, &["model-a", "model-b"]);
     common::seed_pool_models(&registry, "vip", 0, &["model-vip", "model-a"]);
     common::seed_pool_models(&registry, "selector", 0, &["picker"]);
@@ -1211,6 +1240,39 @@ async fn a_model_grant_is_capped_at_the_models_and_routes_the_manager_may_use() 
         StatusCode::CREATED,
         "an admin may use every member: {body}"
     );
+}
+
+/// Embedding and image models are granted like chat models, and a
+/// principal's token then reaches them over `/v1` — as an agent's
+/// `generate_image` call does, under the same access.
+#[tokio::test]
+async fn embedding_and_image_models_can_be_granted_and_reached() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "pipeline").await;
+    for model in ["embed-1", "img-1"] {
+        let (status, body) = fx.grant(&fx.manager, &id, "model", model).await;
+        assert_eq!(status, StatusCode::CREATED, "{model}: {body}");
+    }
+    let (bearer, _) = fx.token(&fx.manager, &id).await;
+    for (uri, body) in [
+        ("/v1/embeddings", json!({"model": "embed-1", "input": "hi"})),
+        (
+            "/v1/images/generations",
+            json!({"model": "img-1", "prompt": "a cat", "response_format": "b64_json"}),
+        ),
+    ] {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = fx.app().serve(req).await.unwrap();
+        let status = resp.status();
+        let text = String::from_utf8_lossy(&common::read_body(resp).await).to_string();
+        assert_eq!(status, StatusCode::OK, "{uri}: {text}");
+    }
 }
 
 /// Whether principal `id`'s grants reach `model-a` on pool `pool_name`.
