@@ -835,6 +835,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
             state.clone(),
             user.clone(),
             real_model.clone(),
+            route_access.clone(),
             parts.headers.clone(),
             client_ip.clone(),
             request_body,
@@ -2779,6 +2780,7 @@ pub(crate) async fn stream_with_tools(
     state: Arc<RamaState>,
     user: UserCtx,
     model: String,
+    access: aiplane_core::server::upstreams::PoolAccess,
     client_headers: HeaderMap,
     client_ip: Option<String>,
     mut request_body: Value,
@@ -2819,8 +2821,9 @@ pub(crate) async fn stream_with_tools(
         obj.insert("stream".into(), Value::Bool(true));
     }
 
-    // Resolved once, then shared by routing and the tool loop.
-    let access = state.pool_access_for_token(&user);
+    // The handler's access, which resolved `model`: shared by routing and
+    // the tool loop, so every round may route what the requested name (an
+    // alias, an automatic route's target) resolved to.
     let tool_ctx = proxy_tool_ctx(
         &state,
         user.principal.clone(),

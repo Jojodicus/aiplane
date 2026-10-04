@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rama::Service;
 use rama::http::{Body, Method, Request, StatusCode};
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::common::{self, TEST_SECRET};
@@ -1469,6 +1469,72 @@ async fn a_granted_alias_does_not_grant_its_target_by_name() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(status(lookup).await, StatusCode::NOT_FOUND);
+}
+
+/// A principal with a tool grant streams its tool loop on a name it holds
+/// only as an alias (`fast`) or as an automatic route whose fallback is
+/// that alias: every streamed round routes the resolved id, on the OpenAI
+/// and on the Anthropic endpoint.
+#[tokio::test]
+async fn a_streamed_tool_round_routes_a_granted_alias_and_route() {
+    let fx = fixture().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(json!({"stream": true})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({"choices": [{"index": 0, "delta": {"content": "streamed"}}]})
+            ),
+            "text/event-stream",
+        ))
+        .with_priority(1)
+        .mount(&fx.upstream)
+        .await;
+    upsert_route(&fx, "auto-fast", &["fast", "model-b"]).await;
+    let id = fx.create(&fx.admin, "ci").await;
+    for (kind, reference) in [("tool", TIME), ("model", "fast"), ("model", "auto-fast")] {
+        let (status, body) = fx.grant(&fx.admin, &id, kind, reference).await;
+        assert_eq!(status, StatusCode::CREATED, "{reference}: {body}");
+    }
+    let (bearer, _) = fx.token(&fx.admin, &id).await;
+    for model in ["fast", "auto-fast"] {
+        for (uri, body) in [
+            (
+                "/v1/chat/completions",
+                json!({"model": model, "stream": true,
+                       "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            (
+                "/v1/messages",
+                json!({"model": model, "stream": true, "max_tokens": 16,
+                       "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+        ] {
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let resp = fx.app().serve(req).await.unwrap();
+            let status = resp.status();
+            let text = String::from_utf8_lossy(&common::read_body(resp).await).to_string();
+            assert_eq!(status, StatusCode::OK, "{model} {uri}: {text}");
+            assert!(text.contains("streamed"), "{model} {uri}: {text}");
+        }
+    }
+    let streamed = fx
+        .upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
+        .filter(|b| b["stream"] == true)
+        .count();
+    assert_eq!(streamed, 4, "every streamed round reached the upstream");
 }
 
 const AGENT: &str = "erp";

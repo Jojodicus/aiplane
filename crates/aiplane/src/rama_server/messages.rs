@@ -187,6 +187,7 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
             state,
             user,
             real_model.clone(),
+            access,
             parts.headers,
             client_ip,
             request_body,
