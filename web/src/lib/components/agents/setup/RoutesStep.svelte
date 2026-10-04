@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { CHANNEL_KINDS, agentsApi, type NotifyChannel, type Spec } from '$lib/agents';
 	import ChannelsPanel from '../ChannelsPanel.svelte';
-	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyOn, readHandoffs, readSlots, setNotify, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyEverywhere, notifyOn, readHandoffs, readSlots, setNotify, sharedNotify, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
@@ -63,7 +63,8 @@
 	const toPerson = $derived(model.fallback || model.rules.some((r) => r.target.kind === 'human'));
 	/** The channel kinds this agent can announce on: push when the gateway sends it, a service once it has a channel. */
 	const available = $derived([...(pushEnabled ? ['push'] : []), ...CHANNEL_KINDS.filter((kind) => channels.some((c) => c.kind === kind))]);
-	const announcing = $derived(notifyOn(model.notify, available));
+	/** One choice while every person route announces alike; each route its own once they differ, so none is rewritten unasked. */
+	const shared = $derived(sharedNotify(model));
 	const channelsOf = (kind: string) => channels.filter((c) => c.kind === kind).map((c) => `${c.name} (${c.url_host})`).join(', ');
 
 	/** A target agent not shared with the viewer, by its id: they may not read its name. */
@@ -96,6 +97,18 @@
 		model.rules.forEach((_, j) => void derive(j));
 	}
 </script>
+
+{#snippet choice(notify: string[] | null, set: (next: string[] | null) => void)}
+	{#each available as kind (kind)}
+		<label class="flex items-start gap-2">
+			<input class="checkbox checkbox-sm mt-0.5" type="checkbox" checked={notifyOn(notify, available).includes(kind)} disabled={!ws.writable} onchange={(e) => set(setNotify(notify, available, kind, e.currentTarget.checked))} />
+			<span class="flex flex-col">
+				<span>{kind === 'push' ? t('agents-setup-notify-push') : t(`agents-channels-kind-${kind}`)}</span>
+				{#if kind !== 'push'}<span class="text-xs text-base-content/60 break-all">{channelsOf(kind)}</span>{/if}
+			</span>
+		</label>
+	{/each}
+{/snippet}
 
 <div class="flex flex-col gap-4">
 	<p class="m-0 text-base-content/70">{t('agents-setup-routes-lead')}</p>
@@ -172,17 +185,22 @@
 		<fieldset class="flex flex-col gap-2">
 			<legend class="font-semibold">{t('agents-setup-notify')}</legend>
 			<span class="text-sm text-base-content/60">{t('agents-setup-notify-hint')}</span>
-			{#each available as kind (kind)}
-				<label class="flex items-start gap-2">
-					<input class="checkbox checkbox-sm mt-0.5" type="checkbox" checked={announcing.includes(kind)} disabled={!ws.writable} onchange={(e) => (model.notify = setNotify(model.notify, available, kind, e.currentTarget.checked))} />
-					<span class="flex flex-col">
-						<span>{kind === 'push' ? t('agents-setup-notify-push') : t(`agents-channels-kind-${kind}`)}</span>
-						{#if kind !== 'push'}<span class="text-xs text-base-content/60 break-all">{channelsOf(kind)}</span>{/if}
-					</span>
-				</label>
-			{:else}
+			{#if !available.length}
 				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-notify-none')}</p>
-			{/each}
+			{:else if shared !== undefined}
+				{@render choice(shared, (next: string[] | null) => (model = notifyEverywhere(model, next)))}
+			{:else}
+				{#each model.rules as rule, i (i)}
+					{#if rule.target.kind === 'human'}
+						<p class="m-0 mt-1 text-sm font-semibold">{rule.topic}</p>
+						{@render choice(rule.notify ?? null, (next: string[] | null) => (model.rules[i].notify = next))}
+					{/if}
+				{/each}
+				{#if model.fallback}
+					<p class="m-0 mt-1 text-sm font-semibold">{t('agents-setup-sum-routes-other', { target: t('agents-setup-rule-person') })}</p>
+					{@render choice(model.fallbackNotify ?? null, (next: string[] | null) => (model.fallbackNotify = next))}
+				{/if}
+			{/if}
 			<ChannelsPanel agentId={ws.id} writable={ws.writable} onchannels={(list) => (channels = list)} />
 		</fieldset>
 	{/if}

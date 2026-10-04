@@ -50,7 +50,9 @@ import {
 	writeBasics,
 	writeHandoffs,
 	notifyOn,
+	notifyEverywhere,
 	setNotify,
+	sharedNotify,
 	writeIdentity,
 	writeScope,
 	writeColor,
@@ -311,8 +313,7 @@ test('hand-off sentences become routes with derived gates, and read back unchang
 			{ route: 'technik', topic: 'Technik', details: false, identity: false, target: { kind: 'human' }, bind: {} }
 		],
 		fallback: true,
-		custom: ['legacy'],
-		notify: null
+		custom: ['legacy']
 	});
 
 	writeHandoffs(spec, { rules: [], fallback: false, custom: ['legacy'] });
@@ -775,18 +776,39 @@ test('the voice picker lists the speech model\'s own voices', () => {
 	assert.deepEqual(speechVoices({ ...voice, speechModel: 'gone' }, r), []);
 });
 
-test('a hand-off to a person is announced where the setup says, on every human route', () => {
+test('each person route keeps where it announces through an unrelated edit', () => {
+	const spec: Spec = {};
+	const person = (topic: string) => ({ route: null, topic, details: true, identity: false, target: { kind: 'human' as const }, bind: {} });
+	writeSlots(spec, [{ key: '', label: 'E-mail', kind: 'email', values: [], fresh: true }]);
+	writeHandoffs(spec, { rules: [person('Billing'), person('Tech')], fallback: true, custom: [] });
+	spec.routes.billing.human = { notify: ['slack'] };
+	const before = { billing: structuredClone(spec.routes.billing.human), tech: structuredClone(spec.routes.tech.human), fallback: structuredClone(spec.routes.fallback.human) };
+
+	const read = readHandoffs(throughEditor(spec));
+	writeHandoffs(spec, { ...read, rules: [...read.rules, person('Sales')] });
+	writeSlots(spec, [...readSlots(spec), { key: '', label: 'Phone', kind: 'phone', values: [], fresh: true }]);
+
+	assert.deepEqual(spec.routes.billing.human, before.billing);
+	assert.deepEqual(spec.routes.tech.human, before.tech, 'every channel stays every channel');
+	assert.deepEqual(spec.routes.fallback.human, before.fallback);
+	assert.equal(sharedNotify(readHandoffs(spec)), undefined, 'the routes differ: no shared choice');
+});
+
+test('one choice for every person route only while they agree', () => {
 	const spec: Spec = {};
 	const person = { route: null, topic: 'Billing', details: false, identity: false, target: { kind: 'human' as const }, bind: {} };
-	writeHandoffs(spec, { rules: [person], fallback: true, custom: [], notify: ['slack'] });
+	writeHandoffs(spec, { rules: [person], fallback: true, custom: [] });
+	const h = readHandoffs(spec);
+	assert.equal(sharedNotify(h), null, 'all of them: every channel');
+	writeHandoffs(spec, notifyEverywhere(h, ['slack']));
 	assert.deepEqual(spec.routes.billing.human, { notify: ['slack'] });
 	assert.deepEqual(spec.routes.fallback.human, { notify: ['slack'] });
-	assert.deepEqual(readHandoffs(throughEditor(spec)).notify, ['slack']);
+	assert.deepEqual(sharedNotify(readHandoffs(throughEditor(spec))), ['slack']);
 
 	spec.routes.billing.human.inbox = 'support';
-	writeHandoffs(spec, { ...readHandoffs(spec), notify: null });
+	writeHandoffs(spec, notifyEverywhere(readHandoffs(spec), null));
 	assert.deepEqual(spec.routes.billing.human, { inbox: 'support' }, 'every channel: no list, the rest of the route kept');
-	assert.equal(readHandoffs(spec).notify, null);
+	assert.deepEqual(spec.routes.fallback.human, {});
 });
 
 test('the notification choice covers what exists, and all of it is every channel', () => {

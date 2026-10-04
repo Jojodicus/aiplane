@@ -747,6 +747,12 @@ export interface Rule {
 	target: Target;
 	/** What the route passes the specialist, derived from its live spec ([`deriveBind`]). */
 	bind: Record<string, unknown>;
+	/**
+	 * A hand-off to a person: where it is announced (`human.notify`), `null`
+	 * for every channel. Left out (as read for a route without a list), the
+	 * route keeps what it has.
+	 */
+	notify?: string[] | null;
 }
 
 export interface Handoffs {
@@ -754,12 +760,8 @@ export interface Handoffs {
 	fallback: boolean;
 	/** Routes the advanced editor set up, kept as they are. */
 	custom: string[];
-	/**
-	 * Where a hand-off to a person is announced (`human.notify` of every
-	 * human route the setup writes): channel kinds, `null` for every channel
-	 * the agent has. Left out, each route keeps what it has.
-	 */
-	notify?: string[] | null;
+	/** As [`Rule.notify`], for the fallback route. */
+	fallbackNotify?: string[] | null;
 }
 
 const REQUEST_SET = { slot: REQUEST_SLOT, set: true };
@@ -801,7 +803,9 @@ export function ruleOf(name: string, route: Spec, details: string[]): Rule | nul
 	if (!topic || topic.slot !== TOPIC_SLOT || typeof topic.eq !== 'string' || Object.keys(topic).length !== 2) return null;
 	if (verified && !(verified.slot === VERIFIED_SLOT && typeof verified.provenance === 'string' && Object.keys(verified).length === 2)) return null;
 	if (target.kind === 'agent' && route.task !== HANDOFF_TASK) return null;
-	return { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	const rule: Rule = { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	if (target.kind === 'human' && Array.isArray(route.human?.notify)) rule.notify = [...route.human.notify];
+	return rule;
 }
 
 const isFallback = (name: string, route: Spec) =>
@@ -814,20 +818,39 @@ function routeOrder(spec: Spec): string[] {
 }
 
 export function readHandoffs(spec: Spec): Handoffs {
-	const out: Handoffs = { rules: [], fallback: false, custom: [], notify: null };
+	const out: Handoffs = { rules: [], fallback: false, custom: [] };
 	const details = detailKeys(spec);
-	const toPerson: Spec[] = [];
 	for (const name of routeOrder(spec)) {
 		const route = spec.routes[name];
 		const rule = ruleOf(name, route, details);
 		if (rule) out.rules.push(rule);
-		else if (isFallback(name, route)) out.fallback = true;
-		else out.custom.push(name);
-		if ((rule?.target.kind === 'human' || (!rule && isFallback(name, route))) && route.human) toPerson.push(route.human);
+		else if (isFallback(name, route)) {
+			out.fallback = true;
+			if (Array.isArray(route.human?.notify)) out.fallbackNotify = [...route.human.notify];
+		} else out.custom.push(name);
 	}
-	const listed = toPerson.find((h) => Array.isArray(h.notify));
-	if (listed) out.notify = [...listed.notify];
 	return out;
+}
+
+/** Where each person route announces, `null` for every channel. */
+function personNotify(h: Handoffs): (string[] | null)[] {
+	const routes = [...h.rules.filter((r) => r.target.kind === 'human').map((r) => r.notify), ...(h.fallback ? [h.fallbackNotify] : [])];
+	return routes.map((n) => n ?? null);
+}
+
+/** The one place every person route announces at, `null` for every channel; `undefined` while they differ. */
+export function sharedNotify(h: Handoffs): string[] | null | undefined {
+	const [first = null, ...rest] = personNotify(h);
+	return rest.every((n) => same(n, first)) ? first : undefined;
+}
+
+/** The hand-offs with every person route announcing at `notify`. */
+export function notifyEverywhere(h: Handoffs, notify: string[] | null): Handoffs {
+	return {
+		...h,
+		rules: h.rules.map((r) => (r.target.kind === 'human' ? { ...r, notify } : r)),
+		...(h.fallback ? { fallbackNotify: notify } : {})
+	};
 }
 
 /** The kinds of `available` that announce, under the setup's choice (`null`: all of them). */
@@ -874,14 +897,14 @@ export function writeHandoffs(spec: Spec, h: Handoffs): void {
 			route.task = HANDOFF_TASK;
 			if (Object.keys(rule.bind).length) route.bind = clone(rule.bind);
 		} else {
-			route.human = withNotify(prev?.human ? clone(prev.human) : {}, h.notify);
+			route.human = withNotify(prev?.human ? clone(prev.human) : {}, rule.notify);
 		}
 		routes[name] = route;
 	}
 	for (const name of h.custom) if (before[name]) routes[name] = before[name];
 	if (h.fallback) {
 		const prev = before[FALLBACK_ROUTE];
-		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: withNotify(prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {}, h.notify) };
+		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: withNotify(prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {}, h.fallbackNotify) };
 	}
 	spec.routes = routes;
 
