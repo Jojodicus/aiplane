@@ -19,6 +19,7 @@ use aiplane_core::server::db::{DbError, automatic_routes, mcp_catalog, rag as ra
 use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
+use crate::agents::access::effective_access;
 use crate::rama_server::state::RamaState;
 use crate::server::model_choices::{self, ModelChoice};
 use crate::server::tools::mcp::MCP_ID_PREFIX;
@@ -126,10 +127,9 @@ pub async fn holds(
             if agents_db::get(&state.db, reference).await?.is_none() {
                 return Err(missing(format!("agent `{reference}`")));
             }
-            state.rbac.is_admin(&role_ids)
-                || agents_db::access_for(&state.db, reference, &user.id, &role_ids)
-                    .await?
-                    .is_some_and(|a| a >= Access::Write)
+            effective_access(state, reference, &user.id, &role_ids)
+                .await?
+                .is_some_and(|a| a >= Access::Write)
         }
         GrantKind::A2aAgent => {
             if let Err(why) = crate::agents::a2a_client::check_card_url(reference) {

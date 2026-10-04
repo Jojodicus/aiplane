@@ -443,7 +443,16 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
     with #88 ([§3](#what-8788-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
-  or `is_admin`. The caller must also hold the permission on every request.
+  or `is_admin`, asked of the RBAC resolver, so a group from `[rbac]` config
+  or the bootstrap admin group counts as one from the database does. The
+  caller must also hold the permission on every request.
+  **One rule** decides who may act on an agent:
+  `aiplane_runtime::agents::access::effective_access` — `write` for an
+  admin; otherwise the strongest share, but only while the person holds
+  `can_manage_agents`; otherwise nothing. The `/api/v0/agents` routes, the
+  inbox's manager standing and the `a2a_caller` grant cap all ask it, so a
+  manager who loses the permission loses every agent with it, whatever
+  shares are left behind.
   Without a share, an agent answers 404, not 403. Removing or downgrading the
   last `write` share is refused (`409 last_writer`). Admins implicitly hold
   `write` on every agent without a share: they see it in the list and can read,
@@ -2171,9 +2180,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   agent's id as `ref`. Default deny: a token without that grant, or with one
   for another agent, gets `403 PERMISSION_DENIED`; no token or a bad one
   `401` with `WWW-Authenticate: Bearer`; a person's `gwk_` token `403`.
-  Granting `a2a_caller` follows #77's grant-time cap: the manager needs a
-  `write` share on that agent (admins hold one), since letting another
-  platform call the agent changes the agent. The caller gets nothing of the
+  Granting `a2a_caller` follows #77's grant-time cap: the manager needs
+  `write` on that agent by the one access rule (§2 "Shares": admins hold it,
+  anyone else needs `can_manage_agents` and a `write` share), since letting
+  another platform call the agent changes the agent. A token a manager
+  minted loses the grant once the manager no longer holds that. The caller gets nothing of the
   agent's: the task runs as the agent's principal, with its grants.
 - **Version.** Every request must carry `A2A-Version: 1.0` (header, or the
   `A2A-Version` query parameter). A missing header means 0.3 per §3.6.2, so it

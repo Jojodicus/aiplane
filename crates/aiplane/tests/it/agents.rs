@@ -22,7 +22,7 @@ use crate::common::{self, TEST_SECRET};
 use aiplane::rama_server::{RamaState, SessionStore};
 use aiplane_agents::db::agent_audit;
 use aiplane_core::server::db::{self, gateway_groups, users};
-use aiplane_core::server::rbac::Resolver;
+use aiplane_core::server::rbac::{BOOTSTRAP_ADMIN_GROUP, Resolver};
 use aiplane_core::server::upstreams::{
     self,
     config::{PickerStrategy, PoolKind, UpstreamPoolConfig},
@@ -32,6 +32,9 @@ use aiplane_runtime::server::tools::ToolRegistry;
 use aiplane_runtime::server::tools::time::CurrentTimestamp;
 
 pub(crate) const TIME: &str = "get_current_timestamp";
+
+/// The `[gateway].bootstrap_admin_groups` claim value of the fixture.
+const BREAK_GLASS: &str = "break-glass";
 
 pub(crate) struct Fx {
     pub(crate) state: RamaState,
@@ -133,7 +136,10 @@ pub(crate) async fn fixture_with_pools(
         pool.clone(),
         registry,
         Arc::new(tools),
-        Arc::new(Resolver::empty()),
+        Arc::new(Resolver::from_snapshot(
+            Default::default(),
+            vec![BREAK_GLASS.into()],
+        )),
     );
     let state = RamaState::new(
         app,
@@ -603,6 +609,47 @@ async fn a_share_is_refused_for_anyone_without_the_agent_management_permission()
         .get(&fx.alice, &format!("/api/v0/agents/{id}/shares"))
         .await;
     assert_eq!(shares["shares"].as_array().unwrap().len(), 1);
+}
+
+/// The share subject check asks the same resolver every access check asks,
+/// so a group that exists only there — the bootstrap admin group — is a
+/// valid subject, as a group from the database is.
+#[tokio::test]
+async fn a_share_with_the_bootstrap_admin_group_is_accepted() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.alice, "support").await;
+    let (status, body) = fx
+        .share(&fx.alice, &id, "group", BOOTSTRAP_ADMIN_GROUP, "read")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = fx.share(&fx.alice, &id, "group", "admins", "read").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// A share outlives the permission it needs, but grants nothing without it.
+#[tokio::test]
+async fn a_manager_who_loses_the_permission_loses_the_agent_despite_the_share() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.alice, "support").await;
+    gateway_groups::set_can_manage_agents(&fx.state.db, "managers", false)
+        .await
+        .unwrap();
+    fx.state.reload_rbac().await;
+    let user = users::find_by_id(&fx.state.db, "alice")
+        .await
+        .unwrap()
+        .unwrap();
+    let groups = fx.state.rbac.role_ids_for(&user.roles);
+    assert_eq!(
+        aiplane_runtime::agents::access::effective_access(&fx.state, &id, "alice", &groups)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        fx.get(&fx.alice, &format!("/api/v0/agents/{id}")).await.0,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]

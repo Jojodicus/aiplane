@@ -174,12 +174,8 @@ pub async fn agent_standing(
     viewer: &Viewer,
     agent_id: &str,
 ) -> Result<Option<Standing>, DbError> {
-    if state.rbac.is_admin(&viewer.groups) {
-        return Ok(Some(Standing::Manager));
-    }
-    if state.rbac.can_manage_agents(&viewer.groups)
-        && agents_db::access_for(&state.db, agent_id, &viewer.user_id, &viewer.groups).await?
-            == Some(Access::Write)
+    if super::access::effective_access(state, agent_id, &viewer.user_id, &viewer.groups).await?
+        == Some(Access::Write)
     {
         return Ok(Some(Standing::Manager));
     }
