@@ -350,6 +350,7 @@ mod tests {
                 agents: &agents,
                 live_specs: live,
                 model_defaults: &Default::default(),
+                speech_voices: &HashMap::new(),
                 allow_private: false,
             },
             stage,

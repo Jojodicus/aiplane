@@ -38,6 +38,7 @@ import {
 	slotsForIdentity,
 	stepForPath,
 	voiceMissing,
+	speechVoices,
 	summary,
 	suggestedMethod,
 	suggestedRules,
@@ -756,4 +757,17 @@ test('publishState tells blocked, recommended-only and ready apart', () => {
 	assert.equal(publishState([]), 'ready');
 	assert.equal(publishState([advice]), 'recommended');
 	assert.equal(publishState([advice, blocking]), 'blocked');
+});
+
+test('the voice picker lists the speech model\'s own voices', () => {
+	const r: AgentResources = {
+		...resources,
+		models: { chat: [], transcription: [], speech: [{ id: 'tts-1', gdpr: true, nda: true, voices: ['alloy', 'onyx'] }, { id: 'kokoro', gdpr: true, nda: true, voices: ['af_heart'] }] },
+		defaults: { chat: null, transcription: null, speech: 'kokoro' }
+	};
+	const voice = { input: false, output: true, voice: '', transcriptionModel: '', speechModel: 'tts-1' };
+	assert.deepEqual(speechVoices(voice, r), ['alloy', 'onyx']);
+	assert.deepEqual(speechVoices({ ...voice, speechModel: '' }, r), ['af_heart'], 'unset: the default model\'s');
+	assert.deepEqual(speechVoices({ ...voice, voice: 'nova' }, r), ['alloy', 'onyx', 'nova'], 'what is set stays visible');
+	assert.deepEqual(speechVoices({ ...voice, speechModel: 'gone' }, r), []);
 });

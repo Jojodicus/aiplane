@@ -282,7 +282,8 @@ agents-setup-voice-output = Ответы можно читать вслух
 agents-setup-voice-transcription-model = Распознавание речи
 agents-setup-voice-speech-model = Синтез речи
 agents-setup-voice-voice = Голос (необязательно)
-agents-setup-voice-voice-hint = Оставьте пустым, чтобы использовать голос по умолчанию для языка посетителя.
+agents-setup-voice-voice-hint = Голоса, которые предлагает модель озвучивания.
+agents-setup-voice-default = По умолчанию для языка посетителя
 agents-setup-voice-unavailable-input = Голосовой ввод недоступен: для вас не включена ни одна модель распознавания речи — обратитесь к администратору.
 agents-setup-voice-unavailable-output = Чтение ответов вслух недоступно: для вас не включена ни одна модель синтеза речи — обратитесь к администратору.
 

@@ -360,6 +360,7 @@ impl<'a> Reviewer<'a> {
             agents: self.ctx.agents,
             live_specs: self.ctx.live_specs,
             model_defaults: &Default::default(),
+            speech_voices: &HashMap::new(),
             allow_private: self.ctx.allow_private,
         };
         spec::validate(draft, &ctx, Stage::Draft)

@@ -96,6 +96,10 @@ pub struct SpecContext<'a> {
     pub live_specs: &'a HashMap<String, Value>,
     /// What an unset model key runs on.
     pub model_defaults: &'a ModelDefaults,
+    /// The voices each speech model offers, by model
+    /// (`UpstreamRegistry::speech_voices_of`): what `publish.voice.voice`
+    /// may name on publish. A model missing here offers none.
+    pub speech_voices: &'a HashMap<String, Vec<String>>,
     /// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`: whether a URL the spec names (an
     /// A2A card, a JWKS) may be plain http or a private host, as at run time.
     pub allow_private: bool,
@@ -1684,17 +1688,26 @@ impl<'a> Check<'a> {
             None => false,
         };
         let (input, output) = (on("input"), on("output"));
+        let defaults = self.ctx.model_defaults;
         if let Some(x) = map.get("voice")
             && let Some(voice) = self.string(x, "publish.voice.voice")
-            && voice.trim().is_empty()
         {
-            self.issue(
-                "publish.voice.voice",
-                "must not be blank — name one of the speech model's voices, or remove it to use \
-                 its default for the visitor's language",
-            );
+            if voice.trim().is_empty() {
+                self.issue(
+                    "publish.voice.voice",
+                    "must not be blank — name one of the speech model's voices, or remove it to \
+                     use its default for the visitor's language",
+                );
+            } else if output && self.stage == Stage::Publish {
+                let model = map
+                    .get("speech_model")
+                    .and_then(Value::as_str)
+                    .or(defaults.speech.as_deref());
+                if let Some(model) = model {
+                    self.offered_voice(voice, model);
+                }
+            }
         }
-        let defaults = self.ctx.model_defaults;
         for (key, wanted, fallback, (direction, kind)) in [
             (
                 "transcription_model",
@@ -1727,6 +1740,33 @@ impl<'a> Check<'a> {
                 self.require_grant(&path, GrantKind::Model, model, "model");
             }
         }
+    }
+
+    /// `publish.voice.voice` names one of the voices speech model `model`
+    /// offers, the ones the setup's voice picker lists.
+    fn offered_voice(&mut self, voice: &str, model: &str) {
+        let offered = self
+            .ctx
+            .speech_voices
+            .get(model)
+            .map_or(&[][..], Vec::as_slice);
+        if offered.iter().any(|v| v == voice) {
+            return;
+        }
+        let message = if offered.is_empty() {
+            format!(
+                "`{voice}` cannot be checked: the speech model `{model}` offers no voices to \
+                 choose from — remove the voice to use the model's default, or ask an admin to \
+                 list its voices on the speech pool"
+            )
+        } else {
+            format!(
+                "`{voice}` is not a voice of the speech model `{model}` — pick one of {}, or \
+                 remove it to use the model's default for the visitor's language",
+                offered.join(", ")
+            )
+        };
+        self.issue("publish.voice.voice", message);
     }
 
     /// A model key (`main.model`, a voice direction's): the model it names
@@ -1811,6 +1851,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &HashMap::new(),
                 model_defaults: &Default::default(),
+                speech_voices: &HashMap::new(),
                 allow_private: false,
             },
             stage,
@@ -1904,6 +1945,7 @@ mod tests {
             agents: &agents,
             live_specs: &live,
             model_defaults: &Default::default(),
+            speech_voices: &HashMap::new(),
             allow_private: false,
         };
         let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
@@ -2703,6 +2745,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &live_specs,
                 model_defaults: &Default::default(),
+                speech_voices: &HashMap::new(),
                 allow_private: false,
             },
             stage,
@@ -2994,6 +3037,60 @@ mod tests {
         );
     }
 
+    fn check_voice(voice: &str, offered: &[&str], stage: Stage) -> Vec<SpecIssue> {
+        let mut spec = full();
+        spec["publish"] =
+            json!({ "voice": { "output": true, "speech_model": "chat", "voice": voice } });
+        let voices = HashMap::from([(
+            "chat".to_string(),
+            offered.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+        )]);
+        let grants = grants();
+        let agents = agents();
+        validate(
+            &spec,
+            &SpecContext {
+                agent_id: SELF,
+                grants: &grants,
+                agents: &agents,
+                live_specs: &HashMap::new(),
+                model_defaults: &Default::default(),
+                speech_voices: &voices,
+                allow_private: false,
+            },
+            stage,
+        )
+    }
+
+    #[test]
+    fn a_published_voice_is_one_its_speech_model_offers() {
+        assert_eq!(check_voice("onyx", &["alloy", "onyx"], Stage::Publish), []);
+
+        let unknown = check_voice("verse", &["alloy", "onyx"], Stage::Publish);
+        assert_eq!(paths(&unknown), ["publish.voice.voice"]);
+        assert!(
+            unknown[0].message.contains("`verse`")
+                && unknown[0].message.contains("`chat`")
+                && unknown[0].message.contains("alloy, onyx"),
+            "{}",
+            unknown[0].message
+        );
+
+        let none = check_voice("alloy", &[], Stage::Publish);
+        assert_eq!(paths(&none), ["publish.voice.voice"]);
+        assert!(
+            none[0].message.contains("offers no voices"),
+            "{}",
+            none[0].message
+        );
+
+        assert_eq!(
+            check_voice("verse", &["alloy"], Stage::Draft),
+            [],
+            "a draft may hold a voice the model does not offer (yet)"
+        );
+    }
+
     fn check_with(spec: &Value, defaults: &ModelDefaults) -> Vec<SpecIssue> {
         let grants = grants();
         let agents = agents();
@@ -3005,6 +3102,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &HashMap::new(),
                 model_defaults: defaults,
+                speech_voices: &HashMap::new(),
                 allow_private: false,
             },
             Stage::Publish,

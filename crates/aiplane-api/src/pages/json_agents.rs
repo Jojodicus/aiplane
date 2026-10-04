@@ -32,6 +32,7 @@ use aiplane_agents::db::agents::{
 use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
 use aiplane_core::server::db::users;
 use aiplane_core::server::principal::{GrantKind, GrantSet};
+use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::access::effective_access;
 use aiplane_runtime::agents::defaults;
 use aiplane_runtime::agents::spec::secrets;
@@ -205,6 +206,7 @@ async fn spec_check(
             agents: &world.agents,
             live_specs: &world.live_specs,
             model_defaults: &world.model_defaults,
+            speech_voices: &world.speech_voices,
             allow_private: world.allow_private,
         },
         stage,
@@ -218,6 +220,8 @@ pub(super) struct SpecWorld {
     pub agents: HashMap<String, bool>,
     pub live_specs: HashMap<String, Value>,
     pub model_defaults: ModelDefaults,
+    /// The voices of every speech model the gateway serves, by model.
+    pub speech_voices: HashMap<String, Vec<String>>,
     pub allow_private: bool,
 }
 
@@ -235,11 +239,22 @@ impl SpecWorld {
             .into_iter()
             .map(|(id, text)| (id, parse_spec(&text)))
             .collect();
+        let speech_voices = state
+            .upstreams
+            .models_for_kind(PoolKind::Speech)
+            .into_iter()
+            .chain(model_defaults.speech.clone())
+            .map(|model| {
+                let voices = state.upstreams.speech_voices_of(&model);
+                (model, voices)
+            })
+            .collect();
         Ok(Self {
             grants,
             agents,
             live_specs,
             model_defaults,
+            speech_voices,
             allow_private: state.config().network.allow_private_networks,
         })
     }
@@ -517,6 +532,7 @@ fn uses_grant(
                 agents: &world.agents,
                 live_specs: &world.live_specs,
                 model_defaults: &world.model_defaults,
+                speech_voices: &world.speech_voices,
                 allow_private: world.allow_private,
             },
             Stage::Publish,

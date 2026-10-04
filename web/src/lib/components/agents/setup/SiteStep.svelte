@@ -11,6 +11,7 @@
 		modelGrantFor,
 		modelsInUse,
 		setupErrorMessage,
+		speechVoices,
 		voiceMissing,
 		voiceOffered,
 		writeColor,
@@ -191,7 +192,10 @@
 		{#if voice.output}
 			<label class="flex flex-col gap-1">
 				<span class="text-sm">{t('agents-setup-voice-voice')}</span>
-				<input class="input input-sm w-48" bind:value={voice.voice} placeholder="alloy" disabled={!ws.writable} />
+				<select class="select select-sm w-64" bind:value={voice.voice} disabled={!ws.writable}>
+					<option value="">{t('agents-setup-voice-default')}</option>
+					{#each speechVoices(voice, ws.resources) as name (name)}<option value={name}>{name}</option>{/each}
+				</select>
 				<span class="text-xs text-base-content/60">{t('agents-setup-voice-voice-hint')}</span>
 			</label>
 		{/if}

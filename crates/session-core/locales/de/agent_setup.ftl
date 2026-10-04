@@ -270,7 +270,8 @@ agents-setup-voice-output = Antworten können vorgelesen werden
 agents-setup-voice-transcription-model = Spracherkennung
 agents-setup-voice-speech-model = Sprachausgabe
 agents-setup-voice-voice = Stimme (optional)
-agents-setup-voice-voice-hint = Leer lassen für die Standardstimme der Sprache des Besuchers.
+agents-setup-voice-voice-hint = Die Stimmen, die das Sprachausgabe-Modell anbietet.
+agents-setup-voice-default = Standard für die Sprache des Besuchers
 agents-setup-voice-unavailable-input = Spracheingabe ist nicht verfügbar, weil für Sie kein Spracherkennungsmodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
 agents-setup-voice-unavailable-output = Vorlesen ist nicht verfügbar, weil für Sie kein Sprachausgabemodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
 

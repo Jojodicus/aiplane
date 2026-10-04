@@ -959,6 +959,18 @@ export interface Voice {
 	speechModel: string;
 }
 
+/**
+ * The voices the agent may speak in: those of the speech model it runs on
+ * (its own, else the gateway default), as the server lists them; the voice
+ * already chosen stays listed when the model no longer offers it, so the
+ * picker shows what is set and publishing says why it is refused.
+ */
+export function speechVoices(v: Voice, resources: AgentResources | null | undefined): string[] {
+	const model = v.speechModel || resources?.defaults?.speech || '';
+	const offered = resources?.models?.speech?.find((m) => m.id === model)?.voices ?? [];
+	return v.voice && !offered.includes(v.voice) ? [...offered, v.voice] : offered;
+}
+
 export function readVoice(spec: Spec): Voice {
 	const v = spec.publish?.voice ?? {};
 	return {

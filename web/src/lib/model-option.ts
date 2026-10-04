@@ -4,6 +4,8 @@ export interface ChatModelOption {
 	id: string;
 	gdpr: boolean;
 	nda: boolean;
+	/** A speech model's voices (`GET /api/v0/agent-resources`). */
+	voices?: string[];
 }
 
 export function modelSelectOptions(

@@ -264,7 +264,8 @@ agents-setup-voice-output = 回答可以被朗读
 agents-setup-voice-transcription-model = 语音识别
 agents-setup-voice-speech-model = 语音输出
 agents-setup-voice-voice = 声音（可选）
-agents-setup-voice-voice-hint = 留空则使用访客语言的默认声音。
+agents-setup-voice-voice-hint = 语音输出模型提供的声音。
+agents-setup-voice-default = 访客语言的默认声音
 agents-setup-voice-unavailable-input = 语音输入不可用，因为没有为您启用任何语音识别模型——请联系管理员。
 agents-setup-voice-unavailable-output = 朗读回答不可用，因为没有为您启用任何语音输出模型——请联系管理员。
 

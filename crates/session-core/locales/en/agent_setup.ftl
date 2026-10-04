@@ -269,7 +269,8 @@ agents-setup-voice-output = Answers can be read aloud
 agents-setup-voice-transcription-model = Speech recognition
 agents-setup-voice-speech-model = Speech output
 agents-setup-voice-voice = Voice (optional)
-agents-setup-voice-voice-hint = Leave it empty for the default voice of the visitor's language.
+agents-setup-voice-voice-hint = The voices the speech-output model offers.
+agents-setup-voice-default = Default for the visitor's language
 agents-setup-voice-unavailable-input = Voice input isn't available because no speech-recognition model is enabled for you — ask an admin.
 agents-setup-voice-unavailable-output = Reading answers aloud isn't available because no speech-output model is enabled for you — ask an admin.
 

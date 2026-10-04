@@ -15,6 +15,9 @@
 //! any automatic route whose candidates or selector they may not use, since
 //! granting the route would hand those on.
 //!
+//! A speech model also lists its `voices` (`UpstreamRegistry::speech_voices_of`):
+//! the ones an agent's `publish.voice.voice` may name, as publishing checks.
+//!
 //! `defaults` names the gateway's default model of each kind (Models &
 //! routing → Default models): what an agent's unset model key runs on.
 //! Whether the caller may grant it is whether `models` lists it.
@@ -264,7 +267,14 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
         let listed: Vec<Value> = grantable_models(state, user, kind)
             .await
             .into_iter()
-            .map(|c| json!({ "id": c.id, "gdpr": c.compliance.gdpr, "nda": c.compliance.nda }))
+            .map(|c| {
+                let mut model =
+                    json!({ "id": c.id, "gdpr": c.compliance.gdpr, "nda": c.compliance.nda });
+                if kind == PoolKind::Speech {
+                    model["voices"] = json!(state.upstreams.speech_voices_of(&c.id));
+                }
+                model
+            })
             .collect();
         models.insert(key.into(), Value::Array(listed));
     }

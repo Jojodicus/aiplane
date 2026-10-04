@@ -3350,7 +3350,15 @@ without either is refused (`422`, at `publish.voice.transcription_model` /
 reaches only models granted to it, and the embed endpoints answer `503
 voice_unavailable` when the grant is gone. `voice` is the TTS voice; unset,
 the voice the pool of the backend that synthesises it maps the visitor's
-language to (`Acquired::voice_for`) applies. `VoiceSpec::{input_model,
+language to (`Acquired::voice_for`) applies. Set, it must be one of the
+voices the speech model it runs on offers
+(`UpstreamRegistry::speech_voices_of`: the serving speech pools'
+`offer_voices`, then their language map's voices — the list
+`speech_voices_for` gives the chat's voice picker); publishing anything else
+is refused at `publish.voice.voice`, naming the voices on offer
+(`SpecContext::speech_voices`, loaded by `SpecWorld`). A draft may hold it.
+`GET /api/v0/agent-resources` lists each speech model's `voices`, which the
+setup's *Website* step offers as a select (empty: the model's default). `VoiceSpec::{input_model,
 output_model}` return the named model only for a direction that is on. `profile.color`
 is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
 itself in it.

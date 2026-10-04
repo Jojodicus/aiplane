@@ -270,7 +270,8 @@ agents-setup-voice-output = Las respuestas se pueden leer en voz alta
 agents-setup-voice-transcription-model = Reconocimiento de voz
 agents-setup-voice-speech-model = Síntesis de voz
 agents-setup-voice-voice = Voz (opcional)
-agents-setup-voice-voice-hint = Déjalo vacío para usar la voz predeterminada del idioma del visitante.
+agents-setup-voice-voice-hint = Las voces que ofrece el modelo de salida de voz.
+agents-setup-voice-default = Predeterminada para el idioma del visitante
 agents-setup-voice-unavailable-input = La entrada de voz no está disponible porque no tienes habilitado ningún modelo de reconocimiento de voz; pide ayuda a un administrador.
 agents-setup-voice-unavailable-output = La lectura en voz alta no está disponible porque no tienes habilitado ningún modelo de salida de voz; pide ayuda a un administrador.
 
