@@ -452,16 +452,7 @@ pub async fn usage(
 
     let limits: Vec<_> = limit_status
         .iter()
-        .map(|l| {
-            json!({
-                "model": l.model,
-                "dimension": l.dimension.as_str(),
-                "window": l.window.as_str(),
-                "limit": l.limit,
-                "used": l.used,
-                "refreshes_at": l.refreshes_at.to_string(),
-            })
-        })
+        .map(aiplane_api::pages::json_tokens::limit_status_json)
         .collect();
 
     json_ok(&json!({

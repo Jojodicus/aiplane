@@ -25,7 +25,6 @@ tokens-revoke-button = Revoke
 tokens-row-meta = created { $created } · last used { $last_used } · expires { $expires }
 tokens-last-used-never = never
 
-tokens-tool-use-aria = Tool use
 tokens-tool-use-label = Tool use
 
 tokens-mcp-allow-description = Approval-required connector tools can't prompt over the API; enabling runs them without asking.
@@ -36,9 +35,6 @@ tokens-copy-aria = Copy token
 tokens-minted-name = Name: { $name }
 
 tokens-account-user-id-label = User ID
-
-tokens-mcp-ask-enabled-toast = Ask-mode MCP tools over API enabled for this token.
-tokens-mcp-ask-disabled-toast = Ask-mode MCP tools over API disabled for this token.
 
 # Web Push "turn complete" opt-in card (rendered by `render_push_card`; wired
 # client-side by `ui/ts/push.ts`). Device-local notification settings.
@@ -51,11 +47,9 @@ tokens-push-error = Could not change notification settings.
 
 # Per-token usage, model allowlist, and quota (the /tokens row panels).
 tokens-usage-line = this month: { $requests } requests · { $tokens } tokens · { $cost }
-tokens-models-summary-all = Models: all
 tokens-models-summary-restricted = Models: { $count } selected
 tokens-models-help = Off, this token follows your own access, including models added later. On, it may use only the models you tick — a model added to the gateway afterwards stays blocked until you tick it here too.
 tokens-models-restrict-label = Limit this token to specific models
-tokens-models-save = Save models
 tokens-models-saved-toast = Token limited to { $count } models.
 tokens-models-cleared-toast = Token can use every model you can.
 tokens-limits-add = Add quota
@@ -72,7 +66,6 @@ tokens-tool-use-description = Let this token call gateway tools (web search, RAG
 tokens-capabilities-summary = Capabilities
 tokens-panel-close = Close
 tokens-edit-button = Edit
-tokens-mcp-allow-aria = Allow ask-mode MCP tools over API
 tokens-mcp-allow-label = Allow “ask” MCP tools over API
 tokens-account-heading = Account
 tokens-signed-in-as = Signed in as { $email }
@@ -86,11 +79,8 @@ tokens-push-off = Notifications are off for this device.
 tokens-push-denied = This browser has blocked notifications. Allow them in your browser settings to enable.
 tokens-push-unsupported = This browser doesn't support notifications.
 tokens-models-none-picked = Tick at least one model, or turn the limit off.
-tokens-limits-summary-none = Quota: none
-tokens-limits-summary-some = Quota: { $count } rule(s)
 tokens-limits-help = A cap on this token alone. Your own budget still applies, so this can only narrow what the token may spend, never widen it.
 tokens-limits-remove = Remove
-tokens-limits-removed-toast = Token quota removed.
 tokens-limits-admin-badge = set by admin
 tokens-models-admin-set = An operator also restricts this token to: { $models }. Your own selection narrows that further; it cannot widen it.
 
@@ -121,3 +111,62 @@ tokens-guides-model-note = Need a model ID? Your available models are shown in t
 notifications-loading = Loading notification settings…
 notifications-unavailable = Notifications are unavailable on this gateway. Ask an administrator to check Push settings.
 notifications-admin-settings-link = Open Push settings
+tokens-tile-models = Models
+tokens-tile-tools = Tools
+tokens-tile-budget = Budget
+tokens-save = Save
+tokens-menu-aria = Token actions
+tokens-expires-today = expires today
+tokens-expires-soon = { $days ->
+    [one] expires in { $days } day
+   *[other] expires in { $days } days
+}
+tokens-models-tile-all = All { $count } models — follows your access
+tokens-models-tile-some = { $count } of { $total } models
+tokens-models-tile-compliant = All GDPR compliant and NDA covered
+tokens-models-tile-noncompliant = { $count ->
+    [one] { $count } model without GDPR or NDA cover
+   *[other] { $count } models without GDPR or NDA cover
+}
+tokens-models-tile-admin = An operator allows { $count } of them
+tokens-models-max-price = up to { $price } per 1M output tokens
+tokens-models-noncompliant-warning = { $count ->
+    [one] { $count } model here is not GDPR compliant or not NDA covered. Don’t send personal data or confidential material through this token.
+   *[other] { $count } models here are not GDPR compliant or not NDA covered. Don’t send personal data or confidential material through this token.
+}
+tokens-models-search = Search models
+tokens-models-filter-gdpr = GDPR compliant
+tokens-models-filter-nda = NDA covered
+tokens-models-filter-free = No charge
+tokens-models-select-compliant = Select all GDPR + NDA
+tokens-models-select-none = Clear selection
+tokens-models-empty = No model matches.
+tokens-models-alias = alias of { $target }
+tokens-models-gdpr-ok = GDPR compliant: personal data stays protected.
+tokens-models-nda-ok = Covered by a confidentiality agreement.
+tokens-models-price-free = no charge
+tokens-models-price-tokens = { $input } in / { $output } out per 1M
+tokens-models-price-per-images = { $price } per image
+tokens-models-price-per-characters = { $price } per character
+tokens-models-price-per-seconds = { $price } per second
+tokens-models-kind-chat = Chat
+tokens-models-kind-transcription = Speech to text
+tokens-models-kind-speech = Text to speech
+tokens-models-kind-embedding = Embedding
+tokens-models-kind-image = Images
+tokens-models-kind-system_one = System One
+tokens-tools-tile-on = Allowed
+tokens-tools-tile-off = Off
+tokens-tools-tile-pinned = { $count } always on
+tokens-tools-tile-mcp-allowed = “Ask” MCP tools run without asking
+tokens-tools-tile-mcp-blocked = “Ask” MCP tools blocked
+tokens-tools-capabilities-help = Which tools and skills this token may use.
+tokens-tools-saved-toast = Token tools saved.
+tokens-budget-tile-none = No limit of its own
+tokens-budget-tile-more = +{ $count } more
+tokens-budget-owner-applies = Your own budget applies as well
+tokens-budget-token-heading = This token
+tokens-budget-owner-heading = Applies as well: your own budget
+tokens-budget-owner-none = You have no budget limit.
+tokens-budget-dimension = What to limit
+tokens-budget-window = Period

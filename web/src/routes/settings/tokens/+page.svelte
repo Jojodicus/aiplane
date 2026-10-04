@@ -5,11 +5,11 @@
 	import { api } from '$lib/api';
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
-	import ManagedTokenRow from '$lib/components/tokens/ManagedTokenRow.svelte';
+	import ManagedTokenCard from '$lib/components/tokens/ManagedTokenCard.svelte';
 	import TokenSetupGuides from '$lib/components/tokens/TokenSetupGuides.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import { selectedTokenTab } from '$lib/tokens-tabs';
-	import type { ManagedToken, TokenManagementDetails } from '$lib/tokens';
+	import type { ManagedToken, NewQuota, TokenManagementDetails } from '$lib/tokens';
 
 	let details = $state<TokenManagementDetails | null>(null);
 	let error = $state<string | null>(null);
@@ -52,22 +52,35 @@
 		catch (caught) { notice = String(caught); }
 	}
 
-	async function updateTools(token: ManagedToken, enabled: boolean, states: Record<string, 'on' | 'auto' | 'off'>) {
-		await mutate(async () => { await api.updateTokenTools(token.id, { tools_enabled: enabled, tool_states: states }); await refresh(); });
+	/** A dialog's Save: one draft can take several requests, and any of them
+	 *  may fail after the earlier ones landed. So the card is reloaded either
+	 *  way, and a failure is rethrown so the dialog keeps the draft open. */
+	async function commit(action: () => Promise<void>) {
+		notice = null;
+		try { await action(); }
+		catch (caught) { notice = String(caught); throw caught; }
+		finally { await refresh(); }
+	}
+
+	async function updateTools(token: ManagedToken, enabled: boolean, states: Record<string, 'on' | 'auto' | 'off'>, mcpAllow: boolean) {
+		await commit(async () => {
+			await api.updateTokenTools(token.id, { tools_enabled: enabled, tool_states: states });
+			if (mcpAllow !== token.mcp_allow) await adminPut(`/api/v0/tokens/${token.id}/mcp-policy`, { allow: mcpAllow });
+			notice = t('tokens-tools-saved-toast');
+		});
 	}
 	async function updateModels(token: ManagedToken, restrict: boolean, models: string[]) {
-		await mutate(async () => { await adminPut(`/api/v0/tokens/${token.id}/models`, { restrict, models });
-			notice = restrict ? t('tokens-models-saved-toast', { count: models.length }) : t('tokens-models-cleared-toast'); await refresh(); });
+		await commit(async () => {
+			await adminPut(`/api/v0/tokens/${token.id}/models`, { restrict, models });
+			notice = restrict ? t('tokens-models-saved-toast', { count: models.length }) : t('tokens-models-cleared-toast');
+		});
 	}
-	async function addQuota(token: ManagedToken, dimension: string, window: string, value: number) {
-		await mutate(async () => { await adminPost(`/api/v0/tokens/${token.id}/quota`, { dimension, window, value }); notice = t('tokens-limits-saved-toast'); await refresh(); });
-	}
-	async function removeQuota(token: ManagedToken, id: string) {
-		await mutate(async () => { await adminDelete(`/api/v0/tokens/${token.id}/quota/${id}`); notice = t('tokens-limits-removed-toast'); await refresh(); });
-	}
-	async function setMcpPolicy(token: ManagedToken, allow: boolean) {
-		await mutate(async () => { await adminPut(`/api/v0/tokens/${token.id}/mcp-policy`, { allow });
-			notice = allow ? t('tokens-mcp-ask-enabled-toast') : t('tokens-mcp-ask-disabled-toast'); await refresh(); });
+	async function updateQuotas(token: ManagedToken, changes: { remove: string[]; add: NewQuota[] }) {
+		await commit(async () => {
+			for (const id of changes.remove) await adminDelete(`/api/v0/tokens/${token.id}/quota/${id}`);
+			for (const quota of changes.add) await adminPost(`/api/v0/tokens/${token.id}/quota`, quota);
+			notice = t('tokens-limits-saved-toast');
+		});
 	}
 	async function rotate(token: ManagedToken) {
 		if (!confirm(t('tokens-rotate-confirm'))) return;
@@ -104,20 +117,19 @@
 	{/if}
 
 	{#if selected === 'tokens'}
-	<section class="card border border-base-300"><div class="card-body">
+	<section class="flex flex-col gap-4">
 		<div class="flex flex-wrap items-center justify-between gap-3">
-			<h2 class="card-title">{t('tokens-list-heading')}</h2>
+			<h2 class="m-0 text-lg font-semibold">{t('tokens-list-heading')}</h2>
 			<button class="btn btn-primary btn-sm" type="button" onclick={openCreate}>{t('tokens-create-heading')}</button>
 		</div>
 		{#if !details}<div class="skeleton h-24 w-full"></div>{:else if details.tokens.length === 0}<p class="text-sm text-base-content/60">{t('tokens-list-empty')}</p>{:else}
-			<ul class="flex flex-col divide-y divide-base-300">{#each details.tokens as token (token.id)}
-				<ManagedTokenRow {token} capabilities={details.capabilities} models={details.models} currency={details.currency} timezone={details.timezone} usageEnabled={details.usage_enabled}
-					ontools={(enabled, states) => updateTools(token, enabled, states)} onmodels={(restrict, models) => updateModels(token, restrict, models)}
-					onquota={(dimension, window, value) => addQuota(token, dimension, window, value)} onremovequota={(id) => removeQuota(token, id)}
-					onmcp={(allow) => setMcpPolicy(token, allow)} onrotate={() => rotate(token)} onrevoke={() => revoke(token)} onremove={() => remove(token)} />
+			<ul class="flex flex-col gap-4">{#each details.tokens as token (token.id)}
+				<ManagedTokenCard {token} capabilities={details.capabilities} models={details.models} ownerLimits={details.owner_limits} currency={details.currency} timezone={details.timezone} usageEnabled={details.usage_enabled}
+					ontools={(enabled, states, mcpAllow) => updateTools(token, enabled, states, mcpAllow)} onmodels={(restrict, models) => updateModels(token, restrict, models)}
+					onquotas={(changes) => updateQuotas(token, changes)} onrotate={() => rotate(token)} onrevoke={() => revoke(token)} onremove={() => remove(token)} />
 			{/each}</ul>
 		{/if}
-	</div></section>
+	</section>
 	{:else if selected === 'guides'}
 		<TokenSetupGuides />
 		{/if}

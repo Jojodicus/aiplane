@@ -1274,6 +1274,15 @@ pub async fn tokens_list(State(state): State<Arc<RamaState>>, req: Request) -> R
     let lists = db::token_models::lists_all(&state.db)
         .await
         .unwrap_or_default();
+    let models = match super::json_tokens::model_catalog(
+        &state,
+        &aiplane_core::server::upstreams::PoolAccess::all(),
+    )
+    .await
+    {
+        Ok(models) => models,
+        Err(err) => return internal(err),
+    };
     let limits: std::collections::HashMap<String, Vec<serde_json::Value>> =
         db::limits::list_all(&state.db)
             .await
@@ -1345,7 +1354,7 @@ pub async fn tokens_list(State(state): State<Arc<RamaState>>, req: Request) -> R
         StatusCode::OK,
         serde_json::json!({
             "tokens": out,
-            "models": state.upstreams.all_models_for(&aiplane_core::server::upstreams::PoolAccess::all()),
+            "models": models,
             "usage_enabled": state.usage.is_enabled(),
             "currency": state.config().usage.currency,
             "timezone": tz,

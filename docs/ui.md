@@ -132,7 +132,20 @@ unavailable message and an admin link to operator settings instead of an empty
 page.
 
 Within `/settings/tokens`, `?tab=tokens` manages tokens and `?tab=guides`
-contains client setup guides. A newly minted or rotated secret stays above
+contains client setup guides. Each token is a card (`ManagedTokenCard`) with
+three tiles — **Models**, **Tools**, **Budget** — that show the current state
+(GDPR/NDA exposure and the dearest token price; tool use and the MCP ask
+policy; the tightest quota with its spend) and open one dialog each. Every
+dialog edits a draft and commits on Save; nothing on the card saves on a
+click. Rotate and Revoke sit in the card's ⋯ menu. The model dialog is
+`TokenModelPicker`, shared with the operator restriction on `/admin/tokens`:
+models grouped by kind, each with its GDPR/NDA badges and price (an alias is
+priced as its target), filters for compliance and price, and a warning when
+the selection reaches a model without GDPR or NDA cover. The data comes from
+`/api/v0/tokens/details`: `models` is the catalog
+(`UpstreamRegistry::model_catalog_for` plus `model_defaults` prices),
+`owner_limits` the owner's own in-force limits, and each token's
+`quota_status` its quotas with what has been spent against them. A newly minted or rotated secret stays above
 these inner tabs until the page is left, so switching to a guide does not hide
 the one-time value. The guide's `client` query parameter selects OpenCode,
 Claude Code, or Python; code examples use the browser's current origin so they

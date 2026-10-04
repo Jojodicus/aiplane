@@ -250,6 +250,25 @@ async fn token_management_details_return_saved_scopes_quotas_policy_and_account(
     )
     .await
     .unwrap();
+    aiplane_core::server::db::model_defaults::set_pricing(
+        &state.db,
+        "model-a",
+        Some(1.5),
+        Some(2.0),
+    )
+    .await
+    .unwrap();
+    limits::upsert(
+        &state.db,
+        SubjectType::User,
+        "alice",
+        None,
+        Dimension::Cost,
+        Window::Month,
+        50.0,
+    )
+    .await
+    .unwrap();
     let cookie = session_for(&state, "alice").await;
     let app = common::app(state);
 
@@ -274,7 +293,19 @@ async fn token_management_details_return_saved_scopes_quotas_policy_and_account(
     assert_eq!(parsed["account"]["email"], "alice@example.com");
     assert_eq!(parsed["account"]["user_id"], "alice");
     assert_eq!(parsed["timezone"], "UTC");
-    assert_eq!(parsed["models"], json!(["model-a", "model-b"]));
+    assert_eq!(
+        parsed["models"],
+        json!([
+            {"id": "model-a", "kind": "chat", "gdpr": true, "nda": true, "alias_of": null,
+             "price": {"input": 1.5, "output": 2.0, "unit": "tokens"}},
+            {"id": "model-b", "kind": "chat", "gdpr": true, "nda": true, "alias_of": null,
+             "price": null},
+        ]),
+        "the token editor shows where each model's data goes and what it costs"
+    );
+    assert_eq!(parsed["owner_limits"][0]["dimension"], "cost");
+    assert_eq!(parsed["owner_limits"][0]["limit"], 50.0);
+    assert_eq!(parsed["owner_limits"][0]["used"], 0.0);
     assert_eq!(parsed["tokens"][0]["id"], token_id);
     assert_eq!(parsed["tokens"][0]["owner_models"], json!(["model-a"]));
     assert_eq!(parsed["tokens"][0]["admin_models"], serde_json::Value::Null);
@@ -282,6 +313,8 @@ async fn token_management_details_return_saved_scopes_quotas_policy_and_account(
     assert_eq!(parsed["tokens"][0]["quotas"][0]["dimension"], "requests");
     assert_eq!(parsed["tokens"][0]["quotas"][0]["window"], "day");
     assert_eq!(parsed["tokens"][0]["quotas"][0]["value"], 42.0);
+    assert_eq!(parsed["tokens"][0]["quota_status"][0]["limit"], 42.0);
+    assert_eq!(parsed["tokens"][0]["quota_status"][0]["used"], 0.0);
 }
 
 /// A session-authenticated JSON request — the shape every SPA-driven token

@@ -3,13 +3,15 @@
 	import EditModal from '$lib/components/EditModal.svelte';
 	import { tokenState, visibleTokenModels } from '$lib/admin-tokens';
 	import type { AdminToken, AdminTokenLimit } from '$lib/admin-tokens';
+	import TokenModelPicker from '$lib/components/tokens/TokenModelPicker.svelte';
+	import type { TokenModel } from '$lib/token-models';
 	import { t } from '$lib/i18n.svelte';
 	import { tokenDate } from '$lib/tokens';
 	import { usageCost, usageInteger } from '$lib/usage';
 
 	let { token, models, usageEnabled, currency, timezone, onsave }: {
 		token: AdminToken;
-		models: string[];
+		models: TokenModel[];
 		usageEnabled: boolean;
 		currency: string;
 		timezone: string;
@@ -25,20 +27,9 @@
 	 *  leaks into the next one. */
 	function openEditor() {
 		restrict = token.admin_models !== null;
-		selected = token.admin_models ? [...token.admin_models] : [...models];
+		selected = token.admin_models ? [...token.admin_models] : models.map((model) => model.id);
 		error = null;
 		editing = true;
-	}
-
-	function setRestrict(enabled: boolean) {
-		restrict = enabled;
-		if (enabled && selected.length === 0) selected = [...models];
-	}
-
-	function toggleModel(model: string) {
-		selected = selected.includes(model)
-			? selected.filter((candidate) => candidate !== model)
-			: [...selected, model];
 	}
 
 	async function save() {
@@ -105,6 +96,7 @@
 			</div>
 			<EditModal
 				bind:open={editing}
+				wide
 				title={t('admin-tokens-models-edit')}
 				description={token.name}
 				cancellabel={t('admin-tokens-models-cancel')}
@@ -114,11 +106,7 @@
 			>
 				<div class="flex flex-col gap-3">
 					{#if error}<div class="alert alert-error py-2 text-xs"><span>{error}</span></div>{/if}
-					<p class="m-0 text-xs text-base-content/70">{t('admin-tokens-models-help')}</p>
-					<label class="label cursor-pointer justify-start gap-2"><input type="checkbox" class="toggle toggle-primary toggle-sm" checked={restrict} onchange={(event) => setRestrict(event.currentTarget.checked)} /><span>{t('admin-tokens-models-restrict-label')}</span></label>
-					<div class="flex max-h-64 flex-wrap gap-2 overflow-y-auto">
-						{#each models as model (model)}<label class="label cursor-pointer gap-1"><input type="checkbox" class="checkbox checkbox-sm" disabled={!restrict} checked={selected.includes(model)} onchange={() => toggleModel(model)} /><span class="font-mono text-xs">{model}</span></label>{/each}
-					</div>
+					<TokenModelPicker {models} {currency} help={t('admin-tokens-models-help')} restrictLabel={t('admin-tokens-models-restrict-label')} allLabel={t('admin-tokens-models-summary-all')} bind:restrict bind:selected />
 				</div>
 			</EditModal>
 		</div>

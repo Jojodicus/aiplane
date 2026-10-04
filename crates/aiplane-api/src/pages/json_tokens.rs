@@ -9,8 +9,55 @@ use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 
 use super::{internal, json_ok};
-use aiplane_core::server::db::{limits, token_models, token_tool_prefs, tokens, usage, user_mcp};
+use aiplane_core::server::db::{
+    DbError, limits, model_defaults, token_models, token_tool_prefs, tokens, usage, user_mcp,
+};
+use aiplane_core::server::limits::LimitStatus;
+use aiplane_core::server::upstreams::PoolAccess;
 use aiplane_runtime::rama_server::state::RamaState;
+
+/// The models a token can be limited to, each with what the person choosing
+/// needs to weigh: its kind, where its data goes, and its price. An alias is
+/// priced as the model it resolves to, since that is what it is metered as.
+pub(crate) async fn model_catalog(
+    state: &RamaState,
+    access: &PoolAccess,
+) -> Result<Vec<serde_json::Value>, DbError> {
+    let prices = model_defaults::all_prices(&state.db).await?;
+    Ok(state
+        .upstreams
+        .model_catalog_for(access)
+        .into_iter()
+        .map(|model| {
+            let price = prices.get(model.alias_of.as_deref().unwrap_or(&model.id));
+            serde_json::json!({
+                "id": model.id,
+                "kind": model.kind.as_str(),
+                "gdpr": model.compliance.gdpr,
+                "nda": model.compliance.nda,
+                "alias_of": model.alias_of,
+                "price": price.map(|price| serde_json::json!({
+                    "input": price.input_price,
+                    "output": price.output_price,
+                    "unit": price.pricing_unit.as_str(),
+                })),
+            })
+        })
+        .collect())
+}
+
+/// One in-force limit with what has been spent against it, as `/usage` and
+/// the token editor both draw it.
+pub fn limit_status_json(status: &LimitStatus) -> serde_json::Value {
+    serde_json::json!({
+        "model": status.model,
+        "dimension": status.dimension.as_str(),
+        "window": status.window.as_str(),
+        "limit": status.limit,
+        "used": status.used,
+        "refreshes_at": status.refreshes_at.to_string(),
+    })
+}
 
 pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (session, user) = require_session_json!(state, req);
@@ -86,6 +133,7 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
             Err(err) => return internal(err),
         };
         let token_quotas = quotas.remove(&token.id).unwrap_or_default();
+        let quota_status = state.enforcer.token_statuses(&token.id).await;
         let usage = usage_by_token.get(&token.id);
         token_details.push(serde_json::json!({
             "id": token.id,
@@ -107,6 +155,7 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
                 "value": rule.value,
                 "managed_by": rule.managed_by.as_str(),
             })).collect::<Vec<_>>(),
+            "quota_status": quota_status.iter().map(limit_status_json).collect::<Vec<_>>(),
             "usage": usage.map(|row| serde_json::json!({
                 "requests": row.requests,
                 "tokens": row.total_tokens,
@@ -115,15 +164,18 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         }));
     }
     let role_ids = state.rbac.role_ids_for(&user.roles);
-    let models = state
-        .upstreams
-        .all_models_for(&state.pool_access_for(&user.roles));
+    let models = match model_catalog(&state, &state.pool_access_for(&user.roles)).await {
+        Ok(models) => models,
+        Err(err) => return internal(err),
+    };
+    let owner_limits = state.enforcer.statuses(&user.id, &role_ids).await;
     json_ok(
         StatusCode::OK,
         serde_json::json!({
             "tokens": token_details,
             "capabilities": capabilities,
             "models": models,
+            "owner_limits": owner_limits.iter().map(limit_status_json).collect::<Vec<_>>(),
             "usage_enabled": state.usage.is_enabled(),
         "currency": state.config().usage.currency,
         "push_enabled": state.push.is_some(),
