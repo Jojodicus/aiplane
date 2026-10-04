@@ -452,7 +452,7 @@ are in `web/src/lib/components/agents/`.
     channels, embed keys).
 
   The panels:
-  - *Builder*: collapsible sections. **Main agent** (pool, orchestration and
+  - *Builder*: collapsible sections. **Main agent** (model, orchestration and
     response instructions, tools and skills from the agent's grants, per-tool
     permission and `bind` rows, budget), **State slots**, **Routes and
     sub-agents** (router, and per route: description, gate, sub-agent picker,
@@ -636,8 +636,8 @@ that every step round-trips through the advanced editor's
   | Step | What the person sees | What it writes |
   |---|---|---|
   | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field with *Suggest a setup* (below) | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
-  | Task & tone | name, what the agent does, tone chips, answer language, free text, *How thorough?* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.pool` |
-  | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_pool` kept |
+  | Task & tone | name, what the agent does, tone chips, answer language, free text, *Model* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.model` (unset = the gateway default) |
+  | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_model` kept |
   | Knowledge & abilities | `ChoiceCard` (`multiple`) per RAG collection, tool, connector and skill | grants (below) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
   | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description`, the row's position as `order` (the server hands object keys back sorted, so the list order lives there); a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
@@ -658,20 +658,29 @@ that every step round-trips through the advanced editor's
   it, and the modal's Cancel drops what the edit staged. A card for something
   the agent holds but the manager does not is shown disabled ("Granted by
   someone else").
-- **Model choice.** *Fast / Balanced / Thorough* is a `SegmentedControl` over
-  the pools an admin mapped in `/admin/settings` → Chat → *Agent model choices*
-  (`agents.pool_fast`, `…_balanced`, `…_thorough`), which
-  `GET /api/v0/agent-resources` returns as `tiers`; once any is mapped, an
-  unmapped Balanced is the gateway's default chat model. Choosing one grants the
-  pool and sets `main.pool`; a choice whose pool the manager does not hold says
-  so. Without a mapping the step lists the pools the manager may grant by a
-  readable name. An agent without a pool starts on the pool of the gateway's
-  default chat model (`defaults.chat`, staged for granting) —
-  [`agents.md`](agents.md#default-models).
-- **Voice.** Switching a direction on in the *Website* step names the pool of
-  the gateway's default transcription / speech model the manager holds
-  (`defaults.transcription` / `.speech`) and stages its grant. A direction the
-  manager holds no pool for shows why instead of a switch.
+- **Model choice.** One `ModelPicker` (`components/agents/ModelPicker.svelte`):
+  the chat picker's `SearchableSelect` with the options `modelSelectOptions`
+  builds (`$lib/model-option`, the GDPR / NDA badges included), led by
+  *Default (<model>)* for the gateway's default model of that kind
+  (`defaults.<kind>` of `GET /api/v0/agent-resources`, Models & routing →
+  Default models). The list is `models.<kind>` — what the manager may use and
+  so grant, built like `GET /api/v0/models` (an automatic route only when the
+  manager may use its fallback, every candidate and its selector) — plus the
+  models the agent holds that no list of the manager's names
+  (`modelPickerOptions`). Choosing a model stages its `model` grant and sets
+  `main.model`; *Default* removes the key and stages the default's grant when
+  the manager may give it (`modelGrantFor`), otherwise the step says the
+  default is out of their reach (`defaultOutOfReach`). What the agent ran on
+  before is staged for revoking unless the spec still runs on it, defaults
+  of unset keys included (`modelsInUse`). A new agent starts on *Default*.
+  The advanced editor's main-model and classifier-model pickers use the same
+  component over the agent's granted models only —
+  [`agents.md`](agents.md#models).
+- **Voice.** The *Website* step's transcription / speech pickers are the same
+  `ModelPicker` over `models.transcription` / `models.speech`
+  (`publish.voice.transcription_model` / `speech_model`). Switching a
+  direction on starts it on *Default* and stages the default's grant. A
+  direction the manager may grant no model for shows why instead of a switch.
 - **Errors.** `setupErrorMessage` (`agent-setup.ts`) turns a failed call into a
   catalog message — the assistant unavailable (404/405/501/503), its model
   failing (502), a network failure, a rate refusal with its `Retry-After` — and
