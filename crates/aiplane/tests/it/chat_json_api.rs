@@ -3102,3 +3102,101 @@ async fn the_first_message_titles_the_conversation_through_a_side_call() {
         "how do I tune ceph\n\n/no_think"
     );
 }
+
+/// Attachment downloads answer by meaning: the bytes when the object store
+/// has them, 404 when it does not, 502 when the store fails, 503 when no
+/// store is configured — every refusal in the shared error envelope.
+#[tokio::test]
+async fn attachment_download_statuses_follow_what_the_object_store_answered() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let s3 = MockServer::start().await;
+    let object = |name: &str| {
+        format!(
+            "/{}/{}/turn-a/{name}",
+            common::TEST_S3_BUCKET,
+            common::TEST_S3_PREFIX
+        )
+    };
+    Mock::given(method("GET"))
+        .and(path(object("there.txt")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_string("hello"),
+        )
+        .mount(&s3)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(object("gone.txt")))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_string("<Error><Code>NoSuchKey</Code></Error>"),
+        )
+        .mount(&s3)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(object("unlisted.txt")))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_string("<Error><Code>AccessDenied</Code></Error>"),
+        )
+        .mount(&s3)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(object("broken.txt")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&s3)
+        .await;
+
+    let state = common::state_with_s3(&s3.uri()).await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    common::seed_turn(&state, "alice", "turn-a").await;
+    let app = router(Arc::new(state));
+    let fetch = |name: &str| {
+        Request::builder()
+            .method(Method::GET)
+            .uri(format!("/api/v0/chat/attachment/turn-a/{name}"))
+            .header(header::COOKIE, format!("id={cookie}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let ok = app.serve(fetch("there.txt")).await.unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(&common::read_body(ok).await[..], b"hello");
+
+    for (name, status, code) in [
+        ("gone.txt", StatusCode::NOT_FOUND, "not_found"),
+        ("unlisted.txt", StatusCode::NOT_FOUND, "not_found"),
+        (
+            "broken.txt",
+            StatusCode::BAD_GATEWAY,
+            "attachment_storage_failed",
+        ),
+    ] {
+        let resp = app.serve(fetch(name)).await.unwrap();
+        assert_eq!(resp.status(), status, "{name}");
+        let refused: serde_json::Value =
+            serde_json::from_slice(&common::read_body(resp).await).unwrap();
+        assert_eq!(refused["error"]["code"], code, "{name}: {refused}");
+    }
+
+    let bare = common::state_with_chat_pool("http://unused.invalid").await;
+    let cookie = common::seed_session(&bare, "alice", "alice@example.com").await;
+    common::seed_turn(&bare, "alice", "turn-a").await;
+    let resp = router(Arc::new(bare))
+        .serve(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/v0/chat/attachment/turn-a/there.txt")
+                .header(header::COOKIE, format!("id={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let refused: serde_json::Value =
+        serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(refused["error"]["code"], "attachments_not_configured");
+}

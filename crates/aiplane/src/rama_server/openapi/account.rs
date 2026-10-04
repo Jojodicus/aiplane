@@ -90,21 +90,16 @@ pub(super) fn operations() -> Vec<Op> {
             Access::Session,
         )
         .ok(Content::Bytes("*/*"))
-        .errors(&[400, 404, 503])
-        .error_body(Content::Text("text/plain")),
-        get("/api/v0/feedback/config", Access::Session)
-            .ok(json::<feedback::FeedbackConfigView>())
-            .error_body(json::<feedback::FeedbackError>()),
+        .errors(&[400, 404, 502, 503]),
+        get("/api/v0/feedback/config", Access::Session).ok(json::<feedback::FeedbackConfigView>()),
         post("/api/v0/feedback/extract", Access::Session)
             .body(json::<feedback::ExtractRequest>())
             .ok(json::<feedback::ExtractedFields>())
-            .errors(&[400, 429, 502, 503])
-            .error_body(json::<feedback::FeedbackError>()),
+            .errors(&[400, 429, 502, 503]),
         post("/api/v0/feedback", Access::Session)
             .body(json::<feedback::SubmitRequest>())
             .ok(json::<feedback::FiledIssue>())
-            .errors(&[400, 502, 503])
-            .error_body(json::<feedback::FeedbackError>()),
+            .errors(&[400, 502, 503]),
         post("/api/v0/comfyui/reload", Access::Admin)
             .ok(json::<comfyui::ReloadResponse>())
             .errors(&[409]),

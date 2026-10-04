@@ -1134,6 +1134,7 @@ export const en: Catalog = {
  "chat-composer-send-during-turn-title": "Send. While an answer is being written this is added to it, and if it arrives too late it is sent as the next message.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "not found",
+ "chat-error-attachment-storage-failed": "The attachment store did not answer properly, so the file could not be fetched. Try again; if it keeps failing, an administrator should check the attachment storage under /admin/settings.",
  "chat-error-attachments-not-configured": "chat attachments not configured",
  "chat-error-auth-required": "auth required",
  "chat-error-bad-filename": "bad filename",

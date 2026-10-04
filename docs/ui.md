@@ -237,9 +237,11 @@ cannot ship undescribed. A new route therefore needs a declaration, and its
 handler's request and response types need `#[derive(schemars::JsonSchema)]`;
 an ad-hoc `json!` body has no schema to derive, so give the response a type.
 
-A few operations refuse in a shape of their own, and their declarations say
-so (`Op::error_body`): the feedback routes answer `{"error":{"message"}}`
-(`FeedbackError`), and chat attachment downloads refuse in plain text.
+Every refusal is the shared error envelope (`json_error`), with the status its
+meaning calls for: 404 for a resource that does not exist or that the caller
+may not see, 502 when a backend the gateway relies on (an upstream, the object
+store, the issue tracker) failed, 503 when the feature is not configured. A
+`200` never carries a failure.
 
 **Operations without a derived schema.** A payload with no wire type to derive
 from is declared with a reason, served as `x-aiplane-schema-unsupported`, and a

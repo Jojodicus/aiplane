@@ -1397,6 +1397,7 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
     let Some((turn_id, filename)) = attachment_path_parts(req.uri().path()) else {
         return attachment_error(
             rama::http::StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "chat-error-bad-filename"),
         );
     };
@@ -1407,6 +1408,7 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
         _ => {
             return attachment_error(
                 rama::http::StatusCode::UNAUTHORIZED,
+                "unauthorized",
                 &t(lang, "chat-error-auth-required"),
             );
         }
@@ -1424,6 +1426,7 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
             );
             return attachment_error(
                 rama::http::StatusCode::NOT_FOUND,
+                "not_found",
                 &t(lang, "chat-error-no-such-turn"),
             );
         }
@@ -1431,6 +1434,7 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
             tracing::warn!(error = %err, "turn_session_readable");
             return attachment_error(
                 rama::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
                 &t(lang, "chat-error-db-error"),
             );
         }
@@ -1439,6 +1443,7 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
     let Some(cfg) = config.chat.s3.as_ref() else {
         return attachment_error(
             rama::http::StatusCode::SERVICE_UNAVAILABLE,
+            "attachments_not_configured",
             &t(lang, "chat-error-attachments-not-configured"),
         );
     };
@@ -1447,14 +1452,33 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
         Err(chat_attachments::AttachmentError::BadFilename(_)) => {
             return attachment_error(
                 rama::http::StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t(lang, "chat-error-bad-filename"),
+            );
+        }
+        Err(chat_attachments::AttachmentError::NotFound(_)) => {
+            return attachment_error(
+                rama::http::StatusCode::NOT_FOUND,
+                "not_found",
+                &t(lang, "chat-error-attachment-not-found"),
+            );
+        }
+        Err(
+            chat_attachments::AttachmentError::NotConfigured
+            | chat_attachments::AttachmentError::MissingCredential(_),
+        ) => {
+            return attachment_error(
+                rama::http::StatusCode::SERVICE_UNAVAILABLE,
+                "attachments_not_configured",
+                &t(lang, "chat-error-attachments-not-configured"),
             );
         }
         Err(err) => {
             tracing::warn!(error = %err, %turn_id, %filename, "attachment fetch");
             return attachment_error(
-                rama::http::StatusCode::NOT_FOUND,
-                &t(lang, "chat-error-attachment-not-found"),
+                rama::http::StatusCode::BAD_GATEWAY,
+                "attachment_storage_failed",
+                &t(lang, "chat-error-attachment-storage-failed"),
             );
         }
     };
@@ -1469,23 +1493,19 @@ pub async fn chat_attachment(State(state): State<Arc<RamaState>>, req: Request) 
         .header(rama::http::header::CACHE_CONTROL, "private, max-age=3600")
         .body(fetched.bytes.into())
         .unwrap_or_else(|err| {
+            // Only the stored content type can make this fail: the object
+            // store handed back a value that is not a valid header.
             tracing::error!(error = %err, "attachment response build");
             attachment_error(
-                rama::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "response build",
+                rama::http::StatusCode::BAD_GATEWAY,
+                "attachment_storage_failed",
+                &t(lang, "chat-error-attachment-storage-failed"),
             )
         })
 }
 
-fn attachment_error(status: rama::http::StatusCode, msg: &str) -> Response {
-    Response::builder()
-        .status(status)
-        .header(
-            rama::http::header::CONTENT_TYPE,
-            "text/plain; charset=utf-8",
-        )
-        .body(msg.to_string().into())
-        .unwrap()
+fn attachment_error(status: rama::http::StatusCode, code: &str, msg: &str) -> Response {
+    crate::pages::json_error(status, code, msg)
 }
 
 #[cfg(test)]

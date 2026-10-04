@@ -1226,3 +1226,52 @@ async fn ref_editor_and_index_log_are_available_to_the_admin_ui() {
     let refs: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
     assert_eq!(refs["data"][0]["document_count"], 12);
 }
+
+/// Rotating or clearing the sync token of a collection that does not exist
+/// is a 404, not a token for nothing.
+#[tokio::test]
+async fn sync_token_routes_answer_404_for_a_missing_collection() {
+    let state = common::state_with_admin_rbac("http://unused.invalid").await;
+    let cookie = seed_admin(&state, "alice").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(req_with_cookie(
+            Method::POST,
+            "/api/v0/rag/collections",
+            &cookie,
+            Some(create_body()),
+        ))
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    for (path, status) in [
+        (
+            format!("/api/v0/rag/collections/{id}/sync-token"),
+            StatusCode::OK,
+        ),
+        (
+            format!("/api/v0/rag/collections/{id}/sync-token/clear"),
+            StatusCode::OK,
+        ),
+        (
+            "/api/v0/rag/collections/99999/sync-token".to_string(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/api/v0/rag/collections/99999/sync-token/clear".to_string(),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let resp = app
+            .serve(req_with_cookie(Method::POST, &path, &cookie, None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), status, "{path}");
+        if status == StatusCode::NOT_FOUND {
+            let refused: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+            assert_eq!(refused["error"]["code"], "not_found", "{refused}");
+        }
+    }
+}

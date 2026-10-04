@@ -1134,6 +1134,7 @@ export const es: Catalog = {
  "chat-composer-send-during-turn-title": "Enviar. Mientras se escribe una respuesta, esto se añade a ella; si llega tarde, se envía como el mensaje siguiente.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "no encontrado",
+ "chat-error-attachment-storage-failed": "El almacenamiento de adjuntos no respondió correctamente, así que no se pudo obtener el archivo. Inténtalo de nuevo; si sigue fallando, un administrador debe revisar el almacenamiento de adjuntos en /admin/settings.",
  "chat-error-attachments-not-configured": "los adjuntos del chat no están configurados",
  "chat-error-auth-required": "se requiere autenticación",
  "chat-error-bad-filename": "nombre de archivo no válido",

@@ -2400,12 +2400,11 @@ pub async fn backends_test(State(state): State<Arc<RamaState>>, req: Request) ->
     };
     let base_url = parsed.base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
-        return json_ok(
-            StatusCode::OK,
-            BackendTest::BaseUrlRequired {
-                outcome: TestOutcome::Error,
-                models: Vec::new(),
-            },
+        return backend_test_failed(
+            StatusCode::BAD_REQUEST,
+            "base_url_required",
+            "the connection test needs a base URL: enter the backend's address and test again",
+            BackendTestFailure::default(),
         );
     }
     let health_path = match parsed.health_path.trim() {
@@ -2424,26 +2423,34 @@ pub async fn backends_test(State(state): State<Arc<RamaState>>, req: Request) ->
     let response = match tokio::time::timeout(BACKEND_TEST_TIMEOUT, request.send()).await {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => {
-            return json_ok(
-                StatusCode::OK,
-                BackendTest::Unreachable {
-                    outcome: TestOutcome::Error,
-                    detail: deepest_error(&err),
-                    url,
-                    key_source,
-                    models: Vec::new(),
+            let detail = deepest_error(&err);
+            return backend_test_failed(
+                StatusCode::BAD_GATEWAY,
+                "unreachable",
+                &format!(
+                    "could not reach {url}: {detail}; check the address and that the backend is running"
+                ),
+                BackendTestFailure {
+                    url: Some(url),
+                    detail: Some(detail),
+                    key_source: Some(key_source),
+                    ..Default::default()
                 },
             );
         }
         Err(_) => {
-            return json_ok(
-                StatusCode::OK,
-                BackendTest::Timeout {
-                    outcome: TestOutcome::Error,
-                    url,
-                    timeout_seconds: BACKEND_TEST_TIMEOUT.as_secs(),
-                    key_source,
-                    models: Vec::new(),
+            return backend_test_failed(
+                StatusCode::GATEWAY_TIMEOUT,
+                "timeout",
+                &format!(
+                    "{url} did not answer within {} s; check the address and the backend's load",
+                    BACKEND_TEST_TIMEOUT.as_secs()
+                ),
+                BackendTestFailure {
+                    url: Some(url),
+                    timeout_seconds: Some(BACKEND_TEST_TIMEOUT.as_secs()),
+                    key_source: Some(key_source),
+                    ..Default::default()
                 },
             );
         }
@@ -2452,26 +2459,32 @@ pub async fn backends_test(State(state): State<Arc<RamaState>>, req: Request) ->
     let body = capped_read::read_capped(response, capped_read::MODEL_ANSWER_BYTES)
         .await
         .unwrap_or_default();
+    // The backend's own 401 is not the caller's: answering it as such would
+    // read as "your gateway session expired". It is a failed upstream, 502.
     if matches!(status, 401 | 403) {
-        return json_ok(
-            StatusCode::OK,
-            BackendTest::AuthFailed {
-                outcome: TestOutcome::Error,
-                status,
-                key_source,
-                models: Vec::new(),
+        return backend_test_failed(
+            StatusCode::BAD_GATEWAY,
+            "auth_failed",
+            &format!(
+                "the backend refused the API key with {status}; check the key or its environment variable"
+            ),
+            BackendTestFailure {
+                status: Some(status),
+                key_source: Some(key_source),
+                ..Default::default()
             },
         );
     }
     if !(200..300).contains(&status) {
-        return json_ok(
-            StatusCode::OK,
-            BackendTest::HttpError {
-                outcome: TestOutcome::Error,
-                status,
-                url,
-                key_source,
-                models: Vec::new(),
+        return backend_test_failed(
+            StatusCode::BAD_GATEWAY,
+            "http_error",
+            &format!("{url} answered {status}; check the address and the health path"),
+            BackendTestFailure {
+                status: Some(status),
+                url: Some(url),
+                key_source: Some(key_source),
+                ..Default::default()
             },
         );
     }
@@ -2526,55 +2539,55 @@ pub async fn backends_test(State(state): State<Arc<RamaState>>, req: Request) ->
     )
 }
 
-/// What a connection test of a backend found. Every outcome is a 200; `code`
-/// says which it was.
+/// What a connection test of a backend that answered found; `code` says
+/// whether it listed models. A test that failed is a refusal instead (see
+/// [`backend_test_failed`]).
 #[derive(serde::Serialize, schemars::JsonSchema)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum BackendTest {
-    BaseUrlRequired {
-        outcome: TestOutcome,
-        models: Vec<String>,
-    },
-    /// The request failed before any answer; `detail` is the innermost error.
-    Unreachable {
-        outcome: TestOutcome,
-        url: String,
-        detail: String,
-        key_source: KeySource,
-        models: Vec<String>,
-    },
-    Timeout {
-        outcome: TestOutcome,
-        url: String,
-        timeout_seconds: u64,
-        key_source: KeySource,
-        models: Vec<String>,
-    },
-    /// The backend answered 401 or 403.
-    AuthFailed {
-        outcome: TestOutcome,
-        status: u16,
-        key_source: KeySource,
-        models: Vec<String>,
-    },
-    /// The backend answered another non-2xx status.
-    HttpError {
-        outcome: TestOutcome,
-        status: u16,
-        url: String,
-        key_source: KeySource,
-        models: Vec<String>,
-    },
     /// The backend answered and listed models.
     Ok(BackendFound),
     /// The backend answered but listed no model.
     OkNoModels(BackendFound),
 }
 
+/// A failed connection test: the shared envelope with the test's `code`
+/// (`base_url_required`, `unreachable`, `timeout`, `auth_failed`,
+/// `http_error`) and whichever details it has beside it.
+fn backend_test_failed(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    failure: BackendTestFailure,
+) -> Response {
+    let extra = match serde_json::to_value(failure) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    json_error_with(status, code, message, extra)
+}
+
+/// The details a failed connection test carries in its error envelope.
+#[derive(Default, serde::Serialize, schemars::JsonSchema)]
+pub struct BackendTestFailure {
+    /// The URL the test requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The backend's HTTP status, when it answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// The innermost transport error, when it did not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_source: Option<KeySource>,
+}
+
 #[derive(serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TestOutcome {
-    Error,
     Warning,
     Success,
 }

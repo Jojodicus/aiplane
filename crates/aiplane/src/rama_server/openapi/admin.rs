@@ -78,7 +78,7 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/admin/backends/test", Access::Admin)
             .body(json::<admin::BackendTestBody>())
             .ok(json::<admin::BackendTest>())
-            .errors(&[400]),
+            .errors(&[400, 502, 504]),
         delete("/api/v0/admin/backends/{name}", Access::Admin)
             .no_content()
             .errors(&[400]),

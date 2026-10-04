@@ -559,7 +559,8 @@ pub fn hash_sync_token(token: &str) -> String {
 ///
 /// Shown to the operator once, at the moment they create it — after that
 /// only the hash exists, and rotating is the only way to get a new one.
-pub async fn rotate_sync_token(pool: &Pool, id: i64) -> Result<String, DbError> {
+/// `None` when there is no collection with that id.
+pub async fn rotate_sync_token(pool: &Pool, id: i64) -> Result<Option<String>, DbError> {
     use rand::RngExt as _;
     let token: String = {
         const ALPHABET: &[u8] = b"abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -568,23 +569,27 @@ pub async fn rotate_sync_token(pool: &Pool, id: i64) -> Result<String, DbError> 
             .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
             .collect()
     };
-    sqlx::query("UPDATE rag_collections SET sync_token_hash = ?, updated_at = ? WHERE id = ?")
-        .bind(hash_sync_token(&token))
-        .bind(Timestamp::now().to_string())
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(token)
+    let updated =
+        sqlx::query("UPDATE rag_collections SET sync_token_hash = ?, updated_at = ? WHERE id = ?")
+            .bind(hash_sync_token(&token))
+            .bind(Timestamp::now().to_string())
+            .bind(id)
+            .execute(pool)
+            .await?;
+    Ok((updated.rows_affected() > 0).then_some(token))
 }
 
-/// Remove a collection's sync token, disabling its hook.
-pub async fn clear_sync_token(pool: &Pool, id: i64) -> Result<(), DbError> {
-    sqlx::query("UPDATE rag_collections SET sync_token_hash = NULL, updated_at = ? WHERE id = ?")
-        .bind(Timestamp::now().to_string())
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
+/// Remove a collection's sync token, disabling its hook. `false` when there
+/// is no collection with that id.
+pub async fn clear_sync_token(pool: &Pool, id: i64) -> Result<bool, DbError> {
+    let updated = sqlx::query(
+        "UPDATE rag_collections SET sync_token_hash = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(Timestamp::now().to_string())
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(updated.rows_affected() > 0)
 }
 
 /// The collection a sync token belongs to, or `None`.

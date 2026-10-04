@@ -2354,3 +2354,63 @@ async fn settings_save_refuses_values_the_typed_reads_would_replace() {
         serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
     assert_eq!(shown(&saved, "chat.compaction.trigger_ratio"), "0.6");
 }
+
+/// A connection test that fails says so in its status, with the shared
+/// envelope carrying the same `code` and details the success body would.
+#[tokio::test]
+async fn backend_connection_test_failures_are_refusals_with_their_status() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/auth/models"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/broken/models"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&upstream)
+        .await;
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    };
+
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    for (base_url, status, code) in [
+        (String::new(), StatusCode::BAD_REQUEST, "base_url_required"),
+        (
+            format!("{}/auth", upstream.uri()),
+            StatusCode::BAD_GATEWAY,
+            "auth_failed",
+        ),
+        (
+            format!("{}/broken", upstream.uri()),
+            StatusCode::BAD_GATEWAY,
+            "http_error",
+        ),
+        (closed, StatusCode::BAD_GATEWAY, "unreachable"),
+    ] {
+        let response = app
+            .serve(req(
+                Method::POST,
+                "/api/v0/admin/backends/test",
+                &cookie,
+                Some(
+                    serde_json::json!({ "name": "probe", "base_url": base_url, "health_path": "/models" })
+                        .to_string(),
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{code}");
+        let refused: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+        assert_eq!(refused["error"]["code"], code, "{refused}");
+        if code == "auth_failed" || code == "http_error" {
+            assert!(refused["error"]["status"].is_u64(), "{refused}");
+            assert_eq!(refused["error"]["key_source"]["kind"], "none", "{refused}");
+        }
+    }
+}

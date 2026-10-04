@@ -1146,6 +1146,7 @@ export const ru: Catalog = {
  "chat-composer-send-during-turn-title": "Отправить. Пока пишется ответ, это добавляется к нему; если не успеет — будет отправлено следующим сообщением.",
  "chat-default-title": "Чат",
  "chat-error-attachment-not-found": "не найдено",
+ "chat-error-attachment-storage-failed": "Хранилище вложений ответило некорректно, поэтому файл не удалось получить. Попробуйте ещё раз; если ошибка повторяется, администратору следует проверить хранилище вложений в /admin/settings.",
  "chat-error-attachments-not-configured": "вложения чата не настроены",
  "chat-error-auth-required": "требуется авторизация",
  "chat-error-bad-filename": "недопустимое имя файла",

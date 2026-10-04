@@ -12,6 +12,7 @@ chat-error-db-error = ошибка базы данных
 chat-error-attachments-not-configured = вложения чата не настроены
 chat-error-bad-filename = недопустимое имя файла
 chat-error-attachment-not-found = не найдено
+chat-error-attachment-storage-failed = Хранилище вложений ответило некорректно, поэтому файл не удалось получить. Попробуйте ещё раз; если ошибка повторяется, администратору следует проверить хранилище вложений в /admin/settings.
 chat-error-turn-interrupted = Внутренняя ошибка прервала этот ответ. Попробуйте ещё раз.
 
 # SPA-only chat chrome (`web/src/routes/chat/*`): the conversation list,

@@ -57,6 +57,10 @@ pub enum AttachmentError {
     MissingCredential(String),
     #[error("filename `{0}` rejected (must not be empty or contain `/`)")]
     BadFilename(String),
+    /// The object store has no such object (404, or 403 from a bucket the
+    /// credentials may not list).
+    #[error("no attachment `{0}` in the object store")]
+    NotFound(String),
     #[error("s3 client: {0}")]
     Client(#[from] S3Error),
     #[error("s3 credentials: {0}")]
@@ -204,6 +208,15 @@ pub async fn delete(cfg: &S3Config, turn_id: &str, filename: &str) -> Result<(),
         .await
         .map_err(AttachmentError::Client)?;
     let status = resp.status_code();
+    // A bucket whose credentials may get but not list objects (the usual
+    // least-privilege policy) answers a missing key with 403, not 404. Logged,
+    // because a 403 on every object means the credentials are wrong instead.
+    if status == 403 {
+        tracing::warn!(%key, "s3 GET answered 403; treating the attachment as missing");
+    }
+    if matches!(status, 403 | 404) {
+        return Err(AttachmentError::NotFound(key));
+    }
     if !(200..300).contains(&status) {
         return Err(AttachmentError::Client(S3Error::Io(std::io::Error::other(
             format!("s3 DELETE returned status {status}"),
@@ -253,9 +266,10 @@ pub struct FetchedAttachment {
 }
 
 /// GET the object at `<key_prefix>/<turn_id>/<filename>` and return
-/// the raw bytes + content-type. Errors with [`AttachmentError::Client`]
-/// for any non-2xx response so the caller can surface a clean tool
-/// error to the model.
+/// the raw bytes + content-type. Errors with [`AttachmentError::NotFound`]
+/// when the store has no such object and [`AttachmentError::Client`] for any
+/// other non-2xx response, so a caller can tell a missing file from a failing
+/// store.
 pub async fn fetch(
     cfg: &S3Config,
     turn_id: &str,
@@ -271,6 +285,15 @@ pub async fn fetch(
         .await
         .map_err(AttachmentError::Client)?;
     let status = resp.status_code();
+    // A bucket whose credentials may get but not list objects (the usual
+    // least-privilege policy) answers a missing key with 403, not 404. Logged,
+    // because a 403 on every object means the credentials are wrong instead.
+    if status == 403 {
+        tracing::warn!(%key, "s3 GET answered 403; treating the attachment as missing");
+    }
+    if matches!(status, 403 | 404) {
+        return Err(AttachmentError::NotFound(key));
+    }
     if !(200..300).contains(&status) {
         return Err(AttachmentError::Client(S3Error::Io(std::io::Error::other(
             format!("s3 GET returned status {status}"),

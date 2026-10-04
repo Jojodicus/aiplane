@@ -1134,6 +1134,7 @@ export const fr: Catalog = {
  "chat-composer-send-during-turn-title": "Envoyer. Pendant qu'une réponse s'écrit, ceci lui est ajouté ; si cela arrive trop tard, c'est envoyé comme message suivant.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "introuvable",
+ "chat-error-attachment-storage-failed": "Le stockage des pièces jointes n'a pas répondu correctement, le fichier n'a donc pas pu être récupéré. Réessayez ; si l'échec persiste, un administrateur doit vérifier le stockage des pièces jointes dans /admin/settings.",
  "chat-error-attachments-not-configured": "les pièces jointes du chat ne sont pas configurées",
  "chat-error-auth-required": "authentification requise",
  "chat-error-bad-filename": "nom de fichier invalide",

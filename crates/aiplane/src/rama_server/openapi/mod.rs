@@ -183,7 +183,6 @@ pub(crate) struct Op {
     request: Vec<Content>,
     replies: Vec<(u16, Option<Content>)>,
     errors: Vec<u16>,
-    error_body: Option<Content>,
     unsupported: Option<&'static str>,
 }
 
@@ -196,7 +195,6 @@ fn op(method: &'static str, path: &'static str, access: Access) -> Op {
         request: Vec::new(),
         replies: Vec::new(),
         errors: Vec::new(),
-        error_body: None,
         unsupported: None,
     }
 }
@@ -279,13 +277,6 @@ impl Op {
     /// repeated.
     pub(crate) fn errors(mut self, statuses: &[u16]) -> Self {
         self.errors.extend_from_slice(statuses);
-        self
-    }
-
-    /// The body this operation's refusals carry, when it is not the shared
-    /// error envelope.
-    pub(crate) fn error_body(mut self, content: Content) -> Self {
-        self.error_body = Some(content);
         self
     }
 
@@ -465,10 +456,7 @@ fn operation(declared: &Op, generators: &mut Generators, error: &Schema) -> Valu
         .chain(body_cap)
         .copied()
         .collect();
-    let error_content = match &declared.error_body {
-        Some(content) => content_map([content], &mut generators.reply),
-        None => json!({ "application/json": { "schema": error } }),
-    };
+    let error_content = json!({ "application/json": { "schema": error } });
     for status in errors {
         responses.insert(
             status.to_string(),

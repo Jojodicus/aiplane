@@ -32,8 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rama::http::service::web::extract::State;
-use rama::http::service::web::response::IntoResponse;
-use rama::http::{Request, Response, StatusCode, header};
+use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 use session_core::chrome::read_body_to_bytes;
@@ -47,42 +46,12 @@ use aiplane_features::server::issue_tracker::{self, IssueInput, TrackerError};
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::side_call::{self, JsonShape, Payer, SideCall, SideCallError};
 
-// ---------------------------------------------------------------------------
-// Small JSON helpers (these endpoints are fetch'd, not Datastar-driven).
-
-fn json_response(status: StatusCode, value: impl serde::Serialize) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        serde_json::to_string(&value).expect("wire types serialize to JSON"),
-    )
-        .into_response()
-}
-
 fn json_ok(value: impl serde::Serialize) -> Response {
-    json_response(StatusCode::OK, value)
+    super::json_ok(StatusCode::OK, value)
 }
 
-fn json_err(status: StatusCode, message: &str) -> Response {
-    json_response(
-        status,
-        FeedbackError {
-            error: FeedbackErrorBody {
-                message: message.to_string(),
-            },
-        },
-    )
-}
-
-/// How the feedback routes refuse: the envelope's `message` alone.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct FeedbackError {
-    pub error: FeedbackErrorBody,
-}
-
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct FeedbackErrorBody {
-    pub message: String,
+fn json_err(status: StatusCode, code: &str, message: &str) -> Response {
+    super::json_error(status, code, message)
 }
 
 /// Session gate that returns a 401 JSON envelope (not a redirect) on miss —
@@ -96,12 +65,14 @@ async fn require_session_json(
         Ok(Some(s)) => Ok(s),
         Ok(None) => Err(json_err(
             StatusCode::UNAUTHORIZED,
+            "unauthorized",
             &t(lang, "feedback-err-no-session"),
         )),
         Err(err) => {
             tracing::warn!(error = %err, "feedback: session lookup");
             Err(json_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
                 &t(lang, "feedback-err-session-lookup-failed"),
             ))
         }
@@ -219,6 +190,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
         Err(msg) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-body-read",
@@ -232,6 +204,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
         Err(err) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-malformed-json",
@@ -244,6 +217,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
     if transcript.is_empty() {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-empty-transcript"),
         );
     }
@@ -263,6 +237,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
     let Some(model) = model else {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_no_model",
             &t(lang, "feedback-err-no-chat-model"),
         );
     };
@@ -287,6 +262,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
             };
             json_err(
                 status,
+                "feedback_model_failed",
                 &t_args(
                     lang,
                     "feedback-err-extraction-failed",
@@ -429,12 +405,14 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     let Some(cfg) = state.config().feedback.clone() else {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         );
     };
     if !cfg.is_configured() {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         );
     }
@@ -445,6 +423,7 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
         Err(msg) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-body-read",
@@ -458,6 +437,7 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
         Err(err) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-malformed-json",
@@ -471,12 +451,14 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     if title.chars().count() < 4 {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-title-required"),
         );
     }
     if parsed.description.trim().is_empty() {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-description-required"),
         );
     }
@@ -514,12 +496,14 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
         }),
         Err(TrackerError::NotConfigured) => json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         ),
         Err(err) => {
             tracing::warn!(error = %err, "feedback: issue creation failed");
             json_err(
                 StatusCode::BAD_GATEWAY,
+                "feedback_submit_failed",
                 &t(lang, "feedback-err-submit-failed"),
             )
         }

@@ -1128,6 +1128,7 @@ export const zh: Catalog = {
  "chat-composer-send-during-turn-title": "发送。回答生成期间，这条会补充进去；若送达太晚，则作为下一条消息发送。",
  "chat-default-title": "聊天",
  "chat-error-attachment-not-found": "未找到",
+ "chat-error-attachment-storage-failed": "附件存储未正确响应，因此无法获取该文件。请重试；如果仍然失败，请管理员在 /admin/settings 中检查附件存储。",
  "chat-error-attachments-not-configured": "聊天附件未配置",
  "chat-error-auth-required": "需要身份验证",
  "chat-error-bad-filename": "文件名无效",

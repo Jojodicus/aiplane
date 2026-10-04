@@ -1960,10 +1960,11 @@ pub async fn rotate_sync_token(
         return resp;
     }
     match rag_db::rotate_sync_token(&state.db, id).await {
-        Ok(token) => json_ok(&SyncToken {
+        Ok(Some(token)) => json_ok(&SyncToken {
             url_hint: format!("/hooks/rag/{token}"),
             token,
         }),
+        Ok(None) => not_found(&format!("no collection with id {id}")),
         Err(err) => {
             tracing::warn!(error = %err, %id, "rotating rag sync token");
             internal_error("rotating the token failed")
@@ -1981,7 +1982,8 @@ pub async fn clear_sync_token(
         return resp;
     }
     match rag_db::clear_sync_token(&state.db, id).await {
-        Ok(()) => json_ok(&Cleared { cleared: true }),
+        Ok(true) => json_ok(&Cleared { cleared: true }),
+        Ok(false) => not_found(&format!("no collection with id {id}")),
         Err(err) => {
             tracing::warn!(error = %err, %id, "clearing rag sync token");
             internal_error("clearing the token failed")

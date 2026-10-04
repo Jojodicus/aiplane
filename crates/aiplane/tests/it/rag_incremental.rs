@@ -529,7 +529,8 @@ async fn the_sync_hook_requeues_the_collection_it_belongs_to() {
 
     let token = rag_db::rotate_sync_token(&h.central, h.collection_id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("the collection exists");
     // The token is a credential, so only its hash is stored.
     let stored: Option<String> =
         sqlx::query_scalar("SELECT sync_token_hash FROM rag_collections WHERE id = ?")
@@ -569,7 +570,8 @@ async fn a_wrong_sync_token_resolves_to_nothing() {
     let h = Harness::new(&dav.uri()).await;
     rag_db::rotate_sync_token(&h.central, h.collection_id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("the collection exists");
     assert!(
         rag_db::find_by_sync_token(&h.central, "not-the-token")
             .await
@@ -585,10 +587,12 @@ async fn rotating_invalidates_the_previous_sync_url() {
     let h = Harness::new(&dav.uri()).await;
     let first = rag_db::rotate_sync_token(&h.central, h.collection_id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("the collection exists");
     let second = rag_db::rotate_sync_token(&h.central, h.collection_id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("the collection exists");
     assert_ne!(first, second);
     assert!(
         rag_db::find_by_sync_token(&h.central, &first)
@@ -611,10 +615,13 @@ async fn clearing_the_token_disables_the_hook() {
     let h = Harness::new(&dav.uri()).await;
     let token = rag_db::rotate_sync_token(&h.central, h.collection_id)
         .await
-        .unwrap();
-    rag_db::clear_sync_token(&h.central, h.collection_id)
-        .await
-        .unwrap();
+        .unwrap()
+        .expect("the collection exists");
+    assert!(
+        rag_db::clear_sync_token(&h.central, h.collection_id)
+            .await
+            .unwrap()
+    );
     assert!(
         rag_db::find_by_sync_token(&h.central, &token)
             .await

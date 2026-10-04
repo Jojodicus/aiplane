@@ -1134,6 +1134,7 @@ export const de: Catalog = {
  "chat-composer-send-during-turn-title": "Senden. Während eine Antwort entsteht, wird dies ergänzt; kommt es zu spät, wird es als nächste Nachricht gesendet.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "nicht gefunden",
+ "chat-error-attachment-storage-failed": "Der Anhangspeicher hat nicht korrekt geantwortet, daher konnte die Datei nicht abgerufen werden. Versuche es erneut; schlägt es weiter fehl, sollte ein Administrator den Anhangspeicher unter /admin/settings prüfen.",
  "chat-error-attachments-not-configured": "Chat-Anhänge sind nicht konfiguriert",
  "chat-error-auth-required": "Authentifizierung erforderlich",
  "chat-error-bad-filename": "ungültiger Dateiname",
