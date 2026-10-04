@@ -20,7 +20,7 @@
 use super::*;
 
 /// What became of an interjection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SteerStatus {
     /// Typed, not yet accounted for — the turn is still running.
@@ -66,7 +66,7 @@ impl SteerStatus {
 }
 
 /// One interjection as stored.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TurnSteer {
     pub id: String,
     pub turn_id: String,

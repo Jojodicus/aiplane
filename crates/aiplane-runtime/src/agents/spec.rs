@@ -70,7 +70,7 @@ pub(crate) use a2a::{MAX_SKILLS as MAX_A2A_SKILLS, is_skill_id};
 pub use model::AgentSpec;
 
 /// One problem with a spec: where, and what to do about it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct SpecIssue {
     pub path: String,
     pub message: String,

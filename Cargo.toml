@@ -38,6 +38,10 @@ publish = false
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# JSON Schema for the wire types the served OpenAPI document describes
+# (`/openapi.json`). Already in the tree via `serde_with`; `derive` adds only
+# the proc macro.
+schemars = { version = "1.2", default-features = false, features = ["derive", "std", "jiff02"] }
 serde_urlencoded = "0.7"
 thiserror = "2"
 anyhow = "1"

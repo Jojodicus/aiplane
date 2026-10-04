@@ -50,21 +50,39 @@ use aiplane_runtime::server::side_call::{self, JsonShape, Payer, SideCall, SideC
 // ---------------------------------------------------------------------------
 // Small JSON helpers (these endpoints are fetch'd, not Datastar-driven).
 
-fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
+fn json_response(status: StatusCode, value: impl serde::Serialize) -> Response {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
-        value.to_string(),
+        serde_json::to_string(&value).expect("wire types serialize to JSON"),
     )
         .into_response()
 }
 
-fn json_ok(value: serde_json::Value) -> Response {
+fn json_ok(value: impl serde::Serialize) -> Response {
     json_response(StatusCode::OK, value)
 }
 
 fn json_err(status: StatusCode, message: &str) -> Response {
-    json_response(status, json!({ "error": { "message": message } }))
+    json_response(
+        status,
+        FeedbackError {
+            error: FeedbackErrorBody {
+                message: message.to_string(),
+            },
+        },
+    )
+}
+
+/// How the feedback routes refuse: the envelope's `message` alone.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FeedbackError {
+    pub error: FeedbackErrorBody,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FeedbackErrorBody {
+    pub message: String,
 }
 
 /// Session gate that returns a 401 JSON envelope (not a redirect) on miss —
@@ -133,13 +151,28 @@ pub async fn feedback_config(State(state): State<Arc<RamaState>>, req: Request) 
         .map(|f| f.provider().as_str())
         .unwrap_or("github");
 
-    json_ok(json!({
-        "enabled": enabled,
-        "voice_enabled": voice_enabled,
-        "voice_model": voice_model,
-        "provider": provider,
-        "max_attachments": MAX_ATTACHMENTS,
-    }))
+    json_ok(FeedbackConfigView {
+        enabled,
+        voice_enabled,
+        voice_model,
+        provider,
+        max_attachments: MAX_ATTACHMENTS,
+    })
+}
+
+/// What the feedback dialog needs to know before it opens.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FeedbackConfigView {
+    /// Whether an issue tracker is configured, so the dialog is offered.
+    pub enabled: bool,
+    /// Whether a spoken note can be turned into the form's fields.
+    pub voice_enabled: bool,
+    /// The transcription model to record against.
+    pub voice_model: Option<String>,
+    /// The tracker reports are filed in: `github` or `gitlab`.
+    pub provider: &'static str,
+    /// How many pasted images one report may carry.
+    pub max_attachments: usize,
 }
 
 /// Resolve a configured model id against the live advertised set: honour the
@@ -154,11 +187,24 @@ fn resolve_model(configured: Option<String>, available: &[String]) -> Option<Str
 // ---------------------------------------------------------------------------
 // POST /feedback/extract — voice transcript → structured fields
 
-#[derive(Deserialize)]
-struct ExtractRequest {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ExtractRequest {
     transcript: String,
+    /// BCP-47 tag of the language the fields are written in.
     #[serde(default)]
     locale: Option<String>,
+}
+
+/// The report fields a spoken note was turned into; a field the note did not
+/// cover is empty.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ExtractedFields {
+    pub title: String,
+    pub description: String,
+    pub business_value: String,
+    pub acceptance_criteria: String,
+    /// `low`, `medium` or `high`.
+    pub priority: &'static str,
 }
 
 pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -277,7 +323,7 @@ async fn extract_fields(
     model: &str,
     transcript: &str,
     locale: Option<&str>,
-) -> Result<serde_json::Value, SideCallError> {
+) -> Result<ExtractedFields, SideCallError> {
     let lang_directive = match locale {
         Some(l) if !l.is_empty() => format!(
             "\n\nWrite every field value in the language with BCP-47 tag \"{l}\", \
@@ -333,20 +379,20 @@ async fn extract_fields(
         "high" => "high",
         _ => "medium",
     };
-    Ok(json!({
-        "title": pick("title"),
-        "description": pick("description"),
-        "business_value": pick("business_value"),
-        "acceptance_criteria": pick("acceptance_criteria"),
-        "priority": priority,
-    }))
+    Ok(ExtractedFields {
+        title: pick("title"),
+        description: pick("description"),
+        business_value: pick("business_value"),
+        acceptance_criteria: pick("acceptance_criteria"),
+        priority,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // POST /feedback — file the issue
 
-#[derive(Deserialize)]
-struct SubmitRequest {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SubmitRequest {
     title: String,
     #[serde(default)]
     description: String,
@@ -364,6 +410,7 @@ struct SubmitRequest {
     /// client can't turn one submission into an unbounded upload loop.
     #[serde(default)]
     attachments_base64: Vec<String>,
+    /// Browser and page details, including the console and network logs.
     #[serde(default)]
     system_info: serde_json::Value,
 }
@@ -460,11 +507,11 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     };
 
     match issue_tracker::create_feedback_issue(&state.http, &cfg, input).await {
-        Ok(result) => json_ok(json!({
-            "ok": true,
-            "number": result.number,
-            "url": result.url,
-        })),
+        Ok(result) => json_ok(FiledIssue {
+            ok: true,
+            number: result.number,
+            url: result.url,
+        }),
         Err(TrackerError::NotConfigured) => json_err(
             StatusCode::SERVICE_UNAVAILABLE,
             &t(lang, "feedback-err-not-configured"),
@@ -477,6 +524,15 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
             )
         }
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FiledIssue {
+    /// Always `true`.
+    pub ok: bool,
+    /// The issue number the tracker shows.
+    pub number: u64,
+    pub url: String,
 }
 
 // ---------------------------------------------------------------------------

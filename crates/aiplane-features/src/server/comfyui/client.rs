@@ -430,7 +430,7 @@ impl Client {
 /// What `/admin/comfyui` shows about the worker itself. Every number comes
 /// straight from ComfyUI; the gateway adds no interpretation beyond counting
 /// the two queue arrays.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct WorkerHealth {
     pub version: Option<String>,
     pub python_version: Option<String>,
@@ -445,7 +445,7 @@ pub struct WorkerHealth {
 /// One compute device as ComfyUI reports it. `vram_total`/`vram_free` are
 /// bytes; `torch_*` are omitted — they read 0 on the deployments we serve
 /// and would only invite a misreading.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct WorkerDevice {
     pub name: String,
     #[serde(default)]

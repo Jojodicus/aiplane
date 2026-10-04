@@ -25,7 +25,6 @@ use jiff::Timestamp;
 use rama::http::service::web::extract::{Path, Query, State};
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
-use serde_json::json;
 use session_core::chrome::read_body_to_bytes;
 use shared::api::{
     CreateTokenRequest, CreateTokenResponse, DeleteResponse, Me, RevokeResponse, TokenSummary,
@@ -267,9 +266,19 @@ pub async fn update_token_tools(
         tracing::warn!(error = %err, %token_id, "token tool pref save");
         return internal_error("storing token tool prefs failed");
     }
-    json_ok(
-        &json!({ "ok": true, "tools_enabled": body.tools_enabled, "tool_states": body.tool_states }),
-    )
+    json_ok(&TokenToolsSaved {
+        ok: true,
+        tools_enabled: body.tools_enabled,
+        tool_states: body.tool_states,
+    })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TokenToolsSaved {
+    /// Always `true`.
+    pub ok: bool,
+    pub tools_enabled: bool,
+    pub tool_states: std::collections::BTreeMap<String, String>,
 }
 
 /// POST /api/v0/tokens/{id}/revoke — flip `revoked_at` on an owned active row.
@@ -366,12 +375,15 @@ pub async fn rotate_token(
 
 /// Query params of `GET /api/v0/usage` (public: rama's `Query` extractor
 /// requires the type to match the handler's visibility).
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, schemars::JsonSchema)]
 pub struct UsageQuery {
+    /// The reporting window, e.g. `today`, `this_month`.
     period: Option<String>,
+    /// `all` for every user's usage (admins only; ignored for anyone else).
     scope: Option<String>,
     source: Option<String>,
     backend: Option<String>,
+    /// A token id, or `none` for usage that carried no token.
     token: Option<String>,
 }
 
@@ -427,13 +439,13 @@ pub async fn usage(
     let backends = usage_db::distinct_backends(&state.db, bounds)
         .await
         .unwrap_or_default();
-    let tokens: Vec<_> =
+    let tokens: Vec<UsageTokenOption> =
         usage_db::distinct_tokens(&state.db, bounds, (!show_all).then_some(user.id.as_str()))
             .await
             .unwrap_or_default()
             .into_iter()
             .filter(|(id, _)| !id.is_empty())
-            .map(|(id, label)| json!({ "id": id, "label": label }))
+            .map(|(id, label)| UsageTokenOption { id, label })
             .collect();
     let limit_status = state.enforcer.statuses(&user.id, &role_ids).await;
     // Models with traffic but no configured price → spend under-counted.
@@ -450,29 +462,63 @@ pub async fn usage(
         .map(|g| g.key.clone())
         .collect();
 
-    let limits: Vec<_> = limit_status
+    let limits = limit_status
         .iter()
-        .map(aiplane_api::pages::json_tokens::limit_status_json)
+        .map(aiplane_api::pages::json_tokens::LimitStatusView::from)
         .collect();
 
-    json_ok(&json!({
-        "period": period.as_str(),
-        "scope": if show_all { "all" } else { "self" },
-        "can_view_all": can_view_all,
-        "usage_enabled": state.usage.is_enabled(),
-        "timezone": tz,
-        "currency": state.config().usage.currency,
-        "summary": agg.summary,
-        "by_user": agg.by_user,
-        "by_token": agg.by_token,
-        "by_backend": agg.by_backend,
-        "by_source": agg.by_source,
-        "by_model": agg.by_model,
-        "backends": backends,
-        "tokens": tokens,
-        "limits": limits,
-        "unpriced_models": unpriced,
-    }))
+    json_ok(&UsageView {
+        period: period.as_str(),
+        scope: if show_all { "all" } else { "self" },
+        can_view_all,
+        usage_enabled: state.usage.is_enabled(),
+        timezone: tz,
+        currency: state.config().usage.currency.clone(),
+        summary: agg.summary,
+        by_user: agg.by_user,
+        by_token: agg.by_token,
+        by_backend: agg.by_backend,
+        by_source: agg.by_source,
+        by_model: agg.by_model,
+        backends,
+        tokens,
+        limits,
+        unpriced_models: unpriced,
+    })
+}
+
+/// What `GET /api/v0/usage` answers: the window's totals and breakdowns, the
+/// pickers' options, and the limits in force.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct UsageView {
+    pub period: &'static str,
+    /// `all` or `self`.
+    pub scope: &'static str,
+    /// Whether the caller may ask for `scope=all`.
+    pub can_view_all: bool,
+    pub usage_enabled: bool,
+    pub timezone: String,
+    pub currency: String,
+    pub summary: aiplane_core::server::db::usage::Summary,
+    pub by_user: Vec<aiplane_core::server::db::usage::GroupCount>,
+    pub by_token: Vec<aiplane_core::server::db::usage::GroupCount>,
+    pub by_backend: Vec<aiplane_core::server::db::usage::GroupCount>,
+    pub by_source: Vec<aiplane_core::server::db::usage::GroupCount>,
+    pub by_model: Vec<aiplane_core::server::db::usage::GroupCount>,
+    /// Every backend with traffic in the window.
+    pub backends: Vec<String>,
+    /// Every token with traffic in the window.
+    pub tokens: Vec<UsageTokenOption>,
+    pub limits: Vec<aiplane_api::pages::json_tokens::LimitStatusView>,
+    /// Models with traffic but no configured price, so their spend is
+    /// under-counted.
+    pub unpriced_models: Vec<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct UsageTokenOption {
+    pub id: String,
+    pub label: String,
 }
 
 /// GET /api/v0/models — the caller's selectable chat models, with the
@@ -519,7 +565,7 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
             .into_iter()
             .map(|row| (row.model_name, row.reasoning_style))
             .collect();
-    let listed: Vec<_> = models
+    let listed = models
         .into_iter()
         .map(|choice| {
             // Aliases are listed as models of their own (`default`, `fast`,
@@ -558,15 +604,31 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
                     target,
                 ) != aiplane_core::server::reasoning::ReasoningStyle::None
             });
-            json!({
-                "id": choice.id,
-                "gdpr": choice.compliance.gdpr,
-                "nda": choice.compliance.nda,
-                "reasoning": reasoning,
-            })
+            ChatModel {
+                id: choice.id,
+                gdpr: choice.compliance.gdpr,
+                nda: choice.compliance.nda,
+                reasoning,
+            }
         })
         .collect();
-    json_ok(&json!({ "models": listed }))
+    json_ok(&ChatModels { models: listed })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ChatModels {
+    pub models: Vec<ChatModel>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ChatModel {
+    pub id: String,
+    /// Whether the model's backend is flagged GDPR-compliant.
+    pub gdpr: bool,
+    /// Whether the model's backend is flagged as covered by an NDA.
+    pub nda: bool,
+    /// Whether the effort control changes anything for this model.
+    pub reasoning: bool,
 }
 
 pub async fn transcription_models(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -597,12 +659,25 @@ pub async fn transcription_models(State(state): State<Arc<RamaState>>, req: Requ
         .models_for_kind_for(aiplane_core::server::upstreams::PoolKind::Speech, &access)
         .is_empty();
     let speech_voices = state.upstreams.speech_voices_for(&access);
-    json_ok(&json!({
-        "data": models,
-        "speech_available": speech_available,
-        "speech_voices": speech_voices,
-        "speech_voice": user.speech_voice,
-    }))
+    json_ok(&VoiceModels {
+        data: models,
+        speech_available,
+        speech_voices,
+        speech_voice: user.speech_voice,
+    })
+}
+
+/// What `GET /api/v0/transcription_models` answers: the caller's dictation
+/// and read-aloud options.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VoiceModels {
+    /// The transcription models the caller may use.
+    pub data: Vec<String>,
+    /// Whether any speech model is available to read answers aloud.
+    pub speech_available: bool,
+    pub speech_voices: Vec<String>,
+    /// The caller's chosen voice; `null` for the operator's default.
+    pub speech_voice: Option<String>,
 }
 
 /// POST /api/v0/me/timezone — store the caller's IANA timezone on
@@ -627,11 +702,7 @@ pub async fn set_timezone(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(b) => b,
         Err(msg) => return invalid_request(&msg),
     };
-    #[derive(serde::Deserialize)]
-    struct Body {
-        timezone: String,
-    }
-    let parsed: Body = match serde_json::from_slice(&body) {
+    let parsed: TimezoneBody = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(err) => return invalid_request(&format!("expected {{\"timezone\":\"…\"}}: {err}")),
     };
@@ -653,7 +724,23 @@ pub async fn set_timezone(State(state): State<Arc<RamaState>>, req: Request) -> 
         tracing::warn!(error = %err, "users set_timezone");
         return internal_error("could not save timezone");
     }
-    json_ok(&json!({ "ok": true, "timezone": parsed.timezone }))
+    json_ok(&TimezoneSaved {
+        ok: true,
+        timezone: parsed.timezone,
+    })
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct TimezoneBody {
+    /// An IANA timezone name, e.g. `Europe/Berlin`.
+    timezone: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TimezoneSaved {
+    /// Always `true`.
+    pub ok: bool,
+    pub timezone: String,
 }
 
 /// POST /api/v0/me/speech_voice — store (or clear) the voice the caller wants
@@ -676,12 +763,7 @@ pub async fn set_speech_voice(State(state): State<Arc<RamaState>>, req: Request)
         Ok(b) => b,
         Err(msg) => return invalid_request(&msg),
     };
-    #[derive(serde::Deserialize)]
-    struct Body {
-        #[serde(default)]
-        voice: Option<String>,
-    }
-    let parsed: Body = match serde_json::from_slice(&body) {
+    let parsed: SpeechVoiceBody = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(err) => return invalid_request(&format!("expected {{\"voice\":\"…\"}}: {err}")),
     };
@@ -710,7 +792,22 @@ pub async fn set_speech_voice(State(state): State<Arc<RamaState>>, req: Request)
         tracing::warn!(error = %err, "users set_speech_voice");
         return internal_error("could not save the speech voice");
     }
-    json_ok(&json!({ "ok": true, "voice": voice }))
+    json_ok(&SpeechVoiceSaved { ok: true, voice })
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SpeechVoiceBody {
+    /// One of the caller's speech voices; `null` or empty for the operator's
+    /// default.
+    #[serde(default)]
+    voice: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SpeechVoiceSaved {
+    /// Always `true`.
+    pub ok: bool,
+    pub voice: Option<String>,
 }
 
 /// POST /api/v0/me/location — store the caller's browser-reported
@@ -730,14 +827,7 @@ pub async fn set_location(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(b) => b,
         Err(msg) => return invalid_request(&msg),
     };
-    #[derive(serde::Deserialize)]
-    struct Body {
-        lat: f64,
-        lon: f64,
-        #[serde(default)]
-        accuracy: Option<f64>,
-    }
-    let parsed: Body = match serde_json::from_slice(&body) {
+    let parsed: LocationBody = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(err) => return invalid_request(&format!("expected {{\"lat\":…,\"lon\":…}}: {err}")),
     };
@@ -757,7 +847,16 @@ pub async fn set_location(State(state): State<Arc<RamaState>>, req: Request) -> 
         tracing::warn!(error = %err, "users set_location");
         return internal_error("could not save location");
     }
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct LocationBody {
+    lat: f64,
+    lon: f64,
+    /// Accuracy radius in metres.
+    #[serde(default)]
+    accuracy: Option<f64>,
 }
 
 /// DELETE /api/v0/me/location — forget the caller's stored position (the
@@ -771,7 +870,7 @@ pub async fn clear_location(State(state): State<Arc<RamaState>>, req: Request) -
         tracing::warn!(error = %err, "users clear_location");
         return internal_error("could not clear location");
     }
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
 }
 
 /// Shared preamble of the three mid-turn feedback endpoints: authenticate the
@@ -835,18 +934,7 @@ pub async fn location_feedback(
 ) -> Response {
     use aiplane_runtime::server::tools::feedback::BrowserFix;
 
-    #[derive(serde::Deserialize)]
-    struct Body {
-        #[serde(default)]
-        lat: Option<f64>,
-        #[serde(default)]
-        lon: Option<f64>,
-        #[serde(default)]
-        accuracy: Option<f64>,
-        #[serde(default)]
-        denied: bool,
-    }
-    let (session, parsed): (Session, Body) = match turn_feedback_body(
+    let (session, parsed): (Session, LocationFeedbackBody) = match turn_feedback_body(
         &state,
         req,
         &turn_id,
@@ -880,7 +968,21 @@ pub async fn location_feedback(
     // Whoever's parked on this turn (if anyone — the tool may have timed
     // out) gets the reply. We don't treat "no one waiting" as an error.
     state.location_feedback.resolve(&turn_id, fix);
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
+}
+
+/// A shared position (`lat`, `lon`, optional `accuracy`), or `denied: true`.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct LocationFeedbackBody {
+    #[serde(default)]
+    lat: Option<f64>,
+    #[serde(default)]
+    lon: Option<f64>,
+    /// Accuracy radius in metres.
+    #[serde(default)]
+    accuracy: Option<f64>,
+    #[serde(default)]
+    denied: bool,
 }
 
 /// POST /api/v0/me/ask/feedback/{turn_id} — answer an in-flight `ask_user`
@@ -903,16 +1005,7 @@ pub async fn ask_feedback(
 ) -> Response {
     use aiplane_runtime::server::tools::feedback::AskReply;
 
-    #[derive(serde::Deserialize)]
-    struct Body {
-        #[serde(default)]
-        choices: Vec<String>,
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        dismissed: bool,
-    }
-    let (_session, parsed): (Session, Body) = match turn_feedback_body(
+    let (_session, parsed): (Session, AskFeedbackBody) = match turn_feedback_body(
         &state,
         req,
         &turn_id,
@@ -949,7 +1042,18 @@ pub async fn ask_feedback(
     // Whoever's parked on this turn (if anyone — the tool may have timed out)
     // gets the reply. "No one waiting" is not an error.
     state.ask_feedback.resolve(&turn_id, reply);
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
+}
+
+/// An answer (`choices`, `text`), or `dismissed: true` to skip the question.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct AskFeedbackBody {
+    #[serde(default)]
+    choices: Vec<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    dismissed: bool,
 }
 
 /// POST /api/v0/me/browser/feedback/{turn_id} — report what the paired browser
@@ -982,19 +1086,7 @@ pub async fn browser_feedback(
 ) -> Response {
     use aiplane_runtime::server::tools::feedback::BrowserReply;
 
-    #[derive(serde::Deserialize)]
-    struct Body {
-        request_id: String,
-        #[serde(default)]
-        results: Vec<serde_json::Value>,
-        #[serde(default)]
-        error: Option<String>,
-        #[serde(default)]
-        refused: Option<String>,
-        #[serde(default)]
-        no_extension: bool,
-    }
-    let (_session, parsed): (Session, Body) = match turn_feedback_body(
+    let (_session, parsed): (Session, BrowserFeedbackBody) = match turn_feedback_body(
         &state,
         req,
         &turn_id,
@@ -1033,7 +1125,26 @@ pub async fn browser_feedback(
     // Resolved by request id: several batches can be parked for one turn, and
     // an unknown id simply finds nobody waiting (the tool may have timed out).
     state.browser_feedback.resolve(&parsed.request_id, reply);
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
+}
+
+/// What the browser extension did with one `browser_control` batch.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct BrowserFeedbackBody {
+    /// The batch's `request_id` from its `browser_action` event.
+    request_id: String,
+    /// One result per action carried out, as the extension reports it.
+    #[serde(default)]
+    results: Vec<serde_json::Value>,
+    /// Why the batch stopped partway.
+    #[serde(default)]
+    error: Option<String>,
+    /// Why the user declined the batch.
+    #[serde(default)]
+    refused: Option<String>,
+    /// No paired extension is present.
+    #[serde(default)]
+    no_extension: bool,
 }
 
 /// DELETE /api/v0/tokens/{id} — hard-delete an already-revoked row.
@@ -1067,10 +1178,22 @@ pub async fn push_config(State(state): State<Arc<RamaState>>, req: Request) -> R
     if let Err(resp) = require_session(&state, &req).await {
         return resp;
     }
-    match state.push.as_ref() {
-        Some(push) => json_ok(&json!({ "enabled": true, "publicKey": push.public_key() })),
-        None => json_ok(&json!({ "enabled": false, "publicKey": null })),
-    }
+    json_ok(&PushConfig {
+        enabled: state.push.is_some(),
+        public_key: state
+            .push
+            .as_ref()
+            .map(|push| push.public_key().to_string()),
+    })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PushConfig {
+    pub enabled: bool,
+    /// The VAPID public key (base64url) to subscribe with; `null` when push
+    /// is disabled.
+    #[serde(rename = "publicKey")]
+    pub public_key: Option<String>,
 }
 
 /// POST /api/v0/push/subscribe — register this browser's push subscription for
@@ -1103,17 +1226,7 @@ pub async fn push_subscribe(State(state): State<Arc<RamaState>>, req: Request) -
         Ok(b) => b,
         Err(msg) => return invalid_request(&msg),
     };
-    #[derive(serde::Deserialize)]
-    struct Keys {
-        p256dh: String,
-        auth: String,
-    }
-    #[derive(serde::Deserialize)]
-    struct Body {
-        endpoint: String,
-        keys: Keys,
-    }
-    let parsed: Body = match serde_json::from_slice(&body) {
+    let parsed: PushSubscribeBody = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(err) => {
             return invalid_request(&format!(
@@ -1145,7 +1258,7 @@ pub async fn push_subscribe(State(state): State<Arc<RamaState>>, req: Request) -
         tracing::warn!(error = %err, "storing push subscription");
         return internal_error("could not store subscription");
     }
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
 }
 
 /// POST /api/v0/push/unsubscribe — forget a browser subscription (the user
@@ -1161,11 +1274,7 @@ pub async fn push_unsubscribe(State(state): State<Arc<RamaState>>, req: Request)
         Ok(b) => b,
         Err(msg) => return invalid_request(&msg),
     };
-    #[derive(serde::Deserialize)]
-    struct Body {
-        endpoint: String,
-    }
-    let parsed: Body = match serde_json::from_slice(&body) {
+    let parsed: PushUnsubscribeBody = match serde_json::from_slice(&body) {
         Ok(p) => p,
         Err(err) => return invalid_request(&format!("expected {{\"endpoint\":…}}: {err}")),
     };
@@ -1181,7 +1290,26 @@ pub async fn push_unsubscribe(State(state): State<Arc<RamaState>>, req: Request)
         tracing::warn!(error = %err, "deleting push subscription");
         return internal_error("could not remove subscription");
     }
-    json_ok(&json!({ "ok": true }))
+    json_ok(&aiplane_api::pages::Done::OK)
+}
+
+/// The browser's `PushSubscription.toJSON()`.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PushSubscribeBody {
+    /// The push service URL; must be public `https`.
+    endpoint: String,
+    keys: PushKeys,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PushKeys {
+    p256dh: String,
+    auth: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PushUnsubscribeBody {
+    endpoint: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,17 +1439,5 @@ fn not_found(message: &str) -> Response {
 }
 
 fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
-    let body = json!({
-        "error": {
-            "message": message,
-            "type": code,
-            "code": code,
-        }
-    });
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        body.to_string(),
-    )
-        .into_response()
+    aiplane_api::pages::json_error(status, code, message)
 }

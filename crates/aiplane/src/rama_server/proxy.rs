@@ -1672,6 +1672,26 @@ pub async fn speech(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     with_resolved_model_header(resp, &model, &real_model)
 }
 
+/// What `POST /api/v0/speech` reads aloud.
+///
+/// A field that is not a string reads as empty, so a body without a usable
+/// `text` is refused as missing it rather than as malformed.
+#[derive(Default, serde::Deserialize, schemars::JsonSchema)]
+pub(crate) struct SpeechBody {
+    /// The text to speak; Markdown, code and tables are turned into spoken
+    /// markers first.
+    #[serde(default, deserialize_with = "string_or_empty")]
+    text: String,
+    /// The language code that picks the voice, e.g. `de`.
+    #[serde(default, deserialize_with = "string_or_empty")]
+    language: String,
+}
+
+fn string_or_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value.as_str().unwrap_or_default().to_string())
+}
+
 /// `POST /api/v0/speech` — session-authed voice-mode TTS. Body:
 /// `{"text": "...", "language": "de"}`. The text (a sentence, for streaming) is
 /// sanitised to speakable prose (Markdown/code/tables → localised spoken
@@ -1702,8 +1722,8 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
         Ok(b) => b,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
     };
-    let parsed: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
+    let parsed: SpeechBody = match serde_json::from_slice::<Value>(&body) {
+        Ok(v) => serde_json::from_value(v).unwrap_or_default(),
         Err(e) => {
             return error_response(
                 StatusCode::BAD_REQUEST,
@@ -1712,12 +1732,7 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
             );
         }
     };
-    let text = parsed
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let text = parsed.text.trim().to_string();
     if text.is_empty() {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -1725,11 +1740,7 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
             "missing `text` field",
         );
     }
-    let language = parsed
-        .get("language")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let language = parsed.language.to_lowercase();
 
     // Markers are spoken, so localise them to the spoken language (fall back to
     // the request's UI language, then English). Bound to locals so the
@@ -3745,19 +3756,7 @@ fn model_not_found_response(model: &str) -> Response {
 /// OpenAI-shaped error envelope. Matches the axum side so existing
 /// clients don't need to special-case the rama path.
 pub(crate) fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
-    let body = json!({
-        "error": {
-            "message": message,
-            "type": code,
-            "code": code,
-        }
-    });
-    (
-        status,
-        [("content-type", "application/json")],
-        body.to_string(),
-    )
-        .into_response()
+    aiplane_api::pages::json_error(status, code, message)
 }
 
 const REQUEST_HEADER_DENYLIST: &[&str] = &[

@@ -64,17 +64,26 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
         Err(err) => return internal(err),
     };
     match inbox::answers_for_published(&state, &viewer).await {
-        Ok(answers) => json_ok(StatusCode::OK, inbox::items_json(&listed, answers)),
+        Ok(answers) => json_ok(StatusCode::OK, inbox::InboxList::new(listed, answers)),
         Err(err) => internal(err),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnswerBody {
+    /// One of the item's `options`.
     pub decision: chat::DecisionKind,
+    /// The decision's value, where its kind takes one.
     #[serde(default)]
     pub value: Option<Value>,
+}
+
+/// The turn that runs again with the decision.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[schemars(rename = "InboxResumed")]
+pub struct Resumed {
+    pub turn_id: String,
 }
 
 /// POST /api/v0/agents/inbox/{id}/answer — `202 {turn_id}` once the turn runs
@@ -105,7 +114,12 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         };
         return match super::chat::resume_turn(&state, &user, &turn, Some(&id), decision, ctx).await
         {
-            Ok(()) => json_ok(StatusCode::ACCEPTED, json!({ "turn_id": item.turn_id })),
+            Ok(()) => json_ok(
+                StatusCode::ACCEPTED,
+                Resumed {
+                    turn_id: item.turn_id,
+                },
+            ),
             Err(super::chat::ResumeTurnError::Busy) => json_error(
                 StatusCode::CONFLICT,
                 "turn_in_progress",
@@ -182,13 +196,26 @@ pub(super) async fn resume_as_staff(state: Arc<RamaState>, d: StaffDecision<'_>)
         Err(err) => return resume_error(err),
     };
     embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
-    json_ok(StatusCode::ACCEPTED, json!({ "turn_id": d.turn_id }))
+    json_ok(
+        StatusCode::ACCEPTED,
+        Resumed {
+            turn_id: d.turn_id.to_string(),
+        },
+    )
+}
+
+/// The one frame of the inbox event stream (SSE event `inbox`).
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InboxEvent {
+    /// How many items wait for the caller.
+    Inbox { count: usize, answers: bool },
 }
 
 fn count_frame(count: usize, answers: bool) -> rama::bytes::Bytes {
     rama::bytes::Bytes::from(format!(
         "event: inbox\ndata: {}\n\n",
-        json!({ "type": "inbox", "count": count, "answers": answers })
+        json!(InboxEvent::Inbox { count, answers })
     ))
 }
 
@@ -239,22 +266,51 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     json_stream_response(rx)
 }
 
-fn channel_json(c: &agent_channels::Channel) -> Value {
-    json!({
-        "id": c.id,
-        "kind": c.kind.as_str(),
-        "name": c.name,
-        "url_host": c.url_host,
-        "details": c.details,
-        "lang": c.lang,
-        "created_by": c.created_by,
-        "created_at": c.created_at,
-    })
+/// A notification channel, without its URL.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ChannelView {
+    pub id: String,
+    /// `slack` or `discord`.
+    pub kind: &'static str,
+    pub name: String,
+    /// The host of the webhook URL; the URL itself is never shown.
+    pub url_host: String,
+    /// Messages name the question or the tool, not only the agent.
+    pub details: bool,
+    pub lang: String,
+    pub created_by: String,
+    pub created_at: jiff::Timestamp,
 }
 
-#[derive(Deserialize)]
+impl ChannelView {
+    fn of(c: &agent_channels::Channel) -> Self {
+        Self {
+            id: c.id.clone(),
+            kind: c.kind.as_str(),
+            name: c.name.clone(),
+            url_host: c.url_host.clone(),
+            details: c.details,
+            lang: c.lang.clone(),
+            created_by: c.created_by.clone(),
+            created_at: c.created_at,
+        }
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ChannelList {
+    pub channels: Vec<ChannelView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CreatedChannel {
+    pub channel: ChannelView,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelBody {
+    /// `slack` or `discord`.
     pub kind: String,
     pub name: String,
     pub url: String,
@@ -271,7 +327,9 @@ pub async fn channels(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     match agent_channels::list(&state.db, &agent.principal.id).await {
         Ok(rows) => json_ok(
             StatusCode::OK,
-            json!({ "channels": rows.iter().map(channel_json).collect::<Vec<_>>() }),
+            ChannelList {
+                channels: rows.iter().map(ChannelView::of).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
@@ -330,7 +388,9 @@ pub async fn create_channel(State(state): State<Arc<RamaState>>, req: Request) -
     {
         Ok(Some(channel)) => json_ok(
             StatusCode::CREATED,
-            json!({ "channel": channel_json(&channel) }),
+            CreatedChannel {
+                channel: ChannelView::of(&channel),
+            },
         ),
         Ok(None) => json_error(
             StatusCode::CONFLICT,

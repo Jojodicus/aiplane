@@ -45,7 +45,8 @@ use aiplane_runtime::agents::embed::{self as embed_rt, TurnWork};
 use aiplane_runtime::agents::profile::{AgentRunError, RunOptions};
 use aiplane_runtime::agents::run::AgentTurn;
 use aiplane_runtime::agents::run::draft::{
-    DRAFT_VERSION, collect_turn_debug, run_draft_turn, start_draft_turn, waiting_handoff,
+    DRAFT_VERSION, DraftDebug, collect_turn_debug, run_draft_turn, start_draft_turn,
+    waiting_handoff,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::db as chat;
@@ -54,11 +55,32 @@ use session_core::db as chat;
 /// settled (the output filter rules after the turn's row is final).
 const DEBUG_SETTLE: Duration = Duration::from_secs(15);
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct TestMessageBody {
     pub message: String,
+    /// The test conversation to continue; a new one when absent.
     #[serde(default)]
     pub session_id: Option<String>,
+}
+
+/// The test turn that now runs; its frames arrive on the conversation's
+/// event stream.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TestTurnStarted {
+    pub session_id: String,
+    pub turn_id: String,
+    /// The version a test conversation is recorded as.
+    pub draft_version: i64,
+}
+
+/// A test turn's debug view.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TurnDebugView {
+    pub turn_id: String,
+    pub draft_version: i64,
+    pub debug: DraftDebug,
+    /// The hand-off the turn waits on, when it waits for a person.
+    pub handoff: Option<Value>,
 }
 
 fn run_error(err: AgentRunError) -> Response {
@@ -118,11 +140,11 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(started) => started,
         Err(err) => return run_error(err),
     };
-    let out = json!({
-        "session_id": started.turn.session_id,
-        "turn_id": started.turn.turn_id,
-        "draft_version": DRAFT_VERSION,
-    });
+    let out = TestTurnStarted {
+        session_id: started.turn.session_id.clone(),
+        turn_id: started.turn.turn_id.clone(),
+        draft_version: DRAFT_VERSION,
+    };
     embed_rt::spawn_guarded(
         state,
         runner,
@@ -221,7 +243,7 @@ async fn turn_view(
     agent: &AgentRow,
     session_id: &str,
     turn_id: &str,
-) -> Result<Value, Response> {
+) -> Result<TurnDebugView, Response> {
     let draft = parse_spec(&agent.draft_spec);
     let debug = collect_turn_debug(
         state,
@@ -236,12 +258,12 @@ async fn turn_view(
     let handoff = waiting_handoff(&state.db, turn_id)
         .await
         .map_err(internal)?;
-    Ok(json!({
-        "turn_id": turn_id,
-        "draft_version": DRAFT_VERSION,
-        "debug": debug,
-        "handoff": handoff,
-    }))
+    Ok(TurnDebugView {
+        turn_id: turn_id.to_string(),
+        draft_version: DRAFT_VERSION,
+        debug,
+        handoff,
+    })
 }
 
 /// One test turn against `agent`'s draft, run to its end, with its debug
@@ -272,15 +294,16 @@ pub(super) async fn draft_test_turn(
         "answer": reply.answer,
         "error": reply.error,
         "suspension": reply.suspension,
-        "debug": view["debug"],
-        "handoff": view["handoff"],
+        "debug": view.debug,
+        "handoff": view.handoff,
     }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StaffResumeBody {
     pub decision: chat::DecisionKind,
+    /// The decision's value, where its kind takes one.
     #[serde(default)]
     pub value: Option<Value>,
     /// The `request_id` of the `suspended` frame being answered. Optional;

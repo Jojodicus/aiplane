@@ -52,7 +52,7 @@ pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) 
         .await
         .unwrap_or_default();
     let location_granted = entries.iter().any(|entry| entry.key == "get_user_location");
-    let tools: Vec<_> = entries
+    let tools = entries
         .into_iter()
         .map(|e| {
             let availability = tool_configuration(
@@ -62,35 +62,67 @@ pub async fn tools_list_json(State(state): State<Arc<RamaState>>, req: Request) 
                 state.push.is_some(),
                 state.indexer.is_some(),
             );
-            serde_json::json!({
-                "key": e.key,
-                "title": e.title,
-                "tech": e.tech,
-                "description": e.description,
-                "category": e.category.key(),
-                "enabled": availability.is_none() && !disabled.contains(&e.key),
-                "configuration": availability.map(|(reason, url)| serde_json::json!({
-                    "reason": reason,
-                    "url": if admin { Some(url) } else { None },
-                })),
-            })
+            ToolToggleView {
+                enabled: availability.is_none() && !disabled.contains(&e.key),
+                key: e.key,
+                title: e.title,
+                tech: e.tech,
+                description: e.description,
+                category: e.category.key(),
+                configuration: availability.map(|(reason, url)| ToolConfigurationNeeded {
+                    reason,
+                    url: admin.then_some(url),
+                }),
+            }
         })
         .collect();
     let location = if location_granted {
         match users::find_location(&state.db, &user.id).await {
-            Ok(stored) => serde_json::json!({
-                "shared": stored.is_some(),
-                "accuracy": stored.and_then(|location| location.accuracy),
+            Ok(stored) => Some(LocationSharing {
+                shared: stored.is_some(),
+                accuracy: stored.and_then(|location| location.accuracy),
             }),
             Err(err) => return internal(err),
         }
     } else {
-        serde_json::Value::Null
+        None
     };
-    json_ok(
-        rama::http::StatusCode::OK,
-        serde_json::json!({ "tools": tools, "location": location }),
-    )
+    json_ok(rama::http::StatusCode::OK, ToolsView { tools, location })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ToolsView {
+    pub tools: Vec<ToolToggleView>,
+    /// Whether the caller shares a browser position; `null` when no role
+    /// grants `get_user_location`.
+    pub location: Option<LocationSharing>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ToolToggleView {
+    pub key: String,
+    pub title: String,
+    pub tech: String,
+    pub description: String,
+    pub category: &'static str,
+    pub enabled: bool,
+    /// Set when the tool cannot run until the deployment configures something.
+    pub configuration: Option<ToolConfigurationNeeded>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ToolConfigurationNeeded {
+    /// The translation key of the reason.
+    pub reason: &'static str,
+    /// Where an admin configures it; `null` for everyone else.
+    pub url: Option<&'static str>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct LocationSharing {
+    pub shared: bool,
+    /// Accuracy radius in metres of the stored position.
+    pub accuracy: Option<f64>,
 }
 
 fn tool_configuration(
@@ -178,7 +210,7 @@ mod tests {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ToolsToggleBody {
     pub tool_key: String,
     pub enabled: bool,
@@ -204,10 +236,19 @@ pub async fn tools_toggle_json(State(state): State<Arc<RamaState>>, req: Request
     match user_tool_prefs::set(&state.db, &user.id, &parsed.tool_key, parsed.enabled).await {
         Ok(()) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "tool_key": parsed.tool_key, "enabled": parsed.enabled }),
+            ToolToggled {
+                tool_key: parsed.tool_key,
+                enabled: parsed.enabled,
+            },
         ),
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ToolToggled {
+    pub tool_key: String,
+    pub enabled: bool,
 }
 
 // ---------------------------------------------------------------------------

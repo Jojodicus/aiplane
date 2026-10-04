@@ -484,33 +484,70 @@ impl StoredEvent {
 
     /// The event as the API and the export show it: the stored JSON parsed.
     pub fn to_json(&self) -> Value {
-        let parse = |text: &str| serde_json::from_str(text).unwrap_or(Value::String(text.into()));
-        json!({
-            "cursor": self.rowid,
-            "id": self.id,
-            "kind": self.kind,
-            "ts": self.created_at,
-            "principal_id": self.principal_id,
-            "actor_id": self.actor_id,
-            "agent_id": self.agent_id,
-            "version": self.version,
-            "conversation_id": self.conversation_id,
-            "session_id": self.session_id,
-            "turn_id": self.turn_id,
-            "round": self.round,
-            "call_id": self.call_id,
-            "visitor_id": self.visitor_id,
-            "caller_id": self.caller_id,
-            "duration_ms": self.duration_ms,
-            "run_chain": self.chain.as_deref().map(parse),
-            "detail": parse(&self.detail),
-            "chain_key": self.chain_key,
-            "seq": self.seq,
-            "prev_hash": self.prev_hash,
-            "hash": self.hash,
-            "key_id": self.key_id,
-        })
+        json!(self.activity_event())
     }
+
+    fn activity_event(&self) -> ActivityEvent {
+        let parse = |text: &str| serde_json::from_str(text).unwrap_or(Value::String(text.into()));
+        ActivityEvent {
+            cursor: self.rowid,
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            ts: self.created_at.clone(),
+            principal_id: self.principal_id.clone(),
+            actor_id: self.actor_id.clone(),
+            agent_id: self.agent_id.clone(),
+            version: self.version,
+            conversation_id: self.conversation_id.clone(),
+            session_id: self.session_id.clone(),
+            turn_id: self.turn_id.clone(),
+            round: self.round,
+            call_id: self.call_id.clone(),
+            visitor_id: self.visitor_id.clone(),
+            caller_id: self.caller_id.clone(),
+            duration_ms: self.duration_ms,
+            run_chain: self.chain.as_deref().map(parse),
+            detail: parse(&self.detail),
+            chain_key: self.chain_key.clone(),
+            seq: self.seq,
+            prev_hash: self.prev_hash.clone(),
+            hash: self.hash.clone(),
+            key_id: self.key_id.clone(),
+        }
+    }
+}
+
+/// One activity-log event as the activity API and its export show it.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct ActivityEvent {
+    /// Pass back as `cursor` to page from here.
+    pub cursor: i64,
+    pub id: String,
+    pub kind: String,
+    pub ts: String,
+    pub principal_id: String,
+    pub actor_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub version: Option<i64>,
+    pub conversation_id: Option<String>,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub round: Option<i64>,
+    pub call_id: Option<String>,
+    pub visitor_id: Option<String>,
+    pub caller_id: Option<String>,
+    pub duration_ms: Option<i64>,
+    /// The run's call chain.
+    pub run_chain: Option<Value>,
+    /// The event's own fields, which differ by `kind`. A model exchange
+    /// carries its whole `request`.
+    pub detail: Value,
+    pub chain_key: Option<String>,
+    pub seq: Option<i64>,
+    pub prev_hash: Option<String>,
+    pub hash: Option<String>,
+    /// Which key of the ring signed `hash`.
+    pub key_id: Option<String>,
 }
 
 /// `text` signed under the ring key `key_id` names — plain SHA-256 for

@@ -23,7 +23,6 @@ use rama::futures::SinkExt as _;
 use rama::http::header;
 use rama::http::service::web::extract::State;
 use rama::http::{Body, Request, Response, StatusCode};
-use serde_json::json;
 
 use super::json_agents::{agent_at, analytics_bound};
 use super::json_principals::require_agent_manager;
@@ -114,12 +113,27 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
     }
     json_ok(
         StatusCode::OK,
-        json!({
-            "events": events,
-            "next_cursor": page.next_cursor,
-            "order": if query.order == Order::Asc { "asc" } else { "desc" },
-        }),
+        ActivityPageView {
+            events,
+            next_cursor: page.next_cursor,
+            order: if query.order == Order::Asc {
+                "asc"
+            } else {
+                "desc"
+            },
+        },
     )
+}
+
+/// One page of the activity log.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ActivityPageView {
+    #[schemars(with = "Vec<agent_audit::ActivityEvent>")]
+    pub events: Vec<serde_json::Value>,
+    /// Pass back as `cursor` for the next page; `null` at the end.
+    pub next_cursor: Option<i64>,
+    /// `asc` or `desc`.
+    pub order: &'static str,
 }
 
 /// GET /api/v0/agents/{id}/activity/export?conversation=&kind=&from=&to=
@@ -208,16 +222,20 @@ pub async fn verify(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     match verified {
         Ok(v) => json_ok(
             StatusCode::OK,
-            json!({
-                "ok": v.ok(),
-                "chains": v.chains,
-                "events": v.events,
-                "checked": v.checked,
-                "unanchored": v.unanchored,
-                "head": v.head,
-                "broken": v.broken,
-            }),
+            Verified {
+                ok: v.ok(),
+                verification: v,
+            },
         ),
         Err(err) => internal(err),
     }
+}
+
+/// The outcome of a hash-chain check.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Verified {
+    /// No chain is broken.
+    pub ok: bool,
+    #[serde(flatten)]
+    pub verification: agent_audit::Verification,
 }

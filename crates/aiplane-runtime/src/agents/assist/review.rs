@@ -48,13 +48,13 @@ pub struct ReviewContext<'a> {
 }
 
 /// The offer, one entry per assistant step, and what was left out.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct Suggestion {
     pub steps: Steps,
     pub dropped: Vec<Dropped>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct Steps {
     pub task: Option<TaskStep>,
     pub tone: Option<ToneStep>,
@@ -91,7 +91,7 @@ impl Steps {
 }
 
 /// `main.instructions.orchestration`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct TaskStep {
     pub orchestration: String,
 }
@@ -100,7 +100,7 @@ pub struct TaskStep {
 /// it: tone chips by id ([`tone::TONES`]), the answer language (`visitor`
 /// or a code; `None`: nothing said) and `response`, the further text no
 /// chip or language stands for.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ToneStep {
     pub response: String,
     pub chips: Vec<String>,
@@ -108,7 +108,7 @@ pub struct ToneStep {
 }
 
 /// `scope.topics`, `scope.refusal`, `scope.strict`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ScopeStep {
     pub topics: Vec<String>,
     pub refusal: String,
@@ -117,7 +117,7 @@ pub struct ScopeStep {
 
 /// A tool for `main.tools`, which the UI grants to the agent when applied.
 /// `name` is the title its ability card shows.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct AbilityStep {
     pub id: String,
     pub name: String,
@@ -127,7 +127,7 @@ pub struct AbilityStep {
 /// A knowledge base (RAG collection `id`) to search, which the UI switches
 /// on like its card: the collection and `rag_search` granted, the search
 /// bound to it ([`set_knowledge`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct KnowledgeStep {
     pub id: String,
     pub name: String,
@@ -135,7 +135,7 @@ pub struct KnowledgeStep {
 }
 
 /// `state.<name>` = `def`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SlotStep {
     pub name: String,
     pub label: String,
@@ -146,7 +146,7 @@ pub struct SlotStep {
 
 /// A recommendation only: the method needs a connector or a key the
 /// identity step asks for, so no spec fragment comes with it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct IdentityStep {
     pub method: String,
     pub why: String,
@@ -159,7 +159,7 @@ pub struct IdentityStep {
 /// check stands for the check the same offer recommends: applying the
 /// hand-off sets that up first (`applySuggestedRules`), and `route` has no
 /// identity leaf until then.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct HandoffStep {
     pub name: String,
     pub topic: String,
@@ -171,7 +171,7 @@ pub struct HandoffStep {
 }
 
 /// A test case in the shape `POST /api/v0/agents/{id}/tests` takes.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct TestStep {
     pub name: String,
     pub kind: String,
@@ -179,7 +179,7 @@ pub struct TestStep {
     pub expect: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct Dropped {
     pub step: &'static str,
     /// The piece within the step (a slot's or a test's name), when there is

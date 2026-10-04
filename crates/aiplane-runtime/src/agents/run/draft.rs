@@ -163,7 +163,7 @@ async fn open_draft_turn(
     Ok((profile, opened))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SlotDebug {
     pub slot: String,
     pub status: &'static str,
@@ -181,7 +181,7 @@ pub struct SlotDebug {
     pub set_by: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct RouteDebug {
     pub route: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,7 +191,7 @@ pub struct RouteDebug {
 }
 
 /// What the run left behind, for the manager testing the draft.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct DraftDebug {
     pub slots: Vec<SlotDebug>,
     pub routes: Vec<RouteDebug>,

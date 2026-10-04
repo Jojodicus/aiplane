@@ -8,14 +8,14 @@ use sqlx::Row;
 
 use super::{DbError, Pool};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AutomaticRouteCandidate {
     pub key: String,
     pub target: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AutomaticRoute {
     pub alias: String,
     pub selector_model: String,
@@ -32,7 +32,7 @@ pub struct AutomaticRoute {
     pub candidates: Vec<AutomaticRouteCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct AutomaticRouteDecisionRow {
     pub created_at: String,
     pub route_alias: String,

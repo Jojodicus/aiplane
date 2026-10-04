@@ -40,19 +40,17 @@ pub const SPA_RETURN_TO: &str = "/setup";
 /// Scoped to the wizard's own API prefix.
 pub const SETUP_CLAIM_COOKIE: &str = "gw_setup";
 
-fn json(status: StatusCode, body: serde_json::Value) -> Response {
+fn json(status: StatusCode, body: impl serde::Serialize) -> Response {
+    let body = serde_json::to_vec(&body).expect("wire types serialize to JSON");
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(body.to_string().into())
+        .body(body.into())
         .expect("static JSON response")
 }
 
 fn error_json(status: StatusCode, code: &str, message: &str) -> Response {
-    json(
-        status,
-        serde_json::json!({ "error": { "message": message, "type": code, "code": code } }),
-    )
+    aiplane_api::pages::json_error(status, code, message)
 }
 
 /// What the gate resolved for one request: how setup may be reached, and the
@@ -205,40 +203,66 @@ pub async fn setup_state(State(state): State<Arc<RamaState>>, req: Request) -> R
         .await
         .ok()
         .flatten();
-    let draft_json = draft.as_ref().map(|d| {
-        serde_json::json!({
-            "public_url": d.public_url,
-            "issuer": d.params.issuer,
-            "client_id": d.params.client_id,
-            "client_secret_set": !d.params.client_secret.is_empty(),
-            "scopes": d.params.scopes,
-            "roles_claim": d.params.roles_claim,
-        })
-    });
-    let proof_json = proof.as_ref().map(|p| {
-        serde_json::json!({
-            "subject": p.subject,
-            "email": p.email,
-            "name": p.name,
-            "claims": p.claims,
-        })
-    });
     let resp = json(
         StatusCode::OK,
-        serde_json::json!({
-            "access": match access {
+        SetupState {
+            access: match access {
                 SetupAccess::FirstRun => "first_run",
                 SetupAccess::Recovery => "recovery",
                 SetupAccess::Closed => "closed",
             },
-            "draft": draft_json,
-            "proof": proof_json,
+            draft: draft.map(|d| SetupDraftView {
+                public_url: d.public_url,
+                client_secret_set: !d.params.client_secret.is_empty(),
+                issuer: d.params.issuer,
+                client_id: d.params.client_id,
+                scopes: d.params.scopes,
+                roles_claim: d.params.roles_claim,
+            }),
+            proof: proof.map(|p| SetupProofView {
+                subject: p.subject,
+                email: p.email,
+                name: p.name,
+                claims: p.claims,
+            }),
             // The wizard form's public-url prefill: the URL the operator's
             // browser is actually using.
-            "suggested_public_url": public_url_from_request(&req, &state),
-        }),
+            suggested_public_url: public_url_from_request(&req, &state),
+        },
     );
     with_claim(&state, resp, claim.as_deref())
+}
+
+/// Where the setup wizard stands.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SetupState {
+    /// `first_run`, `recovery` or `closed`.
+    pub access: &'static str,
+    /// The provider settings saved so far; secrets are not echoed.
+    pub draft: Option<SetupDraftView>,
+    /// What the last test sign-in proved; `null` until one succeeded.
+    pub proof: Option<SetupProofView>,
+    /// The URL the caller's browser is using, as the public URL's prefill.
+    pub suggested_public_url: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SetupDraftView {
+    pub public_url: String,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret_set: bool,
+    pub scopes: Vec<String>,
+    pub roles_claim: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SetupProofView {
+    pub subject: String,
+    pub email: String,
+    pub name: Option<String>,
+    /// Every claim the provider's ID token carried, as it sent them.
+    pub claims: serde_json::Value,
 }
 
 fn public_url_from_request(req: &Request, state: &RamaState) -> String {
@@ -262,7 +286,7 @@ fn public_url_from_request(req: &Request, state: &RamaState) -> String {
     format!("{scheme}://{host}")
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct SetupTestBody {
     pub public_url: String,
     pub issuer: String,
@@ -381,11 +405,19 @@ pub async fn setup_test(State(state): State<Arc<RamaState>>, req: Request) -> Re
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::SET_COOKIE, pending::binding_cookie(&start.csrf))
         .body(
-            serde_json::json!({ "authorize_url": start.url })
-                .to_string()
-                .into(),
+            serde_json::to_vec(&SetupTestStarted {
+                authorize_url: start.url,
+            })
+            .expect("wire types serialize to JSON")
+            .into(),
         )
         .expect("static JSON response")
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SetupTestStarted {
+    /// The provider's sign-in page to send the browser to.
+    pub authorize_url: String,
 }
 
 /// POST /api/v0/setup/restart — throw the proof away, back to screen 1.
@@ -400,10 +432,10 @@ pub async fn setup_restart(State(state): State<Arc<RamaState>>, req: Request) ->
             &format!("clearing the proof: {err}"),
         );
     }
-    json(StatusCode::OK, serde_json::json!({ "ok": true }))
+    json(StatusCode::OK, aiplane_api::pages::Done::OK)
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct SetupFinishBody {
     /// The claim/value pair that grants admin: either a picked pair
     /// `{"claim":…, "value":…}` or a manual `{"manual_claim":…, "manual_value":…}`.
@@ -515,8 +547,19 @@ pub async fn setup_finish(State(state): State<Arc<RamaState>>, req: Request) -> 
     );
     json(
         StatusCode::OK,
-        serde_json::json!({ "ok": true, "landing": "/admin/settings" }),
+        SetupFinished {
+            ok: true,
+            landing: "/admin/settings",
+        },
     )
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SetupFinished {
+    /// Always `true`.
+    pub ok: bool,
+    /// Where the SPA goes next.
+    pub landing: &'static str,
 }
 
 /// The gateway group the wizard creates for administrators. A name, not a

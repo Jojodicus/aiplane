@@ -11,7 +11,6 @@ use std::sync::Arc;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
-use serde_json::{Value, json};
 
 use super::json_agents::agent_at;
 use super::json_principals::require_agent_manager;
@@ -22,15 +21,42 @@ use aiplane_core::server::auth::token;
 use aiplane_runtime::agents::spec;
 use aiplane_runtime::rama_server::state::RamaState;
 
-fn embed_key_json(k: &embed_keys::EmbedKey) -> Value {
-    json!({
-        "id": k.id,
-        "name": k.name,
-        "origins": k.origins,
-        "created_by": k.created_by,
-        "created_at": k.created_at,
-        "revoked_at": k.revoked_at,
-    })
+/// An embed key, never the key itself.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct EmbedKeyView {
+    pub id: String,
+    pub name: String,
+    /// The `Origin`s a website may use the key from.
+    pub origins: Vec<String>,
+    pub created_by: String,
+    pub created_at: jiff::Timestamp,
+    pub revoked_at: Option<jiff::Timestamp>,
+}
+
+impl EmbedKeyView {
+    fn of(k: &embed_keys::EmbedKey) -> Self {
+        Self {
+            id: k.id.clone(),
+            name: k.name.clone(),
+            origins: k.origins.clone(),
+            created_by: k.created_by.clone(),
+            created_at: k.created_at,
+            revoked_at: k.revoked_at,
+        }
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct EmbedKeyList {
+    /// Revoked ones included.
+    pub embed_keys: Vec<EmbedKeyView>,
+}
+
+/// A new embed key. `key` (`gwe_…`) is shown here and nowhere else.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CreatedEmbedKey {
+    pub embed_key: EmbedKeyView,
+    pub key: String,
 }
 
 /// GET /api/v0/agents/{id}/embed-keys — every key, revoked ones included,
@@ -41,16 +67,19 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
     match embed_keys::list(&state.db, &agent.principal.id).await {
         Ok(keys) => json_ok(
             StatusCode::OK,
-            json!({ "embed_keys": keys.iter().map(embed_key_json).collect::<Vec<_>>() }),
+            EmbedKeyList {
+                embed_keys: keys.iter().map(EmbedKeyView::of).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmbedKeyBody {
     pub name: String,
+    /// Each exactly `scheme://host[:port]`, at least one.
     pub origins: Vec<String>,
 }
 
@@ -105,7 +134,10 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     {
         Ok(k) => json_ok(
             StatusCode::CREATED,
-            json!({ "embed_key": embed_key_json(&k), "key": key }),
+            CreatedEmbedKey {
+                embed_key: EmbedKeyView::of(&k),
+                key,
+            },
         ),
         Err(err) => internal(err),
     }

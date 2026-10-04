@@ -62,7 +62,7 @@ pub enum DbError {
 // ---------------------------------------------------------------------------
 // Types
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Session {
     pub id: String,
     pub user_id: String,
@@ -85,7 +85,7 @@ pub struct Session {
     pub pinned: bool,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TurnRole {
     User,
@@ -111,7 +111,7 @@ impl TurnRole {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
     /// Streaming in progress. Only valid for assistant turns.
@@ -162,7 +162,7 @@ impl TurnStatus {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
     Running,
@@ -191,7 +191,7 @@ impl ToolCallStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Turn {
     pub id: String,
     pub session_id: String,
@@ -213,7 +213,7 @@ pub struct Turn {
     pub completed_at: Option<Timestamp>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ToolCall {
     /// The model's `tool_call_id`. Doubles as the DOM id suffix.
     pub id: String,
@@ -229,7 +229,7 @@ pub struct ToolCall {
 
 /// Turn + its tool calls + any mid-turn interjections, fetched as one unit
 /// for rendering.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TurnWithTools {
     pub turn: Turn,
     pub tool_calls: Vec<ToolCall>,

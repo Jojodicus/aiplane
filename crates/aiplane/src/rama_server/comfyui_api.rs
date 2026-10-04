@@ -14,7 +14,6 @@ use rama::http::service::web::extract::State;
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde::Serialize;
-use serde_json::json;
 
 use aiplane_core::server::db::users;
 use aiplane_features::server::comfyui::{ComfyuiJob, ReloadReport, WorkerHealth, jobs};
@@ -159,23 +158,23 @@ pub async fn health(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     }
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct HealthResponse {
     reachable: bool,
     base_url: String,
     error: Option<String>,
     worker: Option<WorkerHealth>,
 }
 
-#[derive(Serialize)]
-struct ReloadResponse {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ReloadResponse {
     report: ReloadReport,
     base_url: String,
     content_dir: String,
 }
 
-#[derive(Serialize)]
-struct CatalogResponse {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct CatalogResponse {
     configured: bool,
     base_url: Option<String>,
     content_dir: Option<String>,
@@ -186,8 +185,8 @@ struct CatalogResponse {
     jobs: Vec<ComfyuiJob>,
 }
 
-#[derive(Serialize)]
-struct CatalogEntry {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct CatalogEntry {
     id: String,
     tool_id: String,
     title: String,
@@ -198,8 +197,8 @@ struct CatalogEntry {
     params: Vec<CatalogParam>,
 }
 
-#[derive(Serialize)]
-struct CatalogParam {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct CatalogParam {
     key: String,
     description: String,
     required: bool,
@@ -254,17 +253,5 @@ fn internal_error(message: &str) -> Response {
     error_envelope(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
 }
 fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
-    let body = json!({
-        "error": {
-            "message": message,
-            "type": code,
-            "code": code,
-        }
-    });
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        body.to_string(),
-    )
-        .into_response()
+    aiplane_api::pages::json_error(status, code, message)
 }

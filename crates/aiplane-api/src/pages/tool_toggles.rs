@@ -17,7 +17,7 @@ use aiplane_runtime::server::tools::catalog::Category;
 use aiplane_runtime::server::tools::catalog::{self, ToolEntry};
 use aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CapabilityEntry {
     pub key: String,
     pub kind: &'static str,

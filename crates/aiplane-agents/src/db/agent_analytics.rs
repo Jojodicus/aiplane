@@ -50,7 +50,7 @@ impl Range {
     }
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct SubAgents {
     pub dispatched: u64,
     pub finished: u64,
@@ -58,33 +58,33 @@ pub struct SubAgents {
     pub incomplete_by_reason: BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct MissingSlot {
     pub route: String,
     pub slot: String,
     pub count: u64,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct GateRefusals {
     pub total: u64,
     pub by_route: BTreeMap<String, u64>,
     pub by_missing_slot: Vec<MissingSlot>,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Blocks {
     pub total: u64,
     pub by_action: BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct LimitRefusals {
     pub total: u64,
     pub by_kind: BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Spend {
     pub requests: u64,
     pub prompt_tokens: u64,
@@ -93,7 +93,7 @@ pub struct Spend {
     pub cost: f64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Day {
     pub day: String,
     pub conversations: u64,
@@ -103,7 +103,7 @@ pub struct Day {
     pub refusals: u64,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, schemars::JsonSchema)]
 pub struct Analytics {
     pub from: String,
     pub to: String,

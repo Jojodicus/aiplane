@@ -15,7 +15,6 @@ use std::sync::Arc;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
-use serde_json::json;
 
 use super::json_agents::agent_by_id;
 use super::json_principals::require_agent_manager;
@@ -111,8 +110,9 @@ pub(crate) async fn persona_for(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ArchitectStartBody")]
 pub struct StartBody {
     /// The agent to plan; none for a new one.
     #[serde(default)]
@@ -154,12 +154,12 @@ pub async fn start(State(state): State<Arc<RamaState>>, req: Request) -> Respons
             Ok(Some(session_id)) => {
                 return json_ok(
                     StatusCode::OK,
-                    json!({
-                        "session_id": session_id,
-                        "model": model,
-                        "agent_id": agent_id,
-                        "resumed": true,
-                    }),
+                    ArchitectConversation {
+                        session_id,
+                        model,
+                        agent_id,
+                        resumed: true,
+                    },
                 );
             }
             Ok(None) => {}
@@ -184,11 +184,23 @@ pub async fn start(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     }
     json_ok(
         StatusCode::CREATED,
-        json!({
-            "session_id": session.id,
-            "model": model,
-            "agent_id": agent_id,
-            "resumed": false,
-        }),
+        ArchitectConversation {
+            session_id: session.id,
+            model,
+            agent_id,
+            resumed: false,
+        },
     )
+}
+
+/// The architect conversation to continue, and the model to send its
+/// messages with.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ArchitectConversation {
+    pub session_id: String,
+    pub model: String,
+    /// The agent it plans; `null` for a new one.
+    pub agent_id: Option<String>,
+    /// An existing conversation was picked up rather than a new one started.
+    pub resumed: bool,
 }
