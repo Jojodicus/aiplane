@@ -538,8 +538,9 @@ test chat behind it.
   else as its admin wrote it, and an empty description stays empty. Each
   item adds `grant: {kind, refs}` (a catalog entry standing for several tool
   ids — memory, a typst template, ComfyUI — grants all of them), `tools` (the
-  ids it puts into `main.tools`), and `editable` / `config_url`: tools link
-  to `/tools`, and an admin is pointed at a connector's
+  ids it puts into `main.tools`), and `editable` / `config_url` — only where the
+  viewer can fix the resource itself: a tool's copy lives in the catalog, so
+  no tool links; an admin is pointed at a connector's
   `/admin/connectors/<key>/edit`, `/admin/skills`, or a knowledge base's
   `/rag/<id>/edit`. Knowledge bases (`kind` `rag_collection`, group
   `knowledge-base`) are offered only here; the chat picker searches

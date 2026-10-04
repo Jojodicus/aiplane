@@ -110,8 +110,7 @@ fn tool_items(state: &RamaState, role_ids: &[String]) -> Vec<GrantableItem> {
                 .filter(|id| catalog::entry_key_for(id) == entry.key)
                 .cloned()
                 .collect();
-            let mut item = GrantableItem::new(CapabilityEntry::tool(entry), "tool", refs.clone())
-                .edited_at(Some("/tools".into()));
+            let mut item = GrantableItem::new(CapabilityEntry::tool(entry), "tool", refs.clone());
             item.tools = refs;
             item
         })

@@ -2014,12 +2014,17 @@ async fn agent_resources_are_capped_by_what_the_manager_holds() {
     assert!(
         items(&managed)
             .iter()
-            .filter(|i| i["grant"]["kind"] != "tool")
             .all(|i| i["editable"] == false && i["config_url"].is_null()),
         "{managed}"
     );
 
     let (_, admin) = fx.get(&fx.admin, "/api/v0/agent-resources").await;
+    let time = item(&admin, "tool", TIME);
+    assert_eq!(
+        (&time["editable"], &time["config_url"]),
+        (&json!(false), &Value::Null),
+        "nothing about a tool is maintained anywhere, so nothing links"
+    );
     let skill = item(&admin, "skill", "brand");
     assert_eq!(skill["editable"], true);
     assert_eq!(skill["config_url"], "/admin/skills");
