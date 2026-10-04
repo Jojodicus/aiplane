@@ -203,8 +203,10 @@ that moment*, by the same check as a new grant
 (`aiplane_runtime::server::grant_holding::capped_to_minter`): a grant added
 to the principal later that the minter does not hold is not usable through
 that token, a grant the minter has since lost stops working through it, and a
-minter who is gone leaves the token with no grants at all. A token an admin
-minted is uncapped while the minter is an admin. *Chosen* over checking only
+minter who is gone leaves the token with no grants at all. A model grant
+kept this way routes only through the pools of the model's kind the minter
+may use, intersected with the grant's own pools (none left, no grant). A
+token an admin minted is uncapped while the minter is an admin. *Chosen* over checking only
 at issue time: the principal can be granted more after a token exists — by
 an admin, or by another manager with a share — and a manager's token must
 never become a way to use what that manager could not hand out. The

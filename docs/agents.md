@@ -3390,22 +3390,37 @@ agent_model_not_granted` in the test chat; voice answers `503`) until it is
 granted or the agent names a model.
 
 **Pools of a grant.** A `model` grant stores, in `principal_grants.pools`,
-the pools the granting manager may use that serve the name — for an automatic
-route, that serve any of its members (`grant_holding::model_grant_pools`,
-`UpstreamRegistry::pools_knowing`). The principal routes the name only
+every pool of the model's kind the granting manager may use — for an
+automatic route, of chat and selector models (`grant_holding::model_grant_pools`,
+`UpstreamRegistry::pools_of_kinds`). That is decided by the manager's
+groups, not by what is serving at grant time: a pool that is down or not
+probed yet still counts once it serves the model; routing takes the recorded
+pools that serve it at request time. The principal routes the name only
 through those pools, as a person's chat stays inside their groups' pools. An
 admin's grant stores `NULL`: every pool serving it, as an admin's own
-requests reach. Granting again replaces the pools (an admin's regrant widens
-a manager's to every pool; a manager's narrows an admin's to theirs); the
-grant persists like every other.
+requests reach. **A regrant never narrows**: the pools become the union of
+what the grant held and the new grantor's pools (`NULL` wins), the first
+grantor stays, and `POST …/grants` answers `{added, widened}` (`201` when
+new, `200` otherwise, `widened` when it now reaches more pools). Taking a
+pool away is a revoke and a new grant. The grant persists like every other.
+
+**A token narrows it again.** A `gws_` token minted by a non-admin carries
+each model grant only through the pools of the model's kind its minter may
+use *now*, intersected with the grant's (`grant_holding::capped_to_minter`,
+cached with the narrowed pools); an empty intersection drops the grant. An
+admin's token keeps the grant's pools.
 
 **Access** (`PoolAccess::granted_models`). A system principal's access is its
 `model` grants, each with its pools: the grant replaces the pools' group
 rule, and a name routes only through its pools (`PoolAccess::reaches`).
 A granted backend alias authorises what a backend of one of its pools
-resolves it to, there and nowhere else — the turn resolves `fast` to the
-real id before it routes, and the conversation's compaction routes that id
-too. An agent run
+resolves it to, there and nowhere else — but only for the gateway's own
+resolution of a name the caller was allowed (`PoolAccess::resolving` /
+`for_request`): the turn resolves `fast` to the real id before it routes,
+the `/v1` chat and messages paths resolve the requested name up front, and
+the conversation's compaction routes the resolved id too. A caller naming
+the target itself (`Qwen/Qwen3` with only `fast` granted) holds no grant on
+it: `404`, and `GET /v1/models/{id}` does not know it. An agent run
 narrows that to the one model it uses (`PoolAccess::for_system_models`), and
 so do the topic guard, the route classifier, the evaluation judge and voice.
 Default deny: no `model` grant, no model. A granted automatic route is
