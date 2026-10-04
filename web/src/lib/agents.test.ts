@@ -28,6 +28,8 @@ import {
 	suspensionLabel,
 	answerField,
 	testTurnLabel,
+	shareSubjectOptions,
+	shareSubjectLabel,
 	type SpecIssue
 } from './agents.ts';
 
@@ -318,4 +320,29 @@ test('a grant option is labelled by its title, with the reference when one item 
 		{ value: 'recall', label: 'Memory: recall' }
 	]);
 	assert.deepEqual(grantOptions(resources, 'skill'), []);
+});
+
+test('a share subject is picked from the users and groups that exist; read and write offer only managers', () => {
+	const subjects = {
+		users: [
+			{ id: 'u1', name: 'Ada', email: 'ada@example.com', manager: true },
+			{ id: 'u2', name: null, email: 'sam@example.com', manager: false }
+		],
+		groups: [
+			{ name: 'managers', manager: true },
+			{ name: 'support', manager: false }
+		]
+	};
+	assert.deepEqual(shareSubjectOptions(subjects, 'user', 'respond'), [
+		{ value: 'u1', label: 'Ada <ada@example.com>' },
+		{ value: 'u2', label: 'sam@example.com' }
+	]);
+	assert.deepEqual(shareSubjectOptions(subjects, 'user', 'read'), [{ value: 'u1', label: 'Ada <ada@example.com>' }]);
+	assert.deepEqual(shareSubjectOptions(subjects, 'group', 'write'), [{ value: 'managers', label: 'managers' }]);
+	assert.deepEqual(shareSubjectOptions(subjects, 'group', 'respond').map((o) => o.value), ['managers', 'support']);
+	assert.deepEqual(shareSubjectOptions(undefined, 'user', 'respond'), []);
+
+	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'user', subject_id: 'u2' }), 'sam@example.com');
+	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'user', subject_id: 'gone' }), 'gone');
+	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'group', subject_id: 'support' }), 'support');
 });

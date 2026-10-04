@@ -5,11 +5,12 @@
 //! waiting for whom, and the notification when something starts to wait.
 //!
 //! **Who sees an item.**
-//! - An agent conversation's approval or handoff: an admin, a manager with a
-//!   `write` share on the agent, or one of the agent's responders. A
-//!   responder sees the item and its minimal context only — the question, the
-//!   handoff context, an approval's tool and arguments — never the spec or
-//!   the conversations. A test conversation's pause stays in the test chat;
+//! - An agent conversation's approval or handoff: anyone holding access to
+//!   the agent ([`super::access::effective_access`]) — an admin, a manager
+//!   with a `read` or `write` share, or a holder of a `respond` share. A
+//!   responder (`respond` only) sees the item and its minimal context only —
+//!   the question, the handoff context, an approval's tool and arguments —
+//!   never the spec or the conversations. A test conversation's pause stays in the test chat;
 //!   a visitor's secure input is never anyone's item.
 //! - A person's own conversation that waits — a scheduled action or a webhook
 //!   run that paused: its owner, and nobody else.
@@ -24,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use aiplane_agents::db::agent_channels;
-use aiplane_agents::db::agent_responders;
 use aiplane_agents::db::agents::{self as agents_db, Access, SubjectKind};
 use aiplane_agents::db::run_sessions;
 use aiplane_agents::db::run_sessions::{PendingSuspension, SessionOwner};
@@ -60,9 +60,10 @@ impl Viewer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Standing {
-    /// Admin, or a manager with a `write` share: may also open the agent.
+    /// Admin, or a manager with a `read` or `write` share: may also open
+    /// the agent.
     Manager,
-    /// Named in the agent's responders: the item and nothing else.
+    /// A `respond` share: the item and nothing else.
     Responder,
     /// Their own conversation (a scheduled or webhook run).
     Owner,
@@ -174,15 +175,14 @@ pub async fn agent_standing(
     viewer: &Viewer,
     agent_id: &str,
 ) -> Result<Option<Standing>, DbError> {
-    if super::access::effective_access(state, agent_id, &viewer.user_id, &viewer.groups).await?
-        == Some(Access::Write)
-    {
-        return Ok(Some(Standing::Manager));
-    }
-    if agent_responders::is_responder(&state.db, agent_id, &viewer.user_id, &viewer.groups).await? {
-        return Ok(Some(Standing::Responder));
-    }
-    Ok(None)
+    Ok(
+        super::access::effective_access(state, agent_id, &viewer.user_id, &viewer.groups)
+            .await?
+            .map(|access| match access {
+                Access::Respond => Standing::Responder,
+                Access::Read | Access::Write => Standing::Manager,
+            }),
+    )
 }
 
 /// The pause that actually waits: the innermost of a chain of sub-agent
@@ -244,25 +244,17 @@ async fn item(
     })
 }
 
-/// Everyone who may answer agent `agent_id`'s items, by user id: managers
-/// holding a `write` share, directly or through a group, and responders.
+/// Everyone who may answer agent `agent_id`'s items, by user id: whoever
+/// holds a share that takes effect, directly or through a group.
 /// Admins without a share are not notified: they may answer everything, and
 /// would be told about everything.
 async fn agent_answerers(state: &RamaState, agent_id: &str) -> Result<Vec<String>, DbError> {
-    let shares = agents_db::shares(&state.db, agent_id).await?;
-    let responders = agent_responders::list(&state.db, agent_id).await?;
     let mut direct = BTreeSet::new();
     let mut groups = BTreeSet::new();
-    for share in shares.iter().filter(|s| s.access == Access::Write) {
+    for share in agents_db::shares(&state.db, agent_id).await? {
         match share.subject_kind {
-            SubjectKind::User => direct.insert(share.subject_id.clone()),
-            SubjectKind::Group => groups.insert(share.subject_id.clone()),
-        };
-    }
-    for r in &responders {
-        match r.subject_kind {
-            SubjectKind::User => direct.insert(r.subject_id.clone()),
-            SubjectKind::Group => groups.insert(r.subject_id.clone()),
+            SubjectKind::User => direct.insert(share.subject_id),
+            SubjectKind::Group => groups.insert(share.subject_id),
         };
     }
     let mut out = BTreeSet::new();

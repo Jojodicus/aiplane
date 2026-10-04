@@ -4,8 +4,8 @@
 //! `GET /api/v0/agents/{id}/activity`, `…/activity/export` and
 //! `…/activity/verify` (`docs/agents.md` → "What #111 built"): the
 //! activity log page by page with its filters, the JSONL export, the chain
-//! check, and who may read it — admins and share holders, never a
-//! responder.
+//! check, and who may read it — admins and `read` or `write` share holders,
+//! never a responder (a `respond` share).
 
 use aiplane_agents::db::agent_audit::{self, AuditKind, Correlation, NewEvent};
 use aiplane_core::server::principal::{GrantSet, SystemPrincipal};
@@ -242,11 +242,7 @@ async fn admins_and_share_holders_read_the_log_and_responders_do_not() {
         format!("/api/v0/agents/{agent}/activity/verify"),
     ];
     let (status, body) = fx
-        .post(
-            &fx.alice,
-            &format!("/api/v0/agents/{agent}/responders"),
-            json!({ "subject_kind": "user", "subject_id": "plain" }),
-        )
+        .share(&fx.alice, &agent, "user", "plain", "respond")
         .await;
     assert!(status.is_success(), "{body}");
     for uri in &routes {

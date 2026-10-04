@@ -471,8 +471,8 @@ are in `web/src/lib/components/agents/`.
     below — *Builder*, *Canvas*, *JSON*, *Grants* — on the same buffer.
   - **Try it**: *Test chat* and *Tests*.
   - **Insights**: *Analytics* and *Activity*.
-  - **Settings**: *Versions* and *Sharing* (shares, responders, notification
-    channels, embed keys).
+  - **Settings**: *Versions* and *Sharing* (shares at `respond`, `read` or
+    `write`, notification channels, embed keys).
 
   The panels:
   - *Builder*: collapsible sections. **Main agent** (model, orchestration and
@@ -784,8 +784,8 @@ while it is open.
 
 `/inbox` (sidebar: Workspace → Inbox, for every signed-in person) lists what
 waits for them: an agent's approvals and handoffs when they are an admin, a
-manager with a `write` share or one of the agent's responders, and their own
-paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
+manager with a `read` or `write` share, or hold a `respond` share (the
+agent's responders), and their own paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
@@ -803,12 +803,16 @@ paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
   sidebar badge (hidden at 0) and makes the open page refetch the list. The
   stream ends after ten minutes and `EventSource` reconnects on its own,
   which is what it is for here, unlike the chat stream.
-- **Workbench.** The agent workbench's Sharing panel (Settings tab) has two more cards:
-  *Responders* (users or groups who answer without a share; they need no
-  agent-management permission) and *Notification channels* (Slack or Discord
-  incoming webhooks; the URL is write-only, the list shows its host, whether
-  the message carries details, and its language). A `read` share sees both
-  read-only.
+- **Workbench.** The agent workbench's Sharing panel (Settings tab) offers
+  the `respond` level next to `read` and `write`: users or groups who answer
+  the inbox and need no agent-management permission. The subject is picked
+  (`SearchableSelect`) from the users and groups that exist
+  (`GET /api/v0/agent-resources` → `subjects`); for `read` and `write` only
+  those holding the permission are offered (`shareSubjectOptions` in
+  `web/src/lib/agents.ts`). Below it, *Notification channels* (Slack or
+  Discord incoming webhooks; the URL is write-only, the list shows its host,
+  whether the message carries details, and its language). A `read` share sees
+  both read-only.
 
 ## Reactive state
 

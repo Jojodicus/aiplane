@@ -1,25 +1,35 @@
 <script lang="ts">
-	import { agentsApi, type AgentError, type Share } from '$lib/agents';
+	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import { agentsApi, SHARE_ACCESS, shareSubjectLabel, shareSubjectOptions, type AgentError, type Share, type ShareAccess, type ShareSubjects } from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 
 	/**
-	 * Who else may work on this agent. A share takes effect only for a holder
-	 * of the agent-management permission (it shows the spec and the visitors'
-	 * conversations), and the last `write` share cannot be removed. Both
-	 * refusals come back from the server in words and are shown as they are.
+	 * Who else may work on this agent, and who answers its inbox. `read` and
+	 * `write` take effect only for holders of the agent-management permission
+	 * (they show the spec and the visitors' conversations), so the picker
+	 * offers only those for them; `respond` answers the inbox items and is
+	 * open to every user and group. Subjects come from the users and groups
+	 * that exist, never typed in. The last `write` share cannot be removed;
+	 * the server's refusals are shown as they are.
 	 */
-	let { agentId, shares, writable, onchanged }: {
+	let { agentId, shares, subjects, writable, onchanged }: {
 		agentId: string;
 		shares: Share[];
+		subjects: ShareSubjects | undefined;
 		writable: boolean;
 		onchanged: () => void | Promise<void>;
 	} = $props();
 
 	let kind = $state<Share['subject_kind']>('user');
+	let access = $state<ShareAccess>('respond');
 	let subject = $state('');
-	let access = $state<Share['access']>('read');
 	let error = $state<string | null>(null);
 	let busy = $state(false);
+	const options = $derived(shareSubjectOptions(subjects, kind, access));
+
+	$effect(() => {
+		if (subject && !options.some((o) => o.value === subject)) subject = '';
+	});
 
 	async function run(action: () => Promise<unknown>) {
 		busy = true;
@@ -35,7 +45,7 @@
 	}
 	const add = () =>
 		run(async () => {
-			await agentsApi.share(agentId, { subject_kind: kind, subject_id: subject.trim(), access });
+			await agentsApi.share(agentId, { subject_kind: kind, subject_id: subject, access });
 			subject = '';
 		});
 </script>
@@ -54,13 +64,12 @@
 					<tr>
 						<td>
 							<span class="badge badge-outline mr-2">{t(`agents-share-kind-${share.subject_kind}`)}</span>
-							<span class="font-mono text-sm">{share.subject_id}</span>
+							<span class="text-sm break-all">{shareSubjectLabel(subjects, share)}</span>
 						</td>
 						<td>
 							{#if writable}
-								<select class="select select-xs w-28" value={share.access} disabled={busy} onchange={(e) => run(() => agentsApi.share(agentId, { ...share, access: e.currentTarget.value as Share['access'] }))} aria-label={t('agents-share-access')}>
-									<option value="read">{t('agents-share-read')}</option>
-									<option value="write">{t('agents-share-write')}</option>
+								<select class="select select-xs w-32" value={share.access} disabled={busy} onchange={(e) => run(() => agentsApi.share(agentId, { ...share, access: e.currentTarget.value as ShareAccess }))} aria-label={t('agents-share-access')}>
+									{#each SHARE_ACCESS as level (level)}<option value={level}>{t(`agents-share-${level}`)}</option>{/each}
 								</select>
 							{:else}
 								{t(`agents-share-${share.access}`)}
@@ -82,24 +91,23 @@
 	{#if writable}
 		<form class="flex flex-wrap items-end gap-3" onsubmit={(e) => { e.preventDefault(); void add(); }}>
 			<label class="flex flex-col gap-1">
+				<span class="label-text">{t('agents-share-access')}</span>
+				<select class="select w-32" bind:value={access}>
+					{#each SHARE_ACCESS as level (level)}<option value={level}>{t(`agents-share-${level}`)}</option>{/each}
+				</select>
+			</label>
+			<label class="flex flex-col gap-1">
 				<span class="label-text">{t('agents-share-subject-kind')}</span>
 				<select class="select w-32" bind:value={kind}>
 					<option value="user">{t('agents-share-kind-user')}</option>
 					<option value="group">{t('agents-share-kind-group')}</option>
 				</select>
 			</label>
-			<label class="flex flex-col gap-1">
-				<span class="label-text">{kind === 'user' ? t('agents-share-user-id') : t('agents-share-group-name')}</span>
-				<input class="input w-64 font-mono" bind:value={subject} required />
-			</label>
-			<label class="flex flex-col gap-1">
-				<span class="label-text">{t('agents-share-access')}</span>
-				<select class="select w-28" bind:value={access}>
-					<option value="read">{t('agents-share-read')}</option>
-					<option value="write">{t('agents-share-write')}</option>
-				</select>
-			</label>
-			<button class="btn btn-primary" type="submit" disabled={busy || !subject.trim()}>{t('agents-share-add')}</button>
+			<div class="flex flex-col gap-1">
+				<span class="label-text">{t(`agents-share-kind-${kind}`)}</span>
+				<SearchableSelect {options} bind:value={subject} ariaLabel={t(`agents-share-kind-${kind}`)} placeholder={t('agents-pick')} class="w-64 max-w-full" />
+			</div>
+			<button class="btn btn-primary" type="submit" disabled={busy || !subject}>{t('agents-share-add')}</button>
 		</form>
 	{/if}
 </div>

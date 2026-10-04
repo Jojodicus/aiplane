@@ -4,15 +4,14 @@
 //! Human in the loop over HTTP (`docs/agents.md` "What #96 built").
 //!
 //! - `/api/v0/agents/inbox` — what waits for the signed-in person: an agent's
-//!   approvals and handoffs when they are an admin, a manager with a `write`
-//!   share or one of its responders, and their own paused scheduled or
-//!   webhook runs. Every signed-in person may ask; most see nothing.
+//!   approvals and handoffs when they hold access to it (an admin, a share
+//!   holder — `respond` answers without the agent-management permission),
+//!   and their own paused scheduled or webhook runs. Every signed-in person may ask; most see nothing.
 //! - `/api/v0/agents/inbox/{id}/answer` — answer one, through the same resume
 //!   the staff route (`json_agent_test::resume_turn`) and the chat use.
 //! - `/api/v0/agents/inbox/events` — a count frame whenever the set changes.
-//! - `/api/v0/agents/{id}/responders` and `…/channels` — who answers without a
-//!   share, and where a waiting turn is announced besides Web Push. Managed
-//!   with a share like the rest of the agent.
+//! - `/api/v0/agents/{id}/channels` — where a waiting turn is announced
+//!   besides Web Push. Managed with a share like the rest of the agent.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,10 +29,8 @@ use super::json_agents::agent_at;
 use super::json_principals::require_agent_manager;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_agents::db::agent_channels::{self, ChannelKind, NewChannel};
-use aiplane_agents::db::agent_responders;
-use aiplane_agents::db::agents::{Access, SubjectKind};
+use aiplane_agents::db::agents::Access;
 use aiplane_agents::notify_channels::validate_webhook_url;
-use aiplane_core::server::db::{gateway_groups, users};
 use aiplane_runtime::agents::embed::{self as embed_rt, TurnWork};
 use aiplane_runtime::agents::inbox::{self, Standing, Viewer};
 use aiplane_runtime::agents::resume::{AgentResume, ResumedBy, claim};
@@ -202,119 +199,6 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         }
     });
     json_stream_response(rx)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResponderBody {
-    pub subject_kind: String,
-    pub subject_id: String,
-}
-
-fn responder_json(r: &agent_responders::Responder) -> Value {
-    json!({
-        "subject_kind": r.subject_kind.as_str(),
-        "subject_id": r.subject_id,
-        "added_by": r.added_by,
-        "added_at": r.added_at,
-    })
-}
-
-async fn responder_subject(
-    state: &RamaState,
-    body: &ResponderBody,
-) -> Result<(SubjectKind, String), Response> {
-    let kind = SubjectKind::parse(&body.subject_kind).ok_or_else(|| {
-        bad_request(format!(
-            "`{}` is not a responder kind — use `user` or `group`",
-            body.subject_kind
-        ))
-    })?;
-    let subject = body.subject_id.trim().to_string();
-    if subject.is_empty() {
-        return Err(bad_request("a responder needs a `subject_id`"));
-    }
-    let exists = match kind {
-        SubjectKind::User => users::find_by_id(&state.db, &subject)
-            .await
-            .map_err(internal)?
-            .is_some(),
-        SubjectKind::Group => gateway_groups::list_groups(&state.db)
-            .await
-            .map_err(internal)?
-            .iter()
-            .any(|g| g.name == subject),
-    };
-    if !exists {
-        return Err(not_found(format!(
-            "there is no {} `{subject}`",
-            kind.as_str()
-        )));
-    }
-    Ok((kind, subject))
-}
-
-/// GET /api/v0/agents/{id}/responders
-pub async fn responders(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let user = or_return!(require_agent_manager(&state, &req).await);
-    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    match agent_responders::list(&state.db, &agent.principal.id).await {
-        Ok(rows) => json_ok(
-            StatusCode::OK,
-            json!({ "responders": rows.iter().map(responder_json).collect::<Vec<_>>() }),
-        ),
-        Err(err) => internal(err),
-    }
-}
-
-/// POST /api/v0/agents/{id}/responders — a responder needs no agent-management
-/// permission: they see the pending items and nothing of the agent.
-pub async fn add_responder(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let user = or_return!(require_agent_manager(&state, &req).await);
-    let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
-    let body: ResponderBody =
-        or_return!(super::read_json(req.into_body(), "the responder body").await);
-    let (kind, subject) = or_return!(responder_subject(&state, &body).await);
-    match agent_responders::add(&state.db, &agent.principal.id, kind, &subject, &user.id).await {
-        Ok(added) => json_ok(
-            if added {
-                StatusCode::CREATED
-            } else {
-                StatusCode::OK
-            },
-            json!({ "subject_kind": kind.as_str(), "subject_id": subject }),
-        ),
-        Err(err) => internal(err),
-    }
-}
-
-/// POST /api/v0/agents/{id}/responders/revoke
-pub async fn revoke_responder(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let user = or_return!(require_agent_manager(&state, &req).await);
-    let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
-    let body: ResponderBody =
-        or_return!(super::read_json(req.into_body(), "the responder body").await);
-    let Some(kind) = SubjectKind::parse(&body.subject_kind) else {
-        return bad_request("a responder kind is `user` or `group`");
-    };
-    match agent_responders::remove(
-        &state.db,
-        &agent.principal.id,
-        kind,
-        body.subject_id.trim(),
-        &user.id,
-    )
-    .await
-    {
-        Ok(true) => no_content(),
-        Ok(false) => not_found(format!(
-            "{} `{}` is not a responder of `{}`",
-            kind.as_str(),
-            body.subject_id.trim(),
-            agent.principal.name
-        )),
-        Err(err) => internal(err),
-    }
 }
 
 fn channel_json(c: &agent_channels::Channel) -> Value {

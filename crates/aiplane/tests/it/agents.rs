@@ -626,6 +626,41 @@ async fn a_share_with_the_bootstrap_admin_group_is_accepted() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
+/// The sharing picker offers the users and groups that exist, each marked
+/// with whether a `read` or `write` share would take effect for it.
+#[tokio::test]
+async fn the_resources_list_every_share_subject_that_exists() {
+    let fx = fixture().await;
+    let (status, body) = fx.get(&fx.alice, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let subjects = &body["subjects"];
+    let user = |id: &str| {
+        subjects["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} in {subjects}"))
+    };
+    assert_eq!(user("alice")["manager"], true);
+    assert_eq!(user("alice")["email"], "alice@example.com");
+    assert_eq!(user("plain")["manager"], false);
+    assert_eq!(user("root")["manager"], true);
+    let group = |name: &str| {
+        subjects["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == name)
+            .map(|g| g["manager"].clone())
+    };
+    assert_eq!(group(BOOTSTRAP_ADMIN_GROUP), Some(json!(true)));
+    assert_eq!(group("managers"), Some(json!(true)));
+    assert_eq!(group("support"), Some(json!(false)));
+    assert_eq!(group("nogroup"), None);
+}
+
 /// A share outlives the permission it needs, but grants nothing without it.
 #[tokio::test]
 async fn a_manager_who_loses_the_permission_loses_the_agent_despite_the_share() {
@@ -649,6 +684,18 @@ async fn a_manager_who_loses_the_permission_loses_the_agent_despite_the_share() 
     assert_eq!(
         fx.get(&fx.alice, &format!("/api/v0/agents/{id}")).await.0,
         StatusCode::FORBIDDEN
+    );
+
+    let (status, body) = fx
+        .share(&fx.root, &id, "group", "managers", "respond")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        aiplane_runtime::agents::access::effective_access(&fx.state, &id, "alice", &groups)
+            .await
+            .unwrap(),
+        Some(aiplane_agents::db::agents::Access::Respond),
+        "only an explicit `respond` share outlives the permission, not the `write` one"
     );
 }
 

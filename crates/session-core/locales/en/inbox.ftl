@@ -1,5 +1,5 @@
 # The human-in-the-loop inbox (#96): the /inbox page, its sidebar entry, the
-# agent builder's responders and notification channels, and the widget's
+# agent builder's notification channels, and the widget's
 # "waiting for staff" notice.
 
 nav-inbox = Inbox
@@ -31,12 +31,6 @@ inbox-decline = Decline
 inbox-answer-required = Write an answer first.
 inbox-already-settled = This item was already answered or has expired.
 inbox-sent = Answer sent; the conversation continues.
-
-agents-responders-heading = Responders
-agents-responders-intro = Users and groups who may answer this agent's approvals and questions in the inbox. They see only the waiting item and its context, never the spec or the conversations, and need no agent-management permission.
-agents-responders-empty = No responders yet. Managers with a write share can answer too.
-agents-responders-add = Add responder
-agents-responders-remove = Remove
 
 agents-channels-heading = Notification channels
 agents-channels-intro = Slack or Discord channels that are told when a conversation starts waiting for staff, in addition to push notifications to everyone who may answer.

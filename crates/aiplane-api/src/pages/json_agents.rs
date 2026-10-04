@@ -6,9 +6,11 @@
 //!
 //! Every route needs the agent-management permission, and every route on one
 //! agent also needs a share on it: `read` to see it, `write` to change it.
-//! A share takes effect only for a holder of the permission, so a share is
+//! Such a share takes effect only for a holder of the permission, so it is
 //! refused for anyone who lacks it, and a holder who loses it loses access
-//! with it. An agent nobody shares is invisible: it answers 404, not 403.
+//! with it. A `respond` share answers the agent's inbox items and needs no
+//! permission; here it is no access at all. An agent nobody shares is
+//! invisible: it answers 404, not 403.
 //! Admins are the exception: they hold `write` on every agent without a
 //! share, so an agent whose last writer left can always be recovered.
 //!
@@ -49,7 +51,7 @@ fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
 }
 
 /// The caller's access to agent `id` ([`effective_access`]) — a 404 when
-/// they hold none, a 403 when it is weaker than `need`.
+/// they cannot see it, a 403 when they can read it but `need` more.
 async fn access(
     state: &RamaState,
     user: &users::User,
@@ -61,13 +63,13 @@ async fn access(
         .map_err(internal)?;
     match held {
         Some(a) if a >= need => Ok(Some(a)),
-        Some(_) => Err(json_error(
+        Some(a) if a >= Access::Read => Err(json_error(
             StatusCode::FORBIDDEN,
             "agent_write_required",
             "you can read this agent but not change it — ask someone with a `write` share to \
              upgrade yours",
         )),
-        None => Err(not_found(format!(
+        _ => Err(not_found(format!(
             "there is no agent `{id}` shared with you — ask its owner for a share"
         ))),
     }
@@ -792,12 +794,14 @@ fn parse_subject(body: &ShareBody) -> Result<(SubjectKind, &str), Response> {
     Ok((kind, subject))
 }
 
-/// A share only takes effect for a holder of the agent-management
-/// permission, so one for anybody else is refused rather than stored inert.
-async fn require_manager_subject(
+/// A share names a user or a group that exists. A `read` or `write` share only
+/// takes effect for a holder of the agent-management permission, so one for
+/// anybody else is refused rather than stored inert.
+async fn require_share_subject(
     state: &RamaState,
     kind: SubjectKind,
     subject: &str,
+    access: Access,
 ) -> Result<(), Response> {
     let holds = match kind {
         SubjectKind::User => {
@@ -816,16 +820,17 @@ async fn require_manager_subject(
             state.rbac.can_manage_agents(&[subject.to_string()])
         }
     };
-    if holds {
+    if holds || !access.needs_agent_manager() {
         return Ok(());
     }
     Err(json_error(
         StatusCode::UNPROCESSABLE_ENTITY,
         "share_needs_agent_manager",
         &format!(
-            "cannot share with {} `{subject}`: a share only works for holders of the \
-             agent-management permission, because it shows the spec and the agent's \
-             conversations. Ask an admin to enable `can_manage_agents` on {}, then share again.",
+            "cannot share with {} `{subject}`: a `read` or `write` share only works for \
+             holders of the agent-management permission, because it shows the spec and the \
+             agent's conversations. Ask an admin to enable `can_manage_agents` on {}, or \
+             give a `respond` share to let them answer the agent's inbox only.",
             kind.as_str(),
             match kind {
                 SubjectKind::User => "one of their groups",
@@ -852,9 +857,9 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
     let (kind, subject) = or_return!(parse_subject(&body));
     let access = match body.access.as_deref().map(Access::parse) {
         Some(Some(a)) => a,
-        _ => return bad_request("a share needs `access`: `read` or `write`"),
+        _ => return bad_request("a share needs `access`: `respond`, `read` or `write`"),
     };
-    or_return!(require_manager_subject(&state, kind, subject).await);
+    or_return!(require_share_subject(&state, kind, subject, access).await);
     let changed = agents_db::set_share(
         &state.db,
         &agent.principal.id,

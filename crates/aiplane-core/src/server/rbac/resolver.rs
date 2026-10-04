@@ -245,6 +245,17 @@ impl Resolver {
             .is_ok_and(|snap| snap.groups.contains_key(group))
     }
 
+    /// Every group id [`Self::has_group`] knows, sorted.
+    pub fn group_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .inner
+            .read()
+            .map(|snap| snap.groups.keys().cloned().collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
     /// True if any of the given group ids is flagged `is_admin`.
     pub fn is_admin(&self, role_ids: &[String]) -> bool {
         let Ok(snap) = self.inner.read() else {
@@ -1145,6 +1156,19 @@ mod tests {
         .unwrap();
         assert!(bootstrap.has_group(BOOTSTRAP_ADMIN_GROUP));
         assert!(bootstrap.can_manage_agents(&[BOOTSTRAP_ADMIN_GROUP.into()]));
+    }
+
+    #[test]
+    fn the_group_names_are_the_groups_it_knows_sorted() {
+        let r = Resolver::build_with_bootstrap(
+            RbacConfig::default(),
+            vec![admin_role("ops"), admin_role("audit")],
+            vec!["break-glass".into()],
+        )
+        .unwrap();
+        let names = r.group_names();
+        assert_eq!(names, [BOOTSTRAP_ADMIN_GROUP, "audit", "ops"]);
+        assert!(names.iter().all(|g| r.has_group(g)));
     }
 
     #[test]

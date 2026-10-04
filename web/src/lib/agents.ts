@@ -46,18 +46,41 @@ export interface Grant {
 export type GrantKind = 'model' | 'tool' | 'connector' | 'skill' | 'rag_collection';
 export const GRANT_KINDS: GrantKind[] = ['model', 'tool', 'connector', 'skill', 'rag_collection'];
 
+/** `respond` answers the agent's inbox items and needs no agent-management permission; `read` and `write` include it and need it. */
+export type ShareAccess = 'respond' | 'read' | 'write';
+export const SHARE_ACCESS: ShareAccess[] = ['respond', 'read', 'write'];
+
 export interface Share {
 	subject_kind: 'user' | 'group';
 	subject_id: string;
-	access: 'read' | 'write';
+	access: ShareAccess;
 }
 
-/** Someone who may answer the agent's inbox items without a share (#96). */
-export interface Responder {
-	subject_kind: 'user' | 'group';
-	subject_id: string;
-	added_by: string;
-	added_at: string;
+/** The users and groups a share may name (`GET /api/v0/agent-resources`); `manager` is whether a `read` or `write` share takes effect for them. */
+export interface ShareSubjects {
+	users: { id: string; name: string | null; email: string; manager: boolean }[];
+	groups: { name: string; manager: boolean }[];
+}
+
+/** How a person is shown in the sharing picker: name and address, or the address alone. */
+function userLabel(user: ShareSubjects['users'][number]): string {
+	return user.name ? `${user.name} <${user.email}>` : user.email;
+}
+
+/** The subjects of `kind` a share of `access` may name, for the picker. */
+export function shareSubjectOptions(subjects: ShareSubjects | null | undefined, kind: Share['subject_kind'], access: ShareAccess): { value: string; label: string }[] {
+	const open = access === 'respond';
+	if (kind === 'user') {
+		return (subjects?.users ?? []).filter((u) => open || u.manager).map((u) => ({ value: u.id, label: userLabel(u) }));
+	}
+	return (subjects?.groups ?? []).filter((g) => open || g.manager).map((g) => ({ value: g.name, label: g.name }));
+}
+
+/** A share's subject as the picker shows it; the stored id when it is no longer listed. */
+export function shareSubjectLabel(subjects: ShareSubjects | null | undefined, share: Pick<Share, 'subject_kind' | 'subject_id'>): string {
+	if (share.subject_kind === 'group') return share.subject_id;
+	const user = subjects?.users.find((u) => u.id === share.subject_id);
+	return user ? userLabel(user) : share.subject_id;
 }
 
 export type ChannelKind = 'slack' | 'discord';
@@ -129,6 +152,7 @@ export interface AgentResources {
 	items: GrantableItem[];
 	/** The gateway's default model of each kind: what a spec key left unset runs on. */
 	defaults?: ModelDefaults;
+	subjects?: ShareSubjects;
 }
 
 export type GrantableKind = 'tool' | 'connector' | 'skill' | 'rag_collection';
@@ -354,12 +378,6 @@ export const agentsApi = {
 	share: (id: string, share: Share) => call<Share>(`/api/v0/agents/${id}/shares`, json('POST', share)),
 	revokeShare: (id: string, share: Pick<Share, 'subject_kind' | 'subject_id'>) =>
 		call<void>(`/api/v0/agents/${id}/shares/revoke`, json('POST', share)),
-	responders: (id: string) =>
-		call<{ responders: Responder[] }>(`/api/v0/agents/${id}/responders`).then((r) => r.responders),
-	addResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
-		call<unknown>(`/api/v0/agents/${id}/responders`, json('POST', r)),
-	removeResponder: (id: string, r: Pick<Responder, 'subject_kind' | 'subject_id'>) =>
-		call<void>(`/api/v0/agents/${id}/responders/revoke`, json('POST', r)),
 	channels: (id: string) =>
 		call<{ channels: NotifyChannel[] }>(`/api/v0/agents/${id}/channels`).then((r) => r.channels),
 	/** Whether this gateway sends Web Push at all (`GET /api/v0/push/config`). */

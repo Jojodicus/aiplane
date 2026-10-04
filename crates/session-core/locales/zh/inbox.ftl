@@ -30,12 +30,6 @@ inbox-answer-required = 请先填写回答。
 inbox-already-settled = 此事项已被回答或已过期。
 inbox-sent = 回答已发送，对话将继续。
 
-agents-responders-heading = 应答人
-agents-responders-intro = 可以在收件箱中回答此智能体的审批和问题的用户和群组。他们只能看到待处理事项及其上下文，看不到规格或对话，也不需要智能体管理权限。
-agents-responders-empty = 暂无应答人。拥有写入共享的管理员也可以回答。
-agents-responders-add = 添加应答人
-agents-responders-remove = 移除
-
 agents-channels-heading = 通知渠道
 agents-channels-intro = 当对话开始等待工作人员时会收到通知的 Slack 或 Discord 频道，此外还会向所有可回答的人发送推送通知。
 agents-channels-empty = 暂无渠道。

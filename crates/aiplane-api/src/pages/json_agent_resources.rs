@@ -27,6 +27,10 @@
 //! title and description are the resource's own), with the grant it takes,
 //! the tool ids it puts into the spec, and its edit page when the caller may
 //! maintain it there.
+//!
+//! `subjects` are the users and groups a share may name (every group the
+//! RBAC resolver knows, config and bootstrap groups included), so the sharing
+//! picker never offers a subject that does not exist.
 
 use std::sync::Arc;
 
@@ -38,7 +42,7 @@ use serde_json::{Value, json};
 use super::json_principals::require_agent_manager;
 use super::tool_toggles::{CapabilityEntry, entries_for_tools, sort_entries};
 use super::{internal, json_ok};
-use aiplane_core::server::db::users::User;
+use aiplane_core::server::db::users::{self, User};
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
 use aiplane_core::server::feature_defaults::Feature;
 use aiplane_core::server::upstreams::PoolKind;
@@ -248,10 +252,43 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
         Ok(user) => user,
         Err(resp) => return resp,
     };
-    match resources_for(&state, &user).await {
-        Ok(view) => json_ok(StatusCode::OK, view),
-        Err(resp) => resp,
+    let mut view = match resources_for(&state, &user).await {
+        Ok(view) => view,
+        Err(resp) => return resp,
+    };
+    match share_subjects(&state).await {
+        Ok(subjects) => view["subjects"] = subjects,
+        Err(resp) => return resp,
     }
+    json_ok(StatusCode::OK, view)
+}
+
+/// The users and groups a share may name, each with whether it holds the
+/// agent-management permission that a `read` or `write` share needs. Only
+/// this route lists them: the architect's listing ([`resources_for`]) goes
+/// to a model, and people's names and addresses stay out of it.
+async fn share_subjects(state: &RamaState) -> Result<Value, Response> {
+    let users: Vec<Value> = users::list_all(&state.db)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|u| {
+            let manager = state
+                .rbac
+                .can_manage_agents(&state.rbac.role_ids_for(&u.roles));
+            json!({ "id": u.id, "name": u.name, "email": u.email, "manager": manager })
+        })
+        .collect();
+    let groups: Vec<Value> = state
+        .rbac
+        .group_names()
+        .into_iter()
+        .map(|g| {
+            let manager = state.rbac.can_manage_agents(std::slice::from_ref(&g));
+            json!({ "name": g, "manager": manager })
+        })
+        .collect();
+    Ok(json!({ "users": users, "groups": groups }))
 }
 
 /// What `user` holds and may grant, as `GET /api/v0/agent-resources`
