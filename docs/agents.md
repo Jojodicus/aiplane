@@ -1312,7 +1312,8 @@ runs. Migration `0077_agent_builder.sql`.
     directly or through a group, and responders (admins without a share are
     not notified — they may answer everything and would be told everything),
     or the run's owner. Title and body from the catalog in each
-    subscription's language; the link is `/inbox?item=<request_id>`.
+    subscription's language, through the one fan-out (`push::send_to_user`,
+    which also cuts and prunes); the link is `/inbox?item=<request_id>`.
   - **Slack and Discord** incoming webhooks (`agent_notify_channels`,
     `db::agent_channels`, `aiplane_agents::notify_channels`). The
     URL is the credential: sealed at rest (and in the reseal pass), never

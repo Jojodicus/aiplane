@@ -33,16 +33,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
-use aiplane_core::server::db::push_subscriptions;
-use aiplane_features::server::push::{PushMessage, SendOutcome};
+use aiplane_features::server::push::{self, MAX_BODY_CHARS, MAX_TITLE_CHARS, PushMessage};
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
-/// Notification text bounds. The whole payload rides in one aes128gcm record
-/// with a ~4 KB budget (and FCM caps the body at 4 KB too), and a phone
-/// notification truncates long text anyway — so cap it here, where the model
-/// gets told, rather than letting the push service silently cut it.
-const MAX_TITLE_LEN: usize = 80;
-const MAX_BODY_LEN: usize = 300;
+/// Notification text bounds are the fan-out's own (`push::MAX_TITLE_CHARS`,
+/// `MAX_BODY_CHARS`), refused here rather than cut there, so the model is
+/// told instead of having its text silently shortened.
+const MAX_TITLE_LEN: usize = MAX_TITLE_CHARS;
+const MAX_BODY_LEN: usize = MAX_BODY_CHARS;
 
 pub struct NotifyUser;
 
@@ -137,24 +135,9 @@ impl Tool for NotifyUser {
                 ));
             }
 
-            let subs = push_subscriptions::list_for_user(&ctx.db, ctx.person(self.id())?)
-                .await
-                .map_err(|e| ToolError::Failed(format!("reading push subscriptions: {e}")))?;
-            if subs.is_empty() {
-                return Err(ToolError::Failed(
-                    "the user has no device subscribed to notifications, so this could not \
-                     be delivered. Say what you wanted to notify about in your reply, and \
-                     that they can enable notifications in the app to be reached when they \
-                     are away."
-                        .into(),
-                ));
-            }
-
-            // Fan out to every subscribed browser. `tag` is the notification's
-            // coalescing key: the session id when we have one, so a second
-            // notification about the same conversation replaces the first
-            // instead of stacking. Gone subscriptions are pruned, exactly as
-            // the turn-complete path does.
+            // `tag` is the notification's coalescing key: the session id when
+            // there is one, so a second notification about the same
+            // conversation replaces the first instead of stacking.
             let tag = ctx
                 .session_id
                 .clone()
@@ -165,21 +148,24 @@ impl Tool for NotifyUser {
                 url: url.clone(),
                 tag,
             };
-            let mut delivered = 0usize;
-            let mut pruned = 0usize;
-            for sub in &subs {
-                match push.sender().send(sub, &message).await {
-                    SendOutcome::Delivered => delivered += 1,
-                    SendOutcome::Gone => {
-                        pruned += 1;
-                        if let Err(err) = push_subscriptions::delete(&ctx.db, &sub.id).await {
-                            tracing::warn!(error = %err, "notify_user: pruning gone subscription");
-                        }
-                    }
-                    SendOutcome::Failed => {}
-                }
+            let reached = push::send_to_user(
+                push.sender(),
+                &ctx.db,
+                ctx.person(self.id())?,
+                |_| message.clone(),
+            )
+            .await
+            .map_err(|e| ToolError::Failed(format!("reading push subscriptions: {e}")))?;
+            if reached.subscriptions == 0 {
+                return Err(ToolError::Failed(
+                    "the user has no device subscribed to notifications, so this could not \
+                     be delivered. Say what you wanted to notify about in your reply, and \
+                     that they can enable notifications in the app to be reached when they \
+                     are away."
+                        .into(),
+                ));
             }
-
+            let delivered = reached.delivered;
             if delivered == 0 {
                 // Every endpoint rejected or vanished. The turn's budget stays
                 // spent: retrying would hit the same endpoints.
@@ -187,9 +173,9 @@ impl Tool for NotifyUser {
                     "the notification could not be delivered to any of the user's \
                      {} registered device(s){}. Say what you wanted to notify about in \
                      your reply instead.",
-                    subs.len(),
-                    if pruned > 0 {
-                        format!(" ({pruned} had expired and were removed)")
+                    reached.subscriptions,
+                    if reached.pruned > 0 {
+                        format!(" ({} had expired and were removed)", reached.pruned)
                     } else {
                         String::new()
                     }

@@ -1066,10 +1066,10 @@ async fn notify_turn_complete(
     session_id: &str,
     assistant_turn_id: &str,
 ) {
-    use aiplane_features::server::push::{PushMessage, SendOutcome};
+    use aiplane_features::server::push::{self, PushMessage};
     use session_core::db::TurnStatus;
 
-    let Some(push) = state.push.clone() else {
+    let Some(sender) = state.push.clone() else {
         return;
     };
 
@@ -1089,60 +1089,32 @@ async fn notify_turn_complete(
         _ => return,
     };
 
-    let subs = match aiplane_core::server::db::push_subscriptions::list_for_user(&state.db, user_id)
-        .await
-    {
-        Ok(s) if !s.is_empty() => s,
-        Ok(_) => return,
-        Err(err) => {
-            tracing::warn!(error = %err, "push: listing subscriptions");
-            return;
-        }
-    };
-
     // Conversation title for the heading; an untitled chat gets a localized
-    // fallback per subscription below.
+    // fallback per subscription.
     let session_title = session_core::db::get_session(&state.db, user_id, session_id)
         .await
         .ok()
         .flatten()
         .and_then(|s| s.title)
         .filter(|t| !t.trim().is_empty());
-
     let url = format!("/chat/{session_id}");
-    for sub in subs {
-        let lang = sub
-            .lang
-            .as_deref()
-            .and_then(Lang::from_code)
-            .unwrap_or(Lang::En);
-        // Cap the title: it's a user-influenced conversation title, and the
-        // whole payload rides in one aes128gcm record with a 4 KB budget (and
-        // FCM's own 4 KB body cap). 80 chars is plenty for a heading.
-        let title = session_title
+    let compose = |lang: Lang| PushMessage {
+        title: session_title
             .clone()
-            .map(|t| session_core::text::truncate_chars(&t, 80))
-            .unwrap_or_else(|| t(lang, "push-untitled-conversation"));
-        let body = t(
+            .unwrap_or_else(|| t(lang, "push-untitled-conversation")),
+        body: t(
             lang,
             if errored {
                 "push-turn-error-body"
             } else {
                 "push-turn-complete-body"
             },
-        );
-        let message = PushMessage {
-            title,
-            body,
-            url: url.clone(),
-            tag: session_id.to_string(),
-        };
-        if push.send(&sub, &message).await == SendOutcome::Gone
-            && let Err(err) =
-                aiplane_core::server::db::push_subscriptions::delete(&state.db, &sub.id).await
-        {
-            tracing::warn!(error = %err, "push: pruning gone subscription");
-        }
+        ),
+        url: url.clone(),
+        tag: session_id.to_string(),
+    };
+    if let Err(err) = push::send_to_user(&sender, &state.db, user_id, compose).await {
+        tracing::warn!(error = %err, "push: notifying a finished turn");
     }
 }
 
