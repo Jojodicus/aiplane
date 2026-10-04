@@ -14,14 +14,21 @@
 //! `TurnUpdate::SidebarChanged` through the live worker's broadcast
 //! (if any) so the sidebar row updates in place without waiting for
 //! the user's next navigation.
+//!
+//! The call is a side call ([`side_call::ask_text`]): it passes the person's
+//! spend limits first and is a usage row of theirs.
 
-use aiplane_core::server::capped_read;
 use std::sync::Arc;
+use std::time::Duration;
 
 use session_core::TurnUpdate;
 
-use aiplane_core::server::upstreams::PoolKind;
+use aiplane_core::server::db::usage::UsageSource;
+use aiplane_core::server::db::users::User;
+use aiplane_core::server::upstreams::PoolAccess;
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::server::side_call::{self, Payer, SideCall, strip_think_block};
+use serde_json::Value;
 use session_core::db as chat;
 
 /// Hard char cap on the generated title. The sidebar's 18rem column
@@ -39,7 +46,7 @@ const MAX_TITLE_WORDS: usize = 5;
 /// around indefinitely. The chat worker itself doesn't have a
 /// timeout (the user can stop it), but title-gen is fire-and-forget
 /// with no stop button.
-const TIMEOUT_SECS: u64 = 15;
+const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// System prompt: terse + concrete length bound + examples so
 /// reasoning models that follow instructions land in a sensible
@@ -62,29 +69,32 @@ Rust async question\n\
 /// result. Best-effort — every failure path logs and returns without
 /// touching the DB (so the session stays "Untitled chat" until the
 /// next message lands or the user renames it). `model` defaults to
-/// the same one the user picked for the conversation.
+/// the same one the user picked for the conversation; the call is a usage
+/// row of `user`'s, under their spend limits.
 pub(super) async fn generate_session_title(
     state: Arc<RamaState>,
-    user_id: String,
+    user: User,
     session_id: String,
     user_msg: String,
     model: String,
 ) {
+    let payer = Payer::person(
+        &user.id,
+        &user.roles,
+        Some(user.email.clone()),
+        UsageSource::Chat,
+    );
+    let user_id = user.id;
     tracing::info!(
         %session_id,
         %model,
         msg_len = user_msg.len(),
         "title generation: starting"
     );
-    let fut = call_upstream(&state, &model, &user_msg);
-    let raw = match tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), fut).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(err)) => {
+    let raw = match call_upstream(&state, &payer, &model, &user_msg).await {
+        Ok(r) => r,
+        Err(err) => {
             tracing::warn!(error = %err, %session_id, %model, "title generation: upstream failed");
-            return;
-        }
-        Err(_) => {
-            tracing::warn!(%session_id, %model, "title generation: timed out");
             return;
         }
     };
@@ -146,91 +156,50 @@ struct UpstreamReply {
     finish_reason: String,
 }
 
-/// Single non-streaming chat completion. Hard-capped output tokens so
-/// even an unruly model can't burn time generating an essay. Skips
-/// tool injection entirely — title generation should never call any
-/// tool.
+/// One side call. Hard-capped output tokens so even an unruly model can't
+/// burn time generating an essay; no tools. The access is the gateway's
+/// own, as for the chat model the person already runs their turn on.
+///
+/// Reasoning is switched off three ways, in order of how reliably they work
+/// across upstreams: `chat_template_kwargs.enable_thinking: false` (the only
+/// way to make a vLLM-served Qwen3 skip its `<think>` block), Qwen3's
+/// `/no_think` directive appended to the user message, and the system
+/// prompt itself saying "no reasoning". `max_tokens: 256` leaves room for a
+/// small reasoning preamble that slips through anyway and a 3-6 word title.
 async fn call_upstream(
     state: &RamaState,
+    payer: &Payer,
     model: &str,
     user_msg: &str,
 ) -> Result<UpstreamReply, String> {
-    let acquired = state
-        .upstreams
-        .route(model, PoolKind::Chat)
-        .map_err(|e| e.to_string())?;
-    // The chat model may be an alias; forward the real id the backend knows.
-    let real_model = acquired.resolved_model().to_string();
-    let backend = acquired.backend();
-    let url = format!("{}/chat/completions", backend.base_url);
-    // Three reasoning-defeating knobs, in order of how reliably they
-    // work across upstreams:
-    //
-    //   1. `chat_template_kwargs: {enable_thinking: false}` is a
-    //      vLLM extension. For Qwen3-family models served via vLLM
-    //      with the Qwen chat template, this is the *only* way to
-    //      make the model skip its `<think>…</think>` block — the
-    //      template renders entirely without the reasoning prelude.
-    //      Other upstreams (OpenAI, Anthropic-compat, llama.cpp's
-    //      openai server) ignore unknown JSON fields per the OpenAI
-    //      spec, so passing it is harmless elsewhere.
-    //
-    //   2. `/no_think` appended to the user message. Qwen3's tokenizer
-    //      treats this as a per-turn directive in addition to the
-    //      template knob above; other model families read it as
-    //      literal text and ignore.
-    //
-    //   3. The system prompt itself says "no reasoning" — for any
-    //      model that follows instructions but doesn't recognise
-    //      either of the above mechanisms.
-    //
-    // `max_tokens: 256` is enough for both a small reasoning preamble
-    // (when reasoning slips through anyway) and a 3-6 word title.
-    let user_with_directive = format!("{user_msg}\n\n/no_think");
-    let body = serde_json::json!({
-        "model": real_model,
-        "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": user_with_directive },
-        ],
-        "stream": false,
-        "temperature": 0,
-        "max_tokens": 256,
-        "chat_template_kwargs": { "enable_thinking": false },
-    });
-    let serialized = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-    let mut req = state
-        .http
-        .post(&url)
-        .header("content-type", "application/json")
-        .body(serialized);
-    if let Some(key) = backend.api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let status = resp.status();
-    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    drop(acquired);
-    if !status.is_success() {
-        return Err(format!(
-            "upstream {status}: {}",
-            String::from_utf8_lossy(&bytes)
-                .chars()
-                .take(120)
-                .collect::<String>()
-        ));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let answered = side_call::ask_text(
+        state,
+        payer,
+        SideCall {
+            purpose: "session_title",
+            model,
+            access: &PoolAccess::all(),
+            instructions: SYSTEM_PROMPT,
+            input: user_msg,
+            temperature: 0.0,
+            max_tokens: Some(256),
+            no_think: true,
+            timeout: TIMEOUT,
+        },
+    )
+    .await;
+    let content = answered.answer.map_err(|e| e.to_string())?;
     let pluck_str = |ptr: &str| -> String {
-        v.pointer(ptr)
-            .and_then(|c| c.as_str())
+        answered
+            .exchange
+            .response
+            .pointer(ptr)
+            .and_then(Value::as_str)
             .unwrap_or("")
             .to_string()
     };
     Ok(UpstreamReply {
-        content: pluck_str("/choices/0/message/content"),
+        content,
         reasoning_content: pluck_str("/choices/0/message/reasoning_content"),
         finish_reason: pluck_str("/choices/0/finish_reason"),
     })
@@ -274,26 +243,6 @@ fn clean_title(raw: &str) -> String {
         Some(idx) if idx > 0 => clipped[..idx].to_string(),
         _ => clipped,
     }
-}
-
-/// Strip a single `<think>…</think>` block, case-insensitive. Returns
-/// the rest of the string concatenated. Conservative: only acts on
-/// a balanced pair; if either tag is missing the input passes through
-/// unchanged.
-fn strip_think_block(s: &str) -> String {
-    let lower = s.to_ascii_lowercase();
-    let Some(start) = lower.find("<think>") else {
-        return s.to_string();
-    };
-    let after_start = start + "<think>".len();
-    let Some(rel_end) = lower[after_start..].find("</think>") else {
-        return s.to_string();
-    };
-    let end = after_start + rel_end + "</think>".len();
-    let mut out = String::with_capacity(s.len() - (end - start));
-    out.push_str(&s[..start]);
-    out.push_str(&s[end..]);
-    out
 }
 
 #[cfg(test)]
@@ -364,19 +313,5 @@ mod tests {
         // because the rest of the response might be misleading.
         let raw = "<think>oops no close\nbut this is the title";
         assert!(clean_title(raw).contains("<think>"));
-    }
-
-    #[test]
-    fn strip_think_block_no_tags() {
-        assert_eq!(strip_think_block("plain text"), "plain text");
-    }
-
-    #[test]
-    fn strip_think_block_handles_attributes() {
-        // We don't handle attributes — `<think foo="bar">` doesn't
-        // match. Document the limitation; current upstreams emit
-        // bare `<think>` so this is fine.
-        let s = r#"<think foo="bar">x</think>rest"#;
-        assert!(strip_think_block(s).contains("<think"));
     }
 }

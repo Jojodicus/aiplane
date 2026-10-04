@@ -3042,3 +3042,63 @@ async fn an_agent_run_is_in_no_persons_chats() {
         "the run survived every attempt above"
     );
 }
+
+/// The first message of an untitled conversation names it through a side
+/// call on the conversation's model: reasoning off, a short answer, and the
+/// `<think>` block a reasoning parser leaks dropped.
+#[tokio::test]
+async fn the_first_message_titles_the_conversation_through_a_side_call() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({ "stream": false }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": {
+                "role": "assistant",
+                "content": "<think>hm</think>Ceph Tuning Help",
+            } }],
+        })))
+        .mount(&upstream)
+        .await;
+    mount_streaming_upstream(&upstream, &["ok"], 0).await;
+    let (state, cookie) = setup(&upstream.uri()).await;
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+
+    let resp = router(state.clone())
+        .serve(json_req(
+            Method::POST,
+            format!("/api/v0/chat/sessions/{}/messages", session.id),
+            &cookie,
+            Some(r#"{"model":"model-a","message":"how do I tune ceph"}"#.into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    let titled = wait_until(|| async {
+        chat::get_session(&state.db, "alice", &session.id)
+            .await
+            .unwrap()
+            .and_then(|s| s.title)
+            .as_deref()
+            == Some("Ceph Tuning Help")
+    })
+    .await;
+    assert!(titled, "the side call's answer becomes the title");
+    let title_call: serde_json::Value = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).unwrap())
+        .find(|body| body["stream"] == false)
+        .expect("a title call");
+    assert_eq!(title_call["max_tokens"], 256);
+    assert_eq!(title_call["chat_template_kwargs"]["enable_thinking"], false);
+    assert_eq!(
+        title_call["messages"][1]["content"],
+        "how do I tune ceph\n\n/no_think"
+    );
+}

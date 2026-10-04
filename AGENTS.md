@@ -141,6 +141,9 @@ server/
                               echo + time stay here as the test fixtures)
     state.rs                  AppState
     comfyui_tool.rs           ComfyUI Tool/ToolSource impls + ComfyuiHandle
+    side_call.rs              one-off model calls beside a conversation (title,
+                              compaction, feedback, guard, classifier, judge,
+                              assistant): metered, spend-limited, one exchange record
     scheduled/ webhooks.rs compaction.rs headless.rs   state-dependent workers
 rama_server/
     state.rs                  RamaState (wraps AppState + sessions/usage/limits)

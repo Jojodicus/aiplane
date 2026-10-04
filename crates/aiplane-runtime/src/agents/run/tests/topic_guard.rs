@@ -292,6 +292,47 @@ async fn a_guard_that_cannot_decide_refuses_and_records_why() {
     );
 }
 
+/// The guard is a side call under the agent's budget: an agent whose
+/// operator limit is spent gets no guard verdict, and a guard without a
+/// verdict refuses — the spent budget never lets an off-topic question
+/// through to the main model.
+#[tokio::test]
+async fn a_spent_agent_limit_keeps_the_guard_closed() {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+    let main = llm(vec![text("Diesel engines compress air …")]).await;
+    let guard = guard(&["in_scope"]).await;
+    let site = website(website_spec(true), &main, &guard, false).await;
+    limits::upsert(
+        site.world.db(),
+        SubjectType::System,
+        &site.agent,
+        None,
+        Dimension::Requests,
+        Window::Hour,
+        0.0,
+    )
+    .await
+    .unwrap();
+
+    let reply = site.says(None, DIESEL).await;
+
+    assert_eq!(reply.answer.as_deref(), Some(REFUSAL));
+    assert!(
+        requests(&guard).await.is_empty(),
+        "the guard is never asked"
+    );
+    assert!(requests(&main).await.is_empty());
+    let decisions = site.events(AuditKind::ScopeDecision).await;
+    assert_eq!(decisions[0]["verdict"], "failed");
+    assert!(
+        decisions[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("limit reached"),
+        "{decisions:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_routed_sub_agent_is_never_guarded() {
     let guard = guard(&["out_of_scope"]).await;

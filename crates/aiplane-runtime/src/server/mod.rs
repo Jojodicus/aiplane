@@ -11,6 +11,7 @@ pub mod headless;
 pub mod model_choices;
 pub mod model_route;
 pub mod scheduled;
+pub mod side_call;
 pub mod state;
 pub mod tools;
 pub mod webhooks;

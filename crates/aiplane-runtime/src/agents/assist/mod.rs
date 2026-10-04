@@ -11,10 +11,10 @@
 //! check it again. So a scenario that talks the model into proposing
 //! anything at all can at most produce an offer the manager sees.
 //!
-//! **A manager's call, not an agent run.** The call runs on a model the
-//! manager may use, under the manager's own spend limits, and is a usage
-//! row of the manager's (`UsageSource::Chat`, like the rest of the session
-//! UI). It is in no conversation chain; the agent's own chain gets one
+//! **A manager's call, not an agent run.** The call is a side call
+//! ([`side_call::ask_json`]) on a model the manager may use, under the
+//! manager's own spend limits, and is a usage row of the manager's
+//! (`UsageSource::Chat`, like the rest of the session UI). It is in no conversation chain; the agent's own chain gets one
 //! `assist_suggested` event per call with who asked, the scenario (the
 //! manager's own words, kept for the audit), the model, token counts
 //! and which steps were offered or dropped.
@@ -28,15 +28,16 @@ use aiplane_core::server::db::DbError;
 use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::users::User;
 use aiplane_core::server::limits::LimitExceeded;
-use aiplane_core::server::principal::PrincipalKind;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::audit::{self, LogError};
-use super::model_call::{JsonExchange, JsonQuestion, ask_json};
 use crate::rama_server::state::RamaState;
+use crate::server::side_call::{
+    self, Answered, JsonShape, Payer, SideCall, SideCallError, SideExchange,
+};
 
 pub mod handoffs;
 mod proposal;
@@ -265,22 +266,27 @@ impl Asker<'_> {
             request.base,
             ctx.candidates,
         );
-        let exchange = ask_json(
-            self.state,
-            &model,
-            &access,
-            &JsonQuestion {
-                instructions: proposal::SUGGEST_INSTRUCTIONS,
-                input: &input,
-                name: "agent_setup",
-                schema: proposal::suggest_schema(ctx.candidates),
-                temperature: 0.3,
-                timeout: SUGGEST_TIMEOUT,
-            },
-        )
-        .await;
-        self.meter(&exchange);
-        let suggestion = exchange
+        let answered = self
+            .ask(
+                SideCall {
+                    purpose: "assist_suggest",
+                    model: &model,
+                    access: &access,
+                    instructions: proposal::SUGGEST_INSTRUCTIONS,
+                    input: &input,
+                    temperature: 0.3,
+                    max_tokens: None,
+                    no_think: false,
+                    timeout: SUGGEST_TIMEOUT,
+                },
+                JsonShape {
+                    name: "agent_setup",
+                    schema: proposal::suggest_schema(ctx.candidates),
+                },
+            )
+            .await?;
+        let exchange = &answered.exchange;
+        let suggestion = answered
             .answer
             .as_ref()
             .ok()
@@ -294,12 +300,12 @@ impl Asker<'_> {
             detail["offered"] = json!(s.steps.offered());
             detail["dropped"] = json!(s.dropped);
         }
-        self.record(&exchange, detail).await?;
-        let suggestion = suggestion.ok_or_else(|| model_error(&exchange))?;
+        self.record(exchange, detail).await?;
+        let suggestion = suggestion.ok_or_else(|| model_error(exchange))?;
         Ok(Suggested {
             suggestion,
             model: exchange.model.clone().unwrap_or(model),
-            usage: usage_of(&exchange),
+            usage: usage_of(exchange),
         })
     }
 
@@ -315,25 +321,30 @@ impl Asker<'_> {
         let draft_model = draft.pointer("/main/model").and_then(Value::as_str);
         let (model, access) = self.admit(requested_model, draft_model).await?;
         let input = json!({ "field": proposal::improve_purpose(field), "text": text }).to_string();
-        let exchange = ask_json(
-            self.state,
-            &model,
-            &access,
-            &JsonQuestion {
-                instructions: proposal::IMPROVE_INSTRUCTIONS,
-                input: &input,
-                name: "improved_text",
-                schema: proposal::improve_schema(),
-                temperature: 0.3,
-                timeout: IMPROVE_TIMEOUT,
-            },
-        )
-        .await;
-        self.meter(&exchange);
-        let improved = exchange
+        let answered = self
+            .ask(
+                SideCall {
+                    purpose: "assist_improve",
+                    model: &model,
+                    access: &access,
+                    instructions: proposal::IMPROVE_INSTRUCTIONS,
+                    input: &input,
+                    temperature: 0.3,
+                    max_tokens: None,
+                    no_think: false,
+                    timeout: IMPROVE_TIMEOUT,
+                },
+                JsonShape {
+                    name: "improved_text",
+                    schema: proposal::improve_schema(),
+                },
+            )
+            .await?;
+        let exchange = &answered.exchange;
+        let improved = answered
             .answer
             .as_ref()
-            .map_err(Clone::clone)
+            .map_err(ToString::to_string)
             .and_then(|a| {
                 serde_json::from_value::<proposal::Improved>(a.clone())
                     .map_err(|e| format!("the answer does not read as an improved text ({e})"))
@@ -346,7 +357,7 @@ impl Asker<'_> {
                     })
             });
         self.record(
-            &exchange,
+            exchange,
             json!({
                 "action": "improve",
                 "field": field.as_str(),
@@ -361,13 +372,33 @@ impl Asker<'_> {
             suggestion: improved.suggestion.trim().to_string(),
             why: improved.why.trim().to_string(),
             model: exchange.model.clone().unwrap_or(model),
-            usage: usage_of(&exchange),
+            usage: usage_of(exchange),
         })
     }
 
-    /// The model to ask, once the manager's rate and spend limits allow a
-    /// call: `requested` if they may use it, else the draft's `main.model`
-    /// if they may, else their default chat model ([`choose_model`]).
+    /// Ask the model as the manager; a spent limit refuses before the model
+    /// is called, and the refused call leaves nothing in the agent's log.
+    async fn ask(
+        &self,
+        call: SideCall<'_>,
+        shape: JsonShape<'_>,
+    ) -> Result<Answered<Value>, AssistError> {
+        let payer = Payer::person(
+            &self.user.id,
+            &self.user.roles,
+            Some(self.user.email.clone()),
+            UsageSource::Chat,
+        );
+        let answered = side_call::ask_json(self.state, &payer, call, shape).await;
+        if let Err(SideCallError::OverBudget(exceeded)) = &answered.answer {
+            return Err(AssistError::OverBudget(exceeded.clone()));
+        }
+        Ok(answered)
+    }
+
+    /// The model to ask, once the manager's rate allows a call: `requested`
+    /// if they may use it, else the draft's `main.model` if they may, else
+    /// their default chat model ([`choose_model`]).
     async fn admit(
         &self,
         requested: Option<&str>,
@@ -383,42 +414,14 @@ impl Asker<'_> {
         rates::record_now(&self.state.db, self.agent_id, &[window], Timestamp::now())
             .await?
             .map_err(AssistError::RateLimited)?;
-        let role_ids = self.state.role_ids_for(&self.user.roles);
-        self.state
-            .enforcer
-            .check_for_model(
-                &self.user.id,
-                &role_ids,
-                &model,
-                self.state
-                    .upstreams
-                    .enforce_limits_for_model(&model, PoolKind::Chat),
-            )
-            .await
-            .map_err(AssistError::OverBudget)?;
         Ok((model, access))
     }
 
-    fn meter(&self, exchange: &JsonExchange) {
-        if !self.state.usage.is_enabled() {
-            return;
-        }
-        if let Some(row) = exchange.usage_record(
-            self.state,
-            &self.user.id,
-            Some(self.user.email.clone()),
-            UsageSource::Chat,
-            PrincipalKind::User,
-        ) {
-            self.state.usage.emit(row);
-        }
-    }
-
-    async fn record(&self, exchange: &JsonExchange, mut detail: Value) -> Result<(), AssistError> {
+    async fn record(&self, exchange: &SideExchange, mut detail: Value) -> Result<(), AssistError> {
         detail["model"] = json!(exchange.model);
         detail["usage"] = usage_of(exchange);
-        detail["latency_ms"] = json!(exchange.latency_ms);
-        if let Err(error) = &exchange.answer {
+        detail["latency_ms"] = json!(exchange.latency_ms());
+        if let Some(error) = &exchange.error {
             detail["error"] = json!(error);
         }
         audit::record_event(
@@ -431,18 +434,11 @@ impl Asker<'_> {
     }
 }
 
-fn model_error(exchange: &JsonExchange) -> AssistError {
-    AssistError::Model(
-        exchange
-            .answer
-            .as_ref()
-            .err()
-            .cloned()
-            .unwrap_or_else(|| "no answer".into()),
-    )
+fn model_error(exchange: &SideExchange) -> AssistError {
+    AssistError::Model(exchange.error.clone().unwrap_or_else(|| "no answer".into()))
 }
 
-fn usage_of(exchange: &JsonExchange) -> Value {
+fn usage_of(exchange: &SideExchange) -> Value {
     let u = exchange.response.get("usage");
     json!({
         "prompt_tokens": u.and_then(|u| u.get("prompt_tokens")),

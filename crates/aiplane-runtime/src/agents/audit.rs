@@ -20,7 +20,7 @@
 //! is logged at `error` with the event's correlation ids.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use aiplane_agents::db::agent_audit::{self, AuditKind, Correlation, NewEvent, Redaction};
 use aiplane_core::server::db::Pool;
@@ -29,6 +29,7 @@ use aiplane_core::server::run_chain::{Frame, RunChain};
 use serde_json::{Value, json};
 
 use crate::agent_run::AgentRun;
+use crate::server::side_call::SideExchange;
 use crate::server::tools::ToolContext;
 use crate::suspend::Suspend;
 
@@ -138,65 +139,32 @@ pub async fn anchor(db: &Pool, agent_id: &str, conversation_id: &str) {
     );
 }
 
-/// A model call made on an agent's behalf outside the round loop — the
-/// conversation's compaction summary, the evaluation's rubric judge, the
-/// vision fallback that describes an image — recorded as an `llm_exchange`
-/// of the run it belongs to, `purpose` saying which.
-pub struct SideExchange {
-    pub purpose: &'static str,
-    pub model: Option<String>,
-    pub backend: Option<String>,
-    /// The body exactly as sent.
-    pub request: Value,
-    pub status: Option<u16>,
-    /// The answer as it came back, parsed when it was JSON.
-    pub response: Value,
-    pub error: Option<String>,
-    started: Instant,
-}
-
-impl SideExchange {
-    pub fn new(purpose: &'static str) -> Self {
-        Self {
-            purpose,
-            model: None,
-            backend: None,
-            request: Value::Null,
-            status: None,
-            response: Value::Null,
-            error: None,
-            started: Instant::now(),
-        }
-    }
-
-    /// The answer's raw bytes, as JSON when they parse and as text otherwise.
-    pub fn answered(&mut self, status: u16, body: &[u8]) {
-        self.status = Some(status);
-        self.response = serde_json::from_slice(body)
-            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(body).into_owned()));
-    }
-}
-
-/// The run a [`SideExchange`] is recorded in: its principal, call chain and
-/// where in it the call happened. Only an agent's run has one, so a
-/// person's compaction or vision fallback records nothing.
+/// The run a [`SideExchange`] — a model call made on an agent's behalf
+/// outside the round loop: the compaction summary, the topic guard, the
+/// route classifier, the rubric judge, a voice call — is recorded in, as an
+/// `llm_exchange` whose `purpose` says which: its principal, call chain and
+/// where in it the call happened. Only an agent's conversation has one, so
+/// a person's compaction records nothing.
 #[derive(Clone)]
 pub struct RunLog {
     principal_id: String,
     chain: Arc<RunChain>,
     at: Correlation,
     redaction: Redaction,
+    /// The live run, stopped when its exchange cannot be written.
+    run: Option<Arc<AgentRun>>,
 }
 
 impl RunLog {
     /// The run of the call `ctx` belongs to; `None` for a person's turn.
     pub fn of(ctx: &ToolContext) -> Option<Self> {
-        let run = ctx.agent.as_deref()?;
+        let run = ctx.agent.as_ref()?;
         Some(Self {
             principal_id: run.system_principal().id.clone(),
             chain: run.chain().clone(),
             at: ctx.correlation(),
             redaction: ctx.redaction(),
+            run: Some(run.clone()),
         })
     }
 
@@ -215,6 +183,7 @@ impl RunLog {
                 ..Correlation::default()
             },
             redaction: Redaction::default(),
+            run: None,
         }
     }
 
@@ -241,8 +210,14 @@ impl RunLog {
         }
     }
 
-    pub async fn record(&self, db: &Pool, exchange: SideExchange) {
-        let latency = u64::try_from(exchange.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    /// The call chain an exchange of this log belongs to, which its usage
+    /// row joins.
+    pub fn chain(&self) -> Arc<RunChain> {
+        self.chain.clone()
+    }
+
+    pub async fn record(&self, db: &Pool, exchange: &SideExchange) {
+        let latency = exchange.latency_ms();
         let mut detail = json!({
             "purpose": exchange.purpose,
             "model": exchange.model,
@@ -251,7 +226,10 @@ impl RunLog {
             "response": { "status": exchange.status, "body": exchange.response },
             "latency_ms": latency,
         });
-        if let Some(error) = exchange.error {
+        if let Some(answer) = &exchange.answer {
+            detail["answer"] = answer.clone();
+        }
+        if let Some(error) = &exchange.error {
             detail["error"] = json!(error);
         }
         let mut event = NewEvent::new(AuditKind::LlmExchange, &self.principal_id, detail)
@@ -259,7 +237,7 @@ impl RunLog {
             .at(self.at.clone())
             .redacted(self.redaction.clone());
         event.duration_ms = Some(latency);
-        let _ = record_event(db, event).await;
+        record_for_run(db, self.run.as_deref(), event).await;
     }
 }
 

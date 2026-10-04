@@ -750,6 +750,6 @@ async fn a_failed_model_call_is_a_502_and_still_recorded() {
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0]["detail"]["error"],
-        "upstream 500 Internal Server Error"
+        "upstream 500 Internal Server Error: boom"
     );
 }

@@ -672,12 +672,24 @@ impl SessionDriver for OpenAiDriver {
             )
             .await;
             let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
+            let email = if self.state.usage.is_enabled() {
+                Some(policy.usage_name(self).await).filter(|name| !name.is_empty())
+            } else {
+                None
+            };
+            let payer = crate::server::side_call::Payer::of_turn(
+                &self.tool_ctx.principal,
+                self.agent().map(|run| run.chain().clone()),
+                email,
+                self.source,
+            );
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(
                     &state,
                     &session_id,
                     &model,
                     &access,
+                    &payer,
                     log,
                 )
                 .await;

@@ -617,12 +617,14 @@ async fn an_agent_conversations_compaction_summary_is_an_exchange_of_its_log() {
         &principal,
         ["support-model"],
     );
+    let unlogged = crate::server::side_call::Payer::agent(&principal, None);
 
     crate::server::compaction::maybe_autocompact(
         &world.state,
         &first.session_id,
         "support-model",
         &access,
+        &unlogged,
         None,
     )
     .await;
@@ -638,22 +640,25 @@ async fn an_agent_conversations_compaction_summary_is_an_exchange_of_its_log() {
         .unwrap();
 
     let log = crate::agents::audit::RunLog::conversation(&principal, 1, &first.session_id);
+    let payer = crate::server::side_call::Payer::agent(&principal, Some(log.chain()));
     crate::server::compaction::maybe_autocompact(
         &world.state,
         &first.session_id,
         "support-model",
         &access,
+        &payer,
         Some(log),
     )
     .await;
     let summaries = exchanges_of(&world, &agent, "compaction_summary").await;
     assert_eq!(summaries.len(), 1);
     let d = detail(&summaries[0]);
-    assert!(
-        d["request"]["messages"][1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("question 0")
+    let asked = d["request"]["messages"][1]["content"].as_str().unwrap();
+    assert!(asked.contains("question 0"), "{asked}");
+    assert!(asked.ends_with("/no_think"), "{asked}");
+    assert_eq!(
+        d["request"]["chat_template_kwargs"]["enable_thinking"], false,
+        "the side call switches reasoning off"
     );
     assert_eq!(
         d["response"]["body"]["choices"][0]["message"]["content"],
@@ -698,7 +703,12 @@ async fn the_rubric_judges_exchange_is_logged_in_the_case_conversation() {
         Some("case-conversation")
     );
     assert_eq!(judged[0].version, Some(0), "the evaluation's draft run");
-    assert!(detail(&judged[0])["request"].to_string().contains("greets"));
+    let request = &detail(&judged[0])["request"];
+    assert!(request.to_string().contains("greets"));
+    assert_eq!(
+        request["chat_template_kwargs"]["enable_thinking"], false,
+        "the judge switches reasoning off like every side call"
+    );
 }
 
 /// A tool whose arguments carry what a visitor must not find in a log.
