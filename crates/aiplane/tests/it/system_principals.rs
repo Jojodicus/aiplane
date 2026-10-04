@@ -45,6 +45,8 @@ const PER_USER: &str = "privdrive";
 struct Fixture {
     state: RamaState,
     upstream: MockServer,
+    /// The `vip` pool's own upstream, so a test sees whether a call landed there.
+    vip_upstream: MockServer,
     _mcp: MockServer,
     /// MCP calls that carried a person's OAuth credential.
     personal_mcp_hits: Arc<AtomicUsize>,
@@ -320,6 +322,15 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
         })))
         .mount(&upstream)
         .await;
+    let vip_upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"role": "assistant", "content": "vip"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        })))
+        .mount(&vip_upstream)
+        .await;
     let personal_mcp_hits = Arc::new(AtomicUsize::new(0));
     let mcp = mcp_server(personal_mcp_hits.clone()).await;
 
@@ -328,7 +339,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
     pools.insert("pool".to_string(), chat_pool(&upstream.uri(), vec![]));
     pools.insert(
         "vip".to_string(),
-        chat_pool(&upstream.uri(), vec!["vipgroup".into()]),
+        chat_pool(&vip_upstream.uri(), vec!["vipgroup".into()]),
     );
     pools.insert(
         "selector".to_string(),
@@ -477,6 +488,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
     Fixture {
         state,
         upstream,
+        vip_upstream,
         _mcp: mcp,
         personal_mcp_hits,
         admin,
@@ -1344,6 +1356,65 @@ async fn a_model_grant_routes_only_through_the_pools_its_manager_could_use() {
     assert!(
         reaches(&fx, &id, "vip").await && reaches(&fx, &id, "pool").await,
         "an admin's grant reaches every pool"
+    );
+}
+
+/// An admin's grant on `model-a` reaches every pool, `vip` included; a
+/// token the (non-vip) manager mints carries it only through the pools the
+/// manager may use, so `/v1/chat/completions` never lands on `vip`. A token
+/// an admin mints keeps the grant's reach.
+#[tokio::test]
+async fn a_minted_token_narrows_a_model_grant_to_the_minters_pools() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    let (status, body) = fx.grant(&fx.admin, &id, "model", "model-a").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(principal.grants.model_pools("model-a"), None);
+
+    let capped = aiplane_runtime::server::grant_holding::capped_to_minter(
+        &fx.state,
+        principal.clone(),
+        "manager",
+    )
+    .await
+    .unwrap();
+    let reach: Vec<&str> = capped
+        .grants
+        .model_pools("model-a")
+        .expect("narrowed")
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        reach,
+        ["late", "pool"],
+        "the manager's chat pools, not `vip`"
+    );
+    let by_admin =
+        aiplane_runtime::server::grant_holding::capped_to_minter(&fx.state, principal, "admin")
+            .await
+            .unwrap();
+    assert_eq!(
+        by_admin.grants.model_pools("model-a"),
+        None,
+        "an admin's token keeps it"
+    );
+
+    let (bearer, _) = fx.token(&fx.manager, &id).await;
+    for _ in 0..6 {
+        assert_eq!(fx.chat(&bearer).await, StatusCode::OK);
+    }
+    assert!(
+        fx.vip_upstream
+            .received_requests()
+            .await
+            .unwrap()
+            .is_empty(),
+        "a manager's token never lands on a pool the manager may not use"
     );
 }
 

@@ -10,7 +10,7 @@
 //! authentication time ([`capped_to_minter`], from `require_bearer`). It is
 //! the same rule that decides the person's own access to each resource.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -239,18 +239,38 @@ pub async fn capped_to_minter(
         return Ok(principal);
     }
     let mut kept = Vec::new();
+    let mut pools = Vec::new();
     for (kind, reference) in principal.grants.iter() {
         match holds(state, &minter, kind, reference).await {
-            Ok(true) => kept.push((kind, reference.to_string())),
+            Ok(true) => {}
             Ok(false)
             | Err(HoldRefusal::Missing(_))
             | Err(HoldRefusal::Invalid(_))
-            | Err(HoldRefusal::AdminOnly(_)) => {}
+            | Err(HoldRefusal::AdminOnly(_)) => continue,
             Err(HoldRefusal::Db(err)) => return Err(err),
         }
+        if kind == GrantKind::Model {
+            // The minter's own pools for it, narrowed further to the
+            // grant's: a token never reaches a pool its minter could not use
+            // or the grant does not name. None left, no grant.
+            let mine: BTreeSet<String> = model_grant_pools(state, &minter, reference)
+                .await?
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let reach: BTreeSet<String> = match principal.grants.model_pools(reference) {
+                Some(granted) => granted.intersection(&mine).cloned().collect(),
+                None => mine,
+            };
+            if reach.is_empty() {
+                continue;
+            }
+            pools.push((reference.to_string(), reach));
+        }
+        kept.push((kind, reference.to_string()));
     }
     Ok(SystemPrincipal {
-        grants: Arc::new(GrantSet::new(kept)),
+        grants: Arc::new(GrantSet::new(kept).with_model_pools(pools)),
         ..principal
     })
 }
