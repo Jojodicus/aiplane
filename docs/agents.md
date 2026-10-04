@@ -1961,7 +1961,9 @@ verifiers:
   `exp`/`nbf`/`iss`/`aud` (30 s leeway, `exp`, `iat`, `iss`, `aud`
   required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
   agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
-  five minutes per URL and refetched for an unknown `kid`. The JWKS URL is
+  five minutes per URL and refetched for an unknown `kid`, at most once a
+  minute (the gateway's one JWKS cache, `aiplane_core::server::auth::jwks`,
+  which the OIDC login uses too). The JWKS URL is
   chosen by the agent's owner, so it is fetched through the same SSRF guard
   as an A2A route (`outbound_guard`, `Policy::agent`, [below](#what-101-built)):
   resolved and pinned, no redirects, at most 64 KiB, link-local always

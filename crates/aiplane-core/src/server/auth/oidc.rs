@@ -31,7 +31,7 @@
 use crate::server::capped_read;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use rand::TryRng;
@@ -39,9 +39,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::sync::RwLock;
 use url::Url;
 
+use crate::server::auth::jwks::JwksCache;
 use crate::server::config::OidcConfig;
 
 #[derive(Debug, Error)]
@@ -107,12 +107,13 @@ struct TokenResponse {
     id_token: Option<String>,
 }
 
-struct JwksCache {
-    /// kid → (algorithm, decoding key). For keys without a kid we store under
-    /// the special key `""` and accept it for any header that also has no kid.
-    keys: HashMap<String, (Algorithm, DecodingKey)>,
-    fetched_at: Instant,
-}
+/// kid → (algorithm, decoding key). A key without a kid is stored under `""`
+/// and accepted for any header that also has no kid.
+type SigningKeys = HashMap<String, (Algorithm, DecodingKey)>;
+
+/// Keys are kept until a token names one the set lacks; a refetch for an
+/// unknown kid happens at most once a minute.
+const JWKS_REFETCH: Duration = Duration::from_secs(60);
 
 pub struct OidcClient {
     /// Trimmed; verified to match the discovery doc's `issuer` field.
@@ -124,7 +125,7 @@ pub struct OidcClient {
     http: reqwest::Client,
     scopes: Vec<String>,
     roles_claim: Option<String>,
-    jwks: RwLock<JwksCache>,
+    jwks: JwksCache<SigningKeys>,
 }
 
 /// Everything [`OidcClient::build`] needs, with the client secret already
@@ -241,11 +242,6 @@ impl OidcClient {
             }
         }
 
-        let jwks = JwksCache {
-            keys: HashMap::new(),
-            fetched_at: Instant::now() - Duration::from_secs(3600),
-        };
-
         Ok(Arc::new(Self {
             issuer,
             metadata,
@@ -255,7 +251,7 @@ impl OidcClient {
             http,
             scopes,
             roles_claim: config.roles_claim.clone(),
-            jwks: RwLock::new(jwks),
+            jwks: JwksCache::new(None, JWKS_REFETCH),
         }))
     }
 
@@ -342,43 +338,46 @@ impl OidcClient {
             .map_err(|e| OidcError::Verify(format!("decoding header: {e}")))?;
         let kid_key = header.kid.unwrap_or_default();
 
-        // Look up the key. If unknown, refresh the JWKS once and try again
-        // (handles signing-key rotation).
-        let (alg, key) = match self.lookup_key(&kid_key).await {
+        // An unknown kid refetches the JWKS (signing-key rotation), at most
+        // once per `JWKS_REFETCH`.
+        let found = self
+            .jwks
+            .key(
+                &self.metadata.jwks_uri,
+                |keys| lookup_key(keys, &kid_key),
+                || self.fetch_jwks(),
+            )
+            .await?;
+        let (alg, key) = match found {
             Some(pair) => pair,
             None => {
-                self.refresh_jwks().await?;
-                match self.lookup_key(&kid_key).await {
-                    Some(pair) => pair,
-                    None => {
-                        let available_kids: Vec<String> = {
-                            let cache = self.jwks.read().await;
-                            cache
-                                .keys
-                                .keys()
-                                .map(|k| {
-                                    if k.is_empty() {
-                                        "<no kid>".into()
-                                    } else {
-                                        format!("`{k}`")
-                                    }
-                                })
-                                .collect()
-                        };
-                        let detail = if available_kids.is_empty() {
-                            "(JWKS refresh stored zero usable keys — check the gateway logs \
+                let available_kids: Vec<String> = self
+                    .jwks
+                    .last(&self.metadata.jwks_uri)
+                    .map(|keys| {
+                        keys.keys()
+                            .map(|k| {
+                                if k.is_empty() {
+                                    "<no kid>".into()
+                                } else {
+                                    format!("`{k}`")
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let detail = if available_kids.is_empty() {
+                    "(JWKS refresh stored zero usable keys — check the gateway logs \
                              for `skipping JWK` warnings to see why each one was dropped)"
-                                .to_string()
-                        } else {
-                            format!("(available kids: [{}])", available_kids.join(", "))
-                        };
-                        return Err(OidcError::Verify(format!(
-                            "no JWK matches token kid `{kid_key}` even after JWKS refresh \
+                        .to_string()
+                } else {
+                    format!("(available kids: [{}])", available_kids.join(", "))
+                };
+                return Err(OidcError::Verify(format!(
+                    "no JWK matches token kid `{kid_key}` even after JWKS refresh \
                              {detail}. Most likely a stale cache or key-rotation race on \
                              the IdP side."
-                        )));
-                    }
-                }
+                )));
             }
         };
 
@@ -441,28 +440,7 @@ impl OidcClient {
         })
     }
 
-    async fn lookup_key(&self, kid: &str) -> Option<(Algorithm, DecodingKey)> {
-        let cache = self.jwks.read().await;
-        if let Some((alg, key)) = cache.keys.get(kid) {
-            return Some((*alg, key.clone()));
-        }
-        // Fall back to a key with no kid if the token also has no kid. Some
-        // providers ship a single unkeyed JWK.
-        if kid.is_empty() {
-            return cache.keys.values().next().map(|(a, k)| (*a, k.clone()));
-        }
-        None
-    }
-
-    async fn refresh_jwks(&self) -> Result<(), OidcError> {
-        // Rate-limit refreshes: don't go to the network more than once a
-        // minute, regardless of how many unknown-kid lookups we see.
-        {
-            let cache = self.jwks.read().await;
-            if cache.fetched_at.elapsed() < Duration::from_secs(60) && !cache.keys.is_empty() {
-                return Ok(());
-            }
-        }
+    async fn fetch_jwks(&self) -> Result<SigningKeys, OidcError> {
         let response = self
             .http
             .get(&self.metadata.jwks_uri)
@@ -539,11 +517,20 @@ impl OidcClient {
             keys.insert(jwk.kid.clone().unwrap_or_default(), (alg, key));
         }
 
-        let mut cache = self.jwks.write().await;
-        cache.keys = keys;
-        cache.fetched_at = Instant::now();
-        Ok(())
+        Ok(keys)
     }
+}
+
+fn lookup_key(keys: &SigningKeys, kid: &str) -> Option<(Algorithm, DecodingKey)> {
+    if let Some((alg, key)) = keys.get(kid) {
+        return Some((*alg, key.clone()));
+    }
+    // Fall back to a key with no kid if the token also has no kid. Some
+    // providers ship a single unkeyed JWK.
+    if kid.is_empty() {
+        return keys.values().next().map(|(a, k)| (*a, k.clone()));
+    }
+    None
 }
 
 fn decoding_key_for_jwk(jwk: &Jwk) -> Result<DecodingKey, OidcError> {
