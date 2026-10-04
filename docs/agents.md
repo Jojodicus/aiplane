@@ -2156,7 +2156,10 @@ version and judged on more than the final answer.
   agent_tests_failing` unless the newest draft run is green **for the draft and
   the suite as they are now**: each run stores a hash of the spec it ran and of
   the cases, so editing either makes the last run stale and the message says
-  to run the suite again. With failing cases, `error.failing` lists `[{case_id,
+  to run the suite again. The spec hash (`agent_tests::spec_hash`) counts
+  every sealed credential (`*_sealed`) as a fixed marker: the at-rest key
+  rotation re-seals them with new ciphertext, and that is no change the suite
+  tests, so it leaves a green run current. With failing cases, `error.failing` lists `[{case_id,
   case_name, problems}]` with the failed checks in words; with no cases or no
   matching run it is empty. Rolling back (`/live`) is not guarded: it publishes
   nothing new.

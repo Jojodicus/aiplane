@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use super::{DbError, Pool};
 use aiplane_core::server::crypto::sha256_hex;
+use aiplane_core::server::db::reseal::SEALED_SUFFIX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TestCase {
@@ -182,9 +183,31 @@ pub fn suite_hash(cases: &[TestCase]) -> String {
     sha256_hex(Value::Array(canonical).to_string().as_bytes())
 }
 
-/// What a spec says, hashed.
+/// What a spec says, hashed. A sealed credential counts as a fixed marker:
+/// its ciphertext changes whenever it is re-sealed — the at-rest key
+/// rotation rewrites every one (`aiplane_core::server::db::reseal`) — and a
+/// credential is no behaviour the suite tests, so neither may make a passing
+/// run stale.
 pub fn spec_hash(spec: &Value) -> String {
-    sha256_hex(spec.to_string().as_bytes())
+    let mut meaning = spec.clone();
+    mask_sealed(&mut meaning);
+    sha256_hex(meaning.to_string().as_bytes())
+}
+
+fn mask_sealed(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, v) in map.iter_mut() {
+                if key.ends_with(SEALED_SUFFIX) && v.is_string() {
+                    *v = Value::String("sealed".into());
+                } else {
+                    mask_sealed(v);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(mask_sealed),
+        _ => {}
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -383,6 +406,24 @@ mod tests {
             expect,
             rubric: None,
         }
+    }
+
+    #[test]
+    fn a_resealed_credential_keeps_the_spec_hash_and_any_other_change_does_not() {
+        let spec = |token: &str, orchestration: &str| {
+            json!({
+                "main": { "instructions": { "orchestration": orchestration } },
+                "routes": { "partner": { "a2a": { "auth": { "token_sealed": token } } } },
+                "verifiers": { "site": { "kind": "host_jwt", "secret_sealed": token } }
+            })
+        };
+        let before = spec_hash(&spec("nonce1.ct1", "Help."));
+        assert_eq!(
+            before,
+            spec_hash(&spec("nonce2.ct2", "Help.")),
+            "the key rotation re-seals a credential; the spec means the same"
+        );
+        assert_ne!(before, spec_hash(&spec("nonce1.ct1", "Help more.")));
     }
 
     #[tokio::test]
