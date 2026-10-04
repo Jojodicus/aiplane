@@ -140,8 +140,9 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   `gwk_` only in `tokens`. A forged prefix swap never authenticates.
 - **What it resolves to.** `UserCtx.principal = Principal::System` with the
   grants loaded once per request and capped at the token's minter (below, reused for at most 30 s). `tools_enabled` is always on — the grants are
-  the policy — and there is no model allowlist; pools are its `pool` grants.
-- **Default deny.** A new principal has no rights at all, not even a pool:
+  the policy — and there is no model allowlist; its models are its `model`
+  grants.
+- **Default deny.** A new principal has no rights at all, not even a model:
   until one is granted, `/v1/chat/completions` answers 404 for every model. See
   [`tools-rbac.md`](tools-rbac.md#system-principals) for what each grant kind
   unlocks.

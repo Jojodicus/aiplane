@@ -407,7 +407,7 @@ none of the above applies to it. It holds exactly the rows in
 | `connector` | every tool of that **global** or **agent** connector | per-user connectors — `user_mcp` is never read, so no person's OAuth connection is reachable; connector `allowed_groups` does not apply (for an `agent` connector it decides who may grant it) |
 | `skill` | that global skill | anyone's private skills |
 | `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
-| `pool` | that upstream pool | open pools; `is_admin` bypass |
+| `model` | that model, by the name the chat picker shows: a model id, a backend alias, or an automatic-route alias (which also reaches the route's candidates, fallback and selector) — on whichever pool serves it, whatever that pool's `allowed_groups` ([`agents.md`](agents.md#models)) | any other model, open pools included; `is_admin` bypass. No grant, no model |
 | `a2a_caller` | calling that agent (ref: its id) over A2A, `/a2a/agents/{id}` ([`agents.md`](agents.md#what-102-built)) | anything of the agent's own: the task runs as the agent's principal, with the agent's grants, never the caller's |
 
 The principal-aware entry points on `AppState` are
@@ -429,8 +429,10 @@ also written to `agent_audit` with the call chain
 it), through `/api/v0/system-principals/*`. A grant is refused unless the
 manager holds the resource *at that moment*, checked with the rule that decides
 their own access (`allowed_tools` + ComfyUI expansion, connector
-`allowed_groups` + MCP grant, `allowed_skills`, `resource_allowed`, pool
-access). After that the grant belongs to the principal: it is never re-derived
+`allowed_groups` + MCP grant, `allowed_skills`, `resource_allowed`, and for a
+model the manager's own chat/transcription/speech model list —
+`server::model_choices::offered` — where an automatic route counts only when
+the manager may use every candidate and the selector too). After that the grant belongs to the principal: it is never re-derived
 from the manager, so it survives the manager losing rights or leaving. Every
 change is written to `agent_audit` in the same transaction.
 

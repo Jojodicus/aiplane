@@ -54,7 +54,8 @@ Three behaviours make that unsafe to reuse for agents:
 - `Resolver::role_ids_for` puts **every `is_default` group** in front of the
   mapped ones.
 - `Resolver::resource_allowed` treats an **empty `allowed_groups` as "everyone"**.
-  That covers pools, RAG collections and MCP connectors.
+  That covers pools (and so the models they serve), RAG collections and MCP
+  connectors.
 - The MCP manager, memory, personal skills and per-user tool prefs are all keyed
   by `user_id`.
 
@@ -65,7 +66,7 @@ company-wide rights. That contradicts the decided default-deny.
 
 - Agents run as **named system principals**, never on a user's token.
 - A new principal has **no rights**. Tools, connectors, skills, RAG collections
-  and pools are granted one by one, and nothing company-wide is inherited.
+  and models are granted one by one, and nothing company-wide is inherited.
 - Only holders of the **agent-management permission** create or configure
   principals.
 - A manager can only grant **what they hold themselves at grant time**. After
@@ -97,8 +98,8 @@ CREATE TABLE system_principals (
 
 CREATE TABLE principal_grants (
     principal_id TEXT NOT NULL REFERENCES system_principals(id) ON DELETE CASCADE,
-    kind         TEXT NOT NULL,              -- 'tool' | 'connector' | 'skill' | 'rag_collection' | 'pool'
-    ref          TEXT NOT NULL,              -- tool id, connector key, skill name, collection id, pool name
+    kind         TEXT NOT NULL,              -- 'tool' | 'connector' | 'skill' | 'rag_collection' | 'model'
+    ref          TEXT NOT NULL,              -- tool id, connector key, skill name, collection id, model name
     granted_by   TEXT NOT NULL,              -- users.id
     granted_at   TEXT NOT NULL,
     PRIMARY KEY (principal_id, kind, ref)
@@ -126,9 +127,11 @@ ALTER TABLE gateway_groups ADD COLUMN can_manage_agents INTEGER NOT NULL DEFAULT
 - **`can_manage_agents`** works like `is_admin` on a gateway group: a column,
   checked by `Resolver::can_manage_agents(role_ids)`. `is_admin` implies it.
 - **Grant-time cap.** Writing a grant runs the manager's own check for that
-  resource: `allowed_tools`, `resource_allowed` for pools, collections and
-  connectors, `allowed_skills`. A refused grant returns an actionable error
-  naming the resource. Grants are never re-derived later.
+  resource: `allowed_tools`, `resource_allowed` for collections and
+  connectors, `allowed_skills`, and for a model the list the person's own chat
+  picker is built from (`server::model_choices::offered`, [Models](#models)).
+  A refused grant returns an actionable error naming the resource. Grants are
+  never re-derived later.
 - **Who manages a principal.** An agent's principal: whoever holds a share on
   the agent (§2). Any other principal: its creator (`created_by`) and admins,
   nobody else — another manager gets 404. Issuing a token takes the cap for
@@ -180,7 +183,7 @@ That compile pass is the audit of every place identity matters.
 | Skills (`allowed_skills_for`, `read_skill`) | groups plus overlay | `grants[skill]` only |
 | MCP (`McpManager::layer_for_user`) | the user's connected per-user connectors plus global ones | `grants[connector]`, restricted to connectors with scope `global` or `agent`. `user_mcp` is never read |
 | RAG collections | `resource_allowed` | `grants[rag_collection]`. An empty `allowed_groups` does **not** count |
-| Pools/models (`PoolAccess`) | `allowed_groups` plus the token allowlist | `grants[pool]` only |
+| Models (`PoolAccess`) | pool `allowed_groups` plus the token allowlist | `grants[model]` only (`PoolAccess::granted_models`): every pool is open to it, only the granted names route; a granted automatic route also reaches its candidates, fallback and selector |
 | Memory, personal skills, user tool prefs | yes | no access: `user_id()` is `None` |
 | Usage | `usage_events.user_id` | `usage_events.principal_kind = 'system'`, with the principal id in `user_id` |
 | Limits | subject `user`/`role`/`global` | subject `system`: an operator's cap on the agent, next to the owner's `publish.budget` ([§5](#what-92-built)) |
@@ -258,9 +261,9 @@ scope:                                  # #115; all optional
   topics: [croit products, Ceph storage]
   refusal: "I can only help with croit products and Ceph storage."
   strict: true                          # a topic guard refuses everything else
-  classifier_pool: small-fast           # the guard's pool; default main.pool, must be granted
+  classifier_model: small-fast          # the guard's model; default the main model, must be granted
 main:
-  pool: chat-conversational             # must be in grants[pool]
+  model: qwen3                          # must be in grants[model]; unset = the gateway's default chat model
   instructions:
     orchestration: "Collect name, email and issue before forwarding …"
     response:      "Friendly, short, in the visitor's language …"
@@ -280,7 +283,7 @@ state:                                  # slot name -> definition
 verifiers:
   otp: { kind: mcp_code, connector: erp, send_tool: send_code, check_tool: check_code,
          input: secure_field, max_attempts: 5, code_ttl: 10m }
-router: { kind: rules, order: [billing] } # or { kind: classifier, pool: small-fast }
+router: { kind: rules, order: [billing] } # or { kind: classifier, model: small-fast }
 routes:
   billing:
     when: { all: [ { slot: issue, eq: billing },
@@ -353,7 +356,7 @@ A sub-agent's spec uses the same layout. It has no `state`, `routes` or
 - Every gate must type-check against the slots (§4).
 - The sub-agent graph must be acyclic and at most 3 levels deep.
 - A `strict` scope lists at least one topic and has a non-blank `refusal`;
-  its `classifier_pool` must be granted. Checked on every save, not only on
+  its `classifier_model`, when set, must be granted. Checked on every save, not only on
   publish, because the test chat runs the draft.
 
 ### The typed spec (#107)
@@ -423,14 +426,18 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
   one. Two stages:
   - *Draft* (on save and on create): shape and references. Unknown keys at any
     level, types, enums, durations (`30s`/`15m`/`2h`/`30d`), exact origins,
-    regexes, the `finish` schema (through `FinishContract::new`). Pools, tools,
+    regexes, the `finish` schema (through `FinishContract::new`). Models, tools,
     MCP tools (via their connector), skills and verifier connectors must be
     granted. Sub-agents must be existing agent ids, and not the agent itself.
     Gate leaves, templates and `set_by: verifier:<id>` must name declared slots
     and verifiers. Bind sources must be non-`llm` slots or `const`. Gates are
     checked for shape only.
   - *Publish*: everything above against the grants as they are now, plus
-    `main.pool`, instructions, and every routed sub-agent having a live version.
+    instructions, every routed sub-agent having a live version, and a granted
+    model for every model key left unset: `main.model` and each voice
+    direction that is on run on the gateway's default of their kind
+    (`SpecContext::model_defaults`, [Models](#models)), so that default must
+    exist and be granted.
   - Slot run-time semantics landed with #85 ([below](#what-85-built)), gate
     type checks with #86 ([§4](#what-86-built)), the sub-agent graph checks
     with #88 ([§3](#what-8788-built)).
@@ -480,7 +487,9 @@ test chat behind it.
   A turn that paused also carries `suspension`
   ([agent-run suspend](#what-agent-run-suspend-built)).
   Failures: `404 unknown_session`, `422 agent_not_runnable` (bad spec),
-  `503 agent_no_model` (no healthy model in the pool the principal may use).
+  `503 agent_no_model` (the spec names no model and the gateway has no default
+  chat model), `422 agent_model_not_granted` (the agent holds no grant on the
+  model it runs on).
 - **`debug`** is for managers only and is built from the stored state and the
   turn's `agent_audit` rows, never from anything a visitor can reach:
   - `slots`: per declared slot `{slot, status: set|missing|invalid, value,
@@ -507,8 +516,9 @@ test chat behind it.
   `embed` integration test publishes v1, edits the draft, and shows the test
   chat running the draft while a visitor message gets v1.
 - **`GET /api/v0/agent-resources`** lists what the calling manager holds and
-  can therefore grant: `{pools, tools: [{id, name, description}], connectors:
-  [{key, name, tools}], skills, rag_collections: [{id, name}]}`. It applies the
+  can therefore grant: `{models: {chat, transcription, speech}, defaults,
+  tools: [{id, name, description}], connectors: [{key, name, tools}], skills,
+  rag_collections: [{id, name}]}` ([Models](#models)). It applies the
   same predicates as the grant route's cap, so the builder's pickers never
   offer what `POST …/grants` would refuse with `grant_exceeds_manager`.
 - **`GET /api/v0/me`** gained `can_manage_agents`; the SPA shows the Agents
@@ -795,7 +805,7 @@ grants.
   on (#91, `RunProfile::load_version`). The chain is
   `RunChain::root(session, visitor, main frame)`. `run_turn_with` takes
   `RunOptions { now, classifier }`: the clock that gates and slot writes read,
-  and a `RouteClassifier` to use instead of the pool classifier. The public
+  and a `RouteClassifier` to use instead of the model classifier. The public
   endpoint (#91) drives its turns through the same `drive_opened`; the test
   chat is #90.
 - **`RunProfile::load(state, agent_id, Role, options)`** reads the live version
@@ -807,7 +817,7 @@ grants.
   agent. The `AgentRun` rides the tool context into the ordinary headless
   loop. There is no second driver: the round loop asks the turn's
   `TurnPolicy` (`openai_driver/turn_policy.rs`, `Chat` or `Agent(&AgentRun)`)
-  for the system message, the offer, the pools, the budget and how the turn
+  for the system message, the offer, the model access, the budget and how the turn
   ends, and holds no agent branch of its own. An agent run therefore never
   reads a person's conversation overlay or "off" switches
   (`chat_session_tools`); a run with no spec surface gets the turn-discipline
@@ -818,9 +828,11 @@ grants.
     `(agent, version)` and shared (`agents::spec_cache`, at most 256, least
     recently used first). Which version is live is read fresh for a run and
     held for 5 s on a visitor admission.
-  - *Model*: `main.pool` names a pool and a request names a model, so the run
-    uses the first model (by name) of a healthy backend of that pool that the
-    principal's pool grant reaches.
+  - *Model*: `main.model`, else the gateway's default chat model
+    (`agents::defaults::main_model`). The principal must hold a `model` grant
+    on it (`ModelNotGranted` otherwise); the run's access is narrowed to it
+    (`PoolAccess::for_system_models`). An automatic-route alias is resolved
+    per turn exactly like a person's chat turn (`server::model_route`).
   - *Budget*: `main.budget`, with rounds defaulting to the `standard` effort
     cap.
   - *Finish*: none for the main agent, which ends its turn with text. A
@@ -855,7 +867,7 @@ grants.
     key with route names, else the first open route by name. Deterministic.
   - *Exactly one open route*: that route, without asking a model.
   - *Otherwise* (`classifier`, or no router): a non-streaming call on
-    `router.pool`, else `main.pool`. It uses `response_format: json_schema`
+    `router.model`, else the main run's model. It uses `response_format: json_schema`
     with `route` constrained to `enum: <open routes>`, and sends the route
     descriptions and the model's slot view, never trusted values. The answer
     is checked in code again, so a closed, unknown or malformed answer
@@ -1423,8 +1435,8 @@ runs after the code gate passes and can only close the route.
   values. `open_reviewed` consults it only after the code gate opened.
   `Verdict::Deny` and an `Err` both close the route (`denied`); nothing it
   returns can open a closed gate. There is no LLM implementation yet, only a
-  test double. *Decided, deferred:* the implementation will classify on the
-  agent's `main.pool` unless the spec names a pool for it.
+  test double. *Decided, deferred:* the implementation will classify with the
+  agent's main model unless the spec names a model for it.
 - **Spec type checks.** On save and publish, each leaf must be able to hold:
   every `eq` and `in` value must pass the slot's own validator, and
   `provenance` must be in the slot's `set_by`. A route with a `bind` must have a
@@ -1678,12 +1690,12 @@ untrusted audiences.
   ([below](#what-95-built)). The waiting view for a request staff answer came
   with [#96](#what-96-built).
 - **`dev-ui`** now installs `LiveAgentRunner` and seeds a published agent on
-  the `chat` pool with a fixed embed key for `http://localhost:8000`.
+  `demo-model` with a fixed embed key for `http://localhost:8000`.
 
 ### What #92 built
 
 Limits that make an embedded agent safe to leave running, an owner budget, the
-pool rule, and retention.
+model rule, and retention.
 
 - **Migration `0077_agent_builder.sql`.** `usage_events` gains `agent_id` (the
   main agent at the root of the run's call chain, `NULL` outside a run) and
@@ -1760,15 +1772,17 @@ pool rule, and retention.
     dimension, window, max, used, exceeded, refreshes_at}], available,
     unavailable_reason}`, where `unavailable_reason` is the budget detail
     above.
-- **Pools.** An agent run reaches only pools that are both granted and named
-  by its spec: `PoolAccess::for_system_pools(principal, listed)`. Routing goes
-  by model, so before this a model served by a second granted pool (a cloud
-  pool next to the self-hosted one an owner picked for PII) could be reached.
-  The narrowed access applies to the turn's rounds (`main.pool`), the
-  router's classifier (`router.pool`), and the conversation's compaction
-  summary, which used to route over every pool. A sub-agent uses its own
-  spec's pool. Tools that call a pool themselves (image generation) keep the
-  principal's pool grants: the tool grant is what allows them.
+- **Models.** An agent run reaches only models that are both granted and
+  named by its spec (or its gateway default):
+  `PoolAccess::for_system_models(principal, listed)`. The narrowed access
+  applies to the turn's rounds (`main.model`), the router's classifier
+  (`router.model`), the topic guard (`scope.classifier_model`) and the
+  conversation's compaction summary. A sub-agent uses its own spec's model.
+  Tools that call a model themselves (image generation) keep the principal's
+  model grants: the tool grant is what allows them. A grant names a model,
+  not a pool: a model name served by a self-hosted and a cloud pool reaches
+  both, as it does for a person picking it in the chat — an owner who needs
+  one of them for PII grants a name only that pool serves (a backend alias).
 - **Retention** (`agents::retention`, `db::agent_retention`). A sweeper runs
   at boot and every hour (`spawn_retention_sweeper`, started in `main.rs`).
   Per agent it deletes the conversations — root sessions it owns, visitor and
@@ -2053,7 +2067,7 @@ version and judged on more than the final answer.
   passed. `tools` and `sub_agents` read the audit rows of the whole
   conversation, nested sub-agents included.
 - **Rubric.** Optional free text per case. After the deterministic checks, one
-  non-streaming call on the agent's `main.pool`, as its principal, grades the
+  non-streaming call on the agent's main model, as its principal, grades the
   visitor messages and the agent's answers (nothing else: no slot values, no
   tool results) as `{passed, reason}`. It is reported as `report.rubric`
   (`verdict`: `passed`, `failed`, `error`, `skipped`) and counted apart in the
@@ -2681,8 +2695,8 @@ logged and the request goes on as it would have.
 | Event | Written by | Detail |
 |---|---|---|
 | `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` or, after a turn's first round, `request_delta` (see "Storage") (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
-| `llm_exchange` | a constrained choice on a pool (`agents::pool_choice`): the route classifier, the topic guard (#115) | `purpose: route_classifier` or `scope_guard`, `pool`, `model`, `backend`, `request`, `response`, `answer`, `error` |
-| `scope_decision` | the topic guard (`agents::topic_guard`, #115) | `verdict` (`in_scope`, `out_of_scope`, `failed`), `topics`, `pool`, `error` |
+| `llm_exchange` | a constrained choice on a model (`agents::model_call`): the route classifier, the topic guard (#115) | `purpose: route_classifier` or `scope_guard`, `model`, `backend`, `request`, `response`, `answer`, `error` |
+| `scope_decision` | the topic guard (`agents::topic_guard`, #115) | `verdict` (`in_scope`, `out_of_scope`, `failed`), `topics`, `model`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
 | `state_written` | `agent_state::put`, on the write's transaction, in the chain of the written session's root conversation (a sub-agent's slot in its child session included, whichever door wrote it) | `slot`, `old` (`value`, `provenance`, `set_at`, or `null`), `new`, `provenance` (who wrote it: `llm`, `verifier:<id>` or `host`), `set_at` |
@@ -2691,7 +2705,7 @@ logged and the request goes on as it would have.
 | `run_suspended`, `run_resumed`, `human_handoff` | the pause and resume paths (#82, #96) | `run_resumed` also carries a staff `answer` to a handoff, and only `secure_input_received: true` for a secure input |
 | `verifier_outcome`, `host_identity`, `output_blocked`, `limit_refused`, `a2a_task`, `injection_detected` | as before (#95, #89, #92, #102, #93) | `output_blocked` now also keeps the withheld `original` and what was `delivered` |
 | management kinds | the agent DB modules, on the change's transaction | as before |
-| `assist_suggested` | the prompt assistant (`agents::assist`, #117), in the agent's own chain | `action`, `scenario`/`template` or `field`/`text`, `pool`, `model`, `usage`, `offered`, `dropped`, `error` ([#117](#what-117-built)) |
+| `assist_suggested` | the prompt assistant (`agents::assist`, #117), in the agent's own chain | `action`, `scenario`/`template` or `field`/`text`, `model`, `usage`, `offered`, `dropped`, `error` ([#117](#what-117-built)) |
 | `activity_swept` | the retention sweep, on the deletion's transaction | `chain_key`, `events`, `before` |
 | `chain_checkpoint` | the retention sweep, when it cuts the agent's own chain | `base_seq`, `base_hash`, `removed`, `seqs`, `from`, `to`, `before`, `anchors` |
 | `chain_anchored` | the end of every turn (`drive_opened_from`) | `chain_key`, `seq`, `hash` of the conversation chain's head |
@@ -2855,7 +2869,7 @@ scope. The system message also named the agent by its slug
 (`` You are the agent `website` ``) and ran orchestration and response
 instructions together.
 
-**Spec.** `scope: { topics, refusal, strict, classifier_pool }`
+**Spec.** `scope: { topics, refusal, strict, classifier_model }`
 (`spec::model::Scope`), all optional. The validator's rules are under
 "Checks when a spec is validated" above.
 
@@ -2892,12 +2906,12 @@ sub-agent, whose input is a task, not a visitor's message).
   characters. The exchange is what lets "and what about the price?" after an
   in-scope question stay in scope; older history is left out to keep the
   call small. Greetings, thanks and "what can you do?" count as in scope.
-- *Call:* `agents::pool_choice::PoolChoice`, the mechanism the route
-  classifier uses too: one non-streaming request to `classifier_pool` (else
-  `main.pool`) under the principal's pool grant, `response_format` an enum
+- *Call:* `agents::model_call::ModelCall`, the mechanism the route
+  classifier uses too: one non-streaming request to `classifier_model` (else
+  the main model) under the principal's model grant, `response_format` an enum
   of `in_scope` / `out_of_scope`, and the answer checked again in code. It
   is a usage row of the run (so it counts against `publish.budget` and the
-  pool's limits), its tokens count against the turn's `main.budget.tokens`,
+  model's limits), its tokens count against the turn's `main.budget.tokens`,
   and it is an `llm_exchange` with `purpose: scope_guard`.
 - *Verdict:* recorded as `scope_decision`. Only a clean `in_scope` lets the
   turn continue (trust rule 1: the model may only deny). `out_of_scope`
@@ -2908,7 +2922,7 @@ sub-agent, whose input is a task, not a visitor's message).
   an answer that is not a verdict), the visitor gets the refusal and the
   `scope_decision` carries `verdict: failed` with the `error`. A strict scope
   promises that off-topic messages never reach the main model; failing open
-  would break that promise exactly when the guard pool is down and nobody is
+  would break that promise exactly when the guard model is down and nobody is
   watching. The cost is an in-scope visitor refused during an outage, which
   the error in the log makes visible.
 
@@ -2930,24 +2944,19 @@ The setup assistant and overview in the SPA ([`ui.md`](ui.md#agent-setup)).
 The spec is unchanged: every step reads and writes the parts of it described
 in that table, and leaves the rest alone.
 
-- **Model choices.** Settings `agents.pool_fast`, `agents.pool_balanced`,
-  `agents.pool_thorough` (`aiplane-core::server::settings`, section `agents`,
-  Chat tab; `Config::agents`), all optional. `GET /api/v0/agent-resources`
-  returns them as `tiers: {fast, balanced, thorough}` (each a pool name or
-  `null`), whether or not the caller holds that pool, so the assistant can say
-  why a choice is unavailable instead of hiding it. With none set the choice is
-  not offered (all `null`); once one is, an unset Balanced is the gateway's
-  default chat model ([Default models](#default-models)). Choosing a tier
-  grants the pool through the ordinary grant route, so the manager's cap
-  applies unchanged.
+- **Model.** One model picker over the models the manager may grant
+  ([Models](#models)), with "Default (<model>)" for the gateway's default
+  chat model. #116 first shipped admin-mapped Fast/Balanced/Thorough choices
+  (`agents.pool_*` settings, `tiers` on `agent-resources`); they were removed
+  when agents moved from pools to models. Choosing a model grants it through
+  the ordinary grant route, so the manager's cap applies unchanged.
 - **Templates.** `web/src/lib/agent-templates.json`: five starter drafts
   (FAQ, customer support with an e-mail-code identity check and a fallback to
   a person, lead qualification, internal helper, blank). A string `@<key>` is
   a catalog message. `tests/it/agent_test_chat.rs`
   (`every_setup_template_is_a_valid_draft_in_every_language`) creates every
   template in all six languages through `POST /api/v0/agents`, so the
-  validator accepts each as a draft; `resources_name_the_pool_behind_each_model_choice_an_admin_mapped`
-  covers `tiers`.
+  validator accepts each as a draft.
 - **Slot `order`.** A slot may carry `order` (a whole number ≥ 0, checked
   like `max_length`; `Slot::order` in the typed spec). The details step writes
   each row's position there and sorts by it, because a JSON object's key
@@ -2969,16 +2978,16 @@ cases; another improves one text. The UI (#116) shows the proposal per step
 and applies what the manager accepts.
 
 **Shared mechanisms.**
-- *Used:* `pool_choice` for the constrained call, the typed spec's validator
+- *Used:* `model_call` for the constrained call, the typed spec's validator
   (`spec::validate`, on the draft as it would be), `eval::parse_case` for the
   proposed tests, the grant cap's predicates (`json_agent_resources::grantable_tools`,
   the same list `GET /api/v0/agent-resources` serves), the rate primitive
   (`rates::record_now`, new scope `manager`), the spend limits
   (`Enforcer::check_for_model`), `read_json_capped`, and the activity log's
   runtime door (`agents::audit::record_event`).
-- *Introduced:* `pool_choice::ask_json`, the one structured (`json_schema`,
-  strict) non-streaming call on a pool, which `PoolChoice` (route classifier,
-  topic guard) now runs on too; whose usage row it is stays the caller's
+- *Introduced:* `model_call::ask_json`, the one structured (`json_schema`,
+  strict) non-streaming call on a model, which `ModelCall` (route classifier,
+  topic guard) and the evaluation judge now run on too; whose usage row it is stays the caller's
   (`JsonExchange::usage_record`). It sends `chat_template_kwargs.enable_thinking:
   false`, as the title and compaction calls do: a reasoning model (Qwen on
   SGLang) asked for JSON otherwise spends the whole answer thinking now and
@@ -2998,8 +3007,8 @@ system message says to ignore instructions in it.
 
 | Method | Path | Body | Answer |
 |---|---|---|---|
-| POST | `/api/v0/agents/{id}/assist/suggest` | `{scenario, template?, current_draft?, pool?}` | `{steps, dropped, pool, model, usage}` |
-| POST | `/api/v0/agents/{id}/assist/improve` | `{field: task\|tone\|refusal, text, pool?}` | `{field, suggestion, why, pool, model, usage}` |
+| POST | `/api/v0/agents/{id}/assist/suggest` | `{scenario, template?, current_draft?, model?}` | `{steps, dropped, model, usage}` |
+| POST | `/api/v0/agents/{id}/assist/improve` | `{field: task\|tone\|refusal, text, model?}` | `{field, suggestion, why, model, usage}` |
 
 `steps` (each `null` or empty when nothing is offered):
 - `task: {orchestration}` — `main.instructions.orchestration`;
@@ -3012,7 +3021,7 @@ system message says to ignore instructions in it.
   language stand for live in `assist::tone` (a port of `TONE_LINES` /
   `responseText`, pinned against `agent-setup.ts` by a test), so an
   architect's tone is written exactly as the step reads it back;
-- `scope: {topics, refusal, strict}` — `scope` (an existing `classifier_pool`
+- `scope: {topics, refusal, strict}` — `scope` (an existing `classifier_model`
   is kept);
 - `abilities: [{id, name, why}]` — tools for `main.tools`, which the UI grants
   when applied; `name` is the title the ability card shows. Never
@@ -3072,12 +3081,14 @@ route name the draft already has is kept as it is, not replaced. Names are
 made spec identifiers (`Order Number` → `order_number`). A step whose JSON
 does not read is dropped whole; the others stand.
 
-**Pool.** The request's `pool` when the manager may use it (`403
-assist_pool_not_allowed` otherwise), else the draft's `main.pool` when the
-manager may use it and it serves a model, else the agents' chat default for
-the manager ([Default models](#default-models)); `503 assist_no_model` when
-none serves one. The manager's pool access
-decides, not the agent's grants: it is the manager's call.
+**Model.** The request's `model` when it is one of the chat models the
+manager may use (`403 assist_model_not_allowed` otherwise), else the draft's
+`main.model` when they may use it, else the first of their chat models — the
+gateway's default chat model when they may use it (`assist::choose_model`
+over `server::model_choices::offered`, [Models](#models)); `503
+assist_no_model` when they may use none. The manager's access decides, not
+the agent's grants: it is the manager's call. An automatic-route alias is
+resolved by its selector, as in the chat.
 
 **Recording.** *Chosen:* a manager's call, not an agent run.
 - A usage row of the manager's (`principal_kind = user`, `source = chat`, like
@@ -3085,7 +3096,7 @@ decides, not the agent's grants: it is the manager's call.
   (`429 rate_limit_exceeded` with `Retry-After` when over).
 - In no conversation chain. The agent's own chain gets one `assist_suggested`
   event per call, actor = the manager: `action` (`suggest`/`improve`), the
-  `scenario` and `template` (or the improved `field` and `text`), `pool`,
+  `scenario` and `template` (or the improved `field` and `text`),
   `model`, `usage` (token counts), `latency_ms`, `offered` (the step kinds),
   `dropped`, and `error` for a failed call. *Chosen to keep the scenario:* it
   is the manager's own input, and without it the event cannot explain what
@@ -3129,7 +3140,7 @@ not a system principal and holds no grants. Its conversation is an ordinary
 chat of the signed-in person's (`chat_sessions.user_id`), marked in
 `agent_architect_sessions` (session, person, the agent it plans), and every
 turn runs on the person chat driver as `TurnPolicy::Persona`
-(`aiplane_runtime::persona::ChatPersona`): the person's pools, budget, usage
+(`aiplane_runtime::persona::ChatPersona`): the person's models, budget, usage
 and history, but the architect's fixed system prompt and only its tools,
 offered every round. The person's own chat tools are neither offered nor run
 (a call to one is refused as an unknown tool). The prompt is English and
@@ -3145,9 +3156,9 @@ code. Each checks `can_manage_agents` again when it runs.
 |---|---|---|
 | `list_agents` | the agents shared with the person | `visible_agents` (as `GET /api/v0/agents`) |
 | `read_agent(agent_id)` | draft, grants, what blocks publishing | `agent_by_id` (`read` share), `SpecWorld`, `publish_issues` |
-| `list_grantable` | pools, model choices, tools, connectors, skills, collections | `resources_for` (as `GET /api/v0/agent-resources`) |
+| `list_grantable` | models by kind, the gateway's default models, tools, connectors, skills, collections | `resources_for` (as `GET /api/v0/agent-resources`) |
 | `propose_setup(agent_id, scenario, template?)` | the #117 proposal; writes nothing | `suggest_for` (as `…/assist/suggest`: its rate, usage row and `assist_suggested` event) |
-| `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName`; it starts on `agents::defaults::chat_pool` when the person may use it (granted, capped) | `create_agent` (as `POST /api/v0/agents`) |
+| `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName`; its `main.model` is left unset, so it runs on the gateway's default chat model, which is granted (capped) when the person may grant it; the answer names it as `model` | `create_agent` (as `POST /api/v0/agents`) |
 | `update_agent_draft(agent_id, changes)` | changes the draft step by step | `assist::apply_changes`, then `add_capped_grant` per needed grant, then `save_draft` |
 | `run_test_turn(agent_id, message, conversation_id?)` | one test-chat turn of the draft | `draft_test_turn` (as `…/test-turn`) |
 
@@ -3155,14 +3166,14 @@ There is **no publish tool**: the prompt tells the model to send the person
 to the setup page (`setup_url`), where Publish stays a click. An agent may
 be named by its id or its name.
 
-**`changes`** (`assist::changes_schema`): `display`, `pool`, `task`, `tone`,
+**`changes`** (`assist::changes_schema`): `display`, `model`, `task`, `tone`,
 `scope`, `abilities` and `slots` in the prompt assistant's step shape, plus
 `knowledge: [{name, why}]`, `handoffs: [{topic, target, details?,
 identity?}]` and `fallback_to_person`.
 `apply_changes` runs the same `Reviewer` as `review`: each piece is applied
 to the stored draft and kept when it adds no validator issue, else dropped
 with the reason. An ability is offered only when it is one of the person's
-grantable tools, and `pool` only when it is a chat pool the person may use —
+grantable tools, and `model` only when it is a chat model the person may grant —
 both are then granted through the capped grant route before the draft is
 saved, so a grant the person lacks is never made (`grant_exceeds_manager`
 would refuse it anyway). When nothing at all is applied the call fails with
@@ -3221,10 +3232,10 @@ the answer lists them as `revoked`.
 share on `agent_id`. It reopens the person's newest architect conversation
 about that agent (or about no agent yet) unless `fresh`; otherwise it
 creates one titled `title` (the client sends "Agent architect: <name>" in the
-person's language). `model` is what to send messages with: the pool choice
-of the prompt assistant (`assist::choose_pool`: the admin's *Balanced* pool
-when the person may use it, else their first chat pool), `503
-architect_no_model` when none serves one. Messages then go through the
+person's language). `model` is what to send messages with: the prompt
+assistant's choice (`assist::choose_model`: the gateway's default chat model
+when the person may use it, else their first chat model), `503
+architect_no_model` when they may use none. Messages then go through the
 ordinary `POST /api/v0/chat/sessions/{id}/messages` and stream on its events
 endpoint; `spawn_assistant_worker` looks the session up and builds the
 persona for it.
@@ -3236,7 +3247,7 @@ for no safety gain, and opened from `/chat` they still run as the architect,
 since the persona belongs to the session, not to the page.
 
 **Tests.** `agents/assist/review/tests.rs` (changes applied with their
-grants; a pool or tool the person may not grant dropped);
+grants; a model or tool the person may not grant dropped);
 `openai_driver/resume.rs` (`a_personas_turn_offers_only_its_tools_and_refuses_the_persons`);
 `persona.rs`; `db/agents.rs` (revisions kept, capped, unchanged saves
 skipped); `db/architect_sessions.rs`; `pages/architect/tools.rs` (the id from
@@ -3244,7 +3255,7 @@ a name, no publish tool); `tests/it/agent_architect.rs` (a scripted
 conversation lists, creates, proposes, updates, is refused an ability the
 person lacks, tests the draft and cannot publish, every call recorded; the
 offered tools; undo through `draft/restore`; reopening and `fresh`; 403 for a
-non-manager; an undo revoking the change's tool but keeping the pool the
+non-manager; an undo revoking the change's tool but keeping the model the
 restored draft runs on, logged; an undo keeping a grant the live version
 uses); `web/src/lib/architect.test.ts`.
 
@@ -3255,25 +3266,27 @@ Voice in the embed widget: a visitor may speak a message and hear answers.
 **Shared mechanisms.**
 - *Used:* the typed `AgentSpec`, the embed `visitor()` chain and `admit`
   (rates and owner budget), `read_body_capped` / `read_json_capped` under
-  `BodyLimitLayer::HANDLER_CAPPED`, `PoolAccess::for_system_pools`, the VAD
+  `BodyLimitLayer::HANDLER_CAPPED`, `PoolAccess::for_system_models`, the VAD
   (`aiplane_features::server::vad`, moved down from the gateway crate so the
   API layer can trim a recording too), `speech::to_spoken`, `UsageRecord::in_run`,
   `agents::audit::{RunLog, SideExchange, anchor}`.
 - *Introduced:* `aiplane-runtime::agents::voice` — the two calls, made as the
-  agent on the one pool the spec names; `RunLog::visitor` for an event of a
+  agent on the one model the direction runs on; `RunLog::visitor` for an event of a
   visitor's conversation between turns; `web/shared/wav.ts` (the WAV encoder
   the SPA composer and the widget now share) and `web/shared/color.ts`.
 
-**Spec.** `publish.voice: { input, output, voice?, transcription_pool?,
-speech_pool? }` (`spec::model::VoiceSpec`). Both directions are off by
-default. A pool named here must be granted to the agent. A direction that is
-on and names none runs on the pool of the gateway's default transcription or
-speech model among the agent's grants ([Default models](#default-models));
-publishing one that neither can serve is refused (`422`, at
-`publish.voice.transcription_pool` / `speech_pool`, naming the setup's
-*Website* step). Either way an agent reaches only pools granted to it. `voice` is the TTS voice; unset, the speech pool's voice for the
-visitor's language (its `voices` map) applies. `VoiceSpec::{input_pool,
-output_pool}` return a pool only for a direction that is on. `profile.color`
+**Spec.** `publish.voice: { input, output, voice?, transcription_model?,
+speech_model? }` (`spec::model::VoiceSpec`). Both directions are off by
+default. A model named here must be granted to the agent. A direction that
+is on and names none runs on the gateway's default transcription or speech
+model ([Models](#models)), which must then be granted; publishing a direction
+without either is refused (`422`, at `publish.voice.transcription_model` /
+`speech_model`, naming the setup's *Website* step). Either way an agent
+reaches only models granted to it, and the embed endpoints answer `503
+voice_unavailable` when the grant is gone. `voice` is the TTS voice; unset,
+the voice the serving speech pool maps the visitor's language to
+(`UpstreamRegistry::speech_voice`) applies. `VoiceSpec::{input_model,
+output_model}` return the named model only for a direction that is on. `profile.color`
 is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
 itself in it.
 
@@ -3291,7 +3304,7 @@ A direction that is off answers `404 voice_not_enabled`; a failing backend
 `503 voice_unavailable` (the real error is in the activity log and the server
 log). Both calls go through `admit` first, so they count against the
 visitor's and the IP's rate like a message and are refused once the owner's
-budget is spent. A spoken turn is cached in memory per turn, pool and voice
+budget is spent. A spoken turn is cached in memory per turn, model and voice
 (256 entries, 64 MiB at most), so replaying costs no second synthesis; a
 replay still counts against the rate.
 
@@ -3320,53 +3333,94 @@ into Web Audio, so no `blob:` URL is needed. Animations stop under
 
 **Builder.** The setup's *Website* step binds the colour and `publish.voice`
 (`readColor`/`writeColor`, `readVoice`/`writeVoice` in `agent-setup.ts`);
-choosing a pool stages its grant. Switching a direction on preselects the
-pool of the gateway's default model for it; a direction the manager holds no
-pool for is explained instead of offered. `GET /api/v0/agent-resources`
-lists `voice_pools: {speech, transcription}` the manager holds.
+each direction has a model picker over `models.transcription` /
+`models.speech` of `GET /api/v0/agent-resources`, with "Default (<model>)"
+for the gateway's default; choosing one stages its grant. Switching a
+direction on starts it on the default (its grant staged); a direction the
+manager may grant no model for is explained instead of offered.
 
 **Tests.** `tests/it/embed/voice.rs` (transcript returned and not sent, no
 audio in the log, disabled → 404, body cap with a finite oversize and
 "endless" body, length and format, visitor rate, owner budget, only a final
 answer of this visitor spoken from the stored text, cache, owner's voice,
-`describe`, worklet, voice pools); `spec.rs` and `spec/model.rs`;
+`describe`, worklet, voice models); `spec.rs` and `spec/model.rs`;
 `web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color}.test.ts`,
 `web/src/lib/agent-setup.test.ts`.
 
-### Default models
+### Models
 
-Agents have no model settings of their own. Where a spec names no pool, the
-gateway's admin *Default models* (`/admin/models`, `app_settings`
-`default_model.{chat,transcription,speech,image,embedding}`,
-`aiplane-core::server::feature_defaults`) decide, through one resolver:
-`feature_defaults::default_pool(db, upstreams, feature, access)` takes the
-configured model, resolves it against the models of the pools of that kind
-`access` reaches (the configured one when served, else the first — the same
-`resolve` every other default uses), and returns the first such pool (by
-name) serving it, with the model.
+An agent names models the way a person picks one in the chat: a model id, a
+backend alias or an automatic-route alias. Every pool reference the builder
+used to have is a model key now: `main.model`, `router.model`,
+`scope.classifier_model`, `publish.voice.transcription_model` /
+`speech_model`. A sub-agent runs on its own spec's `main.model`; the
+evaluation judge on the agent's main model. There are no agent-specific model
+settings (the Fast/Balanced/Thorough tiers of #116 and their
+`agents.pool_*` settings are gone).
 
-| Who asks | Access | Feature |
-|---|---|---|
-| A voice direction without a pool (`agents::defaults::voice_pool`, the embed `transcribe`/`speak`) | the agent's pool grants | `transcription` / `speech` |
-| The publish check of that direction (`SpecContext::voice_defaults`, `defaults::granted_default`) | the agent's pool grants | `transcription` / `speech` |
-| The prompt assistant without a pool, an unset *Balanced* (`agents::defaults::chat_pool`) | the manager's groups | `chat`, after `agents.pool_balanced` when set |
-| `GET /api/v0/agent-resources` → `defaults: {chat, transcription, speech}` (`{pool, model}` or `null`) | the manager's groups | all three |
+**One list** (`aiplane-runtime::server::model_choices`). `offered(state,
+kind, access)` is what a caller with `access` may pick of a kind (chat,
+transcription, speech): the registry's models and aliases of that kind
+(`models_with_compliance_for_kind_for`, then the access's model check), plus
+— for chat — every automatic route whose alias the caller may name and whose
+fallback they may reach, sorted, the gateway default promoted to the front.
+`GET /api/v0/models` (the chat picker), `GET /api/v0/transcription_models`,
+`GET /api/v0/agent-resources`, the grant cap (`grant_holding::holds` for kind
+`model`) and the prompt assistant's choice all read it. It sits in
+`aiplane-runtime` because each consumer is there or above and it needs the
+automatic routes and the feature defaults beside the registry. An automatic
+route carries `RouteChoice { candidates, whole }`: `whole` when the caller
+may also use every candidate and the selector. The chat picker lists a route
+as before (its fallback reachable); a manager may **grant** one only when it
+is whole (`ModelChoice::grantable`), because the grant hands the agent every
+model the route can send to.
 
-What the setup preselects (a new agent's `main.pool`, a voice direction
-switched on) is therefore always a pool the manager holds, and it is staged
-for granting like any other choice, so the grant route's cap applies on save.
-`default_model.speech` (*Voice (speech output)*, added for this) also picks
-the session read-aloud's model (`UpstreamRegistry::speech_target`).
+**Unset means the gateway default.** `gateway_default(state, feature)`:
+the admin's *Default models* choice (`/admin/models`, `app_settings`
+`default_model.{chat,transcription,speech}`) when the gateway offers it, else
+the first model it offers — `feature_defaults::resolve`, over the whole
+gateway, not over the agent's grants. `agents::defaults::{main_model,
+voice_model}` apply it at run time; `SpecContext::model_defaults`
+(`defaults::model_defaults`) carries it to the validator, which on publish
+requires the default an unset key runs on to exist and be granted. So an
+admin changing the default moves every agent that names none — and one not
+granted the new default stops with `ModelNotGranted` (`422
+agent_model_not_granted` in the test chat; voice answers `503`) until it is
+granted or the agent names a model.
 
-Tests: `feature_defaults` (`pick_pool_*`), `registry`
-(`speech_target_follows_the_admins_default_speech_model`), `spec.rs`
-(`a_voice_direction_without_a_pool_runs_on_the_granted_default_or_names_the_step`),
-`tests/it/embed/voice.rs` (`without_a_pool_of_its_own_voice_runs_on_the_gateways_default_models`,
-`voice_without_a_granted_pool_is_refused_at_publish_naming_the_step`,
-`the_setup_defaults_follow_the_gateway_but_stay_within_what_the_manager_holds`),
-`tests/it/agent_assist.rs` (`without_a_pool_the_assistant_follows_the_gateway_default_chat_model`),
-`tests/it/agent_test_chat.rs` (`resources_name_the_pool_behind_each_model_choice_an_admin_mapped`),
-`web/src/lib/agent-setup.test.ts` (the preselection and `setupErrorMessage`).
+**Access** (`PoolAccess::granted_models`). A system principal's access is its
+`model` grants: every pool is open to it (the grant replaces the pool's
+group rule, as the pool grant did), and only those names route. An agent run
+narrows that to the one model it uses (`PoolAccess::for_system_models`), and
+so do the topic guard, the route classifier, the evaluation judge and voice.
+Default deny: no `model` grant, no model. A granted automatic route is
+resolved like a chat turn (`server::model_route::route_target` →
+`AutomaticRouter::select`): the selector and candidates are reached under
+the access widened by the route's members (`PoolAccess::for_route_targets`
+over `AutomaticRoute::members`), and the chosen target is routed under the
+access widened by exactly that target. A person's token allowlist still stops
+at the alias, as before.
+
+**Setup.** One picker per model key (`ModelPicker.svelte` over
+`SearchableSelect` and `modelSelectOptions`, the chat picker's pieces), with
+"Default (<model>)" from `defaults.<kind>` of `GET /api/v0/agent-resources`
+when the spec leaves the key unset. Choosing a model stages its grant;
+choosing Default stages the default's grant when the manager may give it.
+
+Tests: `server::model_choices` (an auto-route with an unusable candidate
+offered but not grantable, per-kind lists with the default first, an agent
+offered exactly its grants), `upstreams::registry`
+(`a_system_principal_reaches_only_its_granted_models_whatever_the_pool_groups`,
+`an_agent_run_reaches_only_models_both_granted_and_listed`,
+`an_automatic_route_target_widens_a_principal_by_exactly_the_target`),
+`spec.rs` (`an_unset_model_runs_on_the_gateway_default_which_must_be_granted`,
+`a_published_voice_direction_runs_on_a_granted_model`), `agents/run/tests.rs`
+(`an_agent_run_uses_only_the_model_its_spec_names`,
+`an_agent_without_a_grant_on_its_model_does_not_run`,
+`an_agent_without_a_model_runs_on_the_gateway_default`),
+`tests/it/automatic_routing.rs`, `tests/it/system_principals.rs` (the grant
+cap for models and automatic routes), `tests/it/embed/voice.rs`,
+`web/src/lib/agent-setup.test.ts` (picker options, spec mapping).
 
 ## 6. Crate placement
 
@@ -3379,13 +3433,13 @@ upward.
 | db modules for `system_principals`, `principal_grants`, `system_tokens`, `agents`, `agent_versions`, `agent_shares`, `agent_embed_keys`, `visitor_sessions`, `agent_state`, `agent_audit`, `agent_test_cases`/`runs`/`results`, `a2a_contexts`, `agent_a2a_tasks`, verifiers, analytics, responders, notify channels, retention; principal-owned conversations, the agent pause sweep and the inbox reads (`db::run_sessions`); the visitor rate gate and the one rate primitive (`rates`, over `rate_events`); the inbox webhooks (`notify_channels`) | `aiplane-agents` | *as moved (#109):* nothing below the runtime reads them, so they sit on `aiplane-core` beside `aiplane-features`; an agent DB edit no longer rebuilds the base layer, and a runtime edit does not recompile them |
 | `chat_turn_suspensions` db fns; `suspended` status; new `chat_json` events (`suspended`, `state`, `gate`) | `session-core` | the chat substrate owns turn lifecycle and the SSE protocol; it reads a conversation by `user_id` and treats any other owner as opaque |
 | Spec types and validation, the gate evaluator, the schema-subset validator, template rendering | `aiplane-runtime` (`agents/`) | the lowest crate that needs them at run time; `aiplane-api` validates on save through it |
-| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/pool resolution | `aiplane-runtime` | they are the loop and the tool machinery |
+| `ToolContext.principal`/`run`, `RunProfile`, finish/budget/trim/repeat/suspend, `AgentToolSource` (synthetic tools, router, dispatch, the `loop` route), output filter, tool-output injection hook, principal-aware tool/skill/MCP/model resolution; the one model list (`server::model_choices`) and the model routing a turn and an agent's own calls share (`server::model_route`) | `aiplane-runtime` | they are the loop and the tool machinery; every consumer of the model list (chat picker, agent resources, the grant cap) is here or above |
 | Verifier tools (`mcp_code`, lookup), host JWT | `aiplane-runtime` (`agents/verifier/`) | *as built (#95):* they are run-scoped synthetic tools like `set_<slot>`, built from the spec and writing through `TrustedWriter`, so they sit beside them; `aiplane-tools` cannot be reached from the run |
 | `/api/v0/agents/*`, `/api/v0/system-principals/*`, grants, shares, versions, embed keys, HiL inbox, the resume endpoint, the internal test chat | `aiplane-api` | JSON handlers |
 | `/api/v0/embed/*` routes and CORS (`rama_server::embed_cors`), `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only; the embed CORS layer reads embed keys, so it cannot sit in `aiplane-core` beside the `/v1` one |
 | The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-agents` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
-| The prompt assistant: the structured call (`pool_choice::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
+| The prompt assistant: the structured call (`model_call::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
 | The agent architect: the persona hook (`persona`, `TurnPolicy::Persona`) and `assist::apply_changes`; its tools, the start route and `draft/restore` (`pages::architect`); `agent_architect_sessions` and draft revisions (`db::architect_sessions`, `db::agents`) | `aiplane-runtime`; `aiplane-api`; `aiplane-agents` | the driver only knows "a prompt and a tool source"; the tools need the route functions (share checks, grant cap, test chat), which live in the API layer, so the API builds the persona per turn and hands it down |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |
@@ -3413,7 +3467,7 @@ use `regex`, and hashing uses the token helpers.
 | #89 output filter | §5 output policy | public main agents are buffered per answer |
 | #90 builder UI, test chat | §2, §6 | draft runs only in the test chat |
 | #91 public endpoint, visitor sessions | §5 | `gwe_` embed keys, `gwv_` visitor tokens in `sessionStorage`, fetch-streamed events, CORS only on `/api/v0/embed/*` |
-| #92 limits, budget, pools, retention | §1, §5 | limits subject `system` plus the spec's `publish.budget`; exact per-visitor and per-IP windows; runs narrowed to granted ∩ listed pools; retention sweeps agent conversations |
+| #92 limits, budget, models, retention | §1, §5 | limits subject `system` plus the spec's `publish.budget`; exact per-visitor and per-IP windows; runs narrowed to granted ∩ named models; retention sweeps agent conversations |
 | #93 injection scanning | §6 | a hook on tool results inside the runner, recorded in `agent_audit` |
 | #94 widget | §5, §6 | script in shadow DOM, not an iframe; own Vite entry |
 | #95 verifiers | §2 `verifiers`, §5 secure input | secure input resolves a `secure_input` suspension; host JWT through `jsonwebtoken`; verifier tools in `aiplane-runtime`, not `aiplane-tools` ([built](#what-95-built)) |
@@ -3424,11 +3478,11 @@ use `regex`, and hashing uses the token helpers.
 | #101 A2A client | §3 dispatch | route target `a2a` (card URL, sealed auth, the route's own `finish` and `budget`); grant kind `a2a_agent` by card URL, admins only; resolve-and-pin SSRF guard with `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; structured `input-required` is a `secure_input` pause ([built](#what-101-built)) |
 | #111 activity log | §5 | `agent_audit` becomes a hash-chained activity log (per conversation, per agent); every model exchange, tool call, state write, turn and decision of an agent run recorded in full, synchronously, failing the run closed; `publish.audit_retention_days`; `/api/v0/agents/{id}/activity` (+ `export`, `verify`); Activity tab ([built](#what-111-built)) |
 | #103 loop route | §3 dispatch | route target `loop` (`worker`, `critic`, `max_iterations`, `budget`); the critic's finish schema must require a boolean `accepted`; the route budget caps the sum through a shared `SpendMeter`; a pausing child is withdrawn ([built](#what-103-built)) |
-| #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message on a small pool and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
-| #116 setup assistant | §2 | overview, routed step assistant and single-step modal over the same spec; admin-mapped model choices (`agents.pool_*`, `tiers` on `agent-resources`); five starter templates validated in six languages ([built](#what-116-built)) |
+| #115 topic guard, structured prompt | §2, §3 | `scope` in the spec; a strict scope's guard classifies each visitor message with a small model and answers out-of-scope ones with the refusal, failing closed; the system message in `## Role`/`## Task`/`## Scope`/`## Tone` sections ([built](#what-115-built)) |
+| #116 setup assistant | §2 | overview, routed step assistant and single-step modal over the same spec; one model picker over what the manager may grant ([Models](#models); the admin-mapped tiers it first shipped are gone); five starter templates validated in six languages ([built](#what-116-built)) |
 | #117 prompt assistant | §2, §5 | `POST …/assist/suggest` and `…/assist/improve`: a proposal per setup step and test cases, each piece checked against the draft and dropped with a reason; writes nothing; a usage row of the manager's and an `assist_suggested` event ([built](#what-117-built)) |
 | #118 agent architect | §2, §6 | a persona of the person's chat (`TurnPolicy::Persona`), not an agent; seven tools through the routes' own functions, no publish; `apply_changes` for step-wise draft edits; draft revisions and `draft/restore` for undo; `POST /api/v0/agent-architect` ([built](#what-118-built)) |
-| #119 widget voice | §5 | `publish.voice` with a named, granted pool per direction; `POST /api/v0/embed/{transcribe,speak,agent}`; transcript returned to the visitor, never sent for them; only a final stored answer is spoken; audio never stored; widget colour from `profile.color` ([built](#what-119-built)) |
+| #119 widget voice | §5 | `publish.voice` with a granted model per direction (named, or the gateway default); `POST /api/v0/embed/{transcribe,speak,agent}`; transcript returned to the visitor, never sent for them; only a final stored answer is spoken; audio never stored; widget colour from `profile.color` ([built](#what-119-built)) |
 | #97 later | — | unchanged |
 
 ## Deferred
