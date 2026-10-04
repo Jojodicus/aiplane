@@ -277,11 +277,6 @@ agents-test-waiting-secure-input = Der Agent bittet den Besucher um einen Wert, 
 agents-test-waiting-approval = Der Agent wartet darauf, dass das Team einen Aufruf von { $tool } freigibt.
 agents-test-waiting-human = Der Agent wartet auf die Antwort eines Menschen.
 agents-test-handoff-inbox-hint = In einem echten Gespräch erscheint diese Anfrage im Posteingang der Manager und Antwortenden des Agenten. Hier im Test-Chat beantworten Sie sie selbst.
-agents-test-value-label = Wert
-agents-test-answer = An das Tool senden
-agents-test-approve = Einmal freigeben
-agents-test-deny = Ablehnen
-agents-test-expires = Läuft ab { $at }
 
 agents-debug-loop-worker = Bearbeiter, Durchlauf { $iteration }
 agents-debug-loop-critic = Prüfer, Durchlauf { $iteration }

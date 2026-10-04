@@ -1,17 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-	answerFor,
-	countFromFrame,
-	focused,
-	itemHeading,
-	itemLink,
-	kindLabel,
-	minutesLeft,
-	prettyArguments,
-	slotText,
-	type InboxItem
-} from './inbox.ts';
+import { countFromFrame, focused, itemHeading, itemLink, kindLabel, type InboxItem } from './inbox.ts';
 
 function item(over: Partial<InboxItem> = {}): InboxItem {
 	return {
@@ -51,26 +40,7 @@ test('the heading names the agent, or the run', () => {
 	assert.equal(kindLabel('human_answer'), 'inbox-kind-handoff');
 });
 
-test('arguments are pretty when they are JSON and kept when they are not', () => {
-	assert.equal(prettyArguments('{"a":1}'), '{\n  "a": 1\n}');
-	assert.equal(prettyArguments('not json'), 'not json');
-	assert.equal(slotText({ slot: 'x', value: 'refund' }), 'refund');
-	assert.equal(slotText({ slot: 'x', value: { id: 1 } }), '{"id":1}');
-	assert.equal(slotText({ slot: 'x', set_by: 'host' }), null);
-});
-
-test('a value answer needs text, the other decisions do not', () => {
-	assert.equal(answerFor('value', '  '), null);
-	assert.deepEqual(answerFor('value', ' yes '), { decision: 'value', value: 'yes' });
-	assert.deepEqual(answerFor('deny', 'ignored'), { decision: 'deny' });
-	assert.deepEqual(answerFor('allow_once', ''), { decision: 'allow_once' });
-});
-
-test('the deadline counts down and the linked item must still be listed', () => {
-	const now = Date.parse('2026-10-02T10:00:00Z');
-	assert.equal(minutesLeft('2026-10-02T10:30:00Z', now), 30);
-	assert.equal(minutesLeft('2026-10-02T09:00:00Z', now), 0);
-	assert.equal(minutesLeft('garbage', now), null);
+test('the linked item must still be listed', () => {
 	assert.equal(focused([item()], new URLSearchParams('item=r1')), 'r1');
 	assert.equal(focused([item()], new URLSearchParams('item=gone')), null);
 });

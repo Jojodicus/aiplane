@@ -2,19 +2,17 @@
 	import {
 		agentsApi,
 		suspensionLabel,
-		answerField,
 		testTurnLabel,
 		type AgentError,
-		type ResumeDecision,
 		type Spec,
 		type Suspension,
 		type TestDebug,
 		type TestTurn
 	} from '$lib/agents';
-	import { slotLabel } from '$lib/agent-setup';
-	import { slotText } from '$lib/inbox';
+	import { waitingFrom, type Answer } from '$lib/suspension';
 	import { t } from '$lib/i18n.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
+	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
 	import DebugPanel from './DebugPanel.svelte';
 
 	/**
@@ -45,7 +43,6 @@
 	let messages = $state<Message[]>([]);
 	let sessionId = $state<string | null>(null);
 	let draft = $state('');
-	let secret = $state('');
 
 	function agentMessage(turn: TestTurn, debug?: TestDebug): Message {
 		return {
@@ -60,7 +57,7 @@
 	}
 
 	/** Answer the pause of message `i`; the reply replaces it, as the same turn continued. */
-	async function answer(i: number, decision: ResumeDecision) {
+	async function answer(i: number, decision: Answer) {
 		const waiting = messages[i];
 		if (busy || !sessionId || !waiting?.turnId || !waiting.suspension) return;
 		busy = true;
@@ -74,7 +71,6 @@
 				decision
 			);
 			messages[i] = agentMessage(turn, turn.debug ?? waiting.debug);
-			secret = '';
 		} catch (err) {
 			error = (err as AgentError).message;
 		} finally {
@@ -171,68 +167,14 @@
 							</div>
 							{#if message.status === 'suspended' && message.suspension}
 								{@const waiting = message.suspension}
-								<div class="card card-border bg-base-200 col-start-2 mt-1 w-full max-w-md">
-									<div class="card-body gap-2 p-3 text-sm">
-										<p>{t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}</p>
-										{#if waiting.message}<p class="font-semibold">{waiting.message}</p>{/if}
-										{#if waiting.context?.visitor_message}
-											<div>
-												<p class="text-xs font-semibold text-base-content/60">{t('inbox-visitor-message')}</p>
-												<blockquote class="whitespace-pre-wrap break-words border-l-2 border-base-300 pl-3">{waiting.context.visitor_message}</blockquote>
-											</div>
-										{/if}
-										{#if waiting.context?.slots?.length}
-											<div>
-												<p class="text-xs font-semibold text-base-content/60">{t('inbox-slots')}</p>
-												<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-													{#each waiting.context.slots as slot (slot.slot)}
-														<dt class="text-base-content/70">{slotLabel(spec, slot.slot, t)}</dt>
-														<dd class="m-0 break-words">{slotText(slot) ?? t('inbox-slot-trusted', { by: slot.set_by ?? '' })}</dd>
-													{/each}
-												</dl>
-											</div>
-										{/if}
-										{#if waiting.kind === 'human_answer'}
-											<p class="text-xs text-base-content/60">{t('agents-test-handoff-inbox-hint')}</p>
-										{/if}
-										<p class="text-xs text-base-content/60">
-											{t('agents-test-expires', { at: new Date(waiting.expires_at).toLocaleString() })}
-										</p>
-										{#if waiting.options.includes('value')}
-											{@const field = answerField(waiting.kind)}
-											<form
-												class={field.secret ? 'join w-full' : 'flex w-full flex-col gap-2'}
-												onsubmit={(e) => { e.preventDefault(); void answer(i, { decision: 'value', value: secret }); }}
-											>
-												{#if field.secret}
-													<input
-														class="input input-sm join-item w-full"
-														type="password"
-														autocomplete="off"
-														bind:value={secret}
-														aria-label={t(field.label)}
-														placeholder={t(field.label)}
-													/>
-												{:else}
-													<textarea class="textarea textarea-sm w-full" rows="3" bind:value={secret} aria-label={t(field.label)} placeholder={t(field.label)}></textarea>
-												{/if}
-												<button class={field.secret ? 'btn btn-sm btn-primary join-item' : 'btn btn-sm btn-primary self-end'} type="submit" disabled={busy || !secret}>
-													{t(field.submit)}
-												</button>
-											</form>
-										{/if}
-										<div class="card-actions justify-end">
-											{#if waiting.options.includes('allow_once')}
-												<button class="btn btn-sm btn-primary" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'allow_once' })}>
-													{t('agents-test-approve')}
-												</button>
-											{/if}
-											<button class="btn btn-sm btn-ghost" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'deny' })}>
-												{t('agents-test-deny')}
-											</button>
-										</div>
-									</div>
-								</div>
+								<SuspensionCard
+									class="col-start-2 mt-1 w-full max-w-md"
+									waiting={waitingFrom(waiting, [], waiting.context ?? null)}
+									lead={t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}
+									note={waiting.kind === 'human_answer' ? t('agents-test-handoff-inbox-hint') : null}
+									{busy}
+									onanswer={(decision) => answer(i, decision)}
+								/>
 							{/if}
 						{:else}
 							<div class="chat-bubble whitespace-pre-wrap">{message.text}</div>

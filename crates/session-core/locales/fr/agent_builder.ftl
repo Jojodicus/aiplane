@@ -277,11 +277,6 @@ agents-test-waiting-secure-input = L’agent demande au visiteur une valeur que 
 agents-test-waiting-approval = L’agent attend que l’équipe approuve un appel à { $tool }.
 agents-test-waiting-human = L’agent attend la réponse d’une personne.
 agents-test-handoff-inbox-hint = Dans une vraie conversation, cette demande apparaît dans la boîte de réception des gestionnaires et répondants de l’agent. Ici, dans le chat de test, vous y répondez vous-même.
-agents-test-value-label = Valeur
-agents-test-answer = Envoyer à l’outil
-agents-test-approve = Approuver une fois
-agents-test-deny = Refuser
-agents-test-expires = Expire { $at }
 
 agents-debug-loop-worker = rédacteur, itération { $iteration }
 agents-debug-loop-critic = relecteur, itération { $iteration }

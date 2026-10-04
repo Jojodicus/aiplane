@@ -277,11 +277,6 @@ agents-test-waiting-secure-input = 智能体请访客输入一个只有访客本
 agents-test-waiting-approval = 智能体正在等待工作人员批准对 { $tool } 的调用。
 agents-test-waiting-human = 智能体正在等待人工答复。
 agents-test-handoff-inbox-hint = 在真实对话中，此请求会出现在该智能体的管理者和应答者的收件箱中。在测试聊天里由你自己回答。
-agents-test-value-label = 值
-agents-test-answer = 发送给工具
-agents-test-approve = 批准一次
-agents-test-deny = 拒绝
-agents-test-expires = 过期时间 { $at }
 
 agents-debug-loop-worker = 执行者，第 { $iteration } 轮
 agents-debug-loop-critic = 评审者，第 { $iteration } 轮

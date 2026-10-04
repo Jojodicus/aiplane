@@ -10,27 +10,10 @@
  * agent behind it.
  */
 import { ApiError, request } from './api.ts';
+import type { Answer, DecisionKind, HandoffContext, SuspensionKind } from './suspension.ts';
 
-export type InboxKind = 'approval' | 'human_answer';
+export type InboxKind = Exclude<SuspensionKind, 'secure_input'>;
 export type Standing = 'manager' | 'responder' | 'owner';
-export type DecisionKind = 'allow_once' | 'deny' | 'value';
-
-export interface InboxSlot {
-	slot: string;
-	value?: unknown;
-	set_by?: string;
-}
-
-export interface InboxContext {
-	route?: string;
-	question?: string;
-	visitor_message?: string | null;
-	slots?: InboxSlot[];
-	lang?: string;
-	inbox?: string | null;
-	notify?: string[] | null;
-	transcript?: { role: 'user' | 'assistant'; text: string }[];
-}
 
 export interface InboxItem {
 	id: string;
@@ -42,15 +25,10 @@ export interface InboxItem {
 	title?: string;
 	question?: string;
 	call?: { name: string; arguments: string };
-	context?: InboxContext;
+	context?: HandoffContext;
 	options: DecisionKind[];
 	created_at: string;
 	expires_at: string;
-}
-
-export interface InboxAnswer {
-	decision: DecisionKind;
-	value?: string;
 }
 
 /** The message and code of a failed inbox call, out of the gateway's envelope. */
@@ -69,7 +47,7 @@ export const INBOX_EVENTS = '/api/v0/agents/inbox/events';
 
 export const inboxApi = {
 	list: () => request<{ items: InboxItem[]; count: number }>('/api/v0/agents/inbox').then((r) => r.items),
-	answer: (id: string, answer: InboxAnswer) =>
+	answer: (id: string, answer: Answer) =>
 		request<{ turn_id: string }>(`/api/v0/agents/inbox/${encodeURIComponent(id)}/answer`, post(answer))
 };
 
@@ -102,35 +80,6 @@ export function itemLink(item: InboxItem, base = ''): { href: string; key: strin
 	if (item.standing === 'owner') return { href: `${base}/chat/${item.session_id}`, key: 'inbox-open-chat' };
 	if (item.standing === 'manager' && item.agent) return { href: `${base}/agents/${item.agent.id}`, key: 'inbox-open-agent' };
 	return null;
-}
-
-/** An approval's arguments, pretty-printed when they are JSON. */
-export function prettyArguments(raw: string): string {
-	try {
-		return JSON.stringify(JSON.parse(raw), null, 2);
-	} catch {
-		return raw;
-	}
-}
-
-/** A slot's value for display: strings as they are, everything else as JSON. */
-export function slotText(slot: InboxSlot): string | null {
-	if (slot.value === undefined) return null;
-	return typeof slot.value === 'string' ? slot.value : JSON.stringify(slot.value);
-}
-
-/** Minutes until the deadline, never negative; `null` for an unreadable date. */
-export function minutesLeft(expiresAt: string, now = Date.now()): number | null {
-	const at = Date.parse(expiresAt);
-	if (Number.isNaN(at)) return null;
-	return Math.max(0, Math.ceil((at - now) / 60000));
-}
-
-/** The answer a decision button sends; `null` when a `value` answer has no text. */
-export function answerFor(decision: DecisionKind, text: string): InboxAnswer | null {
-	if (decision !== 'value') return { decision };
-	const value = text.trim();
-	return value ? { decision, value } : null;
 }
 
 /** The item a notification link (`?item=…`) names, if it is still listed. */

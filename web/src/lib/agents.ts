@@ -10,7 +10,7 @@
  * attached to the field they are about (by `path`).
  */
 import type { ActivityPage, Verification } from './agent-activity.ts';
-import type { InboxContext } from './inbox.ts';
+import type { Answer, HandoffContext, SuspensionView } from './suspension.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request, type ApiIssue, type CapabilityItem } from './api.ts';
@@ -238,16 +238,9 @@ export interface TestDebug {
 }
 
 /** What a suspended turn waits for, as a manager sees it. */
-export interface Suspension {
-	request_id: string;
-	kind: 'approval' | 'secure_input' | 'human_answer';
-	message?: string;
-	tool_call_id?: string;
-	tool?: string;
-	options: ('allow_once' | 'deny' | 'value')[];
-	expires_at: string;
+export interface Suspension extends SuspensionView {
 	/** A hand-off to a person in the test chat: what the Inbox would show whoever answers it. */
-	context?: InboxContext;
+	context?: HandoffContext;
 }
 
 export interface TestTurn {
@@ -286,9 +279,6 @@ export interface AssistSuggestion {
 }
 
 export type ImproveField = 'task' | 'tone' | 'refusal';
-
-/** The answer to a suspension: the decision, and the value only `value` carries. */
-export type ResumeDecision = { decision: 'allow_once' } | { decision: 'deny' } | { decision: 'value'; value: string };
 
 /* ---- errors --------------------------------------------------------- */
 
@@ -399,7 +389,7 @@ export const agentsApi = {
 			`/api/v0/agents/${id}/test-turn`,
 			json('POST', sessionId ? { message, session_id: sessionId } : { message })
 		),
-	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: ResumeDecision) =>
+	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: Answer) =>
 		call<TestTurn>(
 			`/api/v0/agents/${id}/conversations/${sessionId}/turns/${turnId}/resume`,
 			json('POST', { ...answer, request_id: requestId })
@@ -596,17 +586,6 @@ export function suspensionLabel(kind: Suspension['kind']): string {
 		default:
 			return 'agents-test-waiting-human';
 	}
-}
-
-/**
- * How the test chat takes a pause's `value`: a code the visitor would type is
- * masked, a staff member's answer to a handoff is plain text they read back,
- * labelled as in the inbox.
- */
-export function answerField(kind: Suspension['kind']): { secret: boolean; label: string; submit: string } {
-	return kind === 'human_answer'
-		? { secret: false, label: 'inbox-answer-label', submit: 'inbox-send-answer' }
-		: { secret: true, label: 'agents-test-value-label', submit: 'agents-test-answer' };
 }
 
 export function testTurnLabel(status: string): string {

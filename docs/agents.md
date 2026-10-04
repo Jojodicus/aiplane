@@ -1323,7 +1323,8 @@ runs. Migration `0077_agent_builder.sql`.
   a handoff stored in the pause's `run_context` (`{handoff: {route, question,
   visitor_message, slots, lang, inbox, notify, transcript?}}`).
   `SuspendRequest` gained `context` for this. `slots` is the model's view
-  (a value only where the model wrote it, `set_by` otherwise), so a
+  (a value only where the model wrote it, `set_by` otherwise, and the slot's
+  `label` from its `description` when it has one), so a
   verifier's value never reaches the inbox; the transcript (the last 20 turns,
   each cut to 2000 characters) goes along only with `transcript: true`. The
   handoff is audited as `human_handoff` with the run chain (#100's analytics

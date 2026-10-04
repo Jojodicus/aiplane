@@ -591,19 +591,17 @@ are in `web/src/lib/components/agents/`.
   topic-guard verdict, the routing decision, sub-agent calls with outcome, and
   tool-call decisions. "New conversation"
   drops the `session_id`.
-- **A paused test turn.** A reply with `status: suspended` shows what it
-  waits for (`suspensionLabel` per kind, the tool's message, the deadline)
-  with a password field for a `value` and Approve once / Deny buttons, as its
-  `options` allow. The answer goes to `POST
+- **A paused test turn.** A reply with `status: suspended` shows the
+  [suspension card](#suspension-card), led by what it waits for
+  (`suspensionLabel` per kind). The answer goes to `POST
   /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume`, and its
   reply replaces the paused one, since the same turn continued. In a test
   conversation the resume answers with a fresh debug view too, so a verifier's
   slot or a gate the decision opened shows on the reply. In a test
   conversation the manager may answer a `secure_input` too. A hand-off to a
-  person (`human_answer`) shows its context under the question — the
-  visitor's last message and what the agent collected, by slot label — and a
-  line saying that in a live conversation it lands in the Inbox of the
-  agent's managers and responders. The card sits in the bubble's column of
+  person (`human_answer`) shows its context as the inbox would, and a line
+  saying that in a live conversation it lands in the Inbox of the agent's
+  managers and responders. The card sits in the bubble's column of
   the daisyUI `chat` grid (`col-start-2`).
 - **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
@@ -791,13 +789,10 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
-- **An item** shows the agent (or the run's title), its kind and deadline,
-  and what the person needs to decide: a handoff's question, the visitor's
-  last message, the slots and, when the route hands it over, the transcript;
-  an approval's tool and its arguments, pretty-printed. The buttons follow
-  the item's `options`: Approve once / Deny, or an answer field with Send /
-  Decline. A manager's item links to the agent, an owner's to the chat; a
-  responder's links nowhere, since they may open nothing else.
+- **An item** is a [suspension card](#suspension-card) under a heading with
+  the agent (or the run's title), its kind and when it was asked. A
+  manager's item links to the agent, an owner's to the chat; a responder's
+  links nowhere, since they may open nothing else.
 - **`?item=<id>`**, the link every notification carries, scrolls to and
   highlights that item.
 - **Live.** `web/src/lib/inbox.svelte.ts` keeps one `EventSource` per tab on
@@ -818,6 +813,30 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
   whether the message carries details, and its language). A `read` share sees
   both read-only.
 
+
+### Suspension card
+
+`SuspensionCard.svelte` (`web/src/lib/components/`) is the one card for
+whatever a paused turn waits for, wherever it is answered: the inbox, the
+agent builder's test chat and a person's own chat. Its pure half is
+`web/src/lib/suspension.ts` (unit-tested in `suspension.test.ts`).
+
+- **What it shows.** A hand-off's question, the visitor's last message, the
+  slots by their labels (`slotLine`: the `label` the server copies from
+  `state.<slot>.description` when the hand-off is stored, the hand-off and
+  identity slots by catalog name, else the key; a value the model may not see
+  as who vouched for it), the transcript when the route hands it over; an
+  approval's tool and its arguments, pretty-printed; the minutes left.
+- **What it offers** is exactly the request's `options` (`decisionButtons`):
+  Approve once and Deny for an approval, an answer field with its submit
+  button and Decline for a value. A request offering nothing (a visitor
+  waiting for staff) shows no button at all. A `secure_input` value is typed
+  into a password field, a staff answer to a hand-off into a text area
+  (`answerField`); an empty answer is refused in place.
+- **Where it differs** is passed in, never decided inside: a `lead` line (the
+  test chat's `agents-test-waiting-*`), a `note`, a heading snippet (the
+  inbox's), the answer callback, and the error to show.
+- **Strings** are `suspension-*` in `suspension.ftl`.
 ## Reactive state
 
 Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as factories rather than classes — `$state` in a module closure is the documented universal-reactivity pattern, and the returned object's methods close over it directly.
