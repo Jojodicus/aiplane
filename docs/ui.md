@@ -129,7 +129,12 @@ their private skills, and `/tools/browser` the setup of the browser-control
 extension: live status through `browser-bridge.ts`, the store link, the
 `.zip` download, and the steps (see [`browser-control.md`](browser-control.md#for-users)). `/settings` contains the account summary;
 `/settings/notifications`, `/settings/memory`, and `/settings/tokens` keep the
-corresponding personal controls separate. The skills and notifications tabs
+corresponding personal controls separate. The memory page's Preferences card
+takes what it says about standing context from `GET /api/v0/memories` →
+`preferences`: `in_context` is the same `recall` gate the chat driver applies
+(`openai_driver::preferences_in_context`), and the count and character limits
+are the driver's own constants, so the card cannot promise more than a turn
+sends. The skills and notifications tabs
 follow their optional feature switches. The OAuth callback and connect/retry POST endpoints stay
 under `/integrations/*`; they redirect back to `/tools/integrations`.
 The built-in tools tab shows the full registered catalog. A tool that lacks

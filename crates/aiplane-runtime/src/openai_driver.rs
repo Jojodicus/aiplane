@@ -2403,7 +2403,7 @@ async fn build_request_context(
 /// How many of the user's preferences the standing section will consider,
 /// newest first. A sanity bound on the query, not the real limit — the
 /// character budget below is what usually decides.
-const PREFERENCE_FETCH_LIMIT: i64 = 50;
+pub const PREFERENCE_FETCH_LIMIT: i64 = 50;
 
 /// Character budget for the rendered preference list. This text rides in the
 /// leading system message on *every* turn, so it is the cache prefix and a
@@ -2412,7 +2412,22 @@ const PREFERENCE_FETCH_LIMIT: i64 = 50;
 /// it; the budget does. At least one preference is always rendered, even if it
 /// blows the budget on its own — a user with one very long preference should
 /// still have it honoured.
-const PREFERENCE_CHAR_BUDGET: usize = 3_000;
+pub const PREFERENCE_CHAR_BUDGET: usize = 3_000;
+
+/// Whether a person's preferences ride in the standing context: only while
+/// `recall` is among their tools, i.e. memory is granted and switched on. The
+/// memory page asks the same question, so the two cannot disagree.
+pub async fn preferences_in_context(
+    state: &crate::server::state::AppState,
+    roles: &[String],
+    user_id: &str,
+) -> bool {
+    state
+        .allowed_tools_for_user(roles, user_id)
+        .await
+        .iter()
+        .any(|id| id == RECALL_TOOL_ID)
+}
 
 /// The user's standing preferences, plus a pointer to the memories that are
 /// *not* being shipped.
@@ -2445,11 +2460,8 @@ async fn build_preferences_section(d: &OpenAiDriver) -> Option<String> {
     if counts.is_empty() {
         return None;
     }
-    let allowed = d
-        .state
-        .allowed_tools_for_principal(&d.tool_ctx.principal)
-        .await;
-    if !allowed.iter().any(|id| id == RECALL_TOOL_ID) {
+    let roles = d.tool_ctx.principal.user_roles()?;
+    if !preferences_in_context(&d.state, roles, user_id).await {
         return None;
     }
     let preferences: Vec<String> = if counts.preference > 0 {

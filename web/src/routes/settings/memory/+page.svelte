@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { base } from '$app/paths';
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import { groupMemories, MEMORY_KINDS, type Memory, type MemoryKind } from '$lib/memory';
+	import { groupMemories, MEMORY_KINDS, type Memory, type MemoryKind, type PreferenceContext } from '$lib/memory';
 
 	let memories = $state<Memory[]>([]);
+	let preferences = $state<PreferenceContext | null>(null);
 	let drafts = $state<Record<string, string>>({});
 	let error = $state<string | null>(null);
 	let notice = $state<string | null>(null);
@@ -29,8 +31,9 @@
 
 	async function refresh() {
 		try {
-			const data = await adminJson<{ memories: Memory[] }>('/api/v0/memories');
+			const data = await adminJson<{ memories: Memory[]; preferences: PreferenceContext }>('/api/v0/memories');
 			memories = data.memories;
+			preferences = data.preferences;
 			drafts = Object.fromEntries(memories.map((memory) => [memory.id, memory.content]));
 			error = null;
 		} catch (caught) {
@@ -94,7 +97,18 @@
 				     conversation, while project notes and facts wait to be looked
 				     up. That decides which card something belongs in, so it is
 				     said here rather than left to be discovered. -->
-				<p class="text-sm text-base-content/60">{t(`memory-kind-${memoryKind}-hint`)}</p>
+				{#if memoryKind === 'preference'}
+					{#if preferences}
+						<p class="text-sm text-base-content/60">{t('memory-kind-preference-hint', { count: preferences.max_count, chars: preferences.char_budget })}</p>
+						{#if !preferences.in_context}
+							<div class="alert alert-warning alert-soft text-sm">
+								<span>{t('memory-preference-not-in-context')} <a class="link" href="{base}/tools">{t('nav-tools')}</a></span>
+							</div>
+						{/if}
+					{/if}
+				{:else}
+					<p class="text-sm text-base-content/60">{t(`memory-kind-${memoryKind}-hint`)}</p>
+				{/if}
 				<ul class="flex flex-col divide-y divide-base-300">
 					{#each grouped[memoryKind] as memory (memory.id)}
 						<li class="flex items-center gap-2 py-2">

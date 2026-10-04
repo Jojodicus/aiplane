@@ -13,6 +13,7 @@ use rama::http::{Request, Response, StatusCode};
 
 use aiplane_core::server::auth::token as auth_token;
 use aiplane_core::server::db;
+use aiplane_runtime::openai_driver;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::scheduled::{self, cron::Cron};
 use aiplane_runtime::server::webhooks;
@@ -22,13 +23,22 @@ use super::{bad_request, internal, json_error, json_ok};
 // ---------------------------------------------------------------------------
 // Memories
 
-/// GET /api/v0/memories — the caller's structured memories.
+/// GET /api/v0/memories — the caller's structured memories, and whether
+/// their preferences reach the assistant's standing context.
 pub async fn memories_list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, user) = require_session_json!(state, req);
+    let in_context = openai_driver::preferences_in_context(&state, &user.roles, &user.id).await;
     match db::user_memories::list_for_user(&state.db, &user.id, 500).await {
         Ok(rows) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "memories": rows.iter().map(memory_json).collect::<Vec<_>>() }),
+            serde_json::json!({
+                "memories": rows.iter().map(memory_json).collect::<Vec<_>>(),
+                "preferences": {
+                    "in_context": in_context,
+                    "max_count": openai_driver::PREFERENCE_FETCH_LIMIT,
+                    "char_budget": openai_driver::PREFERENCE_CHAR_BUDGET,
+                },
+            }),
         ),
         Err(err) => internal(err),
     }

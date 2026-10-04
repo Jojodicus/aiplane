@@ -2130,3 +2130,82 @@ async fn setup_api_state_and_gates() {
         serde_json::json!(true)
     );
 }
+
+/// The memory page says whether preferences really reach the assistant: the
+/// same `recall` gate the standing context uses, and the limits it applies.
+#[tokio::test]
+async fn memories_list_reports_whether_preferences_reach_the_assistant() {
+    use aiplane_core::server::db::{self, user_tool_prefs};
+    use aiplane_core::server::rbac::Resolver;
+    use aiplane_core::server::rbac::config::{RbacConfig, RoleConfig};
+    use aiplane_runtime::server::AppState;
+    use aiplane_runtime::server::tools::ToolRegistry;
+    use aiplane_tools::memory::{Forget, Recall, Remember, UpdateMemory};
+
+    let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+    let upstreams =
+        aiplane_core::server::upstreams::UpstreamRegistry::new(&std::collections::HashMap::new())
+            .unwrap();
+    let tools = std::sync::Arc::new(
+        ToolRegistry::new()
+            .with(Remember)
+            .with(Recall)
+            .with(UpdateMemory)
+            .with(Forget),
+    );
+    let rbac = std::sync::Arc::new(
+        Resolver::build(
+            RbacConfig {
+                default_role: Some("all".into()),
+                mappings: vec![],
+            },
+            vec![RoleConfig {
+                id: "all".into(),
+                admin: false,
+                models: vec![],
+                tools: vec!["*".into()],
+                skills: vec![],
+            }],
+        )
+        .unwrap(),
+    );
+    let app_state = AppState::new(common::test_config(), pool.clone(), upstreams, tools, rbac);
+    let state = aiplane::rama_server::RamaState::new(
+        app_state,
+        aiplane::rama_server::SessionStore::new(pool, common::TEST_SECRET),
+        aiplane_core::server::usage::UsageHandle::disabled(),
+    );
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    let db = state.db.clone();
+    let app = common::app(state);
+
+    let on: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/memories", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(on["preferences"]["in_context"], true, "{on}");
+    assert_eq!(on["preferences"]["max_count"], 50, "{on}");
+    assert_eq!(on["preferences"]["char_budget"], 3000, "{on}");
+
+    user_tool_prefs::set(&db, "alice", "memory", false)
+        .await
+        .unwrap();
+    let off: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/memories", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(
+        off["preferences"]["in_context"], false,
+        "memory switched off keeps preferences out of the context: {off}"
+    );
+}
