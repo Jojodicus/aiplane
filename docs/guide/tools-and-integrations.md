@@ -48,7 +48,7 @@ Open **Tools → Browser** (`/tools/browser`) and follow the status card. It dis
 4. Switch the extension on using its own controls. A button in AIplane can open the extension's activation UI, but the activation decision happens in the extension.
 5. Keep your conversation open and ask the assistant to perform the browser task.
 
-The assistant works in its own window and an **Assistant** tab group. The extension icon turns green while active and Chrome shows a debugging notification. Switch it off from the extension when finished. In the extension settings, restrict allowed sites when appropriate. Page content can contain instructions aimed at an assistant; examine consequential actions carefully.
+The assistant works in its own window and an **Assistant** tab group. The extension icon is green on AIplane and assistant-window tabs while active, and grey on other pages. Chrome also shows a debugging notification over the assistant window. You can switch it off from the toolbar on any tab. In the extension settings, restrict allowed sites when appropriate. Page content can contain instructions aimed at an assistant; examine consequential actions carefully.
 
 The assistant can capture the current viewport, a full page, one referenced element or a selected rectangle. These captures go to the assistant; the separate `show_screenshot` capability is used when a capture should appear in the conversation for you. The extension also records an action audit for the operator, including its outcome, while omitting page URLs, typed text, page contents and screenshot images. See the [tool inventory](../tools-inventory.md) for screenshot controls and availability.
 

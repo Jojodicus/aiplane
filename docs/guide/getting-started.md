@@ -7,11 +7,11 @@ AIplane gives you browser conversations and access to the models, tools and inte
 1. Open your organization's AIplane address.
 2. Use the sign-in page and complete the configured identity provider's login.
 3. AIplane opens a conversation. The home page and `/chat` both lead to the chat surface; there is no separate dashboard at `/`.
-4. On a desktop-sized screen, choose an available model in the conversation header.
+4. Choose an available model in the conversation header. On a narrow screen, the selectors move to a full-width row below the conversation actions.
 5. Type a message and press **Enter**, or select **Send**. Use **Shift+Enter** for a newline.
 6. Read the reply as it arrives. Tool activity and requests for your input appear in the conversation.
 
-The model list reflects the installation's configuration and your permissions. A model missing from that list is a question for your administrator. Model selection controls are currently hidden on narrow screens; a wider viewport is needed to change the model in the header.
+The model list reflects the installation's configuration and your permissions. A model missing from that list is a question for your administrator. The model, transcription and spoken-reply voice selectors remain available on narrow screens; they move below the conversation actions.
 
 Continue with [Conversations](chat.md) to manage messages, sharing and exports, or [Files and documents](files-and-canvas.md) to work with attachments.
 

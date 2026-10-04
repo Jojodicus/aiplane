@@ -72,7 +72,7 @@ For a known model, AIplane skips unhealthy or drained backends and routes to a h
 4. For a chat model, verify its context window, reasoning format and capabilities against the upstream's actual configuration.
 5. Save. Return to the catalog and inspect the configured values.
 
-Chat overrides include reasoning styles `none`, `qwen`, `openai`, `glm`, `anthropic` and `ollama`; token budgets or effort values for standard/deep/max reasoning; vision, tools, structured output, audio input, PDF input and parallel tools; and fallback models for vision and tools. Capability fields distinguish **unknown**, **enabled** and **disabled**. Unknown is not proof of support.
+Chat overrides include reasoning styles `none`, `qwen`, `openai`, `glm`, `anthropic` and `ollama`; token budgets or effort values for standard/deep/max reasoning; vision, tools, structured output, audio input, PDF input and parallel tools; and fallback models for vision and tools. Capability fields distinguish **unknown**, **enabled** and **disabled**. Unknown is not proof of support. The vision fallback describes images returned by tools only when vision is explicitly **Disabled**; Unknown and Enabled leave the image unchanged. If describing an image fails, AIplane keeps the original image part.
 
 The context-window hint warns when an override exceeds the detected upstream window: AIplane cannot enlarge the upstream's actual context capacity. The TOML defaults field accepts model request defaults. **Clear overrides** removes a chat model's overrides; non-chat model editors expose pricing only.
 

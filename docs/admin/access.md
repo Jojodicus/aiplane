@@ -14,7 +14,7 @@ Open `/admin/groups`. The page has **Groups**, **Identity**, **Tools** and **Ski
 
 The matrices edit the same group grants as the group form. Tool rows include individual tools and discovered families such as an MCP connector or ComfyUI. A wildcard grants a wider set than individual entries; inspect the resulting matrix before using it. Deleting a group requires confirmation and changes the permissions resolved through that group.
 
-`can_manage_agents` is the permission for the agent builder; administrator access implies it. The Groups form does not expose this flag. For a non-administrator builder group, use the session-authenticated administration API: read `GET /api/v0/admin/groups`, take the group's complete object, set `can_manage_agents` to `true`, and submit it with `PUT /api/v0/admin/groups`. Preserve its OIDC/tool/skill lists and administrator/default flags: the endpoint replaces those values. Omitting `can_manage_agents` leaves that particular flag unchanged. Verify the returned group afterwards.
+In the group's form, enable **Agent manager** to let its members create agents and read or edit agents shared with them. Administrator groups already have this permission, so the form shows it as enabled and unavailable to change. This permission does not grant access to every model, connector or tool: agents still need their own resource grants, described in [agent permissions](../agent-guide/permissions.md).
 
 Builder permission does not itself give an agent permission to use every model or tool: the agent has separate grants, documented in [agent permissions](../agent-guide/permissions.md).
 

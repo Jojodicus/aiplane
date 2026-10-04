@@ -14,6 +14,8 @@ Most fields reload without restart. The declared restart fields are `comfyui.bas
 
 Settings are stored in the database. Secrets are write-only: the UI shows whether one is set, not its plaintext. Leaving a secret input blank during Save preserves the stored value. Use its explicit Clear action, with confirmation, to remove it. Clearing a stored setting uses its built-in fallback; it does not re-import an arbitrary value from a configuration file.
 
+Save validates typed settings before storing them. Invalid whole numbers, negative integer values, non-numeric or non-finite values, and unlisted choice values show an inline error and leave the stored setting unchanged. Decimal settings accept either a period or a comma as the decimal separator.
+
 The [field reference](settings-reference.md) lists every declared field and its meaning. The operating system's persistent paths and externally reachable services remain deployment responsibilities.
 
 ## Chat and documents

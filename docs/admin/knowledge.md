@@ -18,6 +18,8 @@ Before creating a collection, enable RAG with a persistent data directory in [sy
 
 The editor proposes chunk size 800 and overlap 100, a daily refresh interval and Git ref `main`. These are form defaults: change them to match your source. Chunk size must be positive and overlap must satisfy `0 <= overlap < chunk_size`. Refresh is in minutes; presets are on demand (`0`), hourly (`60`), daily (`1440`) and weekly (`10080`). A custom stored interval is displayed without rounding it to a preset.
 
+After creating a Git collection, the indexing notice names the ref that was saved. Non-Git sources do not show a Git ref.
+
 ### Source-specific setup
 
 | Source | What to configure and verify |

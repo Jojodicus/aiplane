@@ -113,9 +113,13 @@ Examples of its task families:
 | `/api/v0/admin/*` | Administrative models, grants, settings and catalogs; administration guides. |
 | `/api/v0/setup/*` | Verified setup/recovery state machine. |
 
-The running gateway supplies `/openapi.json`, generated from registered
-`/api/v0` routes. It enumerates operations and path parameters; its current
-generic request/response schemas are not a complete typed payload reference.
+The running gateway supplies `/openapi.json`, a typed OpenAPI contract for the
+registered `/api/v0` routes. It describes operations, path parameters, request
+and response schemas, security requirements and the shared error envelope.
+Use it as the machine-readable contract for the exact build you are calling.
+Most `/api/v0` refusals return an `error` object with a readable `message` and
+machine-readable `type` and `code`; validation responses may also include
+field-level issues. Check each operation's OpenAPI response schema for details.
 
 ### Conversation events
 
@@ -147,13 +151,16 @@ identity modes, origins, A2A configuration and their limitations.
 
 | Status | Typical condition | What to inspect |
 |---|---|---|
-| `400` | Invalid request/model field or operation arguments | Body and the handler's reported validation error. |
+| `400` | Malformed request or invalid operation arguments | Body and the handler's reported validation error. |
 | `401` | Missing, expired, revoked or invalid credential/session | Credential type for this interface. |
 | `403` | Explicit model restriction or permission denial | Credential and principal grants/policies. |
 | `404` | Missing resource or undiscoverable model | Actual IDs and accessible pools/resources. |
+| `409` | Operation conflicts with current resource state, such as deleting an active token or repeating a completed revocation | Resource state and the error code/message. |
 | `413` | Request body cap exceeded | Route's upload/body cap. |
+| `422` | Request is readable but fails a resource-specific validation contract, such as an agent specification | Returned error code and validation issues. |
 | `429` | Rate, token quota or spend limit exceeded | Applicable global/group/user/token rule and period. |
-| `502`/`503` | Upstream, routing or prerequisite failure | Error code, backend/service configuration and logs. |
+| `502` | Upstream failure | Error code, backend configuration and logs. |
+| `503` | Required service or feature is not configured/available, or no upstream capacity is available | Error code, feature prerequisites, backend/service configuration and logs. |
 
 OpenAI model paths generally use an `error` object with message/type/code;
 Anthropic paths use the Anthropic error dialect. Do not assume every

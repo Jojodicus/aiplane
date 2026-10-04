@@ -33,13 +33,12 @@ permissions and this line, using your securely stored key:
 AIPLANE_SESSION_KEY=<your-64-character-hex-key>
 ```
 
-The supplied Compose example also validates required environment values and
-files for optional services when you select only `aiplane`. Set
-`OCR_VLLM_BASE_URL` to the actual OCR server URL and prepare the Google Workspace
-MCP environment file listed in the Compose configuration before running it.
-If you do not operate those services, use the standalone container instructions
-in [Get started](../getting-started.md), or remove their service definitions
-from your deployment copy.
+Optional services are behind Compose profiles. Starting only `aiplane` requires
+just `deploy/aiplane.env`; prerequisites for OCR, sandbox and Google Workspace
+are checked when their profiles are enabled. To use Google Workspace, prepare
+its environment file and start with `--profile google-workspace`. For OCR, set
+`OCR_VLLM_BASE_URL` before enabling `--profile ocr`. Enable `--profile sandbox`
+only after configuring the runner and its host requirements.
 
 Once the example configuration validates, start AIplane:
 
@@ -59,8 +58,8 @@ choices, not immutable version pins.
 ### Optional services
 
 - **Google Workspace MCP:** configure its example environment file and start
-  the `google-workspace-mcp` service. The browser and gateway must both reach
-  the external URL used in its OAuth flow.
+  the `google-workspace-mcp` service with `--profile google-workspace`. The
+  browser and gateway must both reach the external URL used in its OAuth flow.
 - **OCR:** the `ocr` profile starts the PDF OCR adapter. Set
   `OCR_VLLM_BASE_URL` to your Unlimited-OCR server's `/v1` URL, then configure
   the OCR endpoint in AIplane's settings.
