@@ -57,10 +57,10 @@
 		<h4 class="mb-1 font-semibold">{t('agents-debug-routes')}</h4>
 		{#each debug.routes as route (route.route)}
 			<div class="mb-2">
-				<div class="flex items-center gap-2">
-					<span>{route.description || route.route}</span>
-					{#if route.description}<span class="font-mono text-xs text-base-content/50">{route.route}</span>{/if}
-					<span class="badge badge-sm {route.open ? 'badge-success' : 'badge-warning'}">{route.open ? t('agents-gate-open') : t('agents-gate-closed')}</span>
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+					<span class="min-w-0 break-words">{route.description || route.route}</span>
+					{#if route.description}<span class="min-w-0 break-all font-mono text-xs text-base-content/50">{route.route}</span>{/if}
+					<span class="badge badge-sm shrink-0 {route.open ? 'badge-success' : 'badge-warning'}">{route.open ? t('agents-gate-open') : t('agents-gate-closed')}</span>
 				</div>
 				{#if route.missing.length}
 					<ul class="ml-4 list-disc text-xs text-base-content/70">
