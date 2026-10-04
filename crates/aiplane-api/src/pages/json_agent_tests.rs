@@ -23,7 +23,10 @@ use serde_json::{Value, json};
 
 use super::json_agents::{agent_at, parse_spec};
 use super::json_principals::require_agent_manager;
-use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
+use super::{
+    bad_request, internal, json_error, json_error_with, json_ok, no_content, not_found,
+    raw_path_segment,
+};
 use aiplane_agents::db::agent_tests::{self as tests_db, CaseBody, CaseResult, TestCase};
 use aiplane_agents::db::agents::{self as agents_db, Access};
 use aiplane_runtime::agents::eval::{self, EvalIssue, RubricJudge};
@@ -62,16 +65,14 @@ fn invalid_case(issues: &[EvalIssue]) -> Response {
         1 => String::new(),
         n => format!(" (and {} more — see `issues`)", n - 1),
     };
-    json_ok(
+    json_error_with(
         StatusCode::UNPROCESSABLE_ENTITY,
-        json!({
-            "error": {
-                "message": format!("cannot save the test case: at `{}`, {}{more}", first.path, first.message),
-                "type": "invalid_test_case",
-                "code": "invalid_test_case",
-                "issues": issues,
-            }
-        }),
+        "invalid_test_case",
+        &format!(
+            "cannot save the test case: at `{}`, {}{more}",
+            first.path, first.message
+        ),
+        serde_json::Map::from_iter([("issues".to_string(), json!(issues))]),
     )
 }
 
@@ -377,16 +378,11 @@ pub async fn run_detail(State(state): State<Arc<RamaState>>, req: Request) -> Re
 }
 
 fn guard_refusal(message: String, failing: Value) -> Response {
-    json_ok(
+    json_error_with(
         StatusCode::UNPROCESSABLE_ENTITY,
-        json!({
-            "error": {
-                "message": message,
-                "type": "agent_tests_failing",
-                "code": "agent_tests_failing",
-                "failing": failing,
-            }
-        }),
+        "agent_tests_failing",
+        &message,
+        serde_json::Map::from_iter([("failing".to_string(), failing)]),
     )
 }
 

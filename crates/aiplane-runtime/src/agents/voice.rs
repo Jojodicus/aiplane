@@ -32,8 +32,9 @@ use rama::bytes::Bytes;
 use serde_json::{Value, json};
 use session_core::i18n::{Lang, t};
 
-use super::audit::{self, RunLog, SideExchange};
+use super::audit::{self, RunLog};
 use crate::rama_server::state::RamaState;
+use crate::server::side_call::SideExchange;
 
 /// The longest a voice call may take upstream.
 const VOICE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -362,7 +363,7 @@ async fn finish<T>(
         conversation.visitor_id,
         turn_id,
     );
-    log.record(&state.db, exchange).await;
+    log.record(&state.db, &exchange).await;
     audit::anchor(
         &state.db,
         &conversation.principal.id,

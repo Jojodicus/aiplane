@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
@@ -502,16 +502,16 @@ pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> R
         Ok(b) => b,
         Err(resp) => return resp,
     };
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 128 {
-        return bad_request("token name must be 1..=128 characters");
-    }
-    let ttl_days = body
-        .ttl_days
-        .unwrap_or(state.config().gateway.token_ttl_days)
-        .clamp(1, 365 * 5);
+    let (name, expires_at) = match token::token_terms(
+        &body.name,
+        body.ttl_days,
+        state.config().gateway.token_ttl_days,
+        Timestamp::now(),
+    ) {
+        Ok(terms) => terms,
+        Err(message) => return bad_request(message),
+    };
     let (plaintext, hash) = token::mint_system();
-    let expires_at = Timestamp::now() + SignedDuration::from_hours(24 * ttl_days);
     match sp_db::insert_token(&state.db, &p.id, name, &hash, expires_at, &manager.id).await {
         Ok(t) => json_ok(
             StatusCode::CREATED,

@@ -264,6 +264,7 @@ agents-an-requests-desc = Включая субагентов и маршрут�
 agents-an-tokens = Токены
 agents-an-cost = Стоимость
 agents-an-chart-title = По дням
+agents-an-metric = Показатель
 agents-an-chart-empty = За этот период активности не было.
 agents-an-refusals = Отказы
 agents-an-routes-chosen = Выбранные маршруты

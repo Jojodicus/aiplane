@@ -45,6 +45,7 @@ use aiplane_runtime::agents::resume::{
 };
 use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::agents::spec_cache::CompiledSpec;
+use aiplane_runtime::rama_server::auth::parse_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 use tokio::time::Instant;
@@ -357,16 +358,12 @@ struct Visitor {
     live: Live,
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let rest = value.strip_prefix("Bearer ")?.trim();
-    (!rest.is_empty()).then_some(rest)
-}
-
 /// Resolve and check the visitor behind `req`. Only a request that passes
 /// every check slides the session's expiry.
 async fn visitor(state: &RamaState, req: &Request) -> Result<Visitor, Response> {
-    let Some(token_hash) = bearer(req.headers()).and_then(token::hash_visitor_token) else {
+    let Some(token_hash) =
+        parse_bearer(req.headers().get(header::AUTHORIZATION)).and_then(token::hash_visitor_token)
+    else {
         return Err(visitor_session_invalid());
     };
     let now = Timestamp::now();
@@ -1030,15 +1027,5 @@ mod tests {
             1,
             "an errored turn's partial text is not shown"
         );
-    }
-
-    #[test]
-    fn only_a_bearer_header_carries_the_visitor_token() {
-        let mut h = HeaderMap::new();
-        assert_eq!(bearer(&h), None);
-        h.insert(header::AUTHORIZATION, "Bearer gwv_x".parse().unwrap());
-        assert_eq!(bearer(&h), Some("gwv_x"));
-        h.insert(header::AUTHORIZATION, "gwv_x".parse().unwrap());
-        assert_eq!(bearer(&h), None);
     }
 }

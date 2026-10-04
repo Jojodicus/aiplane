@@ -324,7 +324,7 @@ async fn submit_once(
     if auto_titled {
         tokio::spawn(title::generate_session_title(
             state.clone(),
-            user.id.clone(),
+            user.clone(),
             active.id.clone(),
             submit.user_text.clone(),
             submit.model.clone(),
@@ -656,7 +656,7 @@ async fn queue_for_later(
         let _ = chat::set_session_title(&state.db, &active.id, &fallback).await;
         tokio::spawn(title::generate_session_title(
             state.clone(),
-            user.id.clone(),
+            user.clone(),
             active.id.clone(),
             submit.user_text.clone(),
             submit.model.clone(),

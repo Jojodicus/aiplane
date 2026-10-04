@@ -15,6 +15,7 @@ use session_core::driver::TurnError;
 
 use super::OpenAiDriver;
 use crate::agent_run::AgentRun;
+use crate::server::side_call::SideExchange;
 use crate::server::tools::{ToolContext, ToolSource};
 
 /// Which backend took the request.
@@ -60,27 +61,23 @@ pub(super) async fn record_vision_fallback(
     call_id: &str,
     calls: &[aiplane_core::server::capabilities::DescribeCall],
 ) {
-    if d.agent().is_none() || calls.is_empty() {
-        return;
-    }
     let ctx = ToolContext {
         call_id: Some(call_id.to_string()),
         ..tool_ctx.clone()
     };
+    let Some(log) = crate::agents::audit::RunLog::of(&ctx) else {
+        return;
+    };
     for call in calls {
-        let mut detail = json!({
-            "purpose": "vision_fallback",
-            "model": call.model,
-            "backend": call.backend,
-            "request": call.request,
-            "response": { "status": call.status, "body": call.response },
-            "latency_ms": call.latency_ms,
-        });
-        if let Some(error) = &call.error {
-            detail["error"] = json!(error);
-        }
-        ctx.audit_event(AuditKind::LlmExchange, Some(call.latency_ms), detail)
-            .await;
+        let mut exchange = SideExchange::new("vision_fallback");
+        exchange.model = Some(call.model.clone());
+        exchange.backend = call.backend.clone();
+        exchange.request = call.request.clone();
+        exchange.status = call.status;
+        exchange.response = call.response.clone().unwrap_or(Value::Null);
+        exchange.error = call.error.clone();
+        exchange.took(call.latency_ms);
+        log.record(&d.state.db, &exchange).await;
     }
 }
 

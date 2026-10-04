@@ -262,14 +262,26 @@ pub(crate) fn json_ok(status: rama::http::StatusCode, body: serde_json::Value) -
 }
 
 pub(crate) fn json_error(status: rama::http::StatusCode, code: &str, message: &str) -> Response {
+    json_error_with(status, code, message, serde_json::Map::new())
+}
+
+/// [`json_error`] with fields of its own beside `message`, `type` and `code`
+/// — a validator's `issues`, the failing test cases — so every refusal is
+/// the one envelope the SPA's `ApiError` reads.
+pub(crate) fn json_error_with(
+    status: rama::http::StatusCode,
+    code: &str,
+    message: &str,
+    extra: serde_json::Map<String, serde_json::Value>,
+) -> Response {
     use rama::http::header;
-    let body = serde_json::json!({
-        "error": {
-            "message": message,
-            "type": code,
-            "code": code,
-        }
-    });
+    let mut error = serde_json::Map::from_iter([
+        ("message".to_string(), serde_json::json!(message)),
+        ("type".to_string(), serde_json::json!(code)),
+        ("code".to_string(), serde_json::json!(code)),
+    ]);
+    error.extend(extra);
+    let body = serde_json::json!({ "error": error });
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")

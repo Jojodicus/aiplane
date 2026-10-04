@@ -615,7 +615,7 @@ of `execute_tool_calls`, so the chat driver, the headless runs, the resume path
 and both `/v1` loops share it. Client-owned calls never pass through the
 gateway and are not scanned. `server/tools/injection.rs` holds the rest.
 
-An agent run carries an `InjectionScan { policy, classifier }`
+An agent run carries an `InjectionScan { policy }`
 (`AgentRun::with_injection`); every other turn runs with the default.
 `RunProfile` sets `Flag` for every agent run,
 main agent and sub-agent alike, so a sub-agent's `finish` result reaches the
@@ -628,10 +628,10 @@ setting of their own.
 |---|---|
 | `Off` | the result, untouched (and nothing is audited) |
 | `Flag` | `{"untrusted_tool_output": {notice, tool, signals, data}}`: the original under `data`, with a notice that it is data and not instructions. A `tool_content_parts` result keeps its shape; the notice is a leading text part |
-| `Redact` | the result with each matched span replaced by `[removed: possible prompt injection]`. A hit with no span (the classifier) drops the whole result instead |
+| `Redact` | the result with each matched span replaced by `[removed: possible prompt injection]` |
 | `Drop` | `{"error": "The result of `<tool>` was withheld ..."}` |
 
-**Layer 1, heuristics** (`scan_text`, no dependency beyond `regex` and `base64`).
+**Heuristics** (`scan_text`, no dependency beyond `regex` and `base64`).
 Case-insensitive, English and German, run over every string of the JSON result
 after decoding, so `\u200b` escapes are seen. The families (`Signal`):
 `ignore_instructions` ("ignore all previous instructions"), `role_override`
@@ -650,11 +650,11 @@ produce false positives in text that *discusses* injection; each pattern has a
 test, and so do clean code, JSON, prose and a German letter. Add a pattern with
 a failing fixture first, and a clean fixture if it is broad.
 
-**Layer 2, classifier.** `InjectionClassifier::classify(text) -> Verdict` is the
-seam for a model-based check. It runs only when the heuristics found nothing and
-the policy is not `Off`. Nothing implements it against a real model yet; tests
-use a canned double, because the model is an external service. An implementation
-chooses whether an unreachable model fails open or closed.
+**No model-based layer.** An `InjectionClassifier` seam for a second, model-based
+opinion existed without any implementation and was removed (#120). A model check
+on what a visitor may ask is the agent's topic guard (`agents::topic_guard`, a
+side call); one on tool results would be built on `server::side_call` the same
+way.
 
 **Recording.** Every hit logs a `warn` (tool, principal, policy, signals). When
 the acting principal is a system principal it also writes an `agent_audit` row of

@@ -263,6 +263,7 @@ agents-an-requests-desc = Including sub-agents and routing
 agents-an-tokens = Tokens
 agents-an-cost = Cost
 agents-an-chart-title = Per day
+agents-an-metric = Metric
 agents-an-chart-empty = No activity in this period.
 agents-an-refusals = Refusals
 agents-an-routes-chosen = Routes chosen

@@ -12,6 +12,7 @@
 	} from '$lib/agent-analytics';
 	import { dt, n, t } from '$lib/i18n.svelte';
 	import { usageCost, usageInteger } from '$lib/usage';
+	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
 
 	/**
 	 * What the agent did over a period, from `GET …/analytics`: counts only,
@@ -137,13 +138,7 @@
 			<div class="card-body gap-3 p-4">
 				<div class="flex flex-wrap items-center justify-between gap-2">
 					<h3 class="card-title text-base">{t('agents-an-chart-title')}</h3>
-					<div role="tablist" class="tabs tabs-box tabs-sm">
-						{#each METRICS as m (m)}
-							<button role="tab" type="button" class="tab" class:tab-active={metric === m} aria-selected={metric === m} onclick={() => (metric = m)}>
-								{metricLabel(m)}
-							</button>
-						{/each}
-					</div>
+					<SegmentedControl options={METRICS.map((m) => ({ value: m, label: metricLabel(m) }))} bind:value={metric} label={t('agents-an-metric')} size="sm" />
 				</div>
 				{#if peak === 0}
 					<p class="text-sm text-base-content/60">{t('agents-an-chart-empty')}</p>

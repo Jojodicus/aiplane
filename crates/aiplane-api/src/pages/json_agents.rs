@@ -25,7 +25,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
-use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
+use super::{
+    bad_request, internal, json_error, json_error_with, json_ok, no_content, not_found,
+    raw_path_segment,
+};
 use aiplane_agents::db::agents::{
     self as agents_db, Access, DraftChange, ShareChange, SubjectKind,
 };
@@ -278,16 +281,11 @@ fn invalid_spec(what: &str, issues: &[SpecIssue]) -> Response {
         1 => String::new(),
         n => format!(" (and {} more — see `issues`)", n - 1),
     };
-    json_ok(
+    json_error_with(
         StatusCode::UNPROCESSABLE_ENTITY,
-        json!({
-            "error": {
-                "message": format!("cannot {what}: at {at}, {}{more}", first.message),
-                "type": "invalid_agent_spec",
-                "code": "invalid_agent_spec",
-                "issues": issues,
-            }
-        }),
+        "invalid_agent_spec",
+        &format!("cannot {what}: at {at}, {}{more}", first.message),
+        serde_json::Map::from_iter([("issues".to_string(), json!(issues))]),
     )
 }
 

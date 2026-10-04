@@ -12,7 +12,8 @@
 //!   - Voice input reuses the existing in-browser recorder + the
 //!     `/api/v0/transcriptions` endpoint (VAD + Whisper). The transcript is
 //!     then turned into structured form fields by `POST /feedback/extract`
-//!     (a chat-model pass, the `chat/title.rs` idiom).
+//!     (a side call, `aiplane_runtime::server::side_call`, metered to the
+//!     reporter and under their spend limits).
 //!   - A viewport screenshot is captured client-side (snapdom, or the
 //!     pixel-exact `getDisplayMedia` path), annotated on a canvas and sent as
 //!     base64 together with any images the reporter pasted in; the browser's
@@ -27,8 +28,8 @@
 //!   - POST /api/v0/feedback/extract  → transcript → structured fields
 //!   - POST /api/v0/feedback          → file the issue
 
-use aiplane_core::server::capped_read;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rama::http::service::web::extract::State;
 use rama::http::service::web::response::IntoResponse;
@@ -39,10 +40,12 @@ use session_core::chrome::read_body_to_bytes;
 use session_core::i18n::{self, Lang, t, t_args};
 
 use aiplane_core::rama_server::session::Session;
+use aiplane_core::server::db::usage::UsageSource;
 use aiplane_core::server::db::users;
-use aiplane_core::server::upstreams::PoolKind;
+use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use aiplane_features::server::issue_tracker::{self, IssueInput, TrackerError};
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::server::side_call::{self, JsonShape, Payer, SideCall, SideCallError};
 
 // ---------------------------------------------------------------------------
 // Small JSON helpers (these endpoints are fetch'd, not Datastar-driven).
@@ -160,9 +163,10 @@ struct ExtractRequest {
 
 pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let lang = Lang::from_request(req.headers());
-    if let Err(resp) = require_session_json(&state, &req, lang).await {
-        return resp;
-    }
+    let session = match require_session_json(&state, &req, lang).await {
+        Ok(session) => session,
+        Err(resp) => return resp,
+    };
     let (_, body) = req.into_parts();
     let bytes = match read_body_to_bytes(body).await {
         Ok(b) => b,
@@ -217,27 +221,43 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
         );
     };
 
-    match extract_fields(&state, &model, transcript, parsed.locale.as_deref()).await {
+    let user = users::find_by_id(&state.db, &session.user_id)
+        .await
+        .ok()
+        .flatten();
+    let payer = Payer::person(
+        &session.user_id,
+        user.as_ref().map_or(&[][..], |u| u.roles.as_slice()),
+        user.as_ref().map(|u| u.email.clone()),
+        UsageSource::Chat,
+    );
+    match extract_fields(&state, &payer, &model, transcript, parsed.locale.as_deref()).await {
         Ok(fields) => json_ok(fields),
         Err(err) => {
             tracing::warn!(error = %err, %model, "feedback: field extraction failed");
+            let status = match err {
+                SideCallError::OverBudget(_) => StatusCode::TOO_MANY_REQUESTS,
+                SideCallError::Failed(_) => StatusCode::BAD_GATEWAY,
+            };
             json_err(
-                StatusCode::BAD_GATEWAY,
+                status,
                 &t_args(
                     lang,
                     "feedback-err-extraction-failed",
-                    &i18n::args([("error", err.into())]),
+                    &i18n::args([("error", err.to_string().into())]),
                 ),
             )
         }
     }
 }
 
+/// How long the transcript→fields pass may take: long enough for a
+/// 1200-token answer on a busy backend.
+const EXTRACT_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// System prompt for the transcript→fields pass. Forbids invention (empty
 /// string when a field isn't derivable) and pins the output language to the
-/// caller's UI locale regardless of the spoken language. The trailing
-/// `/no_think` mirrors `chat/title.rs` (Qwen3 reasoning-off marker; harmless
-/// elsewhere).
+/// caller's UI locale regardless of the spoken language.
 const EXTRACT_SYSTEM_PROMPT: &str = "You convert a spoken software-feedback note into a structured bug/feature report. \
 Return ONLY a JSON object with these string fields: \
 \"title\" (imperative, concise, max 120 chars), \
@@ -248,25 +268,16 @@ Return ONLY a JSON object with these string fields: \
 Do NOT invent details: if a field cannot be derived from the transcript, use an empty string (for priority default to \"medium\"). \
 No preamble, no code fences, no reasoning — output the raw JSON object only.";
 
-/// Single non-streaming chat completion that returns the structured fields.
-/// Models the `chat/title.rs::call_upstream` pattern; asks for JSON via
-/// `response_format` (honoured by vLLM/OpenAI-compatible servers) and parses
-/// leniently so a server that ignores the hint still works.
+/// One side call that returns the structured fields, on the operator's
+/// model under the gateway's own access. The answer is read leniently, so a
+/// server that ignores the `response_format` hint still works.
 async fn extract_fields(
     state: &RamaState,
+    payer: &Payer,
     model: &str,
     transcript: &str,
     locale: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    let acquired = state
-        .upstreams
-        .route(model, PoolKind::Chat)
-        .map_err(|e| e.to_string())?;
-    // The chat model may be an alias; forward the real id the backend knows.
-    let real_model = acquired.resolved_model().to_string();
-    let backend = acquired.backend();
-    let url = format!("{}/chat/completions", backend.base_url);
-
+) -> Result<serde_json::Value, SideCallError> {
     let lang_directive = match locale {
         Some(l) if !l.is_empty() => format!(
             "\n\nWrite every field value in the language with BCP-47 tag \"{l}\", \
@@ -274,69 +285,39 @@ async fn extract_fields(
         ),
         _ => String::new(),
     };
-    let user_content = format!("Transcript:\n{transcript}{lang_directive}\n\n/no_think");
-
-    let body = json!({
-        "model": real_model,
-        "messages": [
-            { "role": "system", "content": EXTRACT_SYSTEM_PROMPT },
-            { "role": "user", "content": user_content },
-        ],
-        "stream": false,
-        "temperature": 0.2,
-        "max_tokens": 1200,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "feedback_fields",
-                "strict": true,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "title": { "type": "string" },
-                        "description": { "type": "string" },
-                        "business_value": { "type": "string" },
-                        "acceptance_criteria": { "type": "string" },
-                        "priority": { "type": "string", "enum": ["low", "medium", "high"] }
-                    },
-                    "required": ["title", "description", "business_value", "acceptance_criteria", "priority"]
-                }
-            }
+    let input = format!("Transcript:\n{transcript}{lang_directive}");
+    let obj = side_call::ask_json(
+        state,
+        payer,
+        SideCall {
+            purpose: "feedback_fields",
+            model,
+            access: &PoolAccess::all(),
+            instructions: EXTRACT_SYSTEM_PROMPT,
+            input: &input,
+            temperature: 0.2,
+            max_tokens: Some(1200),
+            no_think: true,
+            timeout: EXTRACT_TIMEOUT,
         },
-        "chat_template_kwargs": { "enable_thinking": false },
-    });
-    let serialized = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-    let mut http_req = state
-        .http
-        .post(&url)
-        .header("content-type", "application/json")
-        .body(serialized);
-    if let Some(key) = backend.api_key.as_deref() {
-        http_req = http_req.bearer_auth(key);
-    }
-    let resp = http_req.send().await.map_err(|e| e.to_string())?;
-    let status = resp.status();
-    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    drop(acquired);
-    if !status.is_success() {
-        return Err(format!(
-            "upstream {status}: {}",
-            String::from_utf8_lossy(&bytes)
-                .chars()
-                .take(160)
-                .collect::<String>()
-        ));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    let content = v
-        .pointer("/choices/0/message/content")
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-    let obj = parse_lenient_json(content)
-        .ok_or_else(|| "model returned no parseable JSON".to_string())?;
+        JsonShape {
+            name: "feedback_fields",
+            schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "business_value": { "type": "string" },
+                    "acceptance_criteria": { "type": "string" },
+                    "priority": { "type": "string", "enum": ["low", "medium", "high"] }
+                },
+                "required": ["title", "description", "business_value", "acceptance_criteria", "priority"]
+            }),
+        },
+    )
+    .await
+    .answer?;
 
     // Re-shape into exactly the five fields the client expects, coercing
     // anything odd into a sane default.
@@ -359,40 +340,6 @@ async fn extract_fields(
         "acceptance_criteria": pick("acceptance_criteria"),
         "priority": priority,
     }))
-}
-
-/// Pull a JSON object out of an LLM response that may wrap it in ```json
-/// fences or stray prose. Returns the first balanced object found.
-fn parse_lenient_json(raw: &str) -> Option<serde_json::Value> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim())
-        && v.is_object()
-    {
-        return Some(v);
-    }
-    let start = raw.find('{')?;
-    let mut depth = 0usize;
-    let mut in_str = false;
-    let mut escaped = false;
-    for (i, ch) in raw[start..].char_indices() {
-        match ch {
-            '"' if !escaped => in_str = !in_str,
-            '\\' if in_str => {
-                escaped = !escaped;
-                continue;
-            }
-            '{' if !in_str => depth += 1,
-            '}' if !in_str => {
-                depth -= 1;
-                if depth == 0 {
-                    let candidate = &raw[start..start + i + 1];
-                    return serde_json::from_str(candidate).ok();
-                }
-            }
-            _ => {}
-        }
-        escaped = false;
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------

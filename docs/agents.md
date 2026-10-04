@@ -762,9 +762,10 @@ that is already in the chain (`EnterError::Cycle`).
   call inside an agent run. Since #92 usage rows carry it too, plus the
   main agent as `agent_id` ([§5](#what-92-built)).
 - An agent run gets none of its owner's identity, memory, private skills or
-  MCP connections: the request context reads the user row, memories and
-  private skills only through `Principal::user_id()`, which is `None` for a
-  system principal. Usage rows from such a run carry `principal_kind =
+  MCP connections: the request context is built for `Audience::Agent`, which
+  carries only the operator skills the principal is granted, and it reads the
+  user row, memories and private skills only through `Principal::user_id()`,
+  which is `None` for a system principal. Usage rows from such a run carry `principal_kind =
   'system'` and the principal's name.
 
 ### Sub-agent dispatch
@@ -796,10 +797,21 @@ pub struct RunProfile {
 }
 ```
 
-**Agent system message.** It is the agent's `orchestration` and `response`
-instructions plus the slot status and the granted skill listing. It has no
-built-in chat rules, no user memory, no location and no MCP listing beyond the
-grants.
+**Agent system message.** Built by the same `leading_system_message` as a
+person's turn (#120): the turn-discipline rule first, then the owner's brief
+(Role, Task, Scope, Tone), the slot status and the open routes, the operator
+skills its principal is granted (the `read_skill` listing, plus the guidance
+of skills loaded in the conversation), and the compaction summary. What a
+person's turn adds is withheld by the builder's input
+(`openai_driver::Audience::Agent`), not by a second builder: no owner
+identity, memory or preferences, private skills or MCP connections, no
+visitor IP or location, no `enable_tools` overlay, no hand-edited documents
+and no voice directive. Like a person's, it carries no date — the current
+time is a tool (`get_current_timestamp`) — and the timezone a person's
+message names is the person's own (`users.timezone`), which an agent run has
+none of. `read_skill` is offered whenever the principal is granted it and at
+least one skill, the rule a person's chat follows; the spec need not list it
+in `main.tools`.
 
 **The finish contract.**
 - A sub-agent that writes text without calling `finish` gets one nudge.
@@ -943,8 +955,11 @@ grants.
 
   The sub-agent's own tool calls carry the extended chain.
 - **Deviations.**
-  - `main.skills` is not listed in the system message, and `read_skill` is
-    offered only if granted and listed in `main.tools`.
+  - ~~`main.skills` is not listed in the system message, and `read_skill` is
+    offered only if granted and listed in `main.tools`~~ — since #120 the
+    system message lists every skill the principal is granted and offers
+    `read_skill` with them (see "Agent system message"); `main.skills` is
+    still checked against the grants only when the spec is validated.
   - Usage rows of the classifier call were not written; #92 added them.
   - Whether a tool *declares* a subject parameter is known only from its
     schema, and MCP schemas exist only once the connector is connected. The
@@ -1464,15 +1479,12 @@ runs after the code gate passes and can only close the route.
 - **`RouteGates::from_spec(spec)`** holds each route's gate.
   `gate_status(route, input)` is `Open` or `Closed { missing }`; an unknown
   route is closed with `unknown_route`. A route is invoked through an
-  `OpenRoute`, which only `open` and `open_reviewed` construct and only for an
-  open gate, so dispatch (#88) cannot be reached around a closed one.
-- **Classifier seam.** `DenyClassifier::review(route, &[SlotView]) ->
-  Result<Verdict, String>` gets the model's view of the state, never trusted
-  values. `open_reviewed` consults it only after the code gate opened.
-  `Verdict::Deny` and an `Err` both close the route (`denied`); nothing it
-  returns can open a closed gate. There is no LLM implementation yet, only a
-  test double. *Decided, deferred:* the implementation will classify with the
-  agent's main model unless the spec names a model for it.
+  `OpenRoute`, which only `open` constructs and only for an open gate, so
+  dispatch (#88) cannot be reached around a closed one.
+- ~~**Classifier seam.** `DenyClassifier`~~ — removed in #120: it never had
+  an implementation and nothing called `open_reviewed`. A model check on what
+  the visitor asks is the topic guard (#115); another one would be a side call
+  (`server::side_call`) like it.
 - **Spec type checks.** On save and publish, each leaf must be able to hold:
   every `eq` and `in` value must pass the slot's own validator, and
   `provenance` must be in the slot's `set_by`. A route with a `bind` must have a
@@ -1487,8 +1499,7 @@ runs after the code gate passes and can only close the route.
     route needs one yet.
 - **Wired by #87.** `forward_request` calls `RouteGates`, returns
   `Closed.missing` to the model and writes a `route_decision` row
-  ([§3](#what-8788-built)). There is no `gate` SSE event yet, and nothing
-  calls `open_reviewed`: no spec key selects a `DenyClassifier` yet.
+  ([§3](#what-8788-built)). There is no `gate` SSE event yet.
 
 ### Value validation without a JSON-Schema crate
 
@@ -1848,7 +1859,9 @@ model rule, and retention.
     nothing; behind a reverse proxy that is *not* listed, every visitor
     shares the proxy's bucket.
   - A refusal storm writes one audit row per refused request.
-  - The compaction summary call is still not metered, for agents or people.
+  - ~~The compaction summary call is still not metered~~ — since #120 it is
+    a side call (`server::side_call`): a usage row of the conversation's
+    principal, under their budget.
   - The admin limits page in the SPA does not offer subject `system` yet; the
     API accepts it.
 
@@ -1944,7 +1957,9 @@ verifiers:
   `exp`/`nbf`/`iss`/`aud` (30 s leeway, `exp`, `iat`, `iss`, `aud`
   required), `exp - iat ≤ max_lifetime`, and a `jti`, when present, once per
   agent (`agent_identity_jtis`, kept until `exp`). JWKS documents are cached
-  five minutes per URL and refetched for an unknown `kid`. The JWKS URL is
+  five minutes per URL and refetched for an unknown `kid`, at most once a
+  minute (the gateway's one JWKS cache, `aiplane_core::server::auth::jwks`,
+  which the OIDC login uses too). The JWKS URL is
   chosen by the agent's owner, so it is fetched through the same SSRF guard
   as an A2A route (`outbound_guard`, `Policy::agent`, [below](#what-101-built)):
   resolved and pinned, no redirects, at most 64 KiB, link-local always
@@ -2123,7 +2138,8 @@ version and judged on more than the final answer.
   passed. `tools` and `sub_agents` read the audit rows of the whole
   conversation, nested sub-agents included.
 - **Rubric.** Optional free text per case. After the deterministic checks, one
-  non-streaming call on the agent's main model, as its principal, grades the
+  side call (`server::side_call`, a usage row of the agent's, under its
+  budget) on the agent's main model, as its principal, grades the
   visitor messages and the agent's answers (nothing else: no slot values, no
   tool results) as `{passed, reason}`. It is reported as `report.rubric`
   (`verdict`: `passed`, `failed`, `error`, `skipped`) and counted apart in the
@@ -2761,7 +2777,7 @@ logged and the request goes on as it would have.
 | Event | Written by | Detail |
 |---|---|---|
 | `llm_exchange` | the driver's round loop (`openai_driver/exchange.rs`), around the upstream call, whichever way the round ends | `purpose: round`, `round`, `model`, `real_model`, `backend`, `request` or, after a turn's first round, `request_delta` (see "Storage") (the body exactly as sent: system message, messages, tool offer, parameters — but for what the log never keeps, below), `response` (`status`, `content`, `reasoning`, `tool_calls`, `finish_reason`, `usage`), `latency_ms`, `error` (no backend, transport, non-2xx with the full body, stall, loop), `cancelled` |
-| `llm_exchange` | a constrained choice on a model (`agents::model_call`): the route classifier, the topic guard (#115) | `purpose: route_classifier` or `scope_guard`, `model`, `backend`, `request`, `response`, `answer`, `error` |
+| `llm_exchange` | a constrained choice on a model (`agents::model_call`, a side call): the route classifier, the topic guard (#115) | `purpose: route_classifier` or `scope_guard`, `model`, `backend`, `request`, `response`, `answer`, `latency_ms`, `error` |
 | `scope_decision` | the topic guard (`agents::topic_guard`, #115) | `verdict` (`in_scope`, `out_of_scope`, `failed`), `topics`, `model`, `error` |
 | `tool_call` | the call policy (#83, unchanged) | `decision`, `policy` |
 | `tool_result` | the tool runner (`execute_tool_call`), for every call including an unregistered tool and a refused repeat; the resume path for a denied call and a sub-agent's result | `tool`, `arguments` (as the model wrote them; `{redacted: true}` for a tool that declares `sensitive_args`), `status` (`completed`, `failed`, `invalid_args`, `timed_out`, `unregistered`, `refused_repeated`, `denied`, `answered_by_sub_agent`), `result` (the tool's whole answer before injection screening and before the prompt's byte budget trims it), `injection` (`policy`, `signals`); `duration_ms` |
@@ -2815,10 +2831,12 @@ with a sealed bearer token and a handoff to a person, then greps every text
 column of every table for the code and the token.
 
 **Model calls outside the round loop** go through the same door as an
-`llm_exchange` with their own `purpose` (`agents::audit::SideExchange`,
+`llm_exchange` with their own `purpose`: one record
+(`server::side_call::SideExchange`) and one writer (`agents::audit::RunLog::record`),
 recorded for an agent's run only — `RunLog::of` is `None` for a person's
 turn, so a person's chat records nothing here and its logging is
-unchanged):
+unchanged. The model calls among them (compaction, the judge, the guard and
+the classifier) are side calls (`server::side_call`, below):
 - `compaction_summary` — the conversation's compaction summary, when the
   compacted conversation is an agent's (`maybe_autocompact` gets the run's
   `RunLog`), in that conversation's chain;
@@ -2830,7 +2848,45 @@ unchanged):
   the tool call's `call_id`.
 
 Each records `model`, `backend`, the `request` exactly as sent (the image
-included), `response` (`status`, `body`), `latency_ms` and `error`.
+included), `response` (`status`, `body`), `latency_ms` and `error`; a
+constrained choice also its `answer`.
+
+**Side calls** (#120). Every one-off model call beside a conversation —
+the session title, the compaction summary, the feedback form's fields, the
+topic guard, the route classifier, the rubric judge and the prompt
+assistant — goes through `aiplane-runtime::server::side_call` (`ask_text`,
+`ask_json`). It lives in `aiplane-runtime` because that is the lowest crate
+with `RamaState` and `model_route`, and the highest every caller can see
+(`title.rs` and `feedback.rs` sit in `aiplane-api`, the rest in the runtime).
+One call:
+- resolves the model as a chat turn does (`model_route::route_target`) under
+  the access the caller gives (`PoolAccess::all()` for the title and the
+  feedback form, whose model is the person's own chat model or the
+  operator's; the principal's model grant for an agent's calls);
+- checks the payer's spend limits *before* the model is called: a person's
+  through `Enforcer::check_for_model`, an agent's through
+  `Enforcer::check_agent` (the owner budget of its live version plus the
+  operator's `system` rules, for the agent at the root of the run, which the
+  row is booked to). A pool exempt from enforcement is never refused. A
+  refused call is `SideCallError::OverBudget`: the title and compaction skip,
+  the feedback form answers `429`, the assistant `429` with `Retry-After`, the
+  topic guard fails closed (the refusal);
+- sends `chat_template_kwargs.enable_thinking: false` always, and Qwen3's
+  `/no_think` after the input where the caller asks (title, compaction,
+  feedback), with the caller's temperature and `max_tokens`;
+- reads the answer capped (`MODEL_ANSWER_BYTES`) within one timeout (title
+  15 s, choice 30 s, compaction and judge 60 s, assistant 60/120 s, feedback
+  120 s); `ask_json` strips a code fence and finds the first object in
+  surrounding prose;
+- writes the payer's usage row (`source` the caller's: `chat` for a
+  person's title, feedback and assistant call, the turn's own source for
+  compaction, `agent` for an agent's calls, joined to its run).
+
+What changed by moving them: the judge, compaction, the title and the
+feedback form were not metered before and now write usage rows, and are
+refused when the payer's budget is spent; the judge now switches reasoning
+off like the others; the feedback form gets a timeout; an upstream error
+reads `upstream <status>: <first 160 characters of the body>` everywhere.
 
 **Retention.** `publish.audit_retention_days` (typed, default **365**,
 read from the live version like `retention_days`): the hourly sweep deletes
@@ -2973,8 +3029,9 @@ sub-agent, whose input is a task, not a visitor's message).
   in-scope question stay in scope; older history is left out to keep the
   call small. Greetings, thanks and "what can you do?" count as in scope.
 - *Call:* `agents::model_call::ModelCall`, the mechanism the route
-  classifier uses too: one non-streaming request to `classifier_model` (else
-  the main model) under the principal's model grant, `response_format` an enum
+  classifier uses too: one side call (`server::side_call::ask_json`) to
+  `classifier_model` (else the main model) under the principal's model grant
+  and the agent's budget, `response_format` an enum
   of `in_scope` / `out_of_scope`, and the answer checked again in code. It
   is a usage row of the run (so it counts against `publish.budget` and the
   model's limits), its tokens count against the turn's `main.budget.tokens`,
@@ -3044,18 +3101,16 @@ cases; another improves one text. The UI (#116) shows the proposal per step
 and applies what the manager accepts.
 
 **Shared mechanisms.**
-- *Used:* `model_call` for the constrained call, the typed spec's validator
+- *Used:* `server::side_call::ask_json` for the structured call, the typed spec's validator
   (`spec::validate`, on the draft as it would be), `eval::parse_case` for the
   proposed tests, the grant cap's predicates (`json_agent_resources::grantable_tools`,
   the same list `GET /api/v0/agent-resources` serves), the rate primitive
-  (`rates::record_now`, new scope `manager`), the spend limits
-  (`Enforcer::check_for_model`), `read_json_capped`, and the activity log's
-  runtime door (`agents::audit::record_event`).
-- *Introduced:* `model_call::ask_json`, the one structured (`json_schema`,
-  strict) non-streaming call on a model, which `ModelCall` (route classifier,
-  topic guard) and the evaluation judge now run on too; whose usage row it is stays the caller's
-  (`JsonExchange::usage_record`). It sends `chat_template_kwargs.enable_thinking:
-  false`, as the title and compaction calls do: a reasoning model (Qwen on
+  (`rates::record_now`, new scope `manager`), the spend limits (checked by
+  the side call), `read_json_capped`, and the activity log's runtime door
+  (`agents::audit::record_event`).
+- *Introduced:* the structured call on a model that #120 folded into
+  `server::side_call` (see "Side calls"). It sends
+  `chat_template_kwargs.enable_thinking: false`: a reasoning model (Qwen on
   SGLang) asked for JSON otherwise spends the whole answer thinking now and
   then and returns empty content.
 
@@ -3335,7 +3390,7 @@ Voice in the embed widget: a visitor may speak a message and hear answers.
   `BodyLimitLayer::HANDLER_CAPPED`, `PoolAccess::for_system_models`, the VAD
   (`aiplane_features::server::vad`, moved down from the gateway crate so the
   API layer can trim a recording too), `speech::to_spoken`, `UsageRecord::in_run`,
-  `agents::audit::{RunLog, SideExchange, anchor}`.
+  `agents::audit::{RunLog, anchor}`, `server::side_call::SideExchange`.
 - *Introduced:* `aiplane-runtime::agents::voice` — the two calls, made as the
   agent on the one model the direction runs on; `RunLog::visitor` for an event of a
   visitor's conversation between turns; `web/shared/wav.ts` (the WAV encoder
@@ -3547,7 +3602,7 @@ upward.
 | `/api/v0/embed/*` routes and CORS (`rama_server::embed_cors`), `gws_`/`gwv_` bearer dispatch | `gateway` | routing glue only; the embed CORS layer reads embed keys, so it cannot sit in `aiplane-core` beside the `/v1` one |
 | The A2A client behind an `a2a` route: guard, card cache, exchange | `aiplane-runtime` (`agents::a2a_client`); the waiting task's row in `aiplane-agents` (`db::agent_a2a_tasks`) | *as built (#101):* `forward_request` dispatches it like a sub-agent, so it sits beside the router |
 | The A2A agent card and JSON-RPC handlers (`/a2a/agents/*`) | `aiplane-api` (`pages::a2a`), routed in `gateway`; the spec section, card and state mapping in `aiplane-runtime` (`agents::a2a`) | protocol handlers over the same runner the embed endpoint uses |
-| The prompt assistant: the structured call (`model_call::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
+| The prompt assistant: the structured call (`side_call::ask_json`), the proposal, its review against the draft (`agents::assist`); its handlers (`pages::json_agent_assist`) | `aiplane-runtime`; `aiplane-api` | the review needs the validator and the test-case parser, both runtime; the handlers resolve the manager's grantable tools and shared agents with the helpers `GET /api/v0/agent-resources` and `GET /api/v0/agents` use |
 | The agent architect: the persona hook (`persona`, `TurnPolicy::Persona`) and `assist::apply_changes`; its tools, the start route and `draft/restore` (`pages::architect`); `agent_architect_sessions` and draft revisions (`db::architect_sessions`, `db::agents`) | `aiplane-runtime`; `aiplane-api`; `aiplane-agents` | the driver only knows "a prompt and a tool source"; the tools need the route functions (share checks, grant cap, test chat), which live in the API layer, so the API builds the persona per turn and hands it down |
 | Builder UI, test chat, inbox | `web/` (SPA) | daisyUI + Tailwind, all strings through Fluent |
 | Embed widget | `web/embed/`, its own Vite entry built to `target/frontend/build/embed.js` | must not pull in the SPA; strings still come from the shared catalogs |

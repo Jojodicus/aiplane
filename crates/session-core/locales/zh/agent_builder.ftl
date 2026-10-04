@@ -264,6 +264,7 @@ agents-an-requests-desc = 包括子智能体和路由
 agents-an-tokens = 令牌
 agents-an-cost = 费用
 agents-an-chart-title = 每日
+agents-an-metric = 指标
 agents-an-chart-empty = 此时间段内没有活动。
 agents-an-refusals = 拒绝
 agents-an-routes-chosen = 选择的路由

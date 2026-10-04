@@ -20,19 +20,17 @@
 //!   value the model did not write.
 //!
 //! A route is invoked only through an [`OpenRoute`], which nothing but this
-//! module constructs, and only for a gate that holds. An optional
-//! [`DenyClassifier`] runs after the code gate opened and can only close it.
+//! module constructs, and only for a gate that holds.
 
 use std::collections::BTreeMap;
 
-use async_trait::async_trait;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use serde_json::Value;
 
 use super::slot_tools::set_tool_name;
 use super::spec::{AgentSpec, LEAF_KEYS, SpecIssue, format_duration, index, join, parse_duration};
-use super::state::{self, AgentState, Provenance, SlotState, SlotView, StateSchema, writers};
+use super::state::{self, AgentState, Provenance, SlotState, StateSchema, writers};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cond {
@@ -269,8 +267,6 @@ pub enum Problem {
     /// The condition under a `not` holds.
     Excluded,
     UnknownRoute,
-    /// The route classifier closed a gate the code had opened.
-    Denied,
 }
 
 /// One unmet condition.
@@ -452,8 +448,8 @@ fn how_to_set(schema: &StateSchema, slot: &str) -> String {
 }
 
 /// Proof that a route's gate was open when it was checked. Only
-/// [`RouteGates::open`] and [`RouteGates::open_reviewed`] make one, so code
-/// that dispatches a route cannot be reached without passing its gate.
+/// [`RouteGates::open`] makes one, so code that dispatches a route cannot be
+/// reached without passing its gate.
 #[derive(Debug)]
 pub struct OpenRoute {
     name: String,
@@ -463,22 +459,6 @@ impl OpenRoute {
     pub fn name(&self) -> &str {
         &self.name
     }
-}
-
-/// The verdict of an optional route classifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    Allow,
-    Deny { reason: String },
-}
-
-/// An LLM check that may close a route the code gate opened ("off-topic"),
-/// and never open one. It sees the model's view of the state, not raw
-/// trusted values. An `Err` closes the route: a classifier that cannot answer
-/// has not allowed anything.
-#[async_trait]
-pub trait DenyClassifier: Send + Sync {
-    async fn review(&self, route: &str, view: &[SlotView]) -> Result<Verdict, String>;
 }
 
 /// Every route's gate of one spec.
@@ -544,29 +524,6 @@ impl RouteGates {
             GateStatus::Closed { missing } => Err(missing),
         }
     }
-
-    /// [`Self::open`], then the classifier. The classifier is consulted only
-    /// for a gate that already holds.
-    pub async fn open_reviewed(
-        &self,
-        route: &str,
-        input: GateInput<'_>,
-        classifier: &dyn DenyClassifier,
-    ) -> Result<OpenRoute, Vec<Unmet>> {
-        let open = self.open(route, input)?;
-        let view = input.state.view(input.schema);
-        let reason = match classifier.review(route, &view).await {
-            Ok(Verdict::Allow) => return Ok(open),
-            Ok(Verdict::Deny { reason }) => reason,
-            Err(err) => format!("the route check could not answer ({err})"),
-        };
-        Err(vec![Unmet {
-            path: String::new(),
-            slot: None,
-            problem: Problem::Denied,
-            message: format!("this route was declined: {reason}. Do not retry it for this request"),
-        }])
-    }
 }
 
 #[cfg(test)]
@@ -579,7 +536,6 @@ mod tests {
     use aiplane_agents::db::agent_state::StoredSlot;
     use serde_json::json;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const NOW: &str = "2026-10-02T12:00:00Z";
 
@@ -1074,81 +1030,5 @@ mod tests {
             kinds(&open("2026-10-02T12:15:01Z").await.unwrap_err()),
             ["too_old"]
         );
-    }
-
-    /// Stands in for the LLM call a real classifier makes, which a test cannot
-    /// stand up. The call count is the one interaction checked: whether a
-    /// closed gate reaches the classifier at all.
-    struct Fixed {
-        verdict: Result<Verdict, String>,
-        calls: AtomicUsize,
-    }
-
-    impl Fixed {
-        fn new(verdict: Result<Verdict, String>) -> Self {
-            Self {
-                verdict,
-                calls: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl DenyClassifier for Fixed {
-        async fn review(&self, _route: &str, view: &[SlotView]) -> Result<Verdict, String> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            assert!(
-                !serde_json::to_string(view).unwrap().contains("K-12345"),
-                "the classifier saw a trusted value"
-            );
-            self.verdict.clone()
-        }
-    }
-
-    #[tokio::test]
-    async fn the_classifier_can_deny_an_open_gate_but_never_open_a_closed_one() {
-        let s = schema();
-        let st = state();
-        let input = GateInput {
-            schema: &s,
-            state: &st,
-            now: at(NOW),
-        };
-        let allow = Fixed::new(Ok(Verdict::Allow));
-        assert_eq!(
-            gates()
-                .open_reviewed("billing", input, &allow)
-                .await
-                .unwrap()
-                .name(),
-            "billing"
-        );
-        let refused = gates()
-            .open_reviewed("technical", input, &allow)
-            .await
-            .unwrap_err();
-        assert_eq!(kinds(&refused), ["not_equal"]);
-
-        let deny = Fixed::new(Ok(Verdict::Deny {
-            reason: "off-topic".into(),
-        }));
-        let denied = gates()
-            .open_reviewed("billing", input, &deny)
-            .await
-            .unwrap_err();
-        assert_eq!(kinds(&denied), ["denied"]);
-        assert!(denied[0].message.contains("off-topic"), "{:?}", denied[0]);
-
-        let broken = Fixed::new(Err("timeout".into()));
-        let failed = gates()
-            .open_reviewed("billing", input, &broken)
-            .await
-            .unwrap_err();
-        assert_eq!(kinds(&failed), ["denied"]);
-
-        // Not consulted for a closed gate: there is nothing for it to decide.
-        let counting = Fixed::new(Ok(Verdict::Allow));
-        let _ = gates().open_reviewed("technical", input, &counting).await;
-        assert_eq!(counting.calls.load(Ordering::SeqCst), 0);
     }
 }

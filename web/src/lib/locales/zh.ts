@@ -304,6 +304,7 @@ export const zh: Catalog = {
  "agents-an-limit-kinds": "按类型统计的限额拒绝",
  "agents-an-limit-refusals": "限额拒绝",
  "agents-an-limit-refusals-desc": "被拒绝的访客",
+ "agents-an-metric": "指标",
  "agents-an-none": "此时间段内没有内容。",
  "agents-an-output-actions": "输出过滤操作",
  "agents-an-output-blocks": "输出过滤拦截",

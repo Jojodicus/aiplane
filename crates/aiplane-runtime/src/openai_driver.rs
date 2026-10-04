@@ -672,12 +672,24 @@ impl SessionDriver for OpenAiDriver {
             )
             .await;
             let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
+            let email = if self.state.usage.is_enabled() {
+                Some(policy.usage_name(self).await).filter(|name| !name.is_empty())
+            } else {
+                None
+            };
+            let payer = crate::server::side_call::Payer::of_turn(
+                &self.tool_ctx.principal,
+                self.agent().map(|run| run.chain().clone()),
+                email,
+                self.source,
+            );
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(
                     &state,
                     &session_id,
                     &model,
                     &access,
+                    &payer,
                     log,
                 )
                 .await;
@@ -2218,9 +2230,23 @@ async fn run_one_turn(
     Ok(TurnOutcome::default().into())
 }
 
-/// Build the auto-provided request-context system message: the signed-in
-/// user's identity (name + email), source IP, a coarse IP-based location,
-/// and their timezone — whatever is known. Returns `None` when nothing is
+/// Whose turn a request context describes, and so what it may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Audience {
+    /// A person's own turn: everything below.
+    Person,
+    /// An agent run: only the operator skills its principal is granted. Its
+    /// owner's identity, memory, private skills and connections are never the
+    /// agent's (`docs/agents.md` → "Principals"), and the visitor's IP and
+    /// location, the `enable_tools` overlay and hand-edited documents belong
+    /// to a person's chat, not to an agent's conversation.
+    Agent,
+}
+
+/// Build the auto-provided request context: the signed-in user's identity
+/// (name + email), source IP, a coarse IP-based location, their timezone,
+/// preferences, skills, connected integrations and hand-edited documents —
+/// whatever is known and `audience` may see. Returns `None` when nothing is
 /// known so we don't prepend an empty message. Identity, name and timezone
 /// come from the user row (one read); the IP comes from `ToolContext`
 /// (proxy header or socket peer); the coarse location reuses the same GeoIP
@@ -2228,8 +2254,15 @@ async fn run_one_turn(
 async fn build_request_context(
     d: &OpenAiDriver,
     user_mcp: &crate::server::tools::mcp::manager::UserMcpLayer,
+    audience: Audience,
 ) -> Option<String> {
     use std::fmt::Write as _;
+
+    if audience == Audience::Agent {
+        return build_skills_section(d)
+            .await
+            .map(|skills| skills.trim_start().to_string());
+    }
 
     let ip = d.tool_ctx.client_ip.as_deref();
     let geo = ip.and_then(|ip| d.tool_ctx.geoip.as_ref()?.lookup(ip));
@@ -3113,7 +3146,7 @@ fn messages_for_history(turn: &session_core::db::TurnWithTools) -> Vec<serde_jso
 /// Deliberately about the *shape* of a message, not about vocabulary: a
 /// preamble is legitimate when the call follows it, so the rule keys on
 /// "announcement with nothing after it", which holds in any language.
-const TURN_DISCIPLINE: &str = "How a turn works here: everything you do happens before your \
+pub(crate) const TURN_DISCIPLINE: &str = "How a turn works here: everything you do happens before your \
 message ends. There is no background execution and nothing of yours continues afterwards — the \
 moment you emit no further tool call, the turn is over and the user is left holding whatever text \
 you wrote. Work you announced but did not do simply never happens, and the user only finds out by \
@@ -3146,11 +3179,29 @@ blocks, no tables, no emoji, and never read out URLs.\n\
 - If a complete answer would genuinely be long or need code or a table, give a one-sentence \
 spoken summary, say the details are on screen, and offer to go deeper only if they ask.";
 
-/// Compose the single leading `system` message: [`TURN_DISCIPLINE`] plus the
-/// optional voice directive, request context, and compaction summary.
+/// What one turn's leading `system` message is made of. Every turn builds it
+/// through [`leading_system_message`] — a person's chat, a persona, an agent
+/// run — and differs only in which parts it has.
+#[derive(Default)]
+pub(crate) struct Leading<'a> {
+    pub voice_directive: Option<&'a str>,
+    /// Who the model is and what it is for: an agent's brief and its
+    /// conversation state, a persona's instructions. Empty for a person's
+    /// chat.
+    pub own: Vec<String>,
+    /// What the gateway provides about the turn ([`build_request_context`]):
+    /// for a person their identity, location, timezone, preferences and
+    /// connections; for an agent only its granted skills ([`Audience`]).
+    pub context: Option<String>,
+    pub summary: Option<&'a str>,
+}
+
+/// Compose the single leading `system` message: [`TURN_DISCIPLINE`], then
+/// the optional voice directive, the turn's own sections, the request
+/// context and the compaction summary.
 ///
 /// The turn-discipline rule is unconditional, so this always returns a message
-/// — the other three are what vary. It leads because it governs how the turn
+/// — the other parts are what vary. It leads because it governs how the turn
 /// may *end*, which the parts after it (formatting, context, summary) all
 /// assume.
 ///
@@ -3158,19 +3209,16 @@ spoken summary, say the details are on screen, and offer to go deeper only if th
 /// chat template) reject a request carrying more than one leading system turn
 /// ("System message must be at the beginning"). Merging keeps a single system
 /// turn regardless of which parts are present. Pure so it's unit-tested.
-fn leading_system_message(
-    voice_directive: Option<&str>,
-    request_context: Option<String>,
-    summary: Option<&str>,
-) -> serde_json::Value {
+pub(crate) fn leading_system_message(leading: Leading<'_>) -> serde_json::Value {
     let mut parts: Vec<String> = vec![TURN_DISCIPLINE.to_string()];
-    if let Some(directive) = voice_directive {
+    if let Some(directive) = leading.voice_directive {
         parts.push(directive.to_string());
     }
-    if let Some(ctx) = request_context {
+    parts.extend(leading.own);
+    if let Some(ctx) = leading.context {
         parts.push(ctx);
     }
-    if let Some(summary) = summary {
+    if let Some(summary) = leading.summary {
         parts.push(format!(
             "Summary of the earlier part of this conversation (older messages have been \
              condensed to save context; treat this as established context and continue \
@@ -3986,7 +4034,9 @@ mod tests {
     }
 
     mod history_fold {
-        use crate::openai_driver::{STEER_PREFIX, build_history_messages, leading_system_message};
+        use crate::openai_driver::{
+            Leading, STEER_PREFIX, build_history_messages, leading_system_message,
+        };
         use aiplane_core::server::db::chat_compactions::Compaction;
         use jiff::Timestamp;
         use session_core::db::{SteerStatus, Turn, TurnRole, TurnStatus, TurnWithTools};
@@ -4212,7 +4262,11 @@ mod tests {
         /// system message (backends reject multiple leading system turns).
         #[test]
         fn system_message_merges_context_and_summary() {
-            let m = leading_system_message(None, Some("CONTEXT".into()), Some("SUMMARY"));
+            let m = leading_system_message(Leading {
+                context: Some("CONTEXT".into()),
+                summary: Some("SUMMARY"),
+                ..Leading::default()
+            });
             assert_eq!(m["role"], "system");
             let content = m["content"].as_str().unwrap();
             assert!(content.contains("CONTEXT"));
@@ -4222,12 +4276,31 @@ mod tests {
         /// The three context parts are each optional and merge in when present.
         #[test]
         fn system_message_optional_parts() {
-            let only_ctx = leading_system_message(None, Some("C".into()), None);
+            let only_ctx = leading_system_message(Leading {
+                context: Some("C".into()),
+                ..Leading::default()
+            });
             assert!(only_ctx["content"].as_str().unwrap().contains('C'));
-            let only_sum = leading_system_message(None, None, Some("S"));
+            let only_sum = leading_system_message(Leading {
+                summary: Some("S"),
+                ..Leading::default()
+            });
             assert!(only_sum["content"].as_str().unwrap().contains('S'));
-            let only_voice = leading_system_message(Some("VOICE"), None, None);
+            let only_voice = leading_system_message(Leading {
+                voice_directive: Some("VOICE"),
+                ..Leading::default()
+            });
             assert!(only_voice["content"].as_str().unwrap().contains("VOICE"));
+            let only_own = leading_system_message(Leading {
+                own: vec!["## Role\n\nYou are Support.".into()],
+                ..Leading::default()
+            });
+            assert!(
+                only_own["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("You are Support.")
+            );
         }
 
         /// EVERY turn carries the rule that work happens inside the turn or not
@@ -4242,7 +4315,7 @@ mod tests {
         /// most of the budget still unused.
         #[test]
         fn every_turn_carries_the_no_background_work_rule() {
-            let bare = leading_system_message(None, None, None);
+            let bare = leading_system_message(Leading::default());
             assert_eq!(bare["role"], "system");
             let content = bare["content"].as_str().expect("string content");
             assert!(
@@ -4258,7 +4331,12 @@ mod tests {
             // It leads: the parts after it assume the turn can't be continued
             // later, and a rule buried under a page of context is a rule the
             // model weighs against everything above it.
-            let with_all = leading_system_message(Some("VOICE"), Some("CONTEXT".into()), Some("S"));
+            let with_all = leading_system_message(Leading {
+                voice_directive: Some("VOICE"),
+                own: vec!["ROLE".into()],
+                context: Some("CONTEXT".into()),
+                summary: Some("S"),
+            });
             let all = with_all["content"].as_str().unwrap();
             assert!(
                 all.starts_with("How a turn works here:"),

@@ -20,13 +20,16 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
 
-use super::{OpenAiDriver, TurnEnd, VOICE_DIRECTIVE, build_request_context, run_outcome};
+use super::{
+    Audience, Leading, OpenAiDriver, TurnEnd, VOICE_DIRECTIVE, build_request_context, run_outcome,
+};
 use crate::agent_run::AgentRun;
 use crate::agents::profile::{AgentSurface, RunToolSource};
 use crate::agents::topic_guard::Decision;
 use crate::budget::Budget;
 use crate::finish::{FINISH_NUDGE, FinishTool};
 use crate::persona::ChatPersona;
+use crate::server::tools::catalog::READ_SKILL_ID;
 use crate::server::tools::injection::InjectionScan;
 use crate::server::tools::mcp::manager::UserMcpLayer;
 use crate::server::tools::runner::{self, ToolCallAcc};
@@ -168,26 +171,29 @@ impl<'a> TurnPolicy<'a> {
         user_mcp: &UserMcpLayer,
         summary: Option<&str>,
     ) -> Value {
-        let base = match self {
-            Self::Chat => {
-                let request_context = build_request_context(d, user_mcp).await;
-                let voice_directive = d.voice_mode.then_some(VOICE_DIRECTIVE);
-                super::leading_system_message(voice_directive, request_context, summary)
-            }
-            Self::Agent(run) => match run.surface() {
-                Some(surface) => {
-                    surface
-                        .system_message(&d.state.db, session_id, summary)
-                        .await
-                }
-                None => super::leading_system_message(None, None, summary),
-            },
-            Self::Persona(persona) => super::leading_system_message(
-                None,
-                Some(persona.instructions().to_string()),
+        let leading = match self {
+            Self::Chat => Leading {
+                voice_directive: d.voice_mode.then_some(VOICE_DIRECTIVE),
+                context: build_request_context(d, user_mcp, Audience::Person).await,
                 summary,
-            ),
+                ..Leading::default()
+            },
+            Self::Agent(run) => Leading {
+                own: match run.surface() {
+                    Some(surface) => surface.system_sections(&d.state.db, session_id).await,
+                    None => Vec::new(),
+                },
+                context: build_request_context(d, user_mcp, Audience::Agent).await,
+                summary,
+                ..Leading::default()
+            },
+            Self::Persona(persona) => Leading {
+                own: vec![persona.instructions().to_string()],
+                summary,
+                ..Leading::default()
+            },
         };
+        let base = super::leading_system_message(leading);
         let mut leading = vec![base];
         if let Some(finish) = self.finish() {
             runner::merge_into_leading_system_message(
@@ -259,7 +265,7 @@ impl<'a> TurnPolicy<'a> {
                         .unwrap_or_default()
                         .is_empty()
             }
-            Self::Agent(run) => !agent_offer(run, granted).is_empty(),
+            Self::Agent(run) => !agent_offer(d, run, granted).is_empty(),
             Self::Persona(persona) => !persona.offer().is_empty(),
         }
     }
@@ -280,7 +286,7 @@ impl<'a> TurnPolicy<'a> {
     ) -> Vec<String> {
         match self {
             Self::Chat => chat_offer(d, session_id, user_mcp).await,
-            Self::Agent(run) => agent_offer(run, granted),
+            Self::Agent(run) => agent_offer(d, run, granted),
             Self::Persona(persona) => persona.offer(),
         }
     }
@@ -385,11 +391,30 @@ impl<'a> TurnPolicy<'a> {
 
 /// An agent run's offer: its granted spec tools and synthetic tools (every
 /// grant, for a run with no spec), then the run's terminal tool.
-fn agent_offer(run: &AgentRun, granted: &[String]) -> Vec<String> {
+/// Whether an agent run is offered the skill loader without its spec
+/// listing it: the system message lists the skills its principal is granted,
+/// so the loader must be callable whenever it is granted too — the rule a
+/// person's chat follows (`allowed_tools_for_session`).
+fn skill_loader_on(d: &OpenAiDriver, granted: &[String]) -> bool {
+    granted.iter().any(|id| id == READ_SKILL_ID)
+        && !d
+            .state
+            .allowed_skills_for_principal(&d.tool_ctx.principal)
+            .is_empty()
+}
+
+/// An agent run's offer, the one list both the round and the automatic
+/// router read: its grants (the spec's tools among them, when it has a
+/// spec), the skill loader when its skills are listed, the run's synthetic
+/// tools and, under a contract, `finish`.
+fn agent_offer(d: &OpenAiDriver, run: &AgentRun, granted: &[String]) -> Vec<String> {
     let mut offer = match run.surface() {
         Some(surface) => surface.offered(granted),
         None => granted.to_vec(),
     };
+    if skill_loader_on(d, granted) && !offer.iter().any(|id| id == READ_SKILL_ID) {
+        offer.push(READ_SKILL_ID.to_string());
+    }
     offer.extend(run.terminal_tool().iter().map(|t| t.id().to_string()));
     offer
 }

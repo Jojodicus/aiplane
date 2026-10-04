@@ -126,6 +126,7 @@ suspension row mapper. The migrations' CHECK and foreign key to
 The base layer — the things everything else stands on, and the least-edited code
 in the tree. No routing, no `AppState`, no tool registry:
 - `auth/oidc.rs` — hand-rolled OIDC client (discovery + JWKS-verified ID tokens, on reqwest).
+- `auth/jwks.rs` — the one JWKS cache, shared by the OIDC login and an agent's `host_jwt` verifier: each fetches its set its own way, the cache decides when (fresh for a TTL, refetched for an unknown `kid` at most once per window).
 - `auth/token.rs` — gateway-token mint/hash helpers.
 - `config.rs` — typed `[upstream_pools]`, `[[models]]`, `[oidc]`, `[rbac]` schema.
 - `db/` — sqlx; users / tokens / sessions / prefs / usage / limits / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`. Migrations run on one connection with foreign keys **off** and a `foreign_key_check` after, so a parent table can be rebuilt without `ON DELETE CASCADE` emptying its children (see `migrations/README.md`).
@@ -140,7 +141,7 @@ in the tree. No routing, no `AppState`, no tool registry:
 - `capped_read.rs` — `read_capped`, the one bounded reader for outbound response bodies: a declared `Content-Length` over the cap is refused before anything is read, and otherwise reading stops the moment the running total passes it. `read_capped_json` / `read_capped_text` parse on top of it, `read_capped_for` / `read_capped_json_for` word its errors for a person, and `read_error_text` keeps the first 16 KiB of an error answer to quote. Every outbound response is read through it (the architecture test `response_bodies_are_read_only_through_the_capped_reader` fails on a `.bytes()` / `.text()` / `.json()` anywhere else), each with a cap that fits: `API_ANSWER_BYTES` (4 MiB) for token, discovery, search and lookup answers; `MODEL_ANSWER_BYTES` (64 MiB) for a model backend's whole answer (non-streamed completions, embeddings, base64 images, model lists); and the caller's own where neither fits (`fetch_url` 32 MiB, `load_image_url` and ComfyUI outputs 25 MiB, WebDAV listings 32 MiB, the GeoIP download 512 MiB, the sandbox runner's answer 768 MiB).
 - `usage/`, `limits/` — the metrics sink and the spend-limit/quota enforcer. Usage rows carry the run's `agent_id` and the enforcer checks an agent's budget against them, because spend is metered for every caller in one place; the agent's *visitor rates* are agent-only and live in `aiplane-agents` (`rates`).
 - What stays here although agents use it, and why: the one embedded migration set (the sqlx history is never split, so the agent tables' DDL is here while their accessors are not); `Principal`, `GrantSet`, `GrantKind` and `RunChain` (RBAC, the upstream registry and usage metering read them); the `gwe_`/`gwv_` token helpers in `auth/token.rs` (one module proves every bearer prefix disjoint); and `db/reseal.rs`'s list of sealed columns, which names `agent_notify_channels` and the three agent spec columns (whose credentials it finds by their `*_sealed` keys, without knowing the spec's layout) so key rotation covers every secret in one pass.
-- `rama_server/session.rs` — signed-cookie + sqlite session store, plus the `is_safe_return_to` redirect guard the OIDC callback needs to bounce a signed-in user back to the SPA route they asked for; `rama_server/cors.rs` — the `/v1` CORS layer (the embed one reads agent data, so it lives with the router in `aiplane`). Neither needs `AppState`, so both stay here.
+- `rama_server/session.rs` — signed-cookie + sqlite session store, plus the `is_safe_return_to` redirect guard the OIDC callback needs to bounce a signed-in user back to the SPA route they asked for; `rama_server/cors.rs` — the `/v1` CORS layer and the plumbing both CORS layers share (`CorsHeaders`: the headers an allowed origin gets and the preflight answer; `vary_origin`). The embed layer reads agent data, so it lives with the router in `aiplane`; the two differ on purpose only in which origin they allow. Neither needs `AppState`, so both stay here.
 
 ### `crates/aiplane-features`
 The optional subsystems — what a deployment switches on at `/admin/settings`
@@ -220,7 +221,7 @@ constraint is why a handful of test-support helpers (`ToolContext::for_test`,
 The `/api/v0` JSON handlers the SPA calls — everything the deleted page stack used
 to render server-side, now answering JSON instead. `pages/mod.rs` carries the
 shared helpers every handler uses — `require_session_json` / `require_admin_json`
-(the 401/403 gates) and `json_ok` / `json_error` (the response envelope) — and
+(the 401/403 gates) and `json_ok` / `json_error` / `json_error_with` (the response envelope, the last with extra fields such as a validator's `issues`) — and
 re-exports the handlers the router mounts.
 `chat/` is a directory module for the multi-conversation chat (`json_api.rs` for
 the endpoints and the event stream, `title.rs` for auto-titling); `json_admin.rs`,

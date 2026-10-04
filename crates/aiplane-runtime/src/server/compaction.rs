@@ -21,13 +21,13 @@
 //! fresh summary and bumps the cutoff, so a long-running conversation stays
 //! bounded across many compactions.
 //!
-//! The summariser is a one-shot, non-streaming, capped, best-effort model call
-//! modelled on `aiplane_api::pages::chat::title`. The folded turns are
-//! never deleted — they stay in `chat_turns` and remain visible in the
+//! The summariser is a best-effort side call ([`side_call::ask_text`]): it
+//! passes the turn's payer's spend limits first and is a usage row of theirs.
+//! The folded turns are never deleted — they stay in `chat_turns` and remain visible in the
 //! transcript; they are simply not sent upstream.
 
-use crate::agents::audit::{RunLog, SideExchange};
-use aiplane_core::server::capped_read;
+use crate::agents::audit::RunLog;
+use crate::server::side_call::{self, Payer, SideCall, strip_think_block};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 
 use crate::rama_server::state::RamaState;
@@ -37,7 +37,7 @@ use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
 /// Hard timeout on the summariser call — a sticky upstream can't keep the
 /// background task alive indefinitely.
-const TIMEOUT_SECS: u64 = 60;
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Per-tool-call truncation caps in the summariser input. Tool arguments and
 /// outputs can be large (a fetched page, a document); we hand the summariser a
@@ -66,12 +66,14 @@ summary\" — output only the summary itself.\n\
 /// pools `access` reaches: the summary carries the conversation, so an agent's
 /// may only go to the pools its own turns may. `log` is the agent run the
 /// conversation belongs to, whose activity log records the summariser's
-/// exchange; `None` for a person's chat.
+/// exchange; `None` for a person's chat. `payer` is whoever the turns are
+/// for: the summary is a usage row of theirs and needs their budget.
 pub async fn maybe_autocompact(
     state: &RamaState,
     session_id: &str,
     model: &str,
     access: &PoolAccess,
+    payer: &Payer,
     log: Option<RunLog>,
 ) {
     let cfg = &state.config().chat.compaction;
@@ -106,7 +108,7 @@ pub async fn maybe_autocompact(
         %session_id, %model, current, threshold, window,
         "compaction: context over threshold, summarising"
     );
-    match run_compaction(state, session_id, model, access, Some(current), log).await {
+    match run_compaction(state, session_id, model, access, payer, Some(current), log).await {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(%session_id, "compaction: nothing to fold (guarded)");
@@ -182,6 +184,7 @@ async fn run_compaction(
     session_id: &str,
     model: &str,
     access: &PoolAccess,
+    payer: &Payer,
     tokens_before: Option<i64>,
     log: Option<RunLog>,
 ) -> Result<bool, String> {
@@ -197,26 +200,26 @@ async fn run_compaction(
         return Ok(false);
     };
 
-    let mut exchange = SideExchange::new("compaction_summary");
-    let raw = tokio::time::timeout(
-        std::time::Duration::from_secs(TIMEOUT_SECS),
-        call_summarizer(
-            state,
+    let answered = side_call::ask_text(
+        state,
+        payer,
+        SideCall {
+            purpose: "compaction_summary",
             model,
             access,
-            &plan.input_text,
-            cfg.summary_max_tokens,
-            &mut exchange,
-        ),
+            instructions: SUMMARY_SYSTEM_PROMPT,
+            input: &plan.input_text,
+            temperature: 0.0,
+            max_tokens: Some(cfg.summary_max_tokens),
+            no_think: true,
+            timeout: TIMEOUT,
+        },
     )
-    .await
-    .map_err(|_| "summariser timed out".to_string())
-    .and_then(|r| r);
+    .await;
     if let Some(log) = &log {
-        exchange.error = raw.as_ref().err().cloned();
-        log.record(&state.db, exchange).await;
+        log.record(&state.db, &answered.exchange).await;
     }
-    let raw = raw?;
+    let raw = answered.answer.map_err(|e| e.to_string())?;
 
     let summary = clean_summary(&raw);
     if summary.is_empty() {
@@ -368,95 +371,11 @@ fn append_turn(out: &mut String, t: &TurnWithTools) {
     }
 }
 
-/// One non-streaming chat completion that produces the summary. Modelled on the
-/// title-generation call: temperature 0, capped output, reasoning defeated
-/// three ways (vLLM `enable_thinking=false`, `/no_think`, and the prompt), no
-/// tools.
-async fn call_summarizer(
-    state: &RamaState,
-    model: &str,
-    access: &PoolAccess,
-    input: &str,
-    max_tokens: i64,
-    exchange: &mut SideExchange,
-) -> Result<String, String> {
-    exchange.model = Some(model.to_string());
-    let acquired = state
-        .upstreams
-        .route_access(model, PoolKind::Chat, access)
-        .map_err(|e| e.to_string())?;
-    let real_model = acquired.resolved_model().to_string();
-    let backend = acquired.backend();
-    exchange.backend = Some(backend.name.clone());
-    let url = format!("{}/chat/completions", backend.base_url);
-    let user_with_directive = format!("{input}\n\n/no_think");
-    let body = serde_json::json!({
-        "model": real_model,
-        "messages": [
-            { "role": "system", "content": SUMMARY_SYSTEM_PROMPT },
-            { "role": "user", "content": user_with_directive },
-        ],
-        "stream": false,
-        "temperature": 0,
-        "max_tokens": max_tokens,
-        "chat_template_kwargs": { "enable_thinking": false },
-    });
-    exchange.request = body.clone();
-    let serialized = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-    let mut req = state
-        .http
-        .post(&url)
-        .header("content-type", "application/json")
-        .body(serialized);
-    if let Some(key) = backend.api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let status = resp.status();
-    let bytes = capped_read::read_capped(resp, capped_read::MODEL_ANSWER_BYTES)
-        .await
-        .map_err(|e| e.to_string())?;
-    drop(acquired);
-    exchange.answered(status.as_u16(), &bytes);
-    if !status.is_success() {
-        return Err(format!(
-            "upstream {status}: {}",
-            String::from_utf8_lossy(&bytes)
-                .chars()
-                .take(120)
-                .collect::<String>()
-        ));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    Ok(v.pointer("/choices/0/message/content")
-        .and_then(|c| c.as_str())
-        .unwrap_or("")
-        .to_string())
-}
-
 /// Trim the summariser output into a clean body: strip a leaked
 /// `<think>…</think>` block (some reasoning-parser adapters leak it despite the
 /// knobs) and surrounding whitespace.
 fn clean_summary(raw: &str) -> String {
     strip_think_block(raw).trim().to_string()
-}
-
-/// Strip a single `<think>…</think>` block, case-insensitive. Conservative:
-/// only acts on a balanced pair. (Mirrors the title-gen helper.)
-fn strip_think_block(s: &str) -> String {
-    let lower = s.to_ascii_lowercase();
-    let Some(start) = lower.find("<think>") else {
-        return s.to_string();
-    };
-    let after_start = start + "<think>".len();
-    let Some(rel_end) = lower[after_start..].find("</think>") else {
-        return s.to_string();
-    };
-    let end = after_start + rel_end + "</think>".len();
-    let mut out = String::with_capacity(s.len() - (end - start));
-    out.push_str(&s[..start]);
-    out.push_str(&s[end..]);
-    out
 }
 
 #[cfg(test)]

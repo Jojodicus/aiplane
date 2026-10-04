@@ -19,12 +19,12 @@
 //! A refused token writes nothing. An accepted one writes every mapped slot
 //! or none.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use aiplane_agents::db::agent_audit::{AuditKind, Correlation, NewEvent};
 use aiplane_agents::db::agent_verifiers;
+use aiplane_core::server::auth::jwks::JwksCache;
 use aiplane_core::server::capped_read;
 use aiplane_core::server::crypto::sha256_hex;
 use aiplane_core::server::outbound_guard::{self, Policy};
@@ -230,8 +230,8 @@ pub fn check_jwks_url(url: &str, allow_private: bool) -> Result<(), String> {
     outbound_guard::check_url(url, Policy::agent(allow_private)).map(|_| ())
 }
 
-type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;
-static JWKS: LazyLock<JwksCache> = LazyLock::new(Default::default);
+static JWKS: LazyLock<JwksCache<JwkSet>> =
+    LazyLock::new(|| JwksCache::new(Some(JWKS_TTL), JWKS_REFETCH));
 
 /// The key set at `url`, fetched through `outbound_guard`: the URL is
 /// chosen by an agent's owner, so it gets the same resolve-and-pin, no
@@ -261,16 +261,13 @@ async fn fetch_jwks(state: &RamaState, url: &str) -> Result<JwkSet, IdentityErro
     let bytes = capped_read::read_capped_for(resp, MAX_JWKS_BYTES, "the JWKS document")
         .await
         .map_err(unavailable)?;
-    let set: JwkSet = serde_json::from_slice(&bytes)
-        .map_err(|e| unavailable(format!("not a JWKS document: {e}")))?;
-    JWKS.lock()
-        .expect("jwks cache")
-        .insert(url.to_string(), (Instant::now(), set.clone()));
-    Ok(set)
+    serde_json::from_slice(&bytes).map_err(|e| unavailable(format!("not a JWKS document: {e}")))
 }
 
-/// The JWKS key for `kid`: from the cache while it is fresh and knows the
-/// key, refetched otherwise (a rotated key appears without a restart).
+/// The JWKS key for `kid`: from the shared cache while it is fresh and knows
+/// the key, refetched otherwise (a rotated key appears without a restart),
+/// but never more than once per `JWKS_REFETCH` — a token with a made-up
+/// `kid` must not make the gateway fetch the website's keys on every request.
 async fn jwks_key(
     state: &RamaState,
     url: &str,
@@ -281,18 +278,10 @@ async fn jwks_key(
         None if set.keys.len() == 1 => set.keys.first().cloned(),
         None => None,
     };
-    let (cached, just_fetched) = match JWKS.lock().expect("jwks cache").get(url) {
-        Some((at, set)) if at.elapsed() < JWKS_TTL => (find(set), at.elapsed() < JWKS_REFETCH),
-        _ => (None, false),
-    };
-    let jwk = match cached {
-        Some(jwk) => jwk,
-        // A token with a made-up `kid` must not make the gateway fetch the
-        // website's keys on every request.
-        None if just_fetched => return Err(IdentityError::Invalid(Refusal::UnknownKey)),
-        None => find(&fetch_jwks(state, url).await?)
-            .ok_or(IdentityError::Invalid(Refusal::UnknownKey))?,
-    };
+    let jwk = JWKS
+        .key(url, find, || fetch_jwks(state, url))
+        .await?
+        .ok_or(IdentityError::Invalid(Refusal::UnknownKey))?;
     DecodingKey::from_jwk(&jwk).map_err(|_| IdentityError::Invalid(Refusal::UnknownKey))
 }
 

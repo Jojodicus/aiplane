@@ -201,20 +201,10 @@ pub(crate) async fn limit_exceeded(
     None
 }
 
-/// Compact number for limit messages: whole values without a trailing `.0`,
-/// otherwise two decimals (cost).
-fn fmt_limit_num(n: f64) -> String {
-    if n.fract() == 0.0 {
-        format!("{}", n as i64)
-    } else {
-        format!("{n:.2}")
-    }
-}
-
 /// A `429 Too Many Requests` with an OpenAI-shaped error envelope and a
 /// `Retry-After` header, naming the breached limit.
 fn limit_exceeded_response(e: &aiplane_core::server::limits::LimitExceeded) -> Response {
-    let msg = limit_message(e);
+    let msg = e.to_string();
     let body = json!({
         "error": {
             "message": msg,
@@ -233,32 +223,6 @@ fn limit_exceeded_response(e: &aiplane_core::server::limits::LimitExceeded) -> R
         .unwrap_or_else(|_| {
             error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded", &msg)
         })
-}
-
-/// The human-readable "you are over a limit" sentence, shared by every wire
-/// format so a developer reads the same explanation whichever endpoint they
-/// hit.
-pub(crate) fn limit_message(e: &aiplane_core::server::limits::LimitExceeded) -> String {
-    let scope = e
-        .model
-        .as_deref()
-        .map(|m| format!(" for model `{m}`"))
-        .unwrap_or_default();
-    // Say *whose* ceiling this was. "You are over quota" and "this token is
-    // over its quota" have different fixes — the second is solved by using a
-    // different token, or by raising that token's own rule, and a caller who
-    // cannot tell them apart will chase the wrong one.
-    let subject = match e.subject {
-        aiplane_core::server::db::limits::SubjectType::Token => " for this API token",
-        _ => "",
-    };
-    format!(
-        "{} limit reached{subject}{scope}: {} per {} (used {}). Try again later.",
-        e.dimension.as_str(),
-        fmt_limit_num(e.limit),
-        e.window.as_str(),
-        fmt_limit_num(e.used),
-    )
 }
 
 /// Token counts from a buffered JSON body (or `(None, None, None)` if it

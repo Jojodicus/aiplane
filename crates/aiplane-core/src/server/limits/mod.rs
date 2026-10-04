@@ -96,6 +96,45 @@ pub struct LimitExceeded {
     pub subject: SubjectType,
 }
 
+/// The human-readable "you are over a limit" sentence, shared by every wire
+/// format and every side call, so a caller reads the same explanation
+/// wherever the limit refused them.
+impl std::fmt::Display for LimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scope = self
+            .model
+            .as_deref()
+            .map(|m| format!(" for model `{m}`"))
+            .unwrap_or_default();
+        // Say *whose* ceiling this was. "You are over quota" and "this token is
+        // over its quota" have different fixes — the second is solved by using a
+        // different token, or by raising that token's own rule, and a caller who
+        // cannot tell them apart will chase the wrong one.
+        let subject = match self.subject {
+            SubjectType::Token => " for this API token",
+            _ => "",
+        };
+        write!(
+            f,
+            "{} limit reached{subject}{scope}: {} per {} (used {}). Try again later.",
+            self.dimension.as_str(),
+            fmt_limit_num(self.limit),
+            self.window.as_str(),
+            fmt_limit_num(self.used),
+        )
+    }
+}
+
+/// Compact number for limit messages: whole values without a trailing `.0`,
+/// otherwise two decimals (cost).
+fn fmt_limit_num(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n:.2}")
+    }
+}
+
 impl Enforcer {
     pub fn new(db: Pool, enabled: bool) -> Self {
         Self { db, enabled }

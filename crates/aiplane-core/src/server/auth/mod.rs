@@ -7,6 +7,7 @@
 //! Session cookies + bearer middleware are framework-specific and live in
 //! `crate::rama_server::session` + `aiplane_runtime::rama_server::auth`.
 
+pub mod jwks;
 pub mod mcp_oauth;
 pub mod oidc;
 pub mod pending;

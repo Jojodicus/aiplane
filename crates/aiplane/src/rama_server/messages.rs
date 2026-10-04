@@ -632,7 +632,7 @@ pub(crate) fn error_response(status: StatusCode, message: &str) -> Response {
 
 /// `429` with the `Retry-After` the enforcer computed, in the Anthropic shape.
 fn rate_limited(e: &aiplane_core::server::limits::LimitExceeded) -> Response {
-    let body = anthropic::error::envelope("rate_limit_error", &proxy::limit_message(e));
+    let body = anthropic::error::envelope("rate_limit_error", &e.to_string());
     let mut resp = json_response(StatusCode::TOO_MANY_REQUESTS, &body);
     if let Ok(secs) = rama::http::HeaderValue::from_str(&e.retry_after_secs.to_string()) {
         resp.headers_mut()

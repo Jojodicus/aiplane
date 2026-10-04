@@ -56,14 +56,7 @@ export interface InboxAnswer {
 /** The message and code of a failed inbox call, out of the gateway's envelope. */
 export function errorMessage(err: unknown): { code?: string; message: string } {
 	if (!(err instanceof ApiError)) return { message: err instanceof Error ? err.message : String(err) };
-	const at = err.message.indexOf(' — ');
-	try {
-		const envelope = JSON.parse(at >= 0 ? err.message.slice(at + 3) : '')?.error;
-		if (envelope && typeof envelope.message === 'string') return { code: envelope.code ?? err.code, message: envelope.message };
-	} catch {
-		// not an envelope
-	}
-	return { code: err.code, message: err.message };
+	return { code: err.code, message: err.serverMessage ?? err.message };
 }
 
 const post = (body: unknown): RequestInit => ({

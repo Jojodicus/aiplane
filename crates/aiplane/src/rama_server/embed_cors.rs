@@ -10,8 +10,9 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use aiplane_agents::db::embed_keys::EmbeddableOrigins;
+use aiplane_core::rama_server::cors::{CorsHeaders, vary_origin};
 use aiplane_core::server::db::Pool;
-use rama::http::{Body, HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
+use rama::http::{Body, Method, Request, Response, StatusCode, header};
 use rama::{Layer, Service};
 
 /// [`Layer`] for CORS on the public agent endpoint, `/api/v0/embed/*`
@@ -70,12 +71,13 @@ pub struct EmbedCors<S> {
 pub const EMBED_PREFIX: &str = "/api/v0/embed/";
 
 /// The widget sends its visitor token as `Authorization` and its bodies as
-/// JSON; it needs nothing else.
-const EMBED_ALLOWED_REQUEST_HEADERS: &str = "authorization, content-type";
-
-/// Short on purpose: a revoked key or a removed origin should stop working
-/// in browsers within minutes, not after a day of cached preflights.
-const EMBED_PREFLIGHT_MAX_AGE: &str = "600";
+/// JSON; it needs nothing else. The preflight is cached briefly on purpose:
+/// a revoked key or a removed origin should stop working in browsers within
+/// minutes, not after a day of cached preflights.
+const EMBED_CORS: CorsHeaders = CorsHeaders {
+    allow_headers: "authorization, content-type",
+    max_age_secs: "600",
+};
 
 impl<S> Service<Request> for EmbedCors<S>
 where
@@ -104,42 +106,21 @@ where
         };
 
         if req.method() == Method::OPTIONS {
-            let mut resp = Response::new(Body::empty());
             if allowed {
-                *resp.status_mut() = StatusCode::NO_CONTENT;
-                apply_embed_cors_headers(resp.headers_mut(), origin);
-            } else {
-                *resp.status_mut() = StatusCode::FORBIDDEN;
-                resp.headers_mut()
-                    .append(header::VARY, HeaderValue::from_static("origin"));
+                return Ok(EMBED_CORS.preflight(origin));
             }
+            let mut resp = Response::new(Body::empty());
+            *resp.status_mut() = StatusCode::FORBIDDEN;
+            vary_origin(resp.headers_mut());
             return Ok(resp);
         }
 
         let mut resp = self.inner.serve(req).await?;
         if allowed {
-            apply_embed_cors_headers(resp.headers_mut(), origin);
+            EMBED_CORS.apply(resp.headers_mut(), origin);
         } else {
-            resp.headers_mut()
-                .append(header::VARY, HeaderValue::from_static("origin"));
+            vary_origin(resp.headers_mut());
         }
         Ok(resp)
     }
-}
-
-fn apply_embed_cors_headers(headers: &mut HeaderMap, origin: HeaderValue) {
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, OPTIONS"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static(EMBED_ALLOWED_REQUEST_HEADERS),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_MAX_AGE,
-        HeaderValue::from_static(EMBED_PREFLIGHT_MAX_AGE),
-    );
-    headers.append(header::VARY, HeaderValue::from_static("origin"));
 }
