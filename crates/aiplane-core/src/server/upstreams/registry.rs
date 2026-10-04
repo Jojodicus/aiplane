@@ -723,15 +723,19 @@ impl PoolAccess {
     /// Whether the calling token may use `model`. `true` for every caller
     /// without an allowlist, which is the default for every token.
     pub fn allows_model(&self, model: &str) -> bool {
-        let granted = self
-            .granted_models
-            .as_ref()
-            .is_none_or(|granted| granted.contains(model));
-        granted
+        self.grants_model(model)
             && self
                 .allowed_models
                 .as_ref()
                 .is_none_or(|set| set.contains(model))
+    }
+
+    /// Whether a system principal's grants cover `model`; `true` for people.
+    /// A model outside them is unknown to the principal, not "not allowed".
+    pub fn grants_model(&self, model: &str) -> bool {
+        self.granted_models
+            .as_ref()
+            .is_none_or(|granted| granted.contains(model))
     }
 
     /// True when the caller carries a model allowlist at all — lets a handler
@@ -2051,10 +2055,10 @@ impl UpstreamRegistry {
         // caller — 404, with the kind's fallback still applying — rather than
         // becoming an allowlist error that suppresses the fallback.
         if !access.allows_model(model) {
-            let known = d
-                .pools
-                .values()
-                .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+            let known = access.grants_model(model)
+                && d.pools
+                    .values()
+                    .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
@@ -2219,10 +2223,10 @@ impl UpstreamRegistry {
     ) -> Result<String, RouteError> {
         let d = self.data();
         if !access.allows_model(model) {
-            let known = d
-                .pools
-                .values()
-                .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+            let known = access.grants_model(model)
+                && d.pools
+                    .values()
+                    .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
