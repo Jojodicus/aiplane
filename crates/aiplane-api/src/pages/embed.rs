@@ -14,8 +14,9 @@
 //!
 //! Every request re-checks the whole chain — key live, origin listed by that
 //! key, agent enabled and published — so revoking a key or disabling an
-//! agent ends open conversations at their next request. Only the live
-//! version is ever served.
+//! agent ends open conversations at their next request. A new conversation
+//! starts on the live version and stays on it, so a later publish does not
+//! change the rules mid-conversation; a draft is never served.
 //!
 //! A visitor never sees tool calls, reasoning, upstream error text or an
 //! answer still being written: each assistant answer arrives whole once its
