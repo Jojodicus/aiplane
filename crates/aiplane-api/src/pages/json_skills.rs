@@ -15,7 +15,7 @@ use aiplane_core::server::db;
 use aiplane_core::server::db::user_mcp::ToolMode;
 use aiplane_runtime::rama_server::state::RamaState;
 
-use super::{bad_request, internal, json_error, json_ok, no_content, raw_path_segment};
+use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 
 // ---------------------------------------------------------------------------
 // Skills (user + admin)
@@ -212,9 +212,9 @@ pub async fn skills_upload(State(state): State<Arc<RamaState>>, req: Request) ->
     let (_session, user) = require_session_json!(state, req);
     let Some(store) = state.user_skills() else {
         return json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "personal skills are not enabled on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+            "personal skills are not enabled on this gateway; an administrator can switch them on under Skills at /admin/settings",
         );
     };
     let content_type = req
@@ -287,9 +287,9 @@ pub async fn skills_delete(State(state): State<Arc<RamaState>>, req: Request) ->
     };
     let Some(store) = state.user_skills() else {
         return json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "personal skills are not enabled on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+            "personal skills are not enabled on this gateway; an administrator can switch them on under Skills at /admin/settings",
         );
     };
     match store.remove(&user.id, &name) {
@@ -356,7 +356,11 @@ pub async fn admin_skill_archive(State(state): State<Arc<RamaState>>, req: Reque
         return bad_request("the URL is missing its skill name");
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let registry = store.current();
     let Some(skill) = registry.get(&name) else {
@@ -370,7 +374,11 @@ pub async fn admin_skill_archive(State(state): State<Arc<RamaState>>, req: Reque
 pub async fn admin_skills_upload(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let content_type = req
         .headers()
@@ -421,7 +429,11 @@ pub async fn admin_skills_delete(State(state): State<Arc<RamaState>>, req: Reque
         return bad_request("the URL is missing its skill name");
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let _ = db::skill_grants::delete_skill(&state.db, &name).await;
     match store.remove(&name) {
@@ -454,7 +466,11 @@ pub async fn admin_skills_grants(State(state): State<Arc<RamaState>>, req: Reque
         Err(err) => return bad_request(format!("parsing the grants body: {err}")),
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     if store.current().get(&parsed.skill).is_none() {
         return json_error(StatusCode::NOT_FOUND, "not_found", "no such skill");
@@ -842,13 +858,14 @@ pub async fn admin_connectors_toggle(
     let toggled = db::mcp_catalog::set_enabled(&state.db, &key, parsed.enabled).await;
     state.grant_caps.invalidate();
     match toggled {
-        Ok(_) => json_ok(
+        Ok(true) => json_ok(
             StatusCode::OK,
             ConnectorToggled {
                 key,
                 enabled: parsed.enabled,
             },
         ),
+        Ok(false) => not_found(format!("no connector `{key}`")),
         Err(err) => internal(err),
     }
 }
@@ -860,10 +877,20 @@ pub async fn admin_connector_audit(State(state): State<Arc<RamaState>>, req: Req
     let Some(key) = raw_path_segment(&req, 1) else {
         return bad_request("the URL is missing its connector key");
     };
-    let connector = db::mcp_catalog::get(&state.db, &key).await.ok().flatten();
-    let events = db::mcp_audit::recent_for_connector(&state.db, &key, 200)
-        .await
-        .unwrap_or_default()
+    let connector = match db::mcp_catalog::get(&state.db, &key).await {
+        Ok(connector) => connector,
+        Err(err) => return internal(err),
+    };
+    let events = match db::mcp_audit::recent_for_connector(&state.db, &key, 200).await {
+        Ok(events) => events,
+        Err(err) => return internal(err),
+    };
+    // A deleted connector's calls stay readable; a key that never had
+    // either is not a connector.
+    if connector.is_none() && events.is_empty() {
+        return not_found(format!("no connector `{key}`"));
+    }
+    let events = events
         .into_iter()
         .map(|event| ConnectorAuditEvent {
             created_at: event.created_at.to_string(),
@@ -900,11 +927,17 @@ pub async fn admin_connectors_delete(
     let Some(key) = raw_path_segment(&req, 0) else {
         return bad_request("the URL is missing its connector key");
     };
+    match db::mcp_catalog::get(&state.db, &key).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(format!("no connector `{key}`")),
+        Err(err) => return internal(err),
+    }
     let _ = db::user_mcp::delete_all_for_connector(&state.db, &key).await;
     let deleted = db::mcp_catalog::delete(&state.db, &key).await;
     state.grant_caps.invalidate();
     match deleted {
-        Ok(_) => no_content(),
+        Ok(true) => no_content(),
+        Ok(false) => not_found(format!("no connector `{key}`")),
         Err(err) => internal(err),
     }
 }
@@ -1147,10 +1180,11 @@ pub async fn integrations_disconnect(
         return bad_request("the URL is missing its connector key");
     };
     match db::user_mcp::delete_connection(&state.db, &user.id, &key).await {
-        Ok(_) => {
+        Ok(true) => {
             state.mcp.invalidate(&user.id, &key).await;
             no_content()
         }
+        Ok(false) => not_found(format!("you have no connection to `{key}`")),
         Err(err) => internal(err),
     }
 }
@@ -1173,29 +1207,21 @@ async fn integration_for_user(
     key: &str,
     roles: &[String],
 ) -> Result<db::mcp_catalog::Connector, Response> {
-    let Some(connector) = db::mcp_catalog::get(&state.db, key).await.ok().flatten() else {
-        return Err(json_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no such connector",
-        ));
+    let connector = match db::mcp_catalog::get(&state.db, key).await {
+        Ok(connector) => connector,
+        Err(err) => return Err(internal(err)),
     };
-    if !connector.enabled {
-        return Err(json_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no such connector",
-        ));
-    }
+    // Disabled, ungranted and absent all answer alike, so the answer does not
+    // reveal which connectors exist beyond the caller's own.
     let role_ids = state.rbac.role_ids_for(roles);
-    if !connector.allows(&role_ids, state.rbac.is_admin(&role_ids)) {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "your roles do not grant this connector",
-        ));
+    match connector {
+        Some(connector)
+            if connector.enabled && connector.allows(&role_ids, state.rbac.is_admin(&role_ids)) =>
+        {
+            Ok(connector)
+        }
+        _ => Err(not_found("no such connector")),
     }
-    Ok(connector)
 }
 
 async fn integration_body<T: serde::de::DeserializeOwned>(
@@ -1273,7 +1299,15 @@ pub async fn integrations_tools_all(State(state): State<Arc<RamaState>>, req: Re
     };
     let tools = match state.mcp.connector_tool_infos(&user.id, &connector).await {
         Ok(tools) => tools,
-        Err(err) => return internal(err),
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "connector_unreachable",
+                &format!(
+                    "could not list the connector's tools: {err:#}; try again or reconnect it"
+                ),
+            );
+        }
     };
     for tool in tools {
         if let Err(err) =

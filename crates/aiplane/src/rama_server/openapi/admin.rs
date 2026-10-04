@@ -15,7 +15,7 @@ pub(super) fn operations() -> Vec<Op> {
             .errors(&[400]),
         delete("/api/v0/admin/groups/{name}", Access::Admin)
             .no_content()
-            .errors(&[400]),
+            .errors(&[400, 404]),
         get("/api/v0/admin/users", Access::Admin).ok(json::<admin::UsersView>()),
         post("/api/v0/admin/users/{id}/impersonate", Access::Admin)
             .ok(json::<admin::Impersonating>())
@@ -37,10 +37,10 @@ pub(super) fn operations() -> Vec<Op> {
             .errors(&[400]),
         delete("/api/v0/admin/automatic-routes/{*alias}", Access::Admin)
             .no_content()
-            .errors(&[400]),
+            .errors(&[400, 404]),
         delete("/api/v0/admin/models/{name}", Access::Admin)
             .no_content()
-            .errors(&[400]),
+            .errors(&[400, 404]),
         put("/api/v0/admin/model-defaults", Access::Admin)
             .body(json::<admin::FeatureDefaultBody>())
             .ok(json::<admin::FeatureDefaultSaved>())
@@ -53,8 +53,10 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/admin/limits", Access::Admin)
             .body(json::<admin::LimitBody>())
             .ok(json::<aiplane_api::pages::Done>())
-            .errors(&[400]),
-        delete("/api/v0/admin/limits/{id}", Access::Admin).no_content(),
+            .errors(&[400, 404]),
+        delete("/api/v0/admin/limits/{id}", Access::Admin)
+            .no_content()
+            .errors(&[404]),
         get("/api/v0/admin/settings", Access::Admin).ok(json::<admin::SettingsView>()),
         post("/api/v0/admin/settings", Access::Admin)
             .body(json::<admin::SettingsSaveBody>())
@@ -81,11 +83,11 @@ pub(super) fn operations() -> Vec<Op> {
             .errors(&[400, 502, 504]),
         delete("/api/v0/admin/backends/{name}", Access::Admin)
             .no_content()
-            .errors(&[400]),
+            .errors(&[400, 404]),
         post("/api/v0/admin/backends/{name}/enabled", Access::Admin)
             .body(json::<aiplane_api::pages::json_workspace::EnabledBody>())
             .ok(json::<admin::BackendEnabled>())
-            .errors(&[400]),
+            .errors(&[400, 404]),
         post("/api/v0/admin/backends/{name}/rename", Access::Admin)
             .body(json::<admin::RenameBody>())
             .ok(json::<admin::TopologySaved>())
@@ -96,7 +98,7 @@ pub(super) fn operations() -> Vec<Op> {
             .errors(&[400, 409]),
         delete("/api/v0/admin/pools/{name}", Access::Admin)
             .no_content()
-            .errors(&[400]),
+            .errors(&[400, 404]),
         post("/api/v0/admin/pools/{name}/rename", Access::Admin)
             .body(json::<admin::RenameBody>())
             .ok(json::<admin::TopologySaved>())

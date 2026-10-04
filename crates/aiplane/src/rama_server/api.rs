@@ -291,14 +291,30 @@ pub async fn revoke_token(
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let revoked = match tokens::revoke(&state.db, &session.user_id, &token_id).await {
-        Ok(b) => b,
+    let token = match owned_token(&state, &session.user_id, &token_id).await {
+        Ok(token) => token,
+        Err(resp) => return resp,
+    };
+    if token.revoked_at.is_some() {
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "token_already_revoked",
+            "this token is already revoked",
+        );
+    }
+    match tokens::revoke(&state.db, &session.user_id, &token_id).await {
+        Ok(true) => json_ok(&RevokeResponse { revoked: true }),
+        // Revoked by a concurrent request between the read and the update.
+        Ok(false) => error_envelope(
+            StatusCode::CONFLICT,
+            "token_already_revoked",
+            "this token is already revoked",
+        ),
         Err(err) => {
             tracing::warn!(error = %err, %token_id, "revoke token");
-            return internal_error("revoke failed");
+            internal_error("revoke failed")
         }
-    };
-    json_ok(&RevokeResponse { revoked })
+    }
 }
 
 /// POST /api/v0/tokens/{id}/rotate — re-mint an active token's secret in
@@ -908,7 +924,7 @@ async fn turn_feedback_body<T: serde::de::DeserializeOwned>(
 
     match session_core::db::user_for_turn(&state.db, turn_id).await {
         Ok(Some(owner)) if owner == session.user_id => Ok((session, parsed)),
-        Ok(_) => Err(invalid_request(missing)),
+        Ok(_) => Err(not_found(missing)),
         Err(err) => {
             tracing::warn!(error = %err, turn_id, "turn feedback user_for_turn");
             Err(internal_error("could not verify the request"))
@@ -1158,14 +1174,25 @@ pub async fn delete_token(
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let deleted = match tokens::delete_if_revoked(&state.db, &session.user_id, &token_id).await {
-        Ok(b) => b,
+    let token = match owned_token(&state, &session.user_id, &token_id).await {
+        Ok(token) => token,
+        Err(resp) => return resp,
+    };
+    if token.revoked_at.is_none() {
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "token_active",
+            "an active token cannot be deleted; revoke it first",
+        );
+    }
+    match tokens::delete_if_revoked(&state.db, &session.user_id, &token_id).await {
+        Ok(true) => json_ok(&DeleteResponse { deleted: true }),
+        Ok(false) => not_found("no such token"),
         Err(err) => {
             tracing::warn!(error = %err, %token_id, "delete token");
-            return internal_error("delete failed");
+            internal_error("delete failed")
         }
-    };
-    json_ok(&DeleteResponse { deleted })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +1459,23 @@ fn unauthorized(message: &str) -> Response {
 
 fn internal_error(message: &str) -> Response {
     error_envelope(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+}
+
+/// The caller's own token, or the refusal: another person's token answers
+/// exactly like a missing one.
+async fn owned_token(
+    state: &RamaState,
+    user_id: &str,
+    token_id: &str,
+) -> Result<tokens::Token, Response> {
+    match tokens::find_by_id(&state.db, token_id).await {
+        Ok(Some(token)) if token.user_id == user_id => Ok(token),
+        Ok(_) => Err(not_found("no such token")),
+        Err(err) => {
+            tracing::warn!(error = %err, %token_id, "looking up token");
+            Err(internal_error("looking up the token failed"))
+        }
+    }
 }
 
 fn not_found(message: &str) -> Response {

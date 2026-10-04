@@ -199,12 +199,13 @@ pub async fn set_can_manage_agents(
 /// resource `allowed_groups` (plain JSON string lists, not FKs) are left with a
 /// now-dangling name, which the resolver treats as "no user holds it" — i.e. a
 /// deleted group silently stops granting access, which is the safe direction.
-pub async fn delete_group(pool: &Pool, name: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM gateway_groups WHERE name = ?")
+/// `false` when there was no such group.
+pub async fn delete_group(pool: &Pool, name: &str) -> Result<bool, DbError> {
+    let deleted = sqlx::query("DELETE FROM gateway_groups WHERE name = ?")
         .bind(name)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(deleted.rows_affected() > 0)
 }
 
 // ---- OIDC → group mappings ------------------------------------------------

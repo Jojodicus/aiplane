@@ -470,15 +470,26 @@ pub async fn setup_finish(State(state): State<Arc<RamaState>>, req: Request) -> 
             );
         }
     };
-    let (Ok(Some(draft)), Ok(Some(_proof))) = (
+    let draft = match (
         setup::load_draft(&state.db, &state.crypto).await,
         setup::load_proof(&state.db, &state.crypto).await,
-    ) else {
-        return error_json(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "This setup run has expired. Start again.",
-        );
+    ) {
+        (Ok(Some(draft)), Ok(Some(_proof))) => draft,
+        (Err(err), _) | (_, Err(err)) => {
+            tracing::error!(error = %err, "setup finish: loading the draft and proof");
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "The setup state could not be read. Check the server log and try again.",
+            );
+        }
+        _ => {
+            return error_json(
+                StatusCode::CONFLICT,
+                "setup_expired",
+                "This setup run has expired. Start again.",
+            );
+        }
     };
     // A manual pair wins over the picked one (the operator went out of their
     // way to type it).
@@ -625,12 +636,23 @@ pub async fn setup_probe_callback(
             "Setup is no longer open on this gateway, so this test sign-in was discarded.",
         );
     }
-    let Ok(Some(draft)) = setup::load_draft(&state.db, &state.crypto).await else {
-        return error_json(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "The setup attempt this login belongs to is gone. Start again.",
-        );
+    let draft = match setup::load_draft(&state.db, &state.crypto).await {
+        Ok(Some(draft)) => draft,
+        Ok(None) => {
+            return error_json(
+                StatusCode::CONFLICT,
+                "setup_expired",
+                "The setup attempt this login belongs to is gone. Start again.",
+            );
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "setup callback: loading the draft");
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "The setup state could not be read. Check the server log and try again.",
+            );
+        }
     };
     let client = match OidcClient::build(&draft.params, &draft.public_url).await {
         Ok(c) => c,

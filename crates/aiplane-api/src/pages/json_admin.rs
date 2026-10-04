@@ -27,7 +27,9 @@ use aiplane_core::server::upstreams::{self, PoolKind};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::i18n::{Lang, t};
 
-use super::{bad_request, internal, json_error, json_error_with, json_ok, raw_path_segment};
+use super::{
+    bad_request, internal, json_error, json_error_with, json_ok, not_found, raw_path_segment,
+};
 
 // ---------------------------------------------------------------------------
 // Groups
@@ -262,8 +264,10 @@ pub async fn groups_delete(State(state): State<Arc<RamaState>>, req: Request) ->
     };
     // Skill grants live in their own table without an FK — clear explicitly.
     let _ = db::skill_grants::set_skills_for_role(&state.db, &name, &[]).await;
-    if let Err(err) = db::gateway_groups::delete_group(&state.db, &name).await {
-        return internal(err);
+    match db::gateway_groups::delete_group(&state.db, &name).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(format!("no group `{name}`")),
+        Err(err) => return internal(err),
     }
     state.reload_rbac().await;
     Response::builder()
@@ -792,7 +796,8 @@ pub async fn models_save(State(state): State<Arc<RamaState>>, req: Request) -> R
                 model: form.model_name,
             },
         ),
-        Err(e) => bad_request(e),
+        Err(super::admin::ModelFormError::Invalid(message)) => bad_request(message),
+        Err(super::admin::ModelFormError::Store(err)) => internal(err),
     }
 }
 
@@ -892,10 +897,11 @@ pub async fn models_delete(State(state): State<Arc<RamaState>>, req: Request) ->
         return bad_request("the URL is missing its model id");
     };
     match db::model_defaults::delete(&state.db, &name).await {
-        Ok(()) => Response::builder()
+        Ok(true) => Response::builder()
             .status(StatusCode::NO_CONTENT)
             .body(rama::http::Body::empty())
             .expect("static empty response"),
+        Ok(false) => not_found(format!("`{name}` has no stored overrides")),
         Err(err) => internal(err),
     }
 }
@@ -1017,7 +1023,11 @@ pub async fn automatic_routes_delete(
                 .body(rama::http::Body::empty())
                 .expect("static empty response")
         }
-        Ok(false) => bad_request(t(lang, "auto-route-error-not-found")),
+        Ok(false) => json_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            &t(lang, "auto-route-error-not-found"),
+        ),
         Err(error) => {
             tracing::error!(error = %error, "deleting automatic route failed");
             internal(t(lang, "auto-route-error-internal"))
@@ -1371,7 +1381,7 @@ pub async fn limits_save(State(state): State<Arc<RamaState>>, req: Request) -> R
         .await
         {
             Ok(true) => Ok(()),
-            Ok(false) => Err(bad_request("the limit no longer exists")),
+            Ok(false) => Err(not_found("the limit no longer exists")),
             Err(err) => Err(internal(err)),
         },
         None => limits::upsert(
@@ -1400,10 +1410,11 @@ pub async fn limits_delete(
 ) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
     match limits::delete(&state.db, &id).await {
-        Ok(()) => Response::builder()
+        Ok(true) => Response::builder()
             .status(StatusCode::NO_CONTENT)
             .body(rama::http::Body::empty())
             .expect("static empty response"),
+        Ok(false) => not_found("no such limit"),
         Err(err) => internal(err),
     }
 }
@@ -2811,9 +2822,10 @@ pub async fn backends_enabled(State(state): State<Arc<RamaState>>, req: Request)
         Ok(p) => p,
         Err(err) => return bad_request(format!("parsing the enabled body: {err}")),
     };
-    if let Err(err) = upstreams_config::set_backend_enabled(&state.db, &name, parsed.enabled).await
-    {
-        return internal(err);
+    match upstreams_config::set_backend_enabled(&state.db, &name, parsed.enabled).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(format!("no backend `{name}`")),
+        Err(err) => return internal(err),
     }
     state.upstreams.set_backend_enabled(&name, parsed.enabled);
     json_ok(
@@ -2834,8 +2846,10 @@ pub async fn backends_delete(State(state): State<Arc<RamaState>>, req: Request) 
     let Some(name) = raw_path_segment(&req, 0) else {
         return bad_request("the URL is missing its backend name");
     };
-    if let Err(err) = upstreams_config::delete_backend(&state.db, &name).await {
-        return internal(err);
+    match upstreams_config::delete_backend(&state.db, &name).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(format!("no backend `{name}`")),
+        Err(err) => return internal(err),
     }
     let dirty = state.topology_dirty_bump();
     Response::builder()
@@ -3068,8 +3082,10 @@ pub async fn pools_delete(State(state): State<Arc<RamaState>>, req: Request) -> 
     let Some(name) = raw_path_segment(&req, 0) else {
         return bad_request("the URL is missing its pool name");
     };
-    if let Err(err) = upstreams_config::delete_pool(&state.db, &name).await {
-        return internal(err);
+    match upstreams_config::delete_pool(&state.db, &name).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(format!("no pool `{name}`")),
+        Err(err) => return internal(err),
     }
     let dirty = state.topology_dirty_bump();
     Response::builder()

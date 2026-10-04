@@ -374,10 +374,11 @@ pub async fn create_collection(State(state): State<Arc<RamaState>>, req: Request
         // of a vague 500.
         Err(err) => {
             if is_unique_violation(&err) {
-                return invalid_request(&format!(
-                    "a collection named `{}` already exists",
-                    new.name
-                ));
+                return error_envelope(
+                    StatusCode::CONFLICT,
+                    "name_exists",
+                    &format!("a collection named `{}` already exists", new.name),
+                );
             }
             tracing::warn!(error = %err, "creating rag collection");
             internal_error("creating collection failed")
@@ -809,7 +810,11 @@ pub async fn create_profile(State(state): State<Arc<RamaState>>, req: Request) -
         Err(msg) => return invalid_request(&msg),
     };
     if let Ok(Some(_)) = rag_documents::find_profile_by_name(&state.db, &input.name).await {
-        return invalid_request(&format!("a profile named `{}` already exists", input.name));
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "name_exists",
+            &format!("a profile named `{}` already exists", input.name),
+        );
     }
     match rag_documents::create_profile(&state.db, &input).await {
         Ok(_) => json_ok(&ProfileSaved { name: input.name }),
@@ -885,16 +890,24 @@ pub async fn delete_profile(
         }
     };
     if existing.builtin {
-        return invalid_request("a built-in profile cannot be deleted");
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "profile_builtin",
+            "a built-in profile cannot be deleted",
+        );
     }
     let users = rag_documents::collections_using_profile(&state.db, existing.id)
         .await
         .unwrap_or_default();
     if !users.is_empty() {
-        return invalid_request(&format!(
-            "still used by: {} — point them at another profile first",
-            users.join(", ")
-        ));
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "profile_in_use",
+            &format!(
+                "still used by: {} — point them at another profile first",
+                users.join(", ")
+            ),
+        );
     }
     match rag_documents::delete_profile(&state.db, existing.id).await {
         Ok(true) => json_ok(&Deleted { deleted: true }),
@@ -1014,37 +1027,31 @@ pub async fn test_source(State(state): State<Arc<RamaState>>, req: Request) -> R
         Err(err) => return invalid_request(&err.to_string()),
     };
     match provider.probe().await {
-        Ok(report) => json_ok(&SourceProbe::Reached {
-            ok: true,
+        Ok(report) => json_ok(&SourceProbe {
             account: report.account,
             root_entries: report.root_entries,
             server: report.server,
         }),
-        // A failed probe is the endpoint working: the operator asked whether
-        // this source is reachable and the answer is no, with the reason.
-        Err(err) => json_ok(&SourceProbe::Failed {
-            ok: false,
-            error: err.to_string(),
-        }),
+        // The source is a backend the gateway relies on, so a probe it does
+        // not answer is a failed upstream, with the reason in the message.
+        Err(err) => error_envelope(
+            StatusCode::BAD_GATEWAY,
+            "source_unreachable",
+            &err.to_string(),
+        ),
     }
 }
 
-/// What probing a source found. `ok` says which of the two shapes it is.
+/// What probing a source that answered found. One that did not is a 502
+/// `source_unreachable`.
 #[derive(Serialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum SourceProbe {
-    /// The source answered. `ok` is `true`.
-    Reached {
-        ok: bool,
-        /// The account the credentials resolve to, when the provider says.
-        account: Option<String>,
-        /// How many entries sit directly under the configured root.
-        root_entries: usize,
-        /// The server's product and version, when it says.
-        server: Option<String>,
-    },
-    /// The source could not be reached. `ok` is `false`.
-    Failed { ok: bool, error: String },
+pub(crate) struct SourceProbe {
+    /// The account the credentials resolve to, when the provider says.
+    account: Option<String>,
+    /// How many entries sit directly under the configured root.
+    root_entries: usize,
+    /// The server's product and version, when it says.
+    server: Option<String>,
 }
 
 /// GET /api/v0/rag/providers — the source kinds this gateway can index, and
@@ -1670,6 +1677,14 @@ pub async fn list_refs(
     if let Err(resp) = require_admin(&state, &req).await {
         return resp;
     }
+    match rag_db::find_collection_by_id(&state.db, id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(&format!("no collection with id {id}")),
+        Err(err) => {
+            tracing::warn!(error = %err, %id, "listing rag refs: collection lookup");
+            return internal_error("listing refs failed");
+        }
+    }
     let refs = match rag_db::list_refs(&state.db, id).await {
         Ok(r) => r,
         Err(err) => {
@@ -1851,6 +1866,16 @@ pub async fn delete_ref(
 ) -> Response {
     if let Err(resp) = require_admin(&state, &req).await {
         return resp;
+    }
+    // Scope the ref to the collection in the path, like the other ref routes:
+    // an id from another collection must not be deleted through this one.
+    match rag_db::find_ref_by_id(&state.db, ref_id).await {
+        Ok(Some(r)) if r.collection_id == id => {}
+        Ok(_) => return not_found(&format!("no ref {ref_id} in collection {id}")),
+        Err(err) => {
+            tracing::warn!(error = %err, ref_id, "delete: ref lookup");
+            return internal_error("ref lookup failed");
+        }
     }
     match rag_db::delete_ref(&state.db, ref_id).await {
         Ok(Some(data_uuid)) => {

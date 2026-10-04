@@ -2414,3 +2414,156 @@ async fn backend_connection_test_failures_are_refusals_with_their_status() {
         }
     }
 }
+
+/// Every admin route that names a resource answers 404 in the shared
+/// envelope when there is no such resource, rather than reporting success.
+#[tokio::test]
+async fn admin_routes_answer_404_for_what_does_not_exist() {
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    for (method, path, payload) in [
+        (Method::DELETE, "/api/v0/admin/groups/no-such-group", None),
+        (
+            Method::DELETE,
+            "/api/v0/admin/backends/no-such-backend",
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v0/admin/backends/no-such-backend/enabled",
+            Some(r#"{"enabled":false}"#),
+        ),
+        (Method::DELETE, "/api/v0/admin/pools/no-such-pool", None),
+        (Method::DELETE, "/api/v0/admin/limits/no-such-limit", None),
+        (
+            Method::POST,
+            "/api/v0/admin/limits",
+            Some(
+                r#"{"id":"no-such-limit","subject_type":"user","subject_id":"boss@example.com","dimension":"requests","window":"day","value":100}"#,
+            ),
+        ),
+        (Method::DELETE, "/api/v0/admin/models/no-such-model", None),
+        (
+            Method::DELETE,
+            "/api/v0/admin/automatic-routes/no-such-route",
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v0/admin/connectors/no-such-connector/toggle",
+            Some(r#"{"enabled":false}"#),
+        ),
+        (
+            Method::GET,
+            "/api/v0/admin/connectors/no-such-connector/audit",
+            None,
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/admin/connectors/no-such-connector",
+            None,
+        ),
+    ] {
+        let resp = app
+            .serve(req(
+                method.clone(),
+                path,
+                &cookie,
+                payload.map(str::to_string),
+            ))
+            .await
+            .unwrap();
+        let status = resp.status();
+        let raw = body(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {raw}");
+        let refused: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            refused["error"]["code"], "not_found",
+            "{method} {path}: {raw}"
+        );
+    }
+}
+
+/// A feature that is not set up answers 503, a resource the caller does not
+/// have 404, a precondition that does not hold 409 — each in the envelope.
+#[tokio::test]
+async fn unconfigured_features_and_missing_resources_refuse_by_meaning() {
+    let (state, cookie) = setup().await;
+    let hook = aiplane_runtime::server::webhooks::create(
+        &state.db,
+        aiplane_runtime::server::webhooks::NewWebhook {
+            user_id: "boss".into(),
+            name: "never-called".into(),
+            prompt: "summarise".into(),
+            model: "model-a".into(),
+            tools_enabled: false,
+            synchronous: false,
+            reuse_conversation: false,
+            reuse_rounds: 0,
+            secret_hash: "unused".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let app = router(state);
+    let rerun = |run: Option<&str>| {
+        Some(match run {
+            Some(run) => format!(r#"{{"prompt":"again","run":"{run}"}}"#),
+            None => r#"{"prompt":"again"}"#.to_string(),
+        })
+    };
+    for (method, path, payload, status, code) in [
+        (
+            Method::POST,
+            "/api/v0/comfyui/reload".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "comfyui_not_configured",
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/admin/skills/anything".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/skills/anything".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+        ),
+        (
+            Method::POST,
+            "/api/v0/integrations/never-connected/disconnect".to_string(),
+            None,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/webhooks/{}/rerun", hook.id),
+            rerun(Some("no-such-run")),
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/webhooks/{}/rerun", hook.id),
+            rerun(None),
+            StatusCode::CONFLICT,
+            "no_payload",
+        ),
+    ] {
+        let resp = app
+            .serve(req(method.clone(), &path, &cookie, payload))
+            .await
+            .unwrap();
+        let got = resp.status();
+        let raw = body(resp).await;
+        assert_eq!(got, status, "{method} {path}: {raw}");
+        let refused: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(refused["error"]["code"], code, "{method} {path}: {raw}");
+    }
+}

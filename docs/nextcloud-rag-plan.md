@@ -712,7 +712,8 @@ it — is the classic way admin forms lose secrets.
 builds the provider and calls `FileProvider::probe()`. It reports the account,
 the number of entries under the configured root, and whether the ownCloud
 extensions were detected — which is what tells the operator whether this
-collection gets move-proof identity and cheap re-syncs. An edit form sends its
+collection gets move-proof identity and cheap re-syncs. A source that does not
+answer is a `502 source_unreachable` carrying the reason. An edit form sends its
 `collection_id` too, so testing an existing source does not require retyping
 the password. Worth having before committing to a multi-hour first index
 against a mistyped folder path.

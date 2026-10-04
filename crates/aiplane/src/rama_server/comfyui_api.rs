@@ -30,9 +30,9 @@ pub async fn reload(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     }
     let Some(handle) = state.comfyui() else {
         return error_envelope(
-            StatusCode::CONFLICT,
-            "not_configured",
-            "[comfyui] is not configured on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "comfyui_not_configured",
+            "ComfyUI is not configured on this gateway; set it up under Tools → ComfyUI at /admin/settings",
         );
     };
     // The rescan walks the content dir and parses every manifest.toml +
@@ -131,9 +131,9 @@ pub async fn health(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     }
     let Some(handle) = state.comfyui() else {
         return error_envelope(
-            StatusCode::CONFLICT,
-            "not_configured",
-            "[comfyui] is not configured on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "comfyui_not_configured",
+            "ComfyUI is not configured on this gateway; set it up under Tools → ComfyUI at /admin/settings",
         );
     };
     let base_url = handle.client.base_url().to_string();

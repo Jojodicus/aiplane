@@ -17,7 +17,8 @@ pub(super) fn operations() -> Vec<Op> {
             .ok(json::<shared::api::CreateTokenResponse>())
             .errors(&[400]),
         post("/api/v0/tokens/{id}/revoke", Access::Session)
-            .ok(json::<shared::api::RevokeResponse>()),
+            .ok(json::<shared::api::RevokeResponse>())
+            .errors(&[404, 409]),
         post("/api/v0/tokens/{id}/rotate", Access::Session)
             .ok(json::<shared::api::CreateTokenResponse>())
             .errors(&[404]),
@@ -25,7 +26,9 @@ pub(super) fn operations() -> Vec<Op> {
             .body(json::<shared::api::UpdateTokenToolsRequest>())
             .ok(json::<api::TokenToolsSaved>())
             .errors(&[400, 404]),
-        delete("/api/v0/tokens/{id}", Access::Session).ok(json::<shared::api::DeleteResponse>()),
+        delete("/api/v0/tokens/{id}", Access::Session)
+            .ok(json::<shared::api::DeleteResponse>())
+            .errors(&[404, 409]),
         post("/api/v0/transcriptions", Access::Session)
             .body(Content::Multipart(&[
                 Part {
@@ -76,15 +79,15 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/me/location/feedback/{turn_id}", Access::Session)
             .body(json::<api::LocationFeedbackBody>())
             .ok(json::<aiplane_api::pages::Done>())
-            .errors(&[400]),
+            .errors(&[400, 404]),
         post("/api/v0/me/ask/feedback/{turn_id}", Access::Session)
             .body(json::<api::AskFeedbackBody>())
             .ok(json::<aiplane_api::pages::Done>())
-            .errors(&[400]),
+            .errors(&[400, 404]),
         post("/api/v0/me/browser/feedback/{turn_id}", Access::Session)
             .body(json::<api::BrowserFeedbackBody>())
             .ok(json::<aiplane_api::pages::Done>())
-            .errors(&[400]),
+            .errors(&[400, 404]),
         get(
             "/api/v0/chat/attachment/{turn_id}/{filename}",
             Access::Session,
@@ -102,11 +105,11 @@ pub(super) fn operations() -> Vec<Op> {
             .errors(&[400, 502, 503]),
         post("/api/v0/comfyui/reload", Access::Admin)
             .ok(json::<comfyui::ReloadResponse>())
-            .errors(&[409]),
+            .errors(&[503]),
         get("/api/v0/comfyui/catalog", Access::Admin).ok(json::<comfyui::CatalogResponse>()),
         get("/api/v0/comfyui/health", Access::Admin)
             .ok(json::<comfyui::HealthResponse>())
-            .errors(&[409]),
+            .errors(&[503]),
         get("/api/v0/models", Access::Session).ok(json::<api::ChatModels>()),
         get("/api/v0/usage", Access::Session)
             .query::<api::UsageQuery>()
@@ -124,7 +127,7 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/setup/finish", Access::Setup)
             .body(json::<setup::SetupFinishBody>())
             .ok(json::<setup::SetupFinished>())
-            .errors(&[400, 403, 404, 500, 502]),
+            .errors(&[400, 403, 404, 409, 500, 502]),
         get("/api/v0/tools", Access::Session).ok(json::<tools::ToolsView>()),
         post("/api/v0/tools/toggle", Access::Session)
             .body(json::<tools::ToolsToggleBody>())

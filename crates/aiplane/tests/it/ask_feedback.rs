@@ -144,6 +144,7 @@ async fn an_unknown_turn_looks_the_same_as_someone_elses() {
     let unknown_body = String::from_utf8(common::read_body(unknown).await.to_vec()).unwrap();
 
     assert_eq!(others_status, unknown_status);
+    assert_eq!(unknown_status, StatusCode::NOT_FOUND);
     assert_eq!(others_body, unknown_body);
 }
 

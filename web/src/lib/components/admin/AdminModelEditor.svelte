@@ -146,7 +146,7 @@
 			<p class="m-0 text-xs text-base-content/60">{t('admin-other-price-note')}</p>
 		{/if}
 		<div class="flex items-center gap-2">
-			{#if isChat}<button type="button" class="btn btn-ghost btn-xs" onclick={() => onclear(model.name)}>{t('admin-clear-overrides')}</button>{/if}
+			{#if isChat && model.configured}<button type="button" class="btn btn-ghost btn-xs" onclick={() => onclear(model.name)}>{t('admin-clear-overrides')}</button>{/if}
 			<span class="flex-1"></span>
 			<button type="button" class="btn btn-ghost btn-sm" onclick={oncancel}>{t('admin-cancel')}</button>
 			<button type="submit" class="btn btn-primary btn-sm" disabled={saving}>{t('admin-save-model')}</button>

@@ -827,10 +827,9 @@ pub struct WebhookRunView {
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct RerunOutcome {
-    /// The conversation the rerun ran in.
+    /// The conversation the rerun ran in. A run that failed is a 502
+    /// `run_failed` naming it instead.
     pub session_id: String,
-    pub status: &'static str,
-    pub error: Option<String>,
 }
 
 fn webhook_json(w: &webhooks::Webhook) -> WebhookView {
@@ -1208,15 +1207,19 @@ pub async fn webhooks_rerun(
     };
     // A named run replays that run's payload; otherwise the latest one.
     let payload = match &parsed.run {
-        Some(run_id) => webhooks::get_run(&state.db, &hook.id, run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.payload),
+        Some(run_id) => match webhooks::get_run(&state.db, &hook.id, run_id).await {
+            Ok(Some(run)) => Some(run.payload),
+            Ok(None) => return json_error(StatusCode::NOT_FOUND, "not_found", "no such run"),
+            Err(err) => return internal(err),
+        },
         None => hook.last_payload.clone(),
     };
     let Some(payload) = payload else {
-        return bad_request("this webhook has no stored payload to replay");
+        return json_error(
+            StatusCode::CONFLICT,
+            "no_payload",
+            "this webhook has no stored payload to replay; it needs to be called once first",
+        );
     };
 
     // Same framing as a live fire — the replayed payload stays an untrusted
@@ -1282,12 +1285,18 @@ pub async fn webhooks_rerun(
         error.as_deref(),
     )
     .await;
-    json_ok(
-        StatusCode::OK,
-        RerunOutcome {
-            session_id,
-            status,
-            error,
-        },
-    )
+    // A run that did not finish is a failed upstream, as on a live fire; the
+    // chat it opened is named so the caller can look at what happened.
+    if status != "ok" {
+        return super::json_error_with(
+            StatusCode::BAD_GATEWAY,
+            "run_failed",
+            error.as_deref().unwrap_or("the run failed"),
+            serde_json::Map::from_iter([
+                ("session_id".to_string(), serde_json::json!(session_id)),
+                ("status".to_string(), serde_json::json!(status)),
+            ]),
+        );
+    }
+    json_ok(StatusCode::OK, RerunOutcome { session_id })
 }

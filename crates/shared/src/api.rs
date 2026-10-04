@@ -87,16 +87,15 @@ pub struct CreateTokenResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RevokeResponse {
-    /// True if this call flipped the token from active to revoked. False if
-    /// it was already revoked, never existed, or belongs to a different user.
+    /// Always `true`: a missing or foreign token is a 404, an already revoked
+    /// one a 409.
     pub revoked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DeleteResponse {
-    /// True if this call hard-deleted the row. False if the token didn't
-    /// exist, didn't belong to the caller, or was still active (active
-    /// tokens must be revoked first — see `tokens::delete_if_revoked`).
+    /// Always `true`: a missing or foreign token is a 404, a still active one
+    /// a 409 (revoke it first).
     pub deleted: bool,
 }
 

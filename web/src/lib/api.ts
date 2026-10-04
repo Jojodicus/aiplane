@@ -108,12 +108,12 @@ export interface CreateTokenResponse {
 }
 
 export interface RevokeResponse {
-	/** false if already revoked / missing / not the caller's. */
+	/** Always true; a missing or foreign token is a 404, an already revoked one a 409. */
 	revoked: boolean;
 }
 
 export interface DeleteResponse {
-	/** false if missing / not the caller's / still active. */
+	/** Always true; a missing or foreign token is a 404, a still active one a 409. */
 	deleted: boolean;
 }
 

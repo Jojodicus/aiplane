@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { adminJson, adminPost } from '$lib/admin-client';
+	import { adminJson } from '$lib/admin-client';
+	import { ApiError, request } from '$lib/api';
 	import WebhookSubpageHeader from '$lib/components/webhooks/WebhookSubpageHeader.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import type { Webhook, WebhookRun, WebhooksData } from '$lib/webhooks';
@@ -26,10 +27,14 @@
 		if (!webhook || !run) return;
 		busy = true; error = null;
 		try {
-			const result = await adminPost<{ session_id: string; status: string; error: string | null }>(`/api/v0/webhooks/${webhook.id}/rerun`, { prompt, run: run.id });
-			if (result.status === 'ok') await goto(`/chat/${result.session_id}`);
-			else error = t('webhooks-toast-rerun-failed', { status: result.status }) + (result.error ? `: ${result.error}` : '');
-		} catch (caught) { error = String(caught); } finally { busy = false; }
+			const result = await request<{ session_id: string }>(`/api/v0/webhooks/${webhook.id}/rerun`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, run: run.id }) });
+			await goto(`/chat/${result.session_id}`);
+		} catch (caught) {
+			if (caught instanceof ApiError && caught.code === 'run_failed') {
+				const status = (JSON.parse(caught.detail ?? '{}') as { error?: { status?: string } }).error?.status ?? '';
+				error = t('webhooks-toast-rerun-failed', { status }) + (caught.serverMessage ? `: ${caught.serverMessage}` : '');
+			} else error = caught instanceof ApiError ? (caught.serverMessage ?? caught.message) : String(caught);
+		} finally { busy = false; }
 	}
 </script>
 

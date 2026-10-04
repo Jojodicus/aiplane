@@ -12,24 +12,24 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/rag/test-source", Access::Admin)
             .body(json::<rag::TestSourceRequest>())
             .ok(json::<rag::SourceProbe>())
-            .errors(&[400]),
+            .errors(&[400, 502]),
         get("/api/v0/rag/profiles", Access::Admin).ok(json::<rag::ProfileList>()),
         post("/api/v0/rag/profiles", Access::Admin)
             .body(json::<rag::ProfileRequest>())
             .ok(json::<rag::ProfileSaved>())
-            .errors(&[400]),
+            .errors(&[400, 409]),
         put("/api/v0/rag/profiles/{name}", Access::Admin)
             .body(json::<rag::ProfileRequest>())
             .ok(json::<rag::ProfileUpdated>())
             .errors(&[400, 404]),
         delete("/api/v0/rag/profiles/{name}", Access::Admin)
             .ok(json::<rag::Deleted>())
-            .errors(&[400, 404]),
+            .errors(&[400, 404, 409]),
         get("/api/v0/rag/collections", Access::Admin).ok(json::<rag::CollectionList>()),
         post("/api/v0/rag/collections", Access::Admin)
             .body(json::<rag::CreateRequest>())
             .created(json::<rag::CollectionView>())
-            .errors(&[400]),
+            .errors(&[400, 409]),
         get("/api/v0/rag/collections/{id}", Access::Admin)
             .ok(json::<rag::CollectionView>())
             .errors(&[404]),
@@ -43,7 +43,9 @@ pub(super) fn operations() -> Vec<Op> {
         post("/api/v0/rag/collections/{id}/reindex", Access::Admin)
             .ok(json::<rag::CollectionView>())
             .errors(&[404]),
-        get("/api/v0/rag/collections/{id}/refs", Access::Admin).ok(json::<rag::RefList>()),
+        get("/api/v0/rag/collections/{id}/refs", Access::Admin)
+            .ok(json::<rag::RefList>())
+            .errors(&[404]),
         post("/api/v0/rag/collections/{id}/refs", Access::Admin)
             .body(json::<rag::AddRefsRequest>())
             .ok(json::<rag::AddedRefs>())
@@ -73,11 +75,14 @@ pub(super) fn operations() -> Vec<Op> {
         )
         .ok(json::<rag::PrimarySet>())
         .errors(&[404]),
-        post("/api/v0/rag/collections/{id}/sync-token", Access::Admin).ok(json::<rag::SyncToken>()),
+        post("/api/v0/rag/collections/{id}/sync-token", Access::Admin)
+            .ok(json::<rag::SyncToken>())
+            .errors(&[404]),
         post(
             "/api/v0/rag/collections/{id}/sync-token/clear",
             Access::Admin,
         )
-        .ok(json::<rag::Cleared>()),
+        .ok(json::<rag::Cleared>())
+        .errors(&[404]),
     ]
 }

@@ -215,9 +215,114 @@ async fn cannot_delete_active_token() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
     // Hard-delete refuses non-revoked tokens — keeps the audit trail
     // honest if a token gets stolen.
-    assert_eq!(parsed["deleted"], false);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["error"]["code"], "token_active");
+}
+
+/// Revoke and delete answer by meaning: a token that is missing or someone
+/// else's is a 404, revoking twice or deleting an active token a 409.
+#[tokio::test]
+async fn token_revoke_and_delete_refuse_with_their_status() {
+    let state = common::state_with_chat_pool("http://unused.invalid").await;
+    let cookie = common::seed_session(&state, "erin", "erin@example.com").await;
+    let other = common::seed_session(&state, "frank", "frank@example.com").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(req_with_cookie(
+            Method::POST,
+            "/api/v0/tokens",
+            &cookie,
+            Some(r#"{"name":"laptop","ttl_days":30}"#),
+        ))
+        .await
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let id = parsed["token"]["id"].as_str().unwrap().to_string();
+    let call = |method: Method, path: String, who: &str| req_with_cookie(method, &path, who, None);
+    let code = |resp: rama::http::Response| async move {
+        let status = resp.status();
+        let body: serde_json::Value =
+            serde_json::from_slice(&common::read_body(resp).await).unwrap_or_default();
+        (
+            status,
+            body["error"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        )
+    };
+
+    for (method, path, who, status, expected) in [
+        (
+            Method::DELETE,
+            format!("/api/v0/tokens/{id}"),
+            &cookie,
+            StatusCode::CONFLICT,
+            "token_active",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/tokens/{id}/revoke"),
+            &other,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            "/api/v0/tokens/nope/revoke".to_string(),
+            &cookie,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/tokens/{id}/revoke"),
+            &cookie,
+            StatusCode::OK,
+            "",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/tokens/{id}/revoke"),
+            &cookie,
+            StatusCode::CONFLICT,
+            "token_already_revoked",
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v0/tokens/{id}"),
+            &other,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v0/tokens/{id}"),
+            &cookie,
+            StatusCode::OK,
+            "",
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v0/tokens/{id}"),
+            &cookie,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+    ] {
+        let (got, got_code) = code(
+            app.serve(call(method.clone(), path.clone(), who))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            (got, got_code.as_str()),
+            (status, expected),
+            "{method} {path}"
+        );
+    }
 }

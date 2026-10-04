@@ -38,9 +38,18 @@ use aiplane_runtime::rama_server::state::RamaState;
 /// The shared core of the model-overrides save (form route + JSON API):
 /// validate every field, then write either the price-only slice or the
 /// whole row. `Err` carries the human-readable failure.
-pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Result<(), String> {
+/// Why a model save was refused: the submission (400) or the database (500).
+pub(crate) enum ModelFormError {
+    Invalid(String),
+    Store(aiplane_core::server::db::DbError),
+}
+
+pub(crate) async fn apply_model_form(
+    state: &RamaState,
+    form: &SaveForm,
+) -> Result<(), ModelFormError> {
     if form.model_name.is_empty() {
-        return Err("a model name is required".into());
+        return Err(ModelFormError::Invalid("a model name is required".into()));
     }
 
     // ---- validate every field before touching the DB ----
@@ -56,13 +65,13 @@ pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Resu
     let input_price = match parse_price(&form.input_price) {
         Ok(p) => p,
         Err(v) => {
-            return Err(format!("not a valid price: {v}"));
+            return Err(ModelFormError::Invalid(format!("not a valid price: {v}")));
         }
     };
     let output_price = match parse_price(&form.output_price) {
         Ok(p) => p,
         Err(v) => {
-            return Err(format!("not a valid price: {v}"));
+            return Err(ModelFormError::Invalid(format!("not a valid price: {v}")));
         }
     };
     let pricing_unit = db::PricingUnit::parse(&form.pricing_unit);
@@ -76,14 +85,16 @@ pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Resu
             pricing_unit,
         )
         .await
-        .map_err(|e| e.to_string());
+        .map_err(ModelFormError::Store);
     }
     let context_window = match form.context_window.trim() {
         "" => None,
         s => match s.parse::<i64>() {
             Ok(n) if n >= 1 => Some(n),
             _ => {
-                return Err(format!("context window must be a whole number ≥ 1: {s}"));
+                return Err(ModelFormError::Invalid(format!(
+                    "context window must be a whole number ≥ 1: {s}"
+                )));
             }
         },
     };
@@ -91,7 +102,9 @@ pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Resu
         "" | "auto" => None,
         s @ ("none" | "qwen" | "openai" | "glm" | "anthropic" | "ollama") => Some(s.to_string()),
         other => {
-            return Err(format!("unknown reasoning style: {other}"));
+            return Err(ModelFormError::Invalid(format!(
+                "unknown reasoning style: {other}"
+            )));
         }
     };
     let budget = |s: &str| -> Result<Option<i64>, String> {
@@ -126,13 +139,15 @@ pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Resu
         })
     })() {
         Ok(c) => c,
-        Err(e) => return Err(e),
+        Err(e) => return Err(ModelFormError::Invalid(e)),
     };
     let toml = form.defaults_toml.trim();
     if !toml.is_empty()
         && let Err(err) = merge::parse_defaults(&form.defaults_toml)
     {
-        return Err(format!("invalid defaults TOML: {err}"));
+        return Err(ModelFormError::Invalid(format!(
+            "invalid defaults TOML: {err}"
+        )));
     }
 
     let tri = |s: &str| -> Option<bool> {
@@ -167,7 +182,7 @@ pub(crate) async fn apply_model_form(state: &RamaState, form: &SaveForm) -> Resu
     };
     db::set_all(&state.db, &form.model_name, &fields)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(ModelFormError::Store)
 }
 
 // ---------------------------------------------------------------------------
