@@ -22,7 +22,6 @@ tokens-revoke-button = Widerrufen
 tokens-row-meta = erstellt { $created } · zuletzt verwendet { $last_used } · läuft ab { $expires }
 tokens-last-used-never = nie
 
-tokens-tool-use-aria = Werkzeugnutzung
 tokens-tool-use-label = Werkzeugnutzung
 
 tokens-mcp-allow-description = Verbindungs-Werkzeuge, die eine Bestätigung erfordern, können über die API nicht nachfragen; die Aktivierung führt sie ohne Rückfrage aus.
@@ -33,9 +32,6 @@ tokens-copy-aria = Token kopieren
 tokens-minted-name = Name: { $name }
 
 tokens-account-user-id-label = Benutzer-ID
-
-tokens-mcp-ask-enabled-toast = „Ask“-MCP-Werkzeuge über die API für dieses Token aktiviert.
-tokens-mcp-ask-disabled-toast = „Ask“-MCP-Werkzeuge über die API für dieses Token deaktiviert.
 
 # Web Push "turn complete" opt-in card (rendered by `render_push_card`; wired
 # client-side by `ui/ts/push.ts`). Device-local notification settings.
@@ -48,11 +44,9 @@ tokens-push-error = Benachrichtigungseinstellungen konnten nicht geändert werde
 
 # Nutzung, Modell-Freigabeliste und Kontingent pro Token (/tokens).
 tokens-usage-line = diesen Monat: { $requests } Anfragen · { $tokens } Tokens · { $cost }
-tokens-models-summary-all = Modelle: alle
 tokens-models-summary-restricted = Modelle: { $count } ausgewählt
 tokens-models-help = Ausgeschaltet folgt dieses Token Ihrem eigenen Zugriff, auch bei später hinzugefügten Modellen. Eingeschaltet darf es nur die angehakten Modelle verwenden — ein danach hinzugefügtes Modell bleibt gesperrt, bis Sie es hier ebenfalls anhaken.
 tokens-models-restrict-label = Dieses Token auf bestimmte Modelle beschränken
-tokens-models-save = Modelle speichern
 tokens-models-saved-toast = Token auf { $count } Modelle beschränkt.
 tokens-models-cleared-toast = Token darf alle Ihre Modelle verwenden.
 tokens-limits-add = Kontingent hinzufügen
@@ -69,7 +63,6 @@ tokens-tool-use-description = Erlaubt diesem Token, Gateway-Werkzeuge (Websuche,
 tokens-capabilities-summary = Fähigkeiten
 tokens-panel-close = Schließen
 tokens-edit-button = Bearbeiten
-tokens-mcp-allow-aria = „Ask“-MCP-Werkzeuge über die API erlauben
 tokens-mcp-allow-label = „Ask“-MCP-Werkzeuge über die API erlauben
 tokens-account-heading = Konto
 tokens-signed-in-as = Angemeldet als { $email }
@@ -83,11 +76,8 @@ tokens-push-off = Benachrichtigungen sind für dieses Gerät deaktiviert.
 tokens-push-denied = Dieser Browser hat Benachrichtigungen blockiert. Erlauben Sie sie in den Browsereinstellungen, um sie zu aktivieren.
 tokens-push-unsupported = Dieser Browser unterstützt keine Benachrichtigungen.
 tokens-models-none-picked = Haken Sie mindestens ein Modell an oder schalten Sie die Beschränkung aus.
-tokens-limits-summary-none = Kontingent: keines
-tokens-limits-summary-some = Kontingent: { $count } Regel(n)
 tokens-limits-help = Eine Obergrenze allein für dieses Token. Ihr eigenes Budget gilt weiterhin — das hier kann den Verbrauch nur enger fassen, nie erweitern.
 tokens-limits-remove = Entfernen
-tokens-limits-removed-toast = Token-Kontingent entfernt.
 tokens-limits-admin-badge = vom Administrator gesetzt
 tokens-models-admin-set = Ein Betreiber beschränkt dieses Token zusätzlich auf: { $models }. Ihre eigene Auswahl kann das nur weiter einschränken, nicht erweitern.
 
@@ -118,3 +108,62 @@ tokens-guides-model-note = Sie brauchen eine Modell-ID? Verfügbare Modelle steh
 notifications-loading = Benachrichtigungseinstellungen werden geladen …
 notifications-unavailable = Benachrichtigungen sind auf diesem Gateway derzeit nicht verfügbar. Bitten Sie eine Administratorin oder einen Administrator, die Push-Einstellungen zu prüfen.
 notifications-admin-settings-link = Push-Einstellungen öffnen
+tokens-tile-models = Modelle
+tokens-tile-tools = Werkzeuge
+tokens-tile-budget = Budget
+tokens-save = Speichern
+tokens-menu-aria = Token-Aktionen
+tokens-expires-today = läuft heute ab
+tokens-expires-soon = { $days ->
+    [one] läuft in { $days } Tag ab
+   *[other] läuft in { $days } Tagen ab
+}
+tokens-models-tile-all = Alle { $count } Modelle – folgt Ihrem Zugriff
+tokens-models-tile-some = { $count } von { $total } Modellen
+tokens-models-tile-compliant = Alle GDPR-konform und NDA-gedeckt
+tokens-models-tile-noncompliant = { $count ->
+    [one] { $count } Modell ohne GDPR- oder NDA-Schutz
+   *[other] { $count } Modelle ohne GDPR- oder NDA-Schutz
+}
+tokens-models-tile-admin = Ein Operator erlaubt davon { $count }
+tokens-models-max-price = bis { $price } pro 1 Mio. Ausgabe-Tokens
+tokens-models-noncompliant-warning = { $count ->
+    [one] { $count } Modell hier ist nicht GDPR-konform oder nicht NDA-gedeckt. Senden Sie über diesen Token keine personenbezogenen Daten oder vertraulichen Inhalte.
+   *[other] { $count } Modelle hier sind nicht GDPR-konform oder nicht NDA-gedeckt. Senden Sie über diesen Token keine personenbezogenen Daten oder vertraulichen Inhalte.
+}
+tokens-models-search = Modelle suchen
+tokens-models-filter-gdpr = GDPR-konform
+tokens-models-filter-nda = NDA-gedeckt
+tokens-models-filter-free = Kostenlos
+tokens-models-select-compliant = Alle mit GDPR + NDA auswählen
+tokens-models-select-none = Auswahl leeren
+tokens-models-empty = Kein Modell passt.
+tokens-models-alias = Alias für { $target }
+tokens-models-gdpr-ok = GDPR-konform: personenbezogene Daten bleiben geschützt.
+tokens-models-nda-ok = Durch eine Vertraulichkeitsvereinbarung gedeckt.
+tokens-models-price-free = kostenlos
+tokens-models-price-tokens = { $input } ein / { $output } aus je 1 Mio.
+tokens-models-price-per-images = { $price } pro Bild
+tokens-models-price-per-characters = { $price } pro Zeichen
+tokens-models-price-per-seconds = { $price } pro Sekunde
+tokens-models-kind-chat = Chat
+tokens-models-kind-transcription = Sprache zu Text
+tokens-models-kind-speech = Text zu Sprache
+tokens-models-kind-embedding = Embedding
+tokens-models-kind-image = Bilder
+tokens-models-kind-system_one = System One
+tokens-tools-tile-on = Erlaubt
+tokens-tools-tile-off = Aus
+tokens-tools-tile-pinned = { $count } immer an
+tokens-tools-tile-mcp-allowed = „Ask“-MCP-Werkzeuge laufen ohne Rückfrage
+tokens-tools-tile-mcp-blocked = „Ask“-MCP-Werkzeuge gesperrt
+tokens-tools-capabilities-help = Welche Werkzeuge und Skills dieser Token nutzen darf.
+tokens-tools-saved-toast = Werkzeuge des Tokens gespeichert.
+tokens-budget-tile-none = Kein eigenes Limit
+tokens-budget-tile-more = +{ $count } weitere
+tokens-budget-owner-applies = Ihr eigenes Budget gilt zusätzlich
+tokens-budget-token-heading = Dieser Token
+tokens-budget-owner-heading = Gilt zusätzlich: Ihr eigenes Budget
+tokens-budget-owner-none = Für Sie gilt kein Budgetlimit.
+tokens-budget-dimension = Was begrenzt wird
+tokens-budget-window = Zeitraum

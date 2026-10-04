@@ -22,7 +22,6 @@ tokens-revoke-button = Отозвать
 tokens-row-meta = создан { $created } · последнее использование { $last_used } · истекает { $expires }
 tokens-last-used-never = никогда
 
-tokens-tool-use-aria = Использование инструментов
 tokens-tool-use-label = Использование инструментов
 
 tokens-mcp-allow-description = Инструменты коннектора, требующие подтверждения, не могут запрашивать его через API; включение этой опции запускает их без запроса.
@@ -33,9 +32,6 @@ tokens-copy-aria = Скопировать токен
 tokens-minted-name = Имя: { $name }
 
 tokens-account-user-id-label = ID пользователя
-
-tokens-mcp-ask-enabled-toast = MCP-инструменты «ask» через API включены для этого токена.
-tokens-mcp-ask-disabled-toast = MCP-инструменты «ask» через API отключены для этого токена.
 
 # Web Push "turn complete" opt-in card (rendered by `render_push_card`; wired
 # client-side by `ui/ts/push.ts`). Device-local notification settings.
@@ -48,11 +44,9 @@ tokens-push-error = Не удалось изменить настройки ув
 
 # Использование, список разрешённых моделей и квота для токена (/tokens).
 tokens-usage-line = в этом месяце: { $requests } запросов · { $tokens } токенов · { $cost }
-tokens-models-summary-all = Модели: все
 tokens-models-summary-restricted = Модели: выбрано { $count }
 tokens-models-help = Если выключено, токен следует вашему собственному доступу, включая модели, добавленные позже. Если включено, он может использовать только отмеченные модели — добавленная после этого модель останется недоступной, пока вы не отметите её здесь.
 tokens-models-restrict-label = Ограничить этот токен определёнными моделями
-tokens-models-save = Сохранить модели
 tokens-models-saved-toast = Токен ограничен { $count } моделями.
 tokens-models-cleared-toast = Токен может использовать все ваши модели.
 tokens-limits-add = Добавить квоту
@@ -69,7 +63,6 @@ tokens-tool-use-description = Разрешить этому токену выз�
 tokens-capabilities-summary = Возможности
 tokens-panel-close = Закрыть
 tokens-edit-button = Изменить
-tokens-mcp-allow-aria = Разрешить MCP-инструменты в режиме «ask» через API
 tokens-mcp-allow-label = Разрешить MCP-инструменты «ask» через API
 tokens-account-heading = Аккаунт
 tokens-signed-in-as = Вы вошли как { $email }
@@ -83,11 +76,8 @@ tokens-push-off = Уведомления выключены для этого у
 tokens-push-denied = Этот браузер заблокировал уведомления. Разрешите их в настройках браузера, чтобы включить.
 tokens-push-unsupported = Этот браузер не поддерживает уведомления.
 tokens-models-none-picked = Отметьте хотя бы одну модель или отключите ограничение.
-tokens-limits-summary-none = Квота: нет
-tokens-limits-summary-some = Квота: правил — { $count }
 tokens-limits-help = Ограничение только для этого токена. Ваш собственный бюджет продолжает действовать, поэтому это может только сузить расход токена, но не расширить его.
 tokens-limits-remove = Удалить
-tokens-limits-removed-toast = Квота токена удалена.
 tokens-limits-admin-badge = задано администратором
 tokens-models-admin-set = Оператор дополнительно ограничивает этот токен моделями: { $models }. Ваш выбор может только сузить этот список, но не расширить.
 
@@ -118,3 +108,57 @@ tokens-guides-model-note = Нужен ID модели? Доступные мод
 notifications-loading = Загрузка настроек уведомлений…
 notifications-unavailable = Уведомления недоступны на этом шлюзе. Попросите администратора проверить настройки Push.
 notifications-admin-settings-link = Открыть настройки Push
+tokens-tile-models = Модели
+tokens-tile-tools = Инструменты
+tokens-tile-budget = Бюджет
+tokens-save = Сохранить
+tokens-menu-aria = Действия с токеном
+tokens-expires-today = истекает сегодня
+tokens-expires-soon = { $days ->
+    [one] истекает через { $days } день
+    [few] истекает через { $days } дня
+   *[other] истекает через { $days } дней
+}
+tokens-models-tile-all = Все модели ({ $count }) — по вашему доступу
+tokens-models-tile-some = { $count } из { $total } моделей
+tokens-models-tile-compliant = Все соответствуют GDPR и покрыты NDA
+tokens-models-tile-noncompliant = Моделей без защиты GDPR или NDA: { $count }
+tokens-models-tile-admin = Оператор разрешает из них { $count }
+tokens-models-max-price = до { $price } за 1 млн выходных токенов
+tokens-models-noncompliant-warning = Моделей без соответствия GDPR или без NDA: { $count }. Не отправляйте через этот токен персональные данные или конфиденциальные материалы.
+tokens-models-search = Поиск моделей
+tokens-models-filter-gdpr = Соответствует GDPR
+tokens-models-filter-nda = Покрыто NDA
+tokens-models-filter-free = Бесплатно
+tokens-models-select-compliant = Выбрать все с GDPR + NDA
+tokens-models-select-none = Снять выбор
+tokens-models-empty = Нет подходящих моделей.
+tokens-models-alias = псевдоним для { $target }
+tokens-models-gdpr-ok = Соответствует GDPR: персональные данные защищены.
+tokens-models-nda-ok = Покрыто соглашением о конфиденциальности.
+tokens-models-price-free = бесплатно
+tokens-models-price-tokens = { $input } вход / { $output } выход за 1 млн
+tokens-models-price-per-images = { $price } за изображение
+tokens-models-price-per-characters = { $price } за символ
+tokens-models-price-per-seconds = { $price } за секунду
+tokens-models-kind-chat = Чат
+tokens-models-kind-transcription = Речь в текст
+tokens-models-kind-speech = Текст в речь
+tokens-models-kind-embedding = Эмбеддинги
+tokens-models-kind-image = Изображения
+tokens-models-kind-system_one = System One
+tokens-tools-tile-on = Разрешены
+tokens-tools-tile-off = Выключены
+tokens-tools-tile-pinned = Всегда включено: { $count }
+tokens-tools-tile-mcp-allowed = MCP-инструменты «Ask» запускаются без запроса
+tokens-tools-tile-mcp-blocked = MCP-инструменты «Ask» заблокированы
+tokens-tools-capabilities-help = Какие инструменты и навыки может использовать этот токен.
+tokens-tools-saved-toast = Инструменты токена сохранены.
+tokens-budget-tile-none = Собственного лимита нет
+tokens-budget-tile-more = ещё { $count }
+tokens-budget-owner-applies = Ваш собственный бюджет тоже действует
+tokens-budget-token-heading = Этот токен
+tokens-budget-owner-heading = Также действует: ваш собственный бюджет
+tokens-budget-owner-none = У вас нет лимита бюджета.
+tokens-budget-dimension = Что ограничить
+tokens-budget-window = Период

@@ -6,13 +6,21 @@
 	import { toolCategoryLabel } from '$lib/tools';
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
 
-	let { capabilities, onset, triggerLabel = null, dialogId = 'tool-selector-title', showActive = true }: {
+	/** `showTrigger: false` is for a caller that opens the picker itself
+	 *  through `show()` — from inside another dialog, whose box would
+	 *  otherwise contain and restyle this full-screen one. */
+	let { capabilities, onset, triggerLabel = null, dialogId = 'tool-selector-title', showActive = true, showTrigger = true }: {
 		capabilities: ChatCapability[];
 		onset: (capability: ChatCapability, state: ChatCapability['state']) => Promise<void>;
 		triggerLabel?: string | null;
 		dialogId?: string;
 		showActive?: boolean;
+		showTrigger?: boolean;
 	} = $props();
+
+	export function show() {
+		openPicker();
+	}
 
 	let dialog: HTMLDialogElement;
 	let open = $state(false);
@@ -85,9 +93,11 @@
 {/snippet}
 
 <div class="relative flex flex-wrap items-center gap-1.5">
-	<button type="button" class="btn btn-ghost btn-sm gap-1 rounded-full" title={t('chat-render-tools-tooltip')} onclick={openPicker} aria-expanded={open}>
-		<span aria-hidden="true">+</span> {triggerLabel ?? t('chat-render-tools-label')}
-	</button>
+	{#if showTrigger}
+		<button type="button" class="btn btn-ghost btn-sm gap-1 rounded-full" title={t('chat-render-tools-tooltip')} onclick={openPicker} aria-expanded={open}>
+			<span aria-hidden="true">+</span> {triggerLabel ?? t('chat-render-tools-label')}
+		</button>
+	{/if}
 	{#if showActive && active.length > 0}
 		<button type="button" class="badge badge-outline gap-1 sm:hidden" title={t('chat-render-active-count-title')} onclick={openPicker}>⌁ {active.length}</button>
 	{/if}

@@ -22,7 +22,6 @@ tokens-revoke-button = Révoquer
 tokens-row-meta = créé le { $created } · dernière utilisation { $last_used } · expire le { $expires }
 tokens-last-used-never = jamais
 
-tokens-tool-use-aria = Utilisation des outils
 tokens-tool-use-label = Utilisation des outils
 
 tokens-mcp-allow-description = Les outils de connecteur nécessitant une approbation ne peuvent pas demander de confirmation via l'API ; l'activation les exécute sans demander.
@@ -33,9 +32,6 @@ tokens-copy-aria = Copier le jeton
 tokens-minted-name = Nom : { $name }
 
 tokens-account-user-id-label = ID utilisateur
-
-tokens-mcp-ask-enabled-toast = Outils MCP « ask » via l'API activés pour ce jeton.
-tokens-mcp-ask-disabled-toast = Outils MCP « ask » via l'API désactivés pour ce jeton.
 
 # Web Push "turn complete" opt-in card (rendered by `render_push_card`; wired
 # client-side by `ui/ts/push.ts`). Device-local notification settings.
@@ -48,11 +44,9 @@ tokens-push-error = Impossible de modifier les paramètres de notification.
 
 # Utilisation, liste de modèles autorisés et quota par jeton (/tokens).
 tokens-usage-line = ce mois-ci : { $requests } requêtes · { $tokens } tokens · { $cost }
-tokens-models-summary-all = Modèles : tous
 tokens-models-summary-restricted = Modèles : { $count } sélectionnés
 tokens-models-help = Désactivé, ce jeton suit votre propre accès, y compris les modèles ajoutés plus tard. Activé, il ne peut utiliser que les modèles cochés — un modèle ajouté ensuite reste bloqué tant que vous ne l'avez pas coché ici aussi.
 tokens-models-restrict-label = Limiter ce jeton à des modèles précis
-tokens-models-save = Enregistrer les modèles
 tokens-models-saved-toast = Jeton limité à { $count } modèles.
 tokens-models-cleared-toast = Le jeton peut utiliser tous vos modèles.
 tokens-limits-add = Ajouter un quota
@@ -69,7 +63,6 @@ tokens-tool-use-description = Autoriser ce jeton à appeler les outils de la pas
 tokens-capabilities-summary = Capacités
 tokens-panel-close = Fermer
 tokens-edit-button = Modifier
-tokens-mcp-allow-aria = Autoriser les outils MCP en mode « ask » via l'API
 tokens-mcp-allow-label = Autoriser les outils MCP « ask » via l'API
 tokens-account-heading = Compte
 tokens-signed-in-as = Connecté en tant que { $email }
@@ -83,11 +76,8 @@ tokens-push-off = Les notifications sont désactivées pour cet appareil.
 tokens-push-denied = Ce navigateur a bloqué les notifications. Autorisez-les dans les paramètres du navigateur pour les activer.
 tokens-push-unsupported = Ce navigateur ne prend pas en charge les notifications.
 tokens-models-none-picked = Cochez au moins un modèle, ou désactivez la limite.
-tokens-limits-summary-none = Quota : aucun
-tokens-limits-summary-some = Quota : { $count } règle(s)
 tokens-limits-help = Un plafond pour ce seul jeton. Votre propre budget s'applique toujours : ceci ne peut que restreindre la dépense du jeton, jamais l'élargir.
 tokens-limits-remove = Supprimer
-tokens-limits-removed-toast = Quota du jeton supprimé.
 tokens-limits-admin-badge = défini par l'administrateur
 tokens-models-admin-set = Un opérateur restreint aussi ce jeton à : { $models }. Votre sélection ne peut que réduire cela, pas l'élargir.
 
@@ -118,3 +108,62 @@ tokens-guides-model-note = Besoin d’un identifiant de modèle ? Les modèles a
 notifications-loading = Chargement des paramètres de notification…
 notifications-unavailable = Les notifications ne sont pas disponibles sur cette passerelle. Demandez à un administrateur de vérifier les paramètres Push.
 notifications-admin-settings-link = Ouvrir les paramètres Push
+tokens-tile-models = Modèles
+tokens-tile-tools = Outils
+tokens-tile-budget = Budget
+tokens-save = Enregistrer
+tokens-menu-aria = Actions du jeton
+tokens-expires-today = expire aujourd’hui
+tokens-expires-soon = { $days ->
+    [one] expire dans { $days } jour
+   *[other] expire dans { $days } jours
+}
+tokens-models-tile-all = Les { $count } modèles — suit votre accès
+tokens-models-tile-some = { $count } modèles sur { $total }
+tokens-models-tile-compliant = Tous conformes RGPD et couverts par NDA
+tokens-models-tile-noncompliant = { $count ->
+    [one] { $count } modèle sans couverture RGPD ou NDA
+   *[other] { $count } modèles sans couverture RGPD ou NDA
+}
+tokens-models-tile-admin = Un opérateur en autorise { $count }
+tokens-models-max-price = jusqu’à { $price } par million de jetons de sortie
+tokens-models-noncompliant-warning = { $count ->
+    [one] { $count } modèle ici n’est pas conforme RGPD ou pas couvert par NDA. N’envoyez ni données personnelles ni contenu confidentiel avec ce jeton.
+   *[other] { $count } modèles ici ne sont pas conformes RGPD ou pas couverts par NDA. N’envoyez ni données personnelles ni contenu confidentiel avec ce jeton.
+}
+tokens-models-search = Rechercher des modèles
+tokens-models-filter-gdpr = Conforme RGPD
+tokens-models-filter-nda = Couvert par NDA
+tokens-models-filter-free = Gratuit
+tokens-models-select-compliant = Tout sélectionner RGPD + NDA
+tokens-models-select-none = Effacer la sélection
+tokens-models-empty = Aucun modèle ne correspond.
+tokens-models-alias = alias de { $target }
+tokens-models-gdpr-ok = Conforme RGPD : les données personnelles restent protégées.
+tokens-models-nda-ok = Couvert par un accord de confidentialité.
+tokens-models-price-free = gratuit
+tokens-models-price-tokens = { $input } entrée / { $output } sortie par million
+tokens-models-price-per-images = { $price } par image
+tokens-models-price-per-characters = { $price } par caractère
+tokens-models-price-per-seconds = { $price } par seconde
+tokens-models-kind-chat = Chat
+tokens-models-kind-transcription = Parole vers texte
+tokens-models-kind-speech = Texte vers parole
+tokens-models-kind-embedding = Embedding
+tokens-models-kind-image = Images
+tokens-models-kind-system_one = System One
+tokens-tools-tile-on = Autorisés
+tokens-tools-tile-off = Désactivés
+tokens-tools-tile-pinned = { $count } toujours actifs
+tokens-tools-tile-mcp-allowed = Les outils MCP « Ask » s’exécutent sans demander
+tokens-tools-tile-mcp-blocked = Outils MCP « Ask » bloqués
+tokens-tools-capabilities-help = Les outils et compétences que ce jeton peut utiliser.
+tokens-tools-saved-toast = Outils du jeton enregistrés.
+tokens-budget-tile-none = Aucune limite propre
+tokens-budget-tile-more = +{ $count } autres
+tokens-budget-owner-applies = Votre propre budget s’applique aussi
+tokens-budget-token-heading = Ce jeton
+tokens-budget-owner-heading = S’applique aussi : votre propre budget
+tokens-budget-owner-none = Vous n’avez aucune limite de budget.
+tokens-budget-dimension = Ce qui est limité
+tokens-budget-window = Période
