@@ -1156,7 +1156,7 @@ export const es: Catalog = {
  "chat-prompt-placeholder": "Escribe una respuesta…",
  "chat-prompt-skip": "Omitir",
  "chat-render-active-count-title": "Herramientas activas — toca para gestionar",
- "chat-render-all-tools-label": "Todas las herramientas",
+ "chat-render-all-label": "Todo",
  "chat-render-canvas-asset-download": "Descargar archivo",
  "chat-render-canvas-assets-count": {
   "one": "{count} archivo",
@@ -1180,6 +1180,10 @@ export const es: Catalog = {
  "chat-render-effort-title": "Esfuerzo de razonamiento",
  "chat-render-effort-tooltip": "Esfuerzo de razonamiento: más alto = más razonamiento y más rondas de herramientas, pero más lento",
  "chat-render-effort-unsupported": "Este modelo no tiene control de razonamiento, por lo que el nivel de esfuerzo no cambiaría nada.",
+ "chat-render-entry-count": {
+  "one": "{count} entrada",
+  "other": "{count} entradas"
+ },
  "chat-render-export-aria": "Exportar conversación",
  "chat-render-export-label": "Exportar",
  "chat-render-export-md": "Markdown (.md)",
@@ -1209,10 +1213,6 @@ export const es: Catalog = {
  "chat-render-state-off-tip": "Desactivado — bloqueado; oculto para el asistente",
  "chat-render-state-on-label": "Siempre activa",
  "chat-render-state-on-tip": "Activado — siempre disponible para el asistente",
- "chat-render-tool-count": {
-  "one": "{count} herramienta",
-  "other": "{count} herramientas"
- },
  "chat-render-tools-category-label": "Categoría de herramientas",
  "chat-render-tools-done": "Listo",
  "chat-render-tools-empty": "Ninguna herramienta coincide con los filtros actuales.",

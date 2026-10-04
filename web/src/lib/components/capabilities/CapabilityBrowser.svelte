@@ -48,8 +48,8 @@
 		order(searchCapabilities(items, query).filter((item) => (searching || !selectedGroup || item.group === selectedGroup) && filter(item)))
 	);
 	const groupOptions = $derived([
-		{ value: '', label: t('chat-render-all-tools-label'), description: t('chat-render-tool-count', { count: items.length }) },
-		...groups.map((group) => ({ value: group.name, label: groupLabel(group.name), description: t('chat-render-tool-count', { count: group.rows.length }) }))
+		{ value: '', label: t('chat-render-all-label'), description: t('chat-render-entry-count', { count: items.length }) },
+		...groups.map((group) => ({ value: group.name, label: groupLabel(group.name), description: t('chat-render-entry-count', { count: group.rows.length }) }))
 	]);
 
 	function pick(group: string) {
@@ -69,7 +69,7 @@
 <div class="grid min-h-0 flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">
 	<nav class="hidden overflow-y-auto border-r border-base-300 bg-base-200/25 p-3 md:block" aria-label={t('chat-render-tools-category-label')}>
 		<ul class="menu w-full gap-1">
-			<li><button type="button" class={selectedGroup === '' ? 'menu-active' : ''} onclick={() => pick('')}><span class="min-w-0 flex-1 truncate">{t('chat-render-all-tools-label')}</span><span class="badge badge-sm">{items.length}</span></button></li>
+			<li><button type="button" class={selectedGroup === '' ? 'menu-active' : ''} onclick={() => pick('')}><span class="min-w-0 flex-1 truncate">{t('chat-render-all-label')}</span><span class="badge badge-sm">{items.length}</span></button></li>
 			{#each groups as group (group.name)}
 				<li><button type="button" class={selectedGroup === group.name ? 'menu-active' : ''} onclick={() => pick(group.name)}><span class="min-w-0 flex-1 truncate">{groupLabel(group.name)}</span><span class="badge badge-sm">{group.rows.length}</span></button></li>
 			{/each}
@@ -82,8 +82,8 @@
 		</div>
 		<div class="flex flex-col gap-3 border-b border-base-300 px-4 py-3 sm:flex-row sm:items-center sm:px-6">
 			<div class="min-w-0 flex-1">
-				<h3 class="truncate text-lg font-semibold">{searching ? t('chat-render-tools-search-results') : selectedGroup ? groupLabel(selectedGroup) : t('chat-render-all-tools-label')}</h3>
-				<p class="text-sm text-base-content/60">{t('chat-render-tool-count', { count: shown.length })}</p>
+				<h3 class="truncate text-lg font-semibold">{searching ? t('chat-render-tools-search-results') : selectedGroup ? groupLabel(selectedGroup) : t('chat-render-all-label')}</h3>
+				<p class="text-sm text-base-content/60">{t('chat-render-entry-count', { count: shown.length })}</p>
 			</div>
 			{#if groupActions && !searching && shown.length > 0}{@render groupActions(shown)}{/if}
 		</div>

@@ -1156,7 +1156,7 @@ export const de: Catalog = {
  "chat-prompt-placeholder": "Antwort eingeben …",
  "chat-prompt-skip": "Überspringen",
  "chat-render-active-count-title": "Aktive Tools — zum Verwalten tippen",
- "chat-render-all-tools-label": "Alle Tools",
+ "chat-render-all-label": "Alle",
  "chat-render-canvas-asset-download": "Datei herunterladen",
  "chat-render-canvas-assets-count": {
   "one": "{count} Datei",
@@ -1180,6 +1180,10 @@ export const de: Catalog = {
  "chat-render-effort-title": "Denkaufwand",
  "chat-render-effort-tooltip": "Denkaufwand: höher = mehr Reasoning und mehr Tool-Runden, aber langsamer",
  "chat-render-effort-unsupported": "Dieses Modell hat keine Reasoning-Steuerung — der Denkaufwand würde hier nichts ändern.",
+ "chat-render-entry-count": {
+  "one": "{count} Eintrag",
+  "other": "{count} Einträge"
+ },
  "chat-render-export-aria": "Unterhaltung exportieren",
  "chat-render-export-label": "Exportieren",
  "chat-render-export-md": "Markdown (.md)",
@@ -1209,10 +1213,6 @@ export const de: Catalog = {
  "chat-render-state-off-tip": "Aus — blockiert; für den Assistenten unsichtbar",
  "chat-render-state-on-label": "Immer an",
  "chat-render-state-on-tip": "An — für den Assistenten immer verfügbar",
- "chat-render-tool-count": {
-  "one": "{count} Tool",
-  "other": "{count} Tools"
- },
  "chat-render-tools-category-label": "Tool-Kategorie",
  "chat-render-tools-done": "Fertig",
  "chat-render-tools-empty": "Keine Tools entsprechen den aktuellen Filtern.",

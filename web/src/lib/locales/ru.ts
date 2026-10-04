@@ -1168,7 +1168,7 @@ export const ru: Catalog = {
  "chat-prompt-placeholder": "Введите ответ…",
  "chat-prompt-skip": "Пропустить",
  "chat-render-active-count-title": "Активные инструменты — нажмите для управления",
- "chat-render-all-tools-label": "Все инструменты",
+ "chat-render-all-label": "Все",
  "chat-render-canvas-asset-download": "Скачать файл",
  "chat-render-canvas-assets-count": {
   "few": "{count} файла",
@@ -1194,6 +1194,11 @@ export const ru: Catalog = {
  "chat-render-effort-title": "Уровень размышлений",
  "chat-render-effort-tooltip": "Уровень размышлений: выше = больше рассуждений и больше циклов инструментов, но медленнее",
  "chat-render-effort-unsupported": "У этой модели нет управления рассуждением — уровень усилий ничего не изменит.",
+ "chat-render-entry-count": {
+  "few": "{count} записи",
+  "many": "{count} записей",
+  "one": "{count} запись"
+ },
  "chat-render-export-aria": "Экспортировать беседу",
  "chat-render-export-label": "Экспорт",
  "chat-render-export-md": "Markdown (.md)",
@@ -1224,11 +1229,6 @@ export const ru: Catalog = {
  "chat-render-state-off-tip": "Выключено — заблокировано; скрыто от ассистента",
  "chat-render-state-on-label": "Всегда включено",
  "chat-render-state-on-tip": "Включено — всегда доступно ассистенту",
- "chat-render-tool-count": {
-  "few": "{count} инструмента",
-  "many": "{count} инструментов",
-  "one": "{count} инструмент"
- },
  "chat-render-tools-category-label": "Категория инструментов",
  "chat-render-tools-done": "Готово",
  "chat-render-tools-empty": "Нет инструментов, соответствующих текущим фильтрам.",

@@ -1156,7 +1156,7 @@ export const en: Catalog = {
  "chat-prompt-placeholder": "Type an answer…",
  "chat-prompt-skip": "Skip",
  "chat-render-active-count-title": "Active tools — tap to manage",
- "chat-render-all-tools-label": "All tools",
+ "chat-render-all-label": "All",
  "chat-render-canvas-asset-download": "Download file",
  "chat-render-canvas-assets-count": {
   "one": "{count} file",
@@ -1180,6 +1180,10 @@ export const en: Catalog = {
  "chat-render-effort-title": "Thinking effort",
  "chat-render-effort-tooltip": "Thinking effort: higher = more reasoning and more tool rounds, but slower",
  "chat-render-effort-unsupported": "This model has no reasoning control, so the effort setting would change nothing.",
+ "chat-render-entry-count": {
+  "one": "{count} entry",
+  "other": "{count} entries"
+ },
  "chat-render-export-aria": "Export conversation",
  "chat-render-export-label": "Export",
  "chat-render-export-md": "Markdown (.md)",
@@ -1209,10 +1213,6 @@ export const en: Catalog = {
  "chat-render-state-off-tip": "Off — blocked; hidden from the assistant",
  "chat-render-state-on-label": "Always on",
  "chat-render-state-on-tip": "On — always available to the assistant",
- "chat-render-tool-count": {
-  "one": "{count} tool",
-  "other": "{count} tools"
- },
  "chat-render-tools-category-label": "Tool category",
  "chat-render-tools-done": "Done",
  "chat-render-tools-empty": "No tools match the current filters.",
