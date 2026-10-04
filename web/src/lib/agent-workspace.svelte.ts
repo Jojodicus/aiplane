@@ -77,7 +77,8 @@ export class AgentWorkspace {
 			.filter((g) => g.kind === 'connector')
 			.flatMap((g) => this.resources?.connectors.find((c) => c.key === g.ref)?.tools ?? []);
 		return {
-			pools: grants.filter((g) => g.kind === 'pool').map((g) => g.ref),
+			models: grants.filter((g) => g.kind === 'model').map((g) => g.ref),
+			defaults: this.resources?.defaults ?? null,
 			tools: [...grants.filter((g) => g.kind === 'tool').map((g) => g.ref), ...connectorTools].map((tid) => ({ id: tid, name: toolName(tid) })),
 			skills: grants.filter((g) => g.kind === 'skill').map((g) => g.ref)
 		};
@@ -240,7 +241,7 @@ export class AgentWorkspace {
 	 * grant is kept for the live version.
 	 */
 	stageRevoke(kind: GrantKind, ref: string): boolean {
-		const { plan, kept } = stageRevoke(this.plan, this.detail?.grants ?? [], this.detail?.live_spec ?? null, { kind, ref });
+		const { plan, kept } = stageRevoke(this.plan, this.detail?.grants ?? [], this.detail?.live_spec ?? null, { kind, ref }, this.resources?.defaults);
 		this.plan = plan;
 		return kept;
 	}

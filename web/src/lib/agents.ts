@@ -14,6 +14,7 @@ import type { InboxContext } from './inbox.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request } from './api.ts';
+import type { ChatModelOption } from './model-option.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
 export type Spec = Record<string, any>;
@@ -45,8 +46,8 @@ export interface Grant {
 	granted_at: string;
 }
 
-export type GrantKind = 'pool' | 'tool' | 'connector' | 'skill' | 'rag_collection';
-export const GRANT_KINDS: GrantKind[] = ['pool', 'tool', 'connector', 'skill', 'rag_collection'];
+export type GrantKind = 'model' | 'tool' | 'connector' | 'skill' | 'rag_collection';
+export const GRANT_KINDS: GrantKind[] = ['model', 'tool', 'connector', 'skill', 'rag_collection'];
 
 export interface Share {
 	subject_kind: 'user' | 'group';
@@ -125,26 +126,18 @@ export interface AgentVersion {
 
 /** What the signed-in manager holds, and so may grant (`GET /api/v0/agent-resources`). */
 export interface AgentResources {
-	pools: string[];
-	/** Speech and transcription pools the manager holds, for `publish.voice`. */
-	voice_pools?: { speech: string[]; transcription: string[] };
+	/** The models of each kind the manager may use and so grant, by the name the chat picker shows; the gateway default first. */
+	models?: Record<ModelKind, ChatModelOption[]>;
 	tools: { id: string; name: string; description: string | null }[];
 	connectors: { key: string; name: string; tools: string[] }[];
 	skills: string[];
 	rag_collections: { id: number; name: string }[];
-	/**
-	 * The pool an admin mapped to each of the setup's model choices, held by the caller or not.
-	 * All `null` unless an admin set one; then an unset Balanced is the chat default.
-	 */
-	tiers?: { fast: string | null; balanced: string | null; thorough: string | null };
-	/** The pool (and model) the gateway's admin "Default models" resolve to among the pools the caller holds. */
-	defaults?: Record<'chat' | 'transcription' | 'speech', PoolDefault | null>;
+	/** The gateway's default model of each kind: what a spec key left unset runs on. */
+	defaults?: ModelDefaults;
 }
 
-export interface PoolDefault {
-	pool: string;
-	model: string;
-}
+export type ModelKind = 'chat' | 'transcription' | 'speech';
+export type ModelDefaults = Record<ModelKind, string | null>;
 
 export interface Unmet {
 	path: string;
@@ -251,7 +244,6 @@ export interface AssistSuggestion {
 	};
 	/** What the assistant left out, and why, in words. */
 	dropped: { step: string; item?: string; reason: string }[];
-	pool: string;
 	model: string;
 }
 
@@ -680,7 +672,9 @@ function setRouterOrder(spec: Spec, edit: (order: string[]) => string[]): void {
 
 /** What the agent's principal has been granted, for the editor's pickers. */
 export interface Granted {
-	pools: string[];
+	models: string[];
+	/** The gateway's default models, which an unset model key runs on. */
+	defaults: ModelDefaults | null;
 	tools: { id: string; name: string }[];
 	skills: string[];
 }

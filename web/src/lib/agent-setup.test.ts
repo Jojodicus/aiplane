@@ -44,7 +44,6 @@ import {
 	suggestedSlotRows,
 	suggestedTone,
 	templateSpec,
-	tierOf,
 	topicsNeedingIdentity,
 	unique,
 	writeBasics,
@@ -59,10 +58,12 @@ import {
 	type Handoffs,
 	type Identity,
 	type SlotRow,
-	defaultChatPool,
+	defaultOutOfReach,
+	modelGrantFor,
+	modelPickerOptions,
+	modelsInUse,
 	setupErrorMessage,
-	voiceOffered,
-	voicePoolOnSwitch
+	voiceOffered
 } from './agent-setup.ts';
 
 const tr = (key: string) => `«${key}»`;
@@ -93,14 +94,16 @@ test('task and tone round-trip through the response instructions', () => {
 		tones: ['friendly', 'formal'],
 		language: 'de',
 		extra: 'Never use emojis.',
-		pool: 'chat-large'
+		model: 'chat-large'
 	};
 	const spec = ensureShape({});
 	writeBasics(spec, model);
 	assert.equal(spec.main.instructions.response, `${TONE_LINES.friendly}\n${TONE_LINES.formal}\nAlways answer in German.\nNever use emojis.`);
 	assert.equal(spec.profile.display, 'Harald');
-	assert.equal(spec.main.pool, 'chat-large');
+	assert.equal(spec.main.model, 'chat-large');
 	assert.deepEqual(readBasics(throughEditor(spec)), model);
+	writeBasics(spec, { ...model, model: '' });
+	assert.equal(spec.main.model, undefined, 'the default is no key at all');
 });
 
 test('free-written response instructions stay as they are', () => {
@@ -113,17 +116,66 @@ test('free-written response instructions stay as they are', () => {
 	assert.equal((spec as Spec).main.instructions.response, 'Friendly, short, in the visitor’s language.');
 });
 
-test('a model choice is the admin-mapped pool it names', () => {
-	const tiers = { fast: 'small', balanced: 'mid', thorough: null };
-	assert.equal(tierOf('mid', tiers), 'balanced');
-	assert.equal(tierOf('other', tiers), null);
-	assert.equal(tierOf('', tiers), null);
+const labels3 = { empty: 'Default (qwen)', gdpr: 'GDPR', nda: 'NDA' };
+
+test('the model picker offers the default, what the manager may grant, and what the agent already uses', () => {
+	const r: AgentResources = {
+		...resources,
+		models: { chat: [{ id: 'qwen', gdpr: true, nda: false }, { id: 'auto', gdpr: false, nda: false }], transcription: [{ id: 'whisper', gdpr: true, nda: true }], speech: [] },
+		defaults: { chat: 'qwen', transcription: 'whisper', speech: null }
+	};
+	const options = modelPickerOptions('chat', 'legacy', ['admin-only', 'whisper'], r, labels3);
+	assert.deepEqual(
+		options.map((o) => [o.value, o.label, (o.badges ?? []).map((b) => `${b.label}:${b.tone}`).join(',')]),
+		[
+			['', 'Default (qwen)', ''],
+			['qwen', 'qwen', 'GDPR:success,NDA:error'],
+			['auto', 'auto', 'GDPR:error,NDA:error'],
+			['admin-only', 'admin-only', ''],
+			['legacy', 'legacy', '']
+		],
+		'a held model listed under another kind stays out; one listed nowhere and the named one are shown plainly'
+	);
+	assert.deepEqual(
+		modelPickerOptions('speech', '', [], r, { ...labels3, empty: null }).map((o) => o.value),
+		[],
+		'no default, no entry for it'
+	);
+});
+
+test('a model choice stages the grant of what the agent will run on', () => {
+	const r: AgentResources = {
+		...resources,
+		models: { chat: [{ id: 'qwen', gdpr: true, nda: true }], transcription: [], speech: [] },
+		defaults: { chat: 'qwen', transcription: 'whisper', speech: null }
+	};
+	assert.equal(modelGrantFor('chat', 'big', r), 'big');
+	assert.equal(modelGrantFor('chat', '', r), 'qwen', 'the default, when the manager may grant it');
+	assert.equal(modelGrantFor('transcription', '', r), null, 'a default the manager does not hold is never staged');
+	assert.equal(modelGrantFor('speech', '', r), null);
+	assert.equal(defaultOutOfReach('transcription', '', [], r), 'whisper', 'the step says why the default cannot be given');
+	assert.equal(defaultOutOfReach('transcription', '', ['whisper'], r), null, 'the agent holds it already');
+	assert.equal(defaultOutOfReach('transcription', 'other', [], r), null);
+	assert.equal(defaultOutOfReach('chat', '', [], r), null);
+});
+
+test('the models a spec runs on include the defaults its unset keys fall back to', () => {
+	const defaults = { chat: 'qwen', transcription: 'whisper', speech: 'tts-1' };
+	const spec: Spec = {
+		scope: { classifier_model: 'guard' },
+		router: { kind: 'classifier', model: 'small' },
+		publish: { voice: { input: true, output: false, speech_model: 'piper' } }
+	};
+	assert.deepEqual(modelsInUse(spec, defaults).sort(), ['guard', 'piper', 'qwen', 'small', 'whisper']);
+	spec.main = { model: 'big' };
+	assert.ok(!modelsInUse(spec, defaults).includes('qwen'), 'a named main model replaces the default');
+	assert.deepEqual(modelsInUse({}, undefined), []);
 });
 
 test('the scope step writes #115 scope and drops an empty one', () => {
-	const spec: Spec = { scope: { classifier_pool: 'guard' } };
+	const spec: Spec = { scope: { classifier_model: 'guard' } };
 	writeScope(spec, { topics: [' Ceph ', '', 'Licences'], refusal: 'Only croit.', strict: true });
-	assert.deepEqual(spec.scope, { topics: ['Ceph', 'Licences'], refusal: 'Only croit.', strict: true, classifier_pool: 'guard' });
+	assert.deepEqual(spec.scope, { topics: ['Ceph', 'Licences'], refusal: 'Only croit.', strict: true, classifier_model: 'guard' });
 	assert.deepEqual(readScope(throughEditor(spec)), { topics: ['Ceph', 'Licences'], refusal: 'Only croit.', strict: true });
 
 	const empty: Spec = { scope: { topics: [] } };
@@ -374,7 +426,7 @@ test('a specialist’s route values come from trusted slots or the confirmed ide
 });
 
 const resources: AgentResources = {
-	pools: ['mid'],
+	models: { chat: [{ id: 'mid', gdpr: true, nda: true }], transcription: [], speech: [] },
 	tools: [
 		{ id: 'search_web', name: 'Web search', description: 'Searches the web' },
 		{ id: 'rag_search', name: 'Knowledge search', description: null },
@@ -423,15 +475,18 @@ test('switching abilities edits the spec, and knowledge binds a single collectio
 });
 
 test('a grant the published version relies on is kept', () => {
-	const live = { main: { pool: 'mid', tools: ['rag_search', 'mcp__jira__get'], skills: ['brand-voice'] }, verifiers: { identity: { kind: 'mcp_code', connector: 'erp' } } };
-	assert.ok(liveUses(live, 'pool', 'mid'));
+	const live = { main: { model: 'mid', tools: ['rag_search', 'mcp__jira__get'], skills: ['brand-voice'] }, verifiers: { identity: { kind: 'mcp_code', connector: 'erp' } } };
+	assert.ok(liveUses(live, 'model', 'mid'));
 	assert.ok(liveUses(live, 'connector', 'jira'));
 	assert.ok(liveUses(live, 'connector', 'erp'));
 	assert.ok(liveUses(live, 'rag_collection', '7'));
 	assert.ok(liveUses(live, 'skill', 'brand-voice'));
 	assert.ok(!liveUses(live, 'tool', 'search_web'));
 	assert.ok(!liveUses(null, 'tool', 'search_web'));
-	assert.ok(liveUses({ publish: { voice: { speech_pool: 'tts' } } }, 'pool', 'tts'), 'a live voice pool stays granted');
+	assert.ok(liveUses({ publish: { voice: { speech_model: 'tts' } } }, 'model', 'tts'), 'a live voice model stays granted');
+	const defaults = { chat: 'qwen', transcription: null, speech: null };
+	assert.ok(liveUses({ main: {} }, 'model', 'qwen', defaults), 'the default a live agent runs on stays granted');
+	assert.ok(!liveUses({ main: { model: 'mid' } }, 'model', 'qwen', defaults));
 });
 
 test('the website step keeps only web origins', () => {
@@ -453,16 +508,18 @@ test('the website step binds the widget colour and voice and writes back what it
 	writeColor(spec, 'blue');
 	assert.deepEqual(spec.profile, { display: 'Ada' }, 'a non-colour clears it');
 
-	const voice = { input: true, output: true, voice: 'nova', transcriptionPool: 'stt', speechPool: 'tts' };
+	const voice = { input: true, output: true, voice: 'nova', transcriptionModel: 'stt', speechModel: 'tts' };
 	writeVoice(spec, voice);
-	assert.deepEqual(spec.publish.voice, { input: true, output: true, voice: 'nova', transcription_pool: 'stt', speech_pool: 'tts' });
+	assert.deepEqual(spec.publish.voice, { input: true, output: true, voice: 'nova', transcription_model: 'stt', speech_model: 'tts' });
 	assert.deepEqual(readVoice(throughEditor(spec)), voice);
-	assert.deepEqual(voiceMissing({ ...voice, speechPool: '' }), ['speech']);
-	assert.deepEqual(voiceMissing({ ...voice, input: false, transcriptionPool: '' }), []);
+	assert.deepEqual(voiceMissing({ ...voice, speechModel: '' }, undefined), ['speech']);
+	assert.deepEqual(voiceMissing({ ...voice, speechModel: '' }, { chat: null, transcription: null, speech: 'tts-1' }), [], 'the default serves it');
+	assert.deepEqual(voiceMissing({ ...voice, input: false, transcriptionModel: '' }, undefined), []);
 
-	writeVoice(spec, { input: false, output: false, voice: '', transcriptionPool: '', speechPool: '' });
+	writeVoice(spec, { input: false, output: false, voice: '', transcriptionModel: '', speechModel: '' });
 	assert.equal(spec.publish, undefined, 'nothing chosen leaves no publish block');
-	assert.equal(stepForPath('publish.voice.speech_pool'), 'site');
+	assert.equal(stepForPath('publish.voice.speech_model'), 'site');
+	assert.equal(stepForPath('main.model'), 'basics');
 	assert.equal(stepForPath('profile.color'), 'site');
 	assert.equal(stepForPath('profile.display'), 'basics');
 });
@@ -492,11 +549,11 @@ test('every template is a starter spec the steps read without leftovers', () => 
 });
 
 test('a template keeps the name and the model already chosen', () => {
-	const spec = applyTemplate({ profile: { display: 'Harald' }, main: { pool: 'mid', tools: ['x'] } }, 'faq', tr);
+	const spec = applyTemplate({ profile: { display: 'Harald' }, main: { model: 'mid', tools: ['x'] } }, 'faq', tr);
 	assert.equal(spec.profile.display, 'Harald');
-	assert.equal(spec.main.pool, 'mid');
+	assert.equal(spec.main.model, 'mid');
 	assert.equal(spec.main.tools, undefined);
-	assert.ok(isBlank(ensureShape({ profile: { display: 'Harald' }, main: { pool: 'mid' } })));
+	assert.ok(isBlank(ensureShape({ profile: { display: 'Harald' }, main: { model: 'mid' } })));
 	assert.ok(!isBlank(spec));
 });
 
@@ -516,6 +573,10 @@ test('the checklist points each open item at the step that fixes it', () => {
 	assert.equal(sectionStatus('identity', spec, todos), 'open');
 	assert.equal(sectionStatus('slots', spec, todos), 'done');
 	assert.equal(sectionStatus('abilities', spec, todos), 'optional');
+	assert.ok(
+		!checklist(spec, [], { chat: 'qwen', transcription: null, speech: null }).some((t) => t.key === 'agents-setup-todo-model'),
+		'an unset model runs on the gateway default'
+	);
 
 	writeScope(spec, { topics: [], refusal: '', strict: true });
 	assert.ok(checklist(spec).some((t) => t.step === 'scope' && t.key === 'agents-setup-strict-needs'));
@@ -531,11 +592,12 @@ test('each section sums itself up in one line', () => {
 	const ctx = {
 		tr: (key: string, args?: Record<string, string | number>) => (args ? `${key}(${Object.values(args).join('|')})` : key),
 		grants: [grant('rag_collection', '7')],
-		resources: { ...resources, tiers: { fast: null, balanced: 'mid', thorough: null } },
+		resources: { ...resources, defaults: { chat: 'qwen', transcription: null, speech: null } },
 		agents: [{ id: 'b1', name: 'billing', display: 'Billing' }]
 	};
-	spec.main.pool = 'mid';
-	assert.equal(summary('basics', spec, ctx), 'agents-setup-sum-basics(«agents-tpl-support-task»|agents-setup-model-balanced)');
+	assert.equal(summary('basics', spec, ctx), 'agents-setup-sum-basics(«agents-tpl-support-task»|agents-setup-model-default(qwen))');
+	spec.main.model = 'mid';
+	assert.equal(summary('basics', spec, ctx), 'agents-setup-sum-basics(«agents-tpl-support-task»|mid)');
 	assert.equal(summary('scope', spec, ctx), 'agents-setup-sum-scope-strict(Ceph, Licences)');
 	assert.equal(summary('abilities', spec, ctx), 'croit docs');
 	assert.equal(summary('slots', spec, ctx), '«agents-tpl-slot-name», «agents-tpl-slot-email»');
@@ -609,26 +671,11 @@ test('details keep the order they were given, and unordered slots follow by name
 	assert.equal(slotKind(spec.state.first), 'email', 'the order is not part of the friendly kind');
 });
 
-test('a voice direction switched on starts on the default pool the manager holds, staged for granting', () => {
-	const held: AgentResources = {
-		...resources,
-		voice_pools: { transcription: ['stt-a', 'stt-b'], speech: [] },
-		defaults: { chat: null, transcription: { pool: 'stt-b', model: 'whisper' }, speech: { pool: 'tts-private', model: 'tts-1' } }
-	};
-	assert.deepEqual(voicePoolOnSwitch('transcription', '', held), { pool: 'stt-b', grant: true });
-	assert.deepEqual(voicePoolOnSwitch('transcription', 'stt-a', held), { pool: 'stt-a', grant: false }, 'a named pool stays');
-	assert.equal(voicePoolOnSwitch('speech', '', held), null, 'a default the manager does not hold is never staged');
-	assert.equal(voiceOffered('speech', '', held), false);
-	assert.equal(voiceOffered('speech', 'tts-old', held), true, 'a pool already named can still be switched off');
-	assert.equal(voiceOffered('transcription', '', held), true);
-	const noDefault = { ...held, defaults: undefined };
-	assert.deepEqual(voicePoolOnSwitch('transcription', '', noDefault), { pool: 'stt-a', grant: true });
-});
-
-test('a new agent starts on the gateway default chat pool when the manager holds it', () => {
-	assert.equal(defaultChatPool({ ...resources, defaults: { chat: { pool: 'mid', model: 'm' }, transcription: null, speech: null } }), 'mid');
-	assert.equal(defaultChatPool({ ...resources, defaults: { chat: { pool: 'elsewhere', model: 'm' }, transcription: null, speech: null } }), null);
-	assert.equal(defaultChatPool(resources), null);
+test('a voice direction is offered when the manager may grant a model of its kind, or one is named', () => {
+	const r: AgentResources = { ...resources, models: { chat: [], transcription: [{ id: 'whisper', gdpr: true, nda: true }], speech: [] } };
+	assert.equal(voiceOffered('speech', '', r), false);
+	assert.equal(voiceOffered('speech', 'tts-old', r), true, 'a model already named can still be switched off');
+	assert.equal(voiceOffered('transcription', '', r), true);
 });
 
 test('setup errors are plain words, never a raw HTTP status line', () => {
@@ -642,7 +689,7 @@ test('setup errors are plain words, never a raw HTTP status line', () => {
 	assert.equal(setupErrorMessage({ ...raw(429), retryAfter: 42 }, words, 'assist'), 'agents-error-rate-retry:{"seconds":42}');
 	assert.equal(setupErrorMessage(raw(429), words), 'agents-error-rate');
 	assert.equal(setupErrorMessage(raw(502), words, 'assist'), 'agents-error-assist-failed');
-	const told = { status: 403, code: 'assist_pool_not_allowed', message: 'you may not use pool x — pick one you hold', issues: [] };
+	const told = { status: 403, code: 'assist_model_not_allowed', message: 'you may not use model x — pick one you hold', issues: [] };
 	assert.equal(setupErrorMessage(told, words, 'assist'), told.message, "the server's own advice is kept");
 	assert.equal(setupErrorMessage({ status: 500, code: 'x', message: '500 Internal Server Error', issues: [] }, words), 'agents-error-generic');
 });

@@ -31,7 +31,7 @@ import {
 } from './agents.ts';
 
 const issues: SpecIssue[] = [
-	{ path: 'main.pool', message: 'pool `x` is not granted' },
+	{ path: 'main.model', message: 'model `x` is not granted' },
 	{ path: 'main.tools[0]', message: 'tool `a` is not granted' },
 	{ path: 'main.tools[1]', message: 'tool `b` is not granted' },
 	{ path: 'routes.billing.when.all[1].slot', message: 'no slot `z`' },
@@ -40,7 +40,7 @@ const issues: SpecIssue[] = [
 ];
 
 test('issues are found at a path exactly, or at it and below it', () => {
-	assert.deepEqual(issuesAt(issues, 'main.pool'), ['pool `x` is not granted']);
+	assert.deepEqual(issuesAt(issues, 'main.model'), ['model `x` is not granted']);
 	assert.deepEqual(issuesAt(issues, 'main'), []);
 	assert.deepEqual(
 		issuesUnder(issues, 'main.tools').map((i) => i.path),
@@ -52,7 +52,7 @@ test('issues are found at a path exactly, or at it and below it', () => {
 	);
 	assert.deepEqual(
 		issuesUnder(issues, 'main').map((i) => i.path),
-		['main.pool', 'main.tools[0]', 'main.tools[1]'],
+		['main.model', 'main.tools[0]', 'main.tools[1]'],
 		'`main_other` is not below `main`'
 	);
 });
@@ -60,15 +60,15 @@ test('issues are found at a path exactly, or at it and below it', () => {
 test('a 422 invalid_agent_spec becomes a list of path-keyed issues', () => {
 	const body = JSON.stringify({
 		error: {
-			message: 'cannot save the draft: at `main.pool`, bad',
+			message: 'cannot save the draft: at `main.model`, bad',
 			code: 'invalid_agent_spec',
-			issues: [{ path: 'main.pool', message: 'bad' }]
+			issues: [{ path: 'main.model', message: 'bad' }]
 		}
 	});
 	const parsed = parseSpecError(new ApiError(422, `422 Unprocessable Entity — ${body}`, 'invalid_agent_spec'));
 	assert.equal(parsed.status, 422);
 	assert.equal(parsed.code, 'invalid_agent_spec');
-	assert.deepEqual(parsed.issues, [{ path: 'main.pool', message: 'bad' }]);
+	assert.deepEqual(parsed.issues, [{ path: 'main.model', message: 'bad' }]);
 	assert.match(parsed.message, /cannot save the draft/);
 });
 
@@ -85,13 +85,13 @@ test('other failures keep the server message and carry no issues', () => {
 });
 
 test('editing shape is filled in without disturbing what is there', () => {
-	const shaped = ensureShape({ main: { pool: 'p' }, extra: 1 });
+	const shaped = ensureShape({ main: { model: 'p' }, extra: 1 });
 	assert.deepEqual(shaped.main.tools, []);
 	assert.deepEqual(shaped.main.skills, []);
 	assert.deepEqual(shaped.main.instructions, { orchestration: '', response: '' });
 	assert.deepEqual(shaped.state, {});
 	assert.deepEqual(shaped.routes, {});
-	assert.equal(shaped.main.pool, 'p');
+	assert.equal(shaped.main.model, 'p');
 	assert.equal(shaped.extra, 1);
 	assert.deepEqual(ensureShape({}).main.budget, {});
 });
@@ -100,7 +100,7 @@ test('cleaning drops blanks but keeps what the validator must see', () => {
 	const cleaned = cleanSpec({
 		profile: { display: '', color: '' },
 		main: {
-			pool: 'p',
+			model: 'p',
 			instructions: { orchestration: 'go', response: '' },
 			tools: [],
 			skills: [],
@@ -115,7 +115,7 @@ test('cleaning drops blanks but keeps what the validator must see', () => {
 	});
 	assert.deepEqual(cleaned, {
 		main: {
-			pool: 'p',
+			model: 'p',
 			instructions: { orchestration: 'go' },
 			tool_resources: { t: {} },
 			budget: { tokens: 5 }
@@ -128,9 +128,9 @@ test('cleaning drops blanks but keeps what the validator must see', () => {
 });
 
 test('cleaning does not mutate its input', () => {
-	const input = { main: { pool: '', tools: [] } };
+	const input = { main: { model: '', tools: [] } };
 	cleanSpec(input);
-	assert.deepEqual(input, { main: { pool: '', tools: [] } });
+	assert.deepEqual(input, { main: { model: '', tools: [] } });
 });
 
 test('a gate node is a combinator or a leaf', () => {
@@ -289,9 +289,9 @@ test('slot infos tell the gate editor each slot type, values and writers', () =>
 });
 
 test('a reactive proxy can be cleaned and shaped like a plain object', () => {
-	const proxy = new Proxy({ main: { pool: 'p', tools: [] } }, {});
-	assert.deepEqual(cleanSpec(proxy), { main: { pool: 'p' } });
-	assert.deepEqual(ensureShape(proxy).main.pool, 'p');
+	const proxy = new Proxy({ main: { model: 'p', tools: [] } }, {});
+	assert.deepEqual(cleanSpec(proxy), { main: { model: 'p' } });
+	assert.deepEqual(ensureShape(proxy).main.model, 'p');
 });
 
 test('an agent id is derived from the name people type', () => {

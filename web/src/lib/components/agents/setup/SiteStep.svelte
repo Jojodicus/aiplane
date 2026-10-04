@@ -7,10 +7,12 @@
 		readColor,
 		readSite,
 		readVoice,
+		defaultOutOfReach,
+		modelGrantFor,
+		modelsInUse,
 		setupErrorMessage,
 		voiceMissing,
 		voiceOffered,
-		voicePoolOnSwitch,
 		writeColor,
 		writeSite,
 		writeVoice,
@@ -19,6 +21,7 @@
 	} from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
+	import ModelPicker from '../ModelPicker.svelte';
 	import WidgetPreview from './WidgetPreview.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
@@ -27,11 +30,11 @@
 	 * (`publish.origins`) and, once they are named, an embed key for them
 	 * with the line to paste. The key is the server's to hand out, once.
 	 * Then how the widget looks (`profile.color`) and whether visitors may
-	 * talk to it and hear it (`publish.voice`), each direction on a pool the
-	 * agent is granted. Switching a direction on starts it on the pool of the
-	 * gateway's default model for it (staged for granting, so the grant
-	 * route's cap applies on save); a direction the manager holds no pool for
-	 * is explained instead of offered.
+	 * talk to it and hear it (`publish.voice`), each direction on a model the
+	 * agent is granted. Switching a direction on starts it on the gateway's
+	 * default model for it (its grant staged, so the grant route's cap
+	 * applies on save); a direction the manager may grant no model for is
+	 * explained instead of offered.
 	 */
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
@@ -47,23 +50,38 @@
 
 	const voice = $state<Voice>(readVoice(spec));
 	writeOnChange(() => $state.snapshot(voice), (v) => writeVoice(spec, v));
-	const missing = $derived(voiceMissing(voice));
-	const offered = $derived(ws.resources?.voice_pools ?? { speech: [], transcription: [] });
+	const defaults = $derived(ws.resources?.defaults);
+	const missing = $derived(voiceMissing(voice, defaults));
+	const heldModels = $derived(ws.grants.filter((g) => g.kind === 'model').map((g) => g.ref));
+	type Field = 'transcriptionModel' | 'speechModel';
 
-	/** Stage the chosen pool's grant and name it; the previous one is staged for revoking unless something still uses it. Both are made on save. */
-	function choosePool(field: 'transcriptionPool' | 'speechPool', pool: string) {
-		const previous = voice[field];
-		if (pool === previous) return;
-		if (pool) ws.stageGrant('pool', pool);
-		voice[field] = pool;
-		if (previous && previous !== spec.main?.pool && !Object.values(voice).includes(previous)) ws.stageRevoke('pool', previous);
+	function withVoice(v: Voice): Spec {
+		const next = $state.snapshot(spec) as Spec;
+		writeVoice(next, v);
+		return next;
 	}
 
-	function switchVoice(dir: 'input' | 'output', field: 'transcriptionPool' | 'speechPool', kind: VoiceKind, on: boolean) {
+	/** Stage the grant of what a direction now runs on; a model nothing uses any more is staged for revoking. Both are made on save. */
+	function restage(before: Voice, field: Field, kind: VoiceKind) {
+		const was = modelsInUse(withVoice(before), defaults);
+		const now = modelsInUse(withVoice(voice), defaults);
+		const on = field === 'transcriptionModel' ? voice.input : voice.output;
+		const grant = on ? modelGrantFor(kind, voice[field], ws.resources) : null;
+		if (grant) ws.stageGrant('model', grant);
+		for (const model of was) if (!now.includes(model)) ws.stageRevoke('model', model);
+	}
+
+	function chooseModel(field: Field, kind: VoiceKind, model: string) {
+		if (model === voice[field]) return;
+		const before = $state.snapshot(voice);
+		voice[field] = model;
+		restage(before, field, kind);
+	}
+
+	function switchVoice(dir: 'input' | 'output', field: Field, kind: VoiceKind, on: boolean) {
+		const before = $state.snapshot(voice);
 		voice[dir] = on;
-		if (!on) return;
-		const start = voicePoolOnSwitch(kind, voice[field], ws.resources);
-		if (start?.grant) choosePool(field, start.pool);
+		restage(before, field, kind);
 	}
 
 	let keys = $state<EmbedKey[]>([]);
@@ -130,8 +148,9 @@
 	<fieldset class="flex flex-col gap-3">
 		<legend class="font-semibold">{t('agents-setup-voice')}</legend>
 		<span class="text-sm text-base-content/60">{t('agents-setup-voice-hint')}</span>
-		{#each [{ dir: 'input', field: 'transcriptionPool', kind: 'transcription' }, { dir: 'output', field: 'speechPool', kind: 'speech' }] as const as row (row.dir)}
+		{#each [{ dir: 'input', field: 'transcriptionModel', kind: 'transcription' }, { dir: 'output', field: 'speechModel', kind: 'speech' }] as const as row (row.dir)}
 			{@const available = voiceOffered(row.kind, voice[row.field], ws.resources)}
+			{@const fallback = defaults?.[row.kind] ?? null}
 			{#if !available}
 				<div class="alert alert-info text-sm" role="status"><span>{t(`agents-setup-voice-unavailable-${row.dir}`)}</span></div>
 			{/if}
@@ -148,15 +167,25 @@
 						<span>{t(`agents-setup-voice-${row.dir}`)}</span>
 					</label>
 					{#if voice[row.dir] && available}
-						<label class="flex items-center gap-2">
-							<span class="text-sm">{t(`agents-setup-voice-${row.kind}-pool`)}</span>
-							<select class="select select-sm w-48" value={voice[row.field]} onchange={(e) => choosePool(row.field, e.currentTarget.value)} disabled={!ws.writable} aria-invalid={missing.includes(row.kind)}>
-								<option value="">{t('agents-pick')}</option>
-								{#each [...new Set([...offered[row.kind], ...(voice[row.field] ? [voice[row.field]] : [])])] as pool (pool)}<option value={pool}>{pool}</option>{/each}
-							</select>
-						</label>
+						<div class="flex items-center gap-2">
+							<span class="text-sm" class:text-error={missing.includes(row.kind)}>{t(`agents-setup-voice-${row.kind}-model`)}</span>
+							<ModelPicker
+								kind={row.kind}
+								value={voice[row.field]}
+								held={heldModels}
+								resources={ws.resources}
+								emptyLabel={fallback ? t('agents-setup-model-default', { model: fallback }) : null}
+								ariaLabel={t(`agents-setup-voice-${row.kind}-model`)}
+								disabled={!ws.writable}
+								class="w-56"
+								onchange={(model) => chooseModel(row.field, row.kind, model)}
+							/>
+						</div>
 					{/if}
 				</div>
+				{#if voice[row.dir] && defaultOutOfReach(row.kind, voice[row.field], heldModels, ws.resources)}
+					<div class="alert alert-warning text-sm" role="alert"><span>{t('agents-setup-model-default-unheld', { model: fallback ?? '' })}</span></div>
+				{/if}
 			{/if}
 		{/each}
 		{#if voice.output}

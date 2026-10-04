@@ -178,7 +178,7 @@
 						<span class="truncate font-semibold {node.kind === 'route' ? 'font-mono' : ''}">{title(node)}</span>
 
 						{#if node.kind === 'main'}
-							<span class="truncate font-mono text-xs">{main.pool || t('agents-canvas-no-pool')}</span>
+							<span class="truncate font-mono text-xs">{main.model || t('agents-canvas-model-default')}</span>
 							<span class="flex flex-wrap gap-1 text-xs">
 								<span class="badge badge-ghost badge-sm">{t('agents-canvas-tools', { count: main.tools })}</span>
 								<span class="badge badge-ghost badge-sm">{t('agents-canvas-skills', { count: main.skills })}</span>
@@ -246,7 +246,7 @@
 								</div>
 								<div>
 									<h4 class="mb-2 font-semibold">{t('agents-router-kind')}</h4>
-									<RouterFields bind:spec {issues} pools={granted.pools} />
+									<RouterFields bind:spec {issues} models={granted.models} />
 								</div>
 							</div>
 						{:else}

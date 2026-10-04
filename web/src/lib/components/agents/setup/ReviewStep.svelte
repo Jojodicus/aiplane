@@ -12,7 +12,7 @@
 	const ws = useWorkspace();
 
 	const ctx = $derived({ tr: t, grants: ws.grants, resources: ws.resources, agents: ws.agents });
-	const todos = $derived(checklist(spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
+	const todos = $derived(checklist(spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? []), ws.resources?.defaults));
 	const name = $derived(spec.profile?.display || ws.detail?.display || ws.detail?.name || '');
 
 	const tests = $derived(ws.suggestion?.steps.tests ?? []);

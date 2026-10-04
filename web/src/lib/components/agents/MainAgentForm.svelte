@@ -3,6 +3,7 @@
 	import { t } from '$lib/i18n.svelte';
 	import BindsEditor from './BindsEditor.svelte';
 	import FieldIssues from './FieldIssues.svelte';
+	import ModelPicker from './ModelPicker.svelte';
 
 	let { spec = $bindable(), issues, granted, ongrants }: {
 		spec: Spec;
@@ -32,6 +33,10 @@
 	function resource(tool: string): Spec {
 		return (main.tool_resources[tool] ??= {});
 	}
+	function setModel(model: string) {
+		if (model) main.model = model;
+		else delete main.model;
+	}
 	function number(key: 'rounds' | 'seconds' | 'tokens', raw: string) {
 		if (raw.trim() === '') delete main.budget[key];
 		else main.budget[key] = Number(raw);
@@ -40,18 +45,22 @@
 
 <div class="space-y-4">
 	<div class="flex flex-wrap items-end gap-4">
-		<label class="flex min-w-60 flex-col gap-1">
-			<span class="label-text">{t('agents-main-pool')}</span>
-			<select class="select w-full" class:select-error={issues.some((i) => i.path === 'main.pool')} bind:value={main.pool}>
-				<option value="">{t('agents-pick')}</option>
-				{#each granted.pools as pool (pool)}<option value={pool}>{pool}</option>{/each}
-				{#if main.pool && !granted.pools.includes(main.pool)}<option value={main.pool}>{main.pool}</option>{/if}
-			</select>
-			<FieldIssues {issues} path="main.pool" />
-		</label>
-		{#if !granted.pools.length}
+		<div class="flex min-w-60 flex-col gap-1">
+			<span class="label-text">{t('agents-main-model')}</span>
+			<ModelPicker
+				kind="chat"
+				value={main.model ?? ''}
+				held={granted.models}
+				resources={null}
+				emptyLabel={granted.defaults?.chat ? t('agents-setup-model-default', { model: granted.defaults.chat }) : t('agents-canvas-model-default')}
+				ariaLabel={t('agents-main-model')}
+				onchange={setModel}
+			/>
+			<FieldIssues {issues} path="main.model" />
+		</div>
+		{#if !granted.models.length}
 			<p class="text-sm text-warning">
-				{t('agents-main-no-pool')}
+				{t('agents-main-no-model')}
 				<button class="link" type="button" onclick={ongrants}>{t('agents-tab-grants')}</button>
 			</p>
 		{/if}

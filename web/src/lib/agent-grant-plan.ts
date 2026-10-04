@@ -8,7 +8,7 @@
  * revocations after it (the saved draft no longer uses them) — or drops it on
  * Cancel.
  */
-import type { Grant, GrantKind, Spec } from './agents.ts';
+import type { Grant, GrantKind, ModelDefaults, Spec } from './agents.ts';
 import { liveUses } from './agent-setup.ts';
 
 export interface GrantRef {
@@ -42,10 +42,16 @@ export function stageGrant(plan: GrantPlan, grants: Grant[], r: GrantRef): Grant
  * the agent holds is revoked unless the published version still uses it,
  * which `kept` reports.
  */
-export function stageRevoke(plan: GrantPlan, grants: Grant[], live: Spec | null, r: GrantRef): { plan: GrantPlan; kept: boolean } {
+export function stageRevoke(
+	plan: GrantPlan,
+	grants: Grant[],
+	live: Spec | null,
+	r: GrantRef,
+	defaults?: ModelDefaults | null
+): { plan: GrantPlan; kept: boolean } {
 	if (plan.grant.some((x) => same(x, r))) return { plan: { ...plan, grant: plan.grant.filter((x) => !same(x, r)) }, kept: false };
 	if (!held(grants, r)) return { plan, kept: false };
-	if (liveUses(live, r.kind, r.ref)) return { plan, kept: true };
+	if (liveUses(live, r.kind, r.ref, defaults)) return { plan, kept: true };
 	return { plan: plan.revoke.some((x) => same(x, r)) ? plan : { ...plan, revoke: [...plan.revoke, r] }, kept: false };
 }
 

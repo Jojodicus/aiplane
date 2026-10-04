@@ -38,7 +38,7 @@
 	};
 	const SIZE: Partial<Record<StepKey, 'md' | 'lg'>> = { scope: 'md', slots: 'lg' };
 
-	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
+	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? []), ws.resources?.defaults));
 	const ctx = $derived({ tr: t, grants: ws.grants, resources: ws.resources, agents: ws.agents });
 
 	let editing = $state<StepKey | null>(null);

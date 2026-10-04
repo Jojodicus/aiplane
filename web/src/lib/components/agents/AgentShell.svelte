@@ -21,7 +21,7 @@
 	onMount(() => void ws.load());
 	$effect(() => ws.remember());
 
-	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? [])));
+	const todos = $derived(checklist(ws.spec, ws.dirty ? [] : (ws.detail?.publish_issues ?? []), ws.resources?.defaults));
 	const open = $derived(todos.filter((x) => x.blocking).length);
 	const state = $derived(publishState(todos));
 
