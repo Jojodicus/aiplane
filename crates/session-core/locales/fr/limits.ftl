@@ -35,8 +35,8 @@ limits-subject-system = Agent
 # Tableau des règles de la SPA : titre, colonne « géré par » et confirmation.
 limits-delete-confirm = Supprimer cette règle ?
 limits-intro = Limitez le nombre de requêtes, de tokens ou le montant des dépenses qu'un appelant peut utiliser sur une fenêtre glissante. Les règles sont résolues du plus spécifique au plus général : la règle propre à un utilisateur l'emporte, sinon la plus généreuse de ses rôles, sinon la valeur par défaut globale. Sans règle, tout le monde est illimité. Une règle portant sur un jeton d'API est un plafond supplémentaire vérifié en plus du budget de son propriétaire : elle ne peut que restreindre la dépense de ce jeton. Seuls les pools facturés comptent (les pools auto-hébergés avec enforce_limits = false sont exemptés), et l'ensemble du budget d'un utilisateur est partagé entre ses tokens API, le chat et les exécutions planifiées.
-limits-field-subject-id = Rôle / utilisateur / jeton
-limits-field-subject-id-ph = id de rôle, e-mail d'utilisateur ou id de jeton
+limits-field-subject-id = Rôle / utilisateur / jeton / agent
+limits-field-subject-id-ph = Choisir …
 limits-col-value = Valeur
 limits-col-actions = Actions
 limits-deleted = limite supprimée
