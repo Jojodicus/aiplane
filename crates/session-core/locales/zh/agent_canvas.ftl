@@ -11,7 +11,6 @@ agents-canvas-kind-route = 路由
 agents-canvas-target-agent = 子智能体
 agents-canvas-target-human = 人工
 agents-canvas-target-other = { $kind } 目标
-agents-canvas-model-default = 默认模型
 agents-canvas-tools = 工具：{ $count }
 agents-canvas-skills = 技能：{ $count }
 agents-canvas-slots = 槽位：{ $count }

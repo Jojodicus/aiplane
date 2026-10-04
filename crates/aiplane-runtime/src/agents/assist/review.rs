@@ -27,7 +27,6 @@ use super::{
 };
 use crate::agents::eval::{self, MAX_CASE_NAME_CHARS};
 use crate::agents::spec::{self, SpecContext, SpecIssue, Stage};
-use aiplane_core::server::tool_naming::prettify;
 
 const MAX_IDENT_LEN: usize = 48;
 const MAX_MISSING_KNOWLEDGE: usize = 5;
@@ -361,6 +360,7 @@ impl<'a> Reviewer<'a> {
             agents: self.ctx.agents,
             live_specs: self.ctx.live_specs,
             model_defaults: &Default::default(),
+            speech_voices: &HashMap::new(),
             allow_private: self.ctx.allow_private,
         };
         spec::validate(draft, &ctx, Stage::Draft)
@@ -761,11 +761,7 @@ impl<'a> Reviewer<'a> {
         match self.adopt(candidate) {
             Ok(()) => self.out.steps.abilities.push(AbilityStep {
                 id: id.to_string(),
-                name: if known.name == id {
-                    prettify(id)
-                } else {
-                    known.name.clone()
-                },
+                name: known.name.clone(),
                 why: ability.why.trim().to_string(),
             }),
             Err(reason) => {

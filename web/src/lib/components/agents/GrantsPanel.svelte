@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GRANT_KINDS, agentsApi, type AgentResources, type AgentError, type Grant, type GrantKind } from '$lib/agents';
+	import { GRANT_KINDS, agentsApi, grantOptions, type AgentResources, type AgentError, type Grant, type GrantKind } from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 
 	/**
@@ -26,14 +26,8 @@
 		switch (kind) {
 			case 'model':
 				return [...new Set(Object.values(resources.models ?? {}).flatMap((list) => list.map((m) => m.id)))].map((v) => ({ value: v, label: v }));
-			case 'tool':
-				return resources.tools.map((v) => ({ value: v.id, label: v.name }));
-			case 'connector':
-				return resources.connectors.map((v) => ({ value: v.key, label: v.name }));
-			case 'skill':
-				return resources.skills.map((v) => ({ value: v, label: v }));
-			case 'rag_collection':
-				return resources.rag_collections.map((v) => ({ value: String(v.id), label: v.name }));
+			default:
+				return grantOptions(resources, kind);
 		}
 	});
 

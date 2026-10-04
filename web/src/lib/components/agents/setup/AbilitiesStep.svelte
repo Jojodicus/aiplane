@@ -1,63 +1,52 @@
 <script lang="ts">
-	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import type { Spec } from '$lib/agents';
-	import { RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
-	import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from '$lib/ability-list';
+	import CapabilityBrowser from '$lib/components/capabilities/CapabilityBrowser.svelte';
+	import { grantable, type GrantableItem, type Spec } from '$lib/agents';
+	import { LOCKED_GROUP, RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
+	import { rankCapabilities } from '$lib/capability-picker';
 	import { t } from '$lib/i18n.svelte';
+	import { toolCategoryLabel } from '$lib/tools';
 	import SuggestionBox from './SuggestionBox.svelte';
 
 	/**
-	 * Knowledge and abilities as cards. Switching one on stages the grant it
-	 * needs and puts it into the spec; switching it off takes it out and stages
-	 * revoking the grant unless the published version still relies on it. The
-	 * grants are made when the draft is saved (the manager's own rights cap
-	 * them, and a refusal is shown then), never on the click.
+	 * Knowledge and abilities in the list the chat picker uses: the
+	 * resources the manager may grant, each with its own title and
+	 * description, switched on or off. Switching one on stages the grant it
+	 * needs and puts it into the spec; switching it off takes it out and
+	 * stages revoking the grant unless the published version still relies on
+	 * it. The grants are made when the draft is saved (the manager's own
+	 * rights cap them, and a refusal is shown then), never on the click.
 	 */
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
 	const suggested = $derived(ws.suggestion?.steps.abilities ?? []);
-	const suggestedIds = $derived(suggested.map((s) => s.id));
+	const suggestedKnowledge = $derived(ws.suggestion?.steps.knowledge ?? []);
+	const missingKnowledge = $derived(ws.suggestion?.steps.missing_knowledge ?? []);
 
 	const cards = $derived(abilities(spec, ws.grants, ws.resources));
 	const knowledge = $derived(cards.filter((c) => c.kind === 'rag_collection'));
-	const others = $derived(cards.filter((c) => c.kind !== 'rag_collection'));
-	let query = $state('');
-	let showAll = $state(false);
-	const ordered = $derived(orderAbilities(others, suggestedIds));
-	const matching = $derived(filterAbilities(ordered, query));
-	const shown = $derived(visibleAbilities(matching, suggestedIds, showAll || query.trim() !== ''));
-	const hidden = $derived(matching.length - shown.length);
-	const offers = (id: string) => !!ws.resources?.tools.some((x) => x.id === id);
+	const cardOf = $derived(new Map(cards.map((c) => [c.item, c])));
+	const offers = (id: string) => grantable(ws.resources, 'tool').some((x) => x.grant.refs.includes(id));
 
 	let error = $state<string | null>(null);
-	let kept = $state<string[]>([]);
+	let kept = $state<Ability[]>([]);
 
-	const cardId = (c: Ability) => `${c.kind}:${c.ref}`;
-
-	function description(c: Ability): string | null {
-		if (c.kind === 'rag_collection') return t('agents-setup-knowledge-desc', { name: c.name });
-		if (c.kind === 'connector') return t('agents-setup-connector-desc', { name: c.name, count: c.tools.length });
-		if (c.kind === 'skill') return t('agents-setup-skill-desc', { name: c.name });
-		return c.description ? firstSentence(plainText(c.description)) : null;
+	function isSuggested(c: Ability): boolean {
+		if (c.kind === 'rag_collection') return suggestedKnowledge.some((k) => k.id === c.ref);
+		return c.kind === 'tool' && suggested.some((s) => c.refs.includes(s.id));
 	}
-	/** A tool's description is written for the model and can run to a paragraph; the card shows its first sentence. */
-	function firstSentence(text: string): string {
-		const end = text.search(/[.!?](\s|$)/);
-		const sentence = end > 0 ? text.slice(0, end + 1) : text;
-		return sentence.length > 140 ? `${sentence.slice(0, 139).trimEnd()}…` : sentence;
-	}
-	const title = abilityTitle;
+	const rank = (item: GrantableItem) => {
+		const c = cardOf.get(item);
+		return c?.on ? 0 : c && isSuggested(c) ? 1 : 2;
+	};
+	const groupLabel = (group: string) => (group === LOCKED_GROUP ? t('agents-setup-locked') : toolCategoryLabel(group));
 
 	function collectionNames(): string[] {
 		return ws.grants
 			.filter((g) => g.kind === 'rag_collection')
-			.map((g) => ws.resources?.rag_collections.find((c) => String(c.id) === g.ref)?.name ?? g.ref);
+			.map((g) => grantable(ws.resources, 'rag_collection').find((c) => c.grant.refs.includes(g.ref))?.title ?? g.ref);
 	}
-
-	const suggestedKnowledge = $derived(ws.suggestion?.steps.knowledge ?? []);
-	const missingKnowledge = $derived(ws.suggestion?.steps.missing_knowledge ?? []);
 
 	/**
 	 * Every proposed tool and knowledge base, staged for granting and put
@@ -96,7 +85,7 @@
 				ws.stageGrant('rag_collection', c.ref);
 				ws.stageGrant('tool', RAG_SEARCH);
 			} else if (ws.stageRevoke('rag_collection', c.ref)) {
-				kept = [...kept, cardId(c)];
+				kept = [...kept, c];
 			}
 			const names = collectionNames();
 			const canList = names.length > 1 && offers(RAG_LIST);
@@ -105,38 +94,22 @@
 			return;
 		}
 		if (on) {
-			ws.stageGrant(c.kind, c.ref);
+			for (const ref of c.refs) ws.stageGrant(c.kind, ref);
 			setAbility(spec, c, true);
 		} else {
 			setAbility(spec, c, false);
-			if (ws.stageRevoke(c.kind, c.ref)) kept = [...kept, cardId(c)];
+			if (c.refs.map((ref) => ws.stageRevoke(c.kind, ref)).some(Boolean)) kept = [...kept, c];
 		}
 	}
+	const wasKept = (c: Ability) => !c.on && kept.some((k) => k.kind === c.kind && k.ref === c.ref);
 </script>
-
-{#snippet card(c: Ability)}
-	<ChoiceCard multiple title={title(c)} description={description(c)} selected={c.on} disabled={!c.holdable} onselect={() => toggle(c)}>
-		{#snippet tag()}
-			{#if !c.holdable}
-				<span class="flex flex-col gap-1">
-					<StatusPill size="sm">{t('agents-setup-locked')}</StatusPill>
-					<span class="text-xs text-base-content/60">{t('agents-setup-locked-hint')}</span>
-				</span>
-			{:else if kept.includes(cardId(c)) && !c.on}
-				<span class="text-xs text-base-content/60">{t('agents-setup-kept-live')}</span>
-			{/if}
-		{/snippet}
-	</ChoiceCard>
-{/snippet}
 
 <div class="flex flex-col gap-5">
 	<p class="m-0 text-base-content/70">{t('agents-setup-abilities-lead')}</p>
 	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
 	<SuggestionBox part={['abilities', 'knowledge', 'missing_knowledge']} onapply={suggested.length || suggestedKnowledge.length ? applySuggested : null}>
 		<ul class="m-0 flex list-none flex-col gap-1 p-0">
-			{#each suggestedKnowledge as k (k.id)}
-				<li><span class="font-semibold">{t('agents-setup-knowledge-desc', { name: k.name })}</span>{#if k.why} — {k.why}{/if}</li>
-			{/each}
+			{#each suggestedKnowledge as k (k.id)}<li><span class="font-semibold">{k.name}</span>{#if k.why} — {k.why}{/if}</li>{/each}
 			{#each suggested as s (s.id)}<li><span class="font-semibold">{s.name}</span>{#if s.why} — {s.why}{/if}</li>{/each}
 		</ul>
 		{#each missingKnowledge as topic (topic)}
@@ -144,36 +117,33 @@
 		{/each}
 	</SuggestionBox>
 
-	{#if !cards.length}
+	{#if cards.length}
+		<h3 class="sr-only" id="agent-abilities">{t('agents-setup-step-abilities')}</h3>
+		<div class="flex h-[36rem] flex-col overflow-hidden rounded-box border border-base-300">
+			<CapabilityBrowser items={cards.map((c) => c.item)} labelledby="agent-abilities" order={(rows) => rankCapabilities(rows, rank)} {groupLabel} searchPlaceholder={t('agents-setup-abilities-search')}>
+				{#snippet control(item)}
+					{@const c = cardOf.get(item)}
+					{#if c}
+						<input class="toggle toggle-primary shrink-0" type="checkbox" checked={c.on} disabled={!c.holdable} aria-label={t('tools-toggle-aria', { name: item.title })} onchange={() => toggle(c)} />
+					{/if}
+				{/snippet}
+				{#snippet detail(item)}
+					{@const c = cardOf.get(item)}
+					{#if c && !c.holdable}
+						<span class="mt-1 flex flex-wrap items-center gap-2">
+							<StatusPill size="sm">{t('agents-setup-locked')}</StatusPill>
+							<span class="text-xs text-base-content/60">{t('agents-setup-locked-hint')}</span>
+						</span>
+					{:else if c && wasKept(c)}
+						<p class="m-0 mt-1 text-xs text-base-content/60">{t('agents-setup-kept-live')}</p>
+					{:else if c && !c.on && isSuggested(c)}
+						<span class="badge badge-sm badge-outline mt-1 border-dashed border-primary/60 text-primary">✦ {t('ui-ai-suggestion')}</span>
+					{/if}
+				{/snippet}
+			</CapabilityBrowser>
+		</div>
+	{:else}
 		<div class="alert alert-info text-sm"><span>{t('agents-setup-nothing-available')}</span></div>
-	{/if}
-
-	{#if knowledge.length}
-		<section class="flex flex-col gap-2">
-			<h3 class="m-0 text-sm font-semibold uppercase tracking-wider text-base-content/60">{t('agents-setup-knowledge')}</h3>
-			<div class="grid gap-2.5 sm:grid-cols-2" role="group" aria-label={t('agents-setup-knowledge')}>
-				{#each knowledge as c (cardId(c))}{@render card(c)}{/each}
-			</div>
-		</section>
-	{/if}
-
-	{#if others.length}
-		<section class="flex flex-col gap-2">
-			<h3 class="m-0 text-sm font-semibold uppercase tracking-wider text-base-content/60">{t('agents-setup-abilities')}</h3>
-			<input class="input w-full max-w-sm" type="search" bind:value={query} placeholder={t('agents-setup-abilities-search')} aria-label={t('agents-setup-abilities-search')} />
-			<div class="grid gap-2.5 sm:grid-cols-2" role="group" aria-label={t('agents-setup-abilities')}>
-				{#each shown as c (cardId(c))}{@render card(c)}{/each}
-			</div>
-			{#if query.trim() && !matching.length}
-				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-none-found')}</p>
-			{/if}
-			{#if !shown.length && !query.trim()}
-				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-none-chosen')}</p>
-			{/if}
-			{#if hidden > 0}
-				<button class="btn btn-sm self-start" type="button" onclick={() => (showAll = true)}>{t('agents-setup-abilities-show-all', { count: matching.length })}</button>
-			{/if}
-		</section>
 	{/if}
 
 	<p class="m-0 text-sm text-base-content/60">{t('agents-setup-abilities-more')}</p>

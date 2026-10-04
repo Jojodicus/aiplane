@@ -16,7 +16,7 @@
  * structured system prompt it ends up in (`docs/agents.md` "What #115
  * built"). Text a person reads comes from the catalogs.
  */
-import type { AgentError, AgentResources, Grant, ModelDefaults, ModelKind, Spec, SpecIssue } from './agents.ts';
+import { grantable, type AgentError, type AgentResources, type Grant, type GrantableItem, type GrantableKind, type ModelDefaults, type ModelKind, type Spec, type SpecIssue } from './agents.ts';
 import { modelSelectOptions } from './model-option.ts';
 import type { SearchOption } from './searchable-select.ts';
 import templates from './agent-templates.json' with { type: 'json' };
@@ -61,12 +61,6 @@ export function unique(name: string, taken: Iterable<string>): string {
 		const candidate = `${name.slice(0, MAX_IDENT - String(n).length - 1)}_${n}`;
 		if (!used.has(candidate)) return candidate;
 	}
-}
-
-/** `customer_number` → `Customer number`, for a slot that has no description. */
-export function humanize(key: string): string {
-	const words = key.replace(/_/g, ' ').trim();
-	return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /* ---- task & tone ---------------------------------------------------- */
@@ -248,73 +242,114 @@ export const RAG_LIST = 'rag_list_collections';
 const MCP_PREFIX = 'mcp__';
 const connectorPrefix = (key: string) => `${MCP_PREFIX}${key}__`;
 
+/**
+ * One row of the abilities step. `item` is what the picker shows: the
+ * server's row for the resource (its own title and description), or, for
+ * what the agent has but the manager does not hold, its reference alone.
+ */
 export interface Ability {
-	/** `tool` / `connector` / `skill`: the grant kind; `rag_collection` for knowledge. */
-	kind: 'rag_collection' | 'tool' | 'connector' | 'skill';
+	/** The grant kind. */
+	kind: GrantableKind;
+	/** The tool's catalog key, the connector key, the skill name or the collection id. */
 	ref: string;
-	name: string;
-	description: string | null;
-	/** Tools a connector brings, by id. */
+	/** What switching it on grants: one reference, or every tool id of a catalog entry. */
+	refs: string[];
+	/** Tool ids it puts into `main.tools`. */
 	tools: string[];
 	on: boolean;
 	/** The manager holds it and can therefore grant or revoke it. */
 	holdable: boolean;
+	item: GrantableItem;
 }
+
+/** The group the abilities step lists what it cannot offer under. */
+export const LOCKED_GROUP = 'locked';
 
 const tools = (spec: Spec): string[] => (Array.isArray(spec.main?.tools) ? spec.main.tools : []);
 const skills = (spec: Spec): string[] => (Array.isArray(spec.main?.skills) ? spec.main.skills : []);
 
+function lockedItem(kind: GrantableKind, ref: string, toolIds: string[]): GrantableItem {
+	return {
+		key: ref,
+		kind: kind === 'connector' ? 'tool' : kind,
+		title: ref,
+		description: '',
+		group: LOCKED_GROUP,
+		order: Number.MAX_SAFE_INTEGER,
+		icon: null,
+		grant: { kind, refs: [ref] },
+		tools: toolIds,
+		editable: false,
+		config_url: null
+	};
+}
+
+const offeredAbility = (item: GrantableItem, on: boolean): Ability => ({
+	kind: item.grant.kind,
+	ref: item.grant.kind === 'tool' ? item.key : item.grant.refs[0],
+	refs: item.grant.refs,
+	tools: item.tools,
+	on,
+	holdable: true,
+	item
+});
+
+const lockedAbility = (kind: GrantableKind, ref: string, toolIds: string[]): Ability => ({
+	kind,
+	ref,
+	refs: [ref],
+	tools: toolIds,
+	on: true,
+	holdable: false,
+	item: lockedItem(kind, ref, toolIds)
+});
+
 /**
- * Every card the abilities step shows: what the manager could grant, plus
- * whatever the agent already has that they could not (shown, not offered).
- * Knowledge is on when its collection is granted; the rest when the spec
- * uses it.
+ * Every row the abilities step shows, in the server's order: what the
+ * manager could grant, then whatever the agent already has that they could
+ * not (shown, not offered). Knowledge is on when its collection is granted;
+ * the rest when the spec uses it. Knowledge search itself is no row: it
+ * comes with a knowledge base.
  */
 export function abilities(spec: Spec, grants: Grant[], resources: AgentResources | null): Ability[] {
 	const granted = (kind: string) => grants.filter((g) => g.kind === kind).map((g) => g.ref);
 	const used = tools(spec);
 	const out: Ability[] = [];
+	const locked: Ability[] = [];
 
-	const collections = resources?.rag_collections ?? [];
-	for (const c of collections) {
-		out.push({ kind: 'rag_collection', ref: String(c.id), name: c.name, description: null, tools: [], on: granted('rag_collection').includes(String(c.id)), holdable: true });
+	for (const item of grantable(resources, 'rag_collection')) {
+		out.push(offeredAbility(item, granted('rag_collection').includes(item.grant.refs[0])));
 	}
 	for (const ref of granted('rag_collection')) {
-		if (!collections.some((c) => String(c.id) === ref)) {
-			out.push({ kind: 'rag_collection', ref, name: ref, description: null, tools: [], on: true, holdable: false });
-		}
+		if (!grantable(resources, 'rag_collection').some((c) => c.grant.refs.includes(ref))) locked.push(lockedAbility('rag_collection', ref, []));
 	}
 
-	const offered = (resources?.tools ?? []).filter((x) => x.id !== RAG_SEARCH && x.id !== RAG_LIST);
-	for (const tool of offered) {
-		out.push({ kind: 'tool', ref: tool.id, name: tool.name, description: tool.description, tools: [tool.id], on: used.includes(tool.id), holdable: true });
-	}
+	const offered = grantable(resources, 'tool').filter((item) => !item.tools.some((id) => id === RAG_SEARCH || id === RAG_LIST));
+	for (const item of offered) out.push(offeredAbility(item, item.tools.some((id) => used.includes(id))));
 	for (const id of used) {
-		if (id.startsWith(MCP_PREFIX) || id === RAG_SEARCH || id === RAG_LIST || offered.some((x) => x.id === id)) continue;
-		out.push({ kind: 'tool', ref: id, name: id, description: null, tools: [id], on: true, holdable: false });
+		if (id.startsWith(MCP_PREFIX) || id === RAG_SEARCH || id === RAG_LIST || offered.some((item) => item.tools.includes(id))) continue;
+		locked.push(lockedAbility('tool', id, [id]));
 	}
 
-	const connectors = resources?.connectors ?? [];
+	const connectors = grantable(resources, 'connector');
 	const connectorOn = (key: string) => used.some((id) => id.startsWith(connectorPrefix(key)));
-	for (const c of connectors) {
-		out.push({ kind: 'connector', ref: c.key, name: c.name, description: null, tools: c.tools, on: connectorOn(c.key), holdable: true });
-	}
+	for (const item of connectors) out.push(offeredAbility(item, connectorOn(item.grant.refs[0])));
 	const otherKeys = new Set(
 		used
 			.filter((id) => id.startsWith(MCP_PREFIX))
 			.map((id) => id.slice(MCP_PREFIX.length).split('__')[0])
-			.filter((key) => !connectors.some((c) => c.key === key))
+			.filter((key) => !connectors.some((c) => c.grant.refs.includes(key)))
 	);
-	for (const key of otherKeys) {
-		out.push({ kind: 'connector', ref: key, name: key, description: null, tools: used.filter((id) => id.startsWith(connectorPrefix(key))), on: true, holdable: false });
+	for (const key of otherKeys) locked.push(lockedAbility('connector', key, used.filter((id) => id.startsWith(connectorPrefix(key)))));
+
+	const held = grantable(resources, 'skill');
+	for (const item of held) out.push(offeredAbility(item, skills(spec).includes(item.grant.refs[0])));
+	for (const name of skills(spec)) {
+		if (!held.some((item) => item.grant.refs.includes(name))) locked.push(lockedAbility('skill', name, []));
 	}
 
-	const held = resources?.skills ?? [];
-	for (const name of held) out.push({ kind: 'skill', ref: name, name, description: null, tools: [], on: skills(spec).includes(name), holdable: true });
-	for (const name of skills(spec)) {
-		if (!held.includes(name)) out.push({ kind: 'skill', ref: name, name, description: null, tools: [], on: true, holdable: false });
-	}
-	return out;
+	const position = (a: Ability) => (resources?.items ?? []).indexOf(a.item);
+	return [...out.sort((a, b) => position(a) - position(b)), ...locked];
 }
 
 function dropTool(spec: Spec, id: string): void {
@@ -340,8 +375,10 @@ export function setAbility(spec: Spec, ability: Pick<Ability, 'kind' | 'ref' | '
 		return;
 	}
 	if (ability.kind === 'tool') {
-		if (on) addTool(spec, ability.ref);
-		else dropTool(spec, ability.ref);
+		for (const id of ability.tools) {
+			if (on) addTool(spec, id);
+			else dropTool(spec, id);
+		}
 	}
 }
 
@@ -461,7 +498,7 @@ export function readSlots(spec: Spec): SlotRow[] {
 		.sort(([a, da], [b, db]) => position(da) - position(db) || a.localeCompare(b))
 		.map(([key, def]) => ({
 			key,
-			label: typeof def?.description === 'string' && def.description ? def.description : humanize(key),
+			label: typeof def?.description === 'string' && def.description ? def.description : key,
 			kind: slotKind(def),
 			values: Array.isArray(def?.values) ? def.values.map(String) : []
 		}));
@@ -473,11 +510,11 @@ const MANAGED_LABELS: Record<string, string> = {
 	[VERIFIED_SLOT]: 'agents-slot-label-verified'
 };
 
-/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key made readable. */
+/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key. */
 export function slotLabel(spec: Spec, key: string, tr: (key: string) => string): string {
 	if (MANAGED_LABELS[key]) return tr(MANAGED_LABELS[key]);
 	const description = spec?.state?.[key]?.description;
-	return typeof description === 'string' && description.trim() ? description.trim() : humanize(key);
+	return typeof description === 'string' && description.trim() ? description.trim() : key;
 }
 
 /** The key a row is saved under; a fresh row's follows its label. */
@@ -710,6 +747,12 @@ export interface Rule {
 	target: Target;
 	/** What the route passes the specialist, derived from its live spec ([`deriveBind`]). */
 	bind: Record<string, unknown>;
+	/**
+	 * A hand-off to a person: where it is announced (`human.notify`), `null`
+	 * for every channel. Left out (as read for a route without a list), the
+	 * route keeps what it has.
+	 */
+	notify?: string[] | null;
 }
 
 export interface Handoffs {
@@ -717,6 +760,8 @@ export interface Handoffs {
 	fallback: boolean;
 	/** Routes the advanced editor set up, kept as they are. */
 	custom: string[];
+	/** As [`Rule.notify`], for the fallback route. */
+	fallbackNotify?: string[] | null;
 }
 
 const REQUEST_SET = { slot: REQUEST_SLOT, set: true };
@@ -758,7 +803,9 @@ export function ruleOf(name: string, route: Spec, details: string[]): Rule | nul
 	if (!topic || topic.slot !== TOPIC_SLOT || typeof topic.eq !== 'string' || Object.keys(topic).length !== 2) return null;
 	if (verified && !(verified.slot === VERIFIED_SLOT && typeof verified.provenance === 'string' && Object.keys(verified).length === 2)) return null;
 	if (target.kind === 'agent' && route.task !== HANDOFF_TASK) return null;
-	return { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	const rule: Rule = { route: name, topic: topic.eq, details: rest.length > 0, identity: !!verified, target, bind: route.bind ? clone(route.bind) : {} };
+	if (target.kind === 'human' && Array.isArray(route.human?.notify)) rule.notify = [...route.human.notify];
+	return rule;
 }
 
 const isFallback = (name: string, route: Spec) =>
@@ -777,9 +824,52 @@ export function readHandoffs(spec: Spec): Handoffs {
 		const route = spec.routes[name];
 		const rule = ruleOf(name, route, details);
 		if (rule) out.rules.push(rule);
-		else if (isFallback(name, route)) out.fallback = true;
-		else out.custom.push(name);
+		else if (isFallback(name, route)) {
+			out.fallback = true;
+			if (Array.isArray(route.human?.notify)) out.fallbackNotify = [...route.human.notify];
+		} else out.custom.push(name);
 	}
+	return out;
+}
+
+/** Where each person route announces, `null` for every channel. */
+function personNotify(h: Handoffs): (string[] | null)[] {
+	const routes = [...h.rules.filter((r) => r.target.kind === 'human').map((r) => r.notify), ...(h.fallback ? [h.fallbackNotify] : [])];
+	return routes.map((n) => n ?? null);
+}
+
+/** The one place every person route announces at, `null` for every channel; `undefined` while they differ. */
+export function sharedNotify(h: Handoffs): string[] | null | undefined {
+	const [first = null, ...rest] = personNotify(h);
+	return rest.every((n) => same(n, first)) ? first : undefined;
+}
+
+/** The hand-offs with every person route announcing at `notify`. */
+export function notifyEverywhere(h: Handoffs, notify: string[] | null): Handoffs {
+	return {
+		...h,
+		rules: h.rules.map((r) => (r.target.kind === 'human' ? { ...r, notify } : r)),
+		...(h.fallback ? { fallbackNotify: notify } : {})
+	};
+}
+
+/** The kinds of `available` that announce, under the setup's choice (`null`: all of them). */
+export function notifyOn(notify: string[] | null | undefined, available: string[]): string[] {
+	return notify ? available.filter((kind) => notify.includes(kind)) : [...available];
+}
+
+/** The choice with `kind` switched; all of `available` on again is every channel (`null`). */
+export function setNotify(notify: string[] | null | undefined, available: string[], kind: string, on: boolean): string[] | null {
+	const current = notifyOn(notify, available);
+	const next = on ? [...new Set([...current, kind])] : current.filter((k) => k !== kind);
+	return available.every((k) => next.includes(k)) ? null : available.filter((k) => next.includes(k));
+}
+
+function withNotify(human: Spec, notify: string[] | null | undefined): Spec {
+	if (notify === undefined) return human;
+	const out = clone(human);
+	if (notify === null) delete out.notify;
+	else out.notify = [...notify];
 	return out;
 }
 
@@ -807,14 +897,14 @@ export function writeHandoffs(spec: Spec, h: Handoffs): void {
 			route.task = HANDOFF_TASK;
 			if (Object.keys(rule.bind).length) route.bind = clone(rule.bind);
 		} else {
-			route.human = prev?.human ? clone(prev.human) : {};
+			route.human = withNotify(prev?.human ? clone(prev.human) : {}, rule.notify);
 		}
 		routes[name] = route;
 	}
 	for (const name of h.custom) if (before[name]) routes[name] = before[name];
 	if (h.fallback) {
 		const prev = before[FALLBACK_ROUTE];
-		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {} };
+		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: withNotify(prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {}, h.fallbackNotify) };
 	}
 	spec.routes = routes;
 
@@ -920,6 +1010,18 @@ export interface Voice {
 	voice: string;
 	transcriptionModel: string;
 	speechModel: string;
+}
+
+/**
+ * The voices the agent may speak in: those of the speech model it runs on
+ * (its own, else the gateway default), as the server lists them; the voice
+ * already chosen stays listed when the model no longer offers it, so the
+ * picker shows what is set and publishing says why it is refused.
+ */
+export function speechVoices(v: Voice, resources: AgentResources | null | undefined): string[] {
+	const model = v.speechModel || resources?.defaults?.speech || '';
+	const offered = resources?.models?.speech?.find((m) => m.id === model)?.voices ?? [];
+	return v.voice && !offered.includes(v.voice) ? [...offered, v.voice] : offered;
 }
 
 export function readVoice(spec: Spec): Voice {
@@ -1140,7 +1242,7 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 			return tr(s.strict ? 'agents-setup-sum-scope-strict' : 'agents-setup-sum-scope-soft', { topics: s.topics.join(', ') });
 		}
 		case 'abilities': {
-			const on = abilities(spec, ctx.grants, ctx.resources).filter((c) => c.on).map((c) => c.name);
+			const on = abilities(spec, ctx.grants, ctx.resources).filter((c) => c.on).map((c) => c.item.title);
 			return on.length ? on.join(' · ') : tr('agents-setup-sum-abilities-none');
 		}
 		case 'slots': {
@@ -1156,7 +1258,7 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 				if (r.target.kind === 'human') return person;
 				const id = r.target.id;
 				const agent = ctx.agents.find((a) => a.id === id);
-				return agent ? agent.display || agent.name : tr('agents-pick');
+				return agent ? agent.display || agent.name : id || tr('agents-pick');
 			};
 			const parts = h.rules.map((r) => `${r.topic} → ${target(r)}`);
 			if (h.fallback) parts.push(tr('agents-setup-sum-routes-other', { target: person }));

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { ApiError } from './api.ts';
 import {
+	grantOptions,
 	gateHint,
 	agentIdFromName,
 	bindSource,
@@ -303,4 +304,18 @@ test('an agent id is derived from the name people type', () => {
 	assert.equal(agentIdFromName('支持'), 'agent');
 	assert.equal(agentIdFromName('a'.repeat(80)).length, 48);
 	assert.ok(!agentIdFromName(`${'a'.repeat(47)} b`).endsWith('-'));
+});
+
+test('a grant option is labelled by its title, with the reference when one item grants several', () => {
+	const item = (key: string, title: string, refs: string[]) => ({
+		key, kind: 'tool' as const, title, description: '', group: 'g', order: 0, icon: null,
+		grant: { kind: 'tool' as const, refs }, tools: refs, editable: false, config_url: null
+	});
+	const resources = { items: [item('search_web', 'Web search', ['search_web']), item('memory', 'Memory', ['remember', 'recall'])] };
+	assert.deepEqual(grantOptions(resources, 'tool'), [
+		{ value: 'search_web', label: 'Web search' },
+		{ value: 'remember', label: 'Memory: remember' },
+		{ value: 'recall', label: 'Memory: recall' }
+	]);
+	assert.deepEqual(grantOptions(resources, 'skill'), []);
 });

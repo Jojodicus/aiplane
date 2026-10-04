@@ -1832,3 +1832,205 @@ async fn issuing_a_token_needs_every_grant_the_principal_holds() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     fx.token(&fx.manager, &id).await;
 }
+
+async fn collection(fx: &Fixture, name: &str, description: Option<&str>) -> i64 {
+    use aiplane_core::server::db::rag;
+    rag::create_collection(
+        &fx.state.db,
+        &rag::NewCollection {
+            name: name.into(),
+            description: description.map(Into::into),
+            git_url: String::new(),
+            git_ref: "main".into(),
+            pat: None,
+            source: Default::default(),
+            profile_id: None,
+            extraction_model: None,
+            embedding_model: "embed-1".into(),
+            include_globs: Vec::new(),
+            exclude_globs: Vec::new(),
+            chunk_size: 400,
+            chunk_overlap: 40,
+            search_mode: rag::SearchMode::Versioned,
+            refresh_interval_mins: 0,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+fn items(body: &Value) -> Vec<Value> {
+    body["items"].as_array().cloned().unwrap_or_default()
+}
+
+fn item(body: &Value, kind: &str, key: &str) -> Value {
+    items(body)
+        .into_iter()
+        .find(|i| i["kind"] == kind && i["key"] == key)
+        .unwrap_or_else(|| panic!("{kind} {key} is not offered: {body}"))
+}
+
+fn shown(item: &Value) -> (String, String, String, String) {
+    let text = |field: &str| item[field].as_str().unwrap_or_default().to_string();
+    (
+        text("kind"),
+        text("key"),
+        text("title"),
+        text("description"),
+    )
+}
+
+async fn chat_picker(fx: &Fixture, cookie: &str, user: &str) -> Value {
+    let session = session_core::db::create_session(&fx.state.db, user)
+        .await
+        .unwrap();
+    let (status, picker) = fx
+        .get(
+            cookie,
+            &format!("/api/v0/chat/sessions/{}/capabilities", session.id),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{picker}");
+    picker
+}
+
+/// The agent setup and the chat picker describe a resource from one source:
+/// what both offer, they show with the same title and description.
+#[tokio::test]
+async fn agent_resources_describe_what_they_share_with_the_chat_picker_identically() {
+    let fx = fixture().await;
+    mcp_catalog::update(
+        &fx.state.db,
+        GLOBAL,
+        mcp_catalog::ConnectorInput {
+            name: "Global tools".into(),
+            description: Some("Looks things up in the shared directory.".into()),
+            ..connector(GLOBAL, &fx._mcp.uri(), mcp_catalog::Scope::Global)
+        },
+    )
+    .await
+    .unwrap();
+
+    let picker = chat_picker(&fx, &fx.manager, "manager").await;
+    let (status, resources) = fx.get(&fx.manager, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{resources}");
+
+    let offered: Vec<_> = items(&resources).iter().map(shown).collect();
+    let in_chat: Vec<_> = picker["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(shown)
+        .collect();
+    for (kind, key) in [
+        ("tool", TIME.to_string()),
+        ("tool", format!("mcp__{GLOBAL}")),
+        ("skill", "brand".to_string()),
+    ] {
+        let chat = in_chat.iter().find(|c| c.0 == kind && c.1 == key);
+        let agents = offered.iter().find(|c| c.0 == kind && c.1 == key);
+        assert!(chat.is_some(), "{kind} {key} missing in chat: {in_chat:?}");
+        assert_eq!(chat, agents, "{kind} {key} is shown differently");
+    }
+
+    let connector = item(&resources, "tool", &format!("mcp__{GLOBAL}"));
+    assert_eq!(connector["title"], "Global tools");
+    assert_eq!(
+        connector["description"],
+        "Looks things up in the shared directory."
+    );
+    assert_eq!(
+        connector["grant"],
+        json!({ "kind": "connector", "refs": [GLOBAL] })
+    );
+    let skill = item(&resources, "skill", "brand");
+    assert_eq!(skill["title"], "Brand");
+    assert_eq!(skill["description"], "Enforce the brand.");
+    assert_eq!(
+        skill["grant"],
+        json!({ "kind": "skill", "refs": ["brand"] })
+    );
+    let time = item(&resources, "tool", TIME);
+    assert_eq!(time["grant"], json!({ "kind": "tool", "refs": [TIME] }));
+    assert_eq!(time["tools"], json!([TIME]));
+    assert_ne!(time["title"], TIME, "the catalog names the tool");
+}
+
+/// A knowledge base is offered with the description its admin maintains, or
+/// with none at all; only who may edit it is told where to add one. The chat
+/// picker, which has its own way to search knowledge, offers none.
+#[tokio::test]
+async fn agent_resources_offer_knowledge_bases_with_their_own_description_or_none() {
+    let fx = fixture().await;
+    let described = collection(&fx, "Ceph docs", Some("The Ceph administration manual.")).await;
+    let bare = collection(&fx, "Contracts", None).await;
+
+    let (_, resources) = fx.get(&fx.manager, "/api/v0/agent-resources").await;
+    let shown = item(&resources, "rag_collection", &described.to_string());
+    assert_eq!(shown["title"], "Ceph docs");
+    assert_eq!(shown["description"], "The Ceph administration manual.");
+    assert_eq!(
+        shown["grant"],
+        json!({ "kind": "rag_collection", "refs": [described.to_string()] })
+    );
+    let shown = item(&resources, "rag_collection", &bare.to_string());
+    assert_eq!(shown["title"], "Contracts");
+    assert_eq!(shown["description"], "");
+    assert_eq!(shown["editable"], false, "only an admin edits a collection");
+    assert_eq!(shown["config_url"], Value::Null);
+
+    let (_, resources) = fx.get(&fx.admin, "/api/v0/agent-resources").await;
+    let shown = item(&resources, "rag_collection", &bare.to_string());
+    assert_eq!(shown["editable"], true);
+    assert_eq!(shown["config_url"], format!("/rag/{bare}/edit"));
+
+    let picker = chat_picker(&fx, &fx.manager, "manager").await;
+    assert!(
+        picker["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["kind"] != "rag_collection"),
+        "{picker}"
+    );
+}
+
+/// A manager is offered only what they hold, and may edit none of the
+/// admin-maintained resources; an admin is pointed at each one's edit page.
+#[tokio::test]
+async fn agent_resources_are_capped_by_what_the_manager_holds() {
+    let fx = fixture().await;
+
+    let (_, managed) = fx.get(&fx.manager, "/api/v0/agent-resources").await;
+    let refs: Vec<String> = items(&managed)
+        .iter()
+        .flat_map(|i| i["grant"]["refs"].as_array().cloned().unwrap_or_default())
+        .filter_map(|r| r.as_str().map(String::from))
+        .collect();
+    assert!(refs.contains(&TIME.to_string()), "{managed}");
+    assert!(!refs.contains(&"company_echo".to_string()), "{managed}");
+    assert!(!refs.contains(&PER_USER.to_string()), "{managed}");
+    assert!(
+        items(&managed)
+            .iter()
+            .all(|i| i["editable"] == false && i["config_url"].is_null()),
+        "{managed}"
+    );
+
+    let (_, admin) = fx.get(&fx.admin, "/api/v0/agent-resources").await;
+    let time = item(&admin, "tool", TIME);
+    assert_eq!(
+        (&time["editable"], &time["config_url"]),
+        (&json!(false), &Value::Null),
+        "nothing about a tool is maintained anywhere, so nothing links"
+    );
+    let skill = item(&admin, "skill", "brand");
+    assert_eq!(skill["editable"], true);
+    assert_eq!(skill["config_url"], "/admin/skills");
+    let connector = item(&admin, "tool", &format!("mcp__{GLOBAL}"));
+    assert_eq!(
+        connector["config_url"],
+        format!("/admin/connectors/{GLOBAL}/edit")
+    );
+}

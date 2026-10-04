@@ -11,7 +11,6 @@ agents-canvas-kind-route = Ruta
 agents-canvas-target-agent = Subagente
 agents-canvas-target-human = Persona
 agents-canvas-target-other = Destino { $kind }
-agents-canvas-model-default = Modelo predeterminado
 agents-canvas-tools = Herramientas: { $count }
 agents-canvas-skills = Habilidades: { $count }
 agents-canvas-slots = Slots: { $count }

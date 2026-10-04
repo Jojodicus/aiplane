@@ -40,10 +40,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Список из { $count } тем, строго соблюдается
 }
 agents-setup-preview = Так это выглядит на вашем сайте
-agents-setup-preview-greeting = Здравствуйте! Я { $name }. Чем могу помочь?
 agents-setup-preview-offtopic = Как работает дизельный двигатель?
 agents-setup-preview-free = Без строгого соблюдения модель решает сама и часто всё равно отвечает.
-agents-setup-preview-placeholder = Сообщение …
 agents-setup-modal-note = Изменения сохраняются в черновик.
 agents-setup-apply = Применить
 agents-setup-assistant = Помощник
@@ -134,17 +132,7 @@ agents-setup-strict-hint = Перед каждым ответом небольш
 agents-setup-strict-needs = Строгому стражу тем нужны хотя бы одна тема и ответ на другие темы.
 agents-setup-scope-try = Попробуйте на вкладке «Попробовать»: тестовый чат показывает решение стража для каждого сообщения.
 agents-setup-abilities-lead = Чем может пользоваться агент? Нужные доступы выдаются автоматически, насколько они есть у вас самих.
-agents-setup-knowledge = Знания
-agents-setup-knowledge-desc = Отвечает из базы знаний «{ $name }».
 agents-setup-knowledge-no-search = Вам самим недоступен поиск по знаниям, поэтому вы не можете дать его агенту. Обратитесь к администратору.
-agents-setup-abilities = Возможности
-agents-setup-connector-desc = { $count ->
-    [one] Через коннектор «{ $name }» ({ $count } инструмент).
-    [few] Через коннектор «{ $name }» ({ $count } инструмента).
-    [many] Через коннектор «{ $name }» ({ $count } инструментов).
-   *[other] Через коннектор «{ $name }» ({ $count } инструмента).
-}
-agents-setup-skill-desc = Следует инструкциям навыка «{ $name }».
 agents-setup-locked = Выдано кем-то другим
 agents-setup-locked-hint = У вас самих этого нет, поэтому изменить это вы не можете. Обратитесь к администратору.
 agents-setup-kept-live = Доступ сохранён, потому что его использует опубликованная версия.
@@ -217,6 +205,10 @@ agents-setup-fallback = Иначе, если агент не может помо
 agents-setup-fallback-human = передать человеку
 agents-setup-fallback-none = вежливо завершить разговор
 agents-setup-routes-note = Специалист автоматически получает собранные данные, например подтверждённый номер клиента, но никогда не весь разговор.
+agents-setup-notify = Сообщать о передаче человеку
+agents-setup-notify-hint = Все, кто может ответить, увидят её во входящих. Также сообщать через:
+agents-setup-notify-push = Push-уведомление всем, кто может ответить
+agents-setup-notify-none = Пока нет канала для оповещений. Добавьте ниже канал Slack или Discord.
 agents-setup-rule-needs-identity = Этот специалист работает с подтверждёнными данными клиента, поэтому правило требует подтверждённой личности.
 agents-setup-rule-no-identity = Чтобы передавать только после подтверждения личности, сначала настройте проверку личности.
 agents-setup-rule-no-details = Чтобы передавать разговор только после сбора всех данных, сначала добавьте их в разделе «Сбор данных».
@@ -294,7 +286,8 @@ agents-setup-voice-output = Ответы можно читать вслух
 agents-setup-voice-transcription-model = Распознавание речи
 agents-setup-voice-speech-model = Синтез речи
 agents-setup-voice-voice = Голос (необязательно)
-agents-setup-voice-voice-hint = Оставьте пустым, чтобы использовать голос по умолчанию для языка посетителя.
+agents-setup-voice-voice-hint = Голоса, которые предлагает модель озвучивания.
+agents-setup-voice-default = По умолчанию для языка посетителя
 agents-setup-voice-unavailable-input = Голосовой ввод недоступен: для вас не включена ни одна модель распознавания речи — обратитесь к администратору.
 agents-setup-voice-unavailable-output = Чтение ответов вслух недоступно: для вас не включена ни одна модель синтеза речи — обратитесь к администратору.
 
@@ -327,6 +320,3 @@ agents-setup-ready-recommended-pill = Готов, есть рекомендац�
 agents-setup-test-save-all = Сохранить все как тесты
 agents-setup-proposing = Настройка составляется по вашему описанию. Обычно это занимает от 20 до 40 секунд.
 agents-setup-abilities-search = Поиск возможностей
-agents-setup-abilities-none-found = Нет возможностей, подходящих под ваш запрос.
-agents-setup-abilities-show-all = Показать все возможности ({ $count })
-agents-setup-abilities-none-chosen = Большинству агентов дополнительные возможности не нужны. Найдите нужную через поиск выше или покажите все.

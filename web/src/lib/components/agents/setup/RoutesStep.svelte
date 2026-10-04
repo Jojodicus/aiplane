@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { agentsApi, type Spec } from '$lib/agents';
-	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, readHandoffs, readSlots, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { CHANNEL_KINDS, agentsApi, type NotifyChannel, type Spec } from '$lib/agents';
+	import ChannelsPanel from '../ChannelsPanel.svelte';
+	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyEverywhere, notifyOn, readHandoffs, readSlots, setNotify, sharedNotify, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
@@ -54,6 +55,24 @@
 
 	onMount(() => model.rules.forEach((_, i) => void derive(i)));
 
+	let channels = $state<NotifyChannel[]>([]);
+	let pushEnabled = $state(false);
+	onMount(() => {
+		agentsApi.pushEnabled().then((on) => (pushEnabled = on)).catch(() => (pushEnabled = false));
+	});
+	const toPerson = $derived(model.fallback || model.rules.some((r) => r.target.kind === 'human'));
+	/** The channel kinds this agent can announce on: push when the gateway sends it, a service once it has a channel. */
+	const available = $derived([...(pushEnabled ? ['push'] : []), ...CHANNEL_KINDS.filter((kind) => channels.some((c) => c.kind === kind))]);
+	/** One choice while every person route announces alike; each route its own once they differ, so none is rewritten unasked. */
+	const shared = $derived(sharedNotify(model));
+	const channelsOf = (kind: string) => channels.filter((c) => c.kind === kind).map((c) => `${c.name} (${c.url_host})`).join(', ');
+
+	/** A target agent not shared with the viewer, by its id: they may not read its name. */
+	function unlisted(rule: Rule): string | null {
+		const target = rule.target;
+		if (target.kind !== 'agent' || !target.id) return null;
+		return ws.agents.some((a) => a.id === target.id) ? null : target.id;
+	}
 	const targetValue = (rule: Rule) => (rule.target.kind === 'human' ? 'human' : `agent:${rule.target.id}`);
 	function setTarget(i: number, value: string) {
 		model.rules[i].target = value === 'human' ? { kind: 'human' } : { kind: 'agent', id: value.slice(6) };
@@ -78,6 +97,18 @@
 		model.rules.forEach((_, j) => void derive(j));
 	}
 </script>
+
+{#snippet choice(notify: string[] | null, set: (next: string[] | null) => void)}
+	{#each available as kind (kind)}
+		<label class="flex items-start gap-2">
+			<input class="checkbox checkbox-sm mt-0.5" type="checkbox" checked={notifyOn(notify, available).includes(kind)} disabled={!ws.writable} onchange={(e) => set(setNotify(notify, available, kind, e.currentTarget.checked))} />
+			<span class="flex flex-col">
+				<span>{kind === 'push' ? t('agents-setup-notify-push') : t(`agents-channels-kind-${kind}`)}</span>
+				{#if kind !== 'push'}<span class="text-xs text-base-content/60 break-all">{channelsOf(kind)}</span>{/if}
+			</span>
+		</label>
+	{/each}
+{/snippet}
 
 <div class="flex flex-col gap-4">
 	<p class="m-0 text-base-content/70">{t('agents-setup-routes-lead')}</p>
@@ -116,6 +147,7 @@
 							<option value="agent:{agent.id}">{t('agents-setup-rule-agent', { name: agent.display || agent.name })}</option>
 						{/each}
 						{#if rule.target.kind === 'agent' && !rule.target.id}<option value="agent:" disabled>{t('agents-pick')}</option>{/if}
+						{#if unlisted(rule)}<option value={targetValue(rule)}>{t('agents-setup-rule-agent', { name: unlisted(rule) ?? '' })}</option>{/if}
 					</select>
 					<button class="btn btn-ghost btn-sm ml-auto" type="button" aria-label={t('agents-remove')} onclick={() => remove(i)}>✕</button>
 				</div>
@@ -149,5 +181,29 @@
 	{#if model.custom.length}
 		<p class="m-0 text-sm text-base-content/60">{t('agents-setup-routes-custom', { count: model.custom.length })}</p>
 	{/if}
+	{#if toPerson}
+		<fieldset class="flex flex-col gap-2">
+			<legend class="font-semibold">{t('agents-setup-notify')}</legend>
+			<span class="text-sm text-base-content/60">{t('agents-setup-notify-hint')}</span>
+			{#if !available.length}
+				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-notify-none')}</p>
+			{:else if shared !== undefined}
+				{@render choice(shared, (next: string[] | null) => (model = notifyEverywhere(model, next)))}
+			{:else}
+				{#each model.rules as rule, i (i)}
+					{#if rule.target.kind === 'human'}
+						<p class="m-0 mt-1 text-sm font-semibold">{rule.topic}</p>
+						{@render choice(rule.notify ?? null, (next: string[] | null) => (model.rules[i].notify = next))}
+					{/if}
+				{/each}
+				{#if model.fallback}
+					<p class="m-0 mt-1 text-sm font-semibold">{t('agents-setup-sum-routes-other', { target: t('agents-setup-rule-person') })}</p>
+					{@render choice(model.fallbackNotify ?? null, (next: string[] | null) => (model.fallbackNotify = next))}
+				{/if}
+			{/if}
+			<ChannelsPanel agentId={ws.id} writable={ws.writable} onchannels={(list) => (channels = list)} />
+		</fieldset>
+	{/if}
+
 	<p class="m-0 text-sm text-base-content/60">{t('agents-setup-routes-note')}</p>
 </div>

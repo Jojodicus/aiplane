@@ -526,10 +526,26 @@ test chat behind it.
   chat running the draft while a visitor message gets v1.
 - **`GET /api/v0/agent-resources`** lists what the calling manager holds and
   can therefore grant: `{models: {chat, transcription, speech}, defaults,
-  tools: [{id, name, description}], connectors: [{key, name, tools}], skills,
-  rag_collections: [{id, name}]}` ([Models](#models)). It applies the
-  same predicates as the grant route's cap, so the builder's pickers never
-  offer what `POST …/grants` would refuse with `grant_exceeds_manager`.
+  items}` ([Models](#models)). It applies the same predicates as the grant
+  route's cap, so the builder's pickers never offer what `POST …/grants`
+  would refuse with `grant_exceeds_manager`.
+
+  `items` are the tools, connectors, skills and knowledge bases, each the
+  row the chat capability picker shows for the same resource — built by the
+  same constructors (`tool_toggles::CapabilityEntry::{tool, connector,
+  skill, collection}`), so `key`, `kind`, `title`, `description`, `group`
+  and `icon` are identical; a tool reads as its catalog entry, everything
+  else as its admin wrote it, and an empty description stays empty. Each
+  item adds `grant: {kind, refs}` (a catalog entry standing for several tool
+  ids — memory, a typst template, ComfyUI — grants all of them), `tools` (the
+  ids it puts into `main.tools`), and `editable` / `config_url` — only where the
+  viewer can fix the resource itself: a tool's copy lives in the catalog, so
+  no tool links; an admin is pointed at a connector's
+  `/admin/connectors/<key>/edit`, `/admin/skills`, or a knowledge base's
+  `/rag/<id>/edit`. Knowledge bases (`kind` `rag_collection`, group
+  `knowledge-base`) are offered only here; the chat picker searches
+  knowledge through its tools. What each surface *lists* stays its own
+  (the chat: what the person may use; agents: what the manager may grant).
 - **`GET /api/v0/me`** gained `can_manage_agents`; the SPA shows the Agents
   section only when it is true.
 
@@ -3112,8 +3128,8 @@ system message says to ignore instructions in it.
 `dropped: [{step, item?, reason}]` lists what was left out and why, in words.
 
 **What may be offered.** The model is given — and its schema enumerates —
-exactly the tools this manager holds and may grant (ids with friendly names,
-knowledge search aside), the knowledge bases they may read (by name;
+exactly the tools this manager holds and may grant (ids with their catalog
+titles — the `items` of `GET /api/v0/agent-resources` — knowledge search aside), the knowledge bases they may read (by name;
 `json_agent_resources::grantable_collections`, the list `GET
 /api/v0/agent-resources` serves) and the agents shared with them (not the
 agent itself) plus `human` as targets. Because a backend may ignore the schema, the review checks again: an
@@ -3206,7 +3222,7 @@ code. Each checks `can_manage_agents` again when it runs.
 |---|---|---|
 | `list_agents` | the agents shared with the person | `visible_agents` (as `GET /api/v0/agents`) |
 | `read_agent(agent_id)` | draft, grants, what blocks publishing | `agent_by_id` (`read` share), `SpecWorld`, `publish_issues` |
-| `list_grantable` | models by kind, the gateway's default models, tools, connectors, skills, collections | `resources_for` (as `GET /api/v0/agent-resources`) |
+| `list_grantable` | models by kind, the gateway's default models, and `items` (tools, connectors, skills, collections with their own titles, descriptions and grant refs) | `resources_for` (as `GET /api/v0/agent-resources`) |
 | `propose_setup(agent_id, scenario, template?)` | the #117 proposal; writes nothing | `suggest_for` (as `…/assist/suggest`: its rate, usage row and `assist_suggested` event) |
 | `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName`; its `main.model` is left unset, so it runs on the gateway's default chat model, which is granted (capped) when the person may grant it; the answer names it as `model` | `create_agent` (as `POST /api/v0/agents`) |
 | `update_agent_draft(agent_id, changes)` | changes the draft step by step | `assist::apply_changes`, then `add_capped_grant` per needed grant, then `save_draft` |
@@ -3335,7 +3351,15 @@ without either is refused (`422`, at `publish.voice.transcription_model` /
 reaches only models granted to it, and the embed endpoints answer `503
 voice_unavailable` when the grant is gone. `voice` is the TTS voice; unset,
 the voice the pool of the backend that synthesises it maps the visitor's
-language to (`Acquired::voice_for`) applies. `VoiceSpec::{input_model,
+language to (`Acquired::voice_for`) applies. Set, it must be one of the
+voices the speech model it runs on offers
+(`UpstreamRegistry::speech_voices_of`: the serving speech pools'
+`offer_voices`, then their language map's voices — the list
+`speech_voices_for` gives the chat's voice picker); publishing anything else
+is refused at `publish.voice.voice`, naming the voices on offer
+(`SpecContext::speech_voices`, loaded by `SpecWorld`). A draft may hold it.
+`GET /api/v0/agent-resources` lists each speech model's `voices`, which the
+setup's *Website* step offers as a select (empty: the model's default). `VoiceSpec::{input_model,
 output_model}` return the named model only for a direction that is on. `profile.color`
 is now checked as `#rrggbb` (`Profile::color()`), and the widget paints
 itself in it.

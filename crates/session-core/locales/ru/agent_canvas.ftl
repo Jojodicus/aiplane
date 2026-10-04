@@ -11,7 +11,6 @@ agents-canvas-kind-route = Маршрут
 agents-canvas-target-agent = Субагент
 agents-canvas-target-human = Человек
 agents-canvas-target-other = Цель { $kind }
-agents-canvas-model-default = Модель по умолчанию
 agents-canvas-tools = Инструменты: { $count }
 agents-canvas-skills = Навыки: { $count }
 agents-canvas-slots = Слоты: { $count }

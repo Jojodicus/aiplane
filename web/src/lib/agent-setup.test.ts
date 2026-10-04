@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
-import { cleanSpec, ensureShape, type AgentResources, type Grant, type Spec } from './agents.ts';
+import { cleanSpec, ensureShape, type AgentResources, type Grant, type GrantableItem, type GrantableKind, type Spec } from './agents.ts';
 import {
 	SLOT_KINDS,
 	TEMPLATES,
@@ -38,6 +38,7 @@ import {
 	slotsForIdentity,
 	stepForPath,
 	voiceMissing,
+	speechVoices,
 	summary,
 	suggestedMethod,
 	suggestedRules,
@@ -48,6 +49,10 @@ import {
 	unique,
 	writeBasics,
 	writeHandoffs,
+	notifyOn,
+	notifyEverywhere,
+	setNotify,
+	sharedNotify,
 	writeIdentity,
 	writeScope,
 	writeColor,
@@ -211,7 +216,7 @@ test('details round-trip; a fresh row takes its key from its label, managed and 
 	const back = readSlots(throughEditor(spec));
 	assert.deepEqual(back, [
 		{ key: 'email', label: 'E-mail', kind: 'email', values: [] },
-		{ key: 'legacy', label: 'Legacy', kind: 'custom', values: [] },
+		{ key: 'legacy', label: 'legacy', kind: 'custom', values: [] },
 		{ key: 'customer_number', label: 'Customer number', kind: 'customer_number', values: [] },
 		{ key: 'plan', label: 'Plan', kind: 'choice', values: ['basic', 'pro'] }
 	], 'the order the person gave survives the server sorting the keys');
@@ -425,16 +430,30 @@ test('a specialist’s route values come from trusted slots or the confirmed ide
 	assert.deepEqual(deriveBind(null, spec), { bind: {}, missing: [] });
 });
 
+const item = (kind: GrantableKind, key: string, title: string, refs: string[], tools: string[], description = ''): GrantableItem => ({
+	key,
+	kind: kind === 'connector' ? 'tool' : kind,
+	title,
+	description,
+	group: kind,
+	order: 0,
+	icon: null,
+	grant: { kind, refs },
+	tools,
+	editable: false,
+	config_url: null
+});
 const resources: AgentResources = {
 	models: { chat: [{ id: 'mid', gdpr: true, nda: true }], transcription: [], speech: [] },
-	tools: [
-		{ id: 'search_web', name: 'Web search', description: 'Searches the web' },
-		{ id: 'rag_search', name: 'Knowledge search', description: null },
-		{ id: 'rag_list_collections', name: 'List collections', description: null }
-	],
-	connectors: [{ key: 'jira', name: 'Jira', tools: ['mcp__jira__create', 'mcp__jira__get'] }],
-	skills: ['brand-voice'],
-	rag_collections: [{ id: 7, name: 'croit docs' }]
+	items: [
+		item('rag_collection', '7', 'croit docs', ['7'], []),
+		item('tool', 'search_web', 'Web search', ['search_web'], ['search_web'], 'Searches the web'),
+		item('tool', 'memory', 'Memory', ['remember', 'recall'], ['remember', 'recall']),
+		item('tool', 'rag_search', 'Knowledge search', ['rag_search'], ['rag_search']),
+		item('tool', 'rag_list_collections', 'List collections', ['rag_list_collections'], ['rag_list_collections']),
+		item('connector', 'mcp__jira', 'Jira', ['jira'], ['mcp__jira__create', 'mcp__jira__get']),
+		item('skill', 'brand-voice', 'Brand voice', ['brand-voice'], [])
+	]
 };
 const grant = (kind: Grant['kind'], ref: string): Grant => ({ kind, ref, granted_by: 'admin', granted_at: '' });
 
@@ -444,14 +463,29 @@ test('ability cards: what the manager may grant, and what the agent has that the
 	const view = cards.map((c) => `${c.kind}:${c.ref}:${c.on ? 'on' : 'off'}:${c.holdable ? 'mine' : 'locked'}`);
 	assert.deepEqual(view, [
 		'rag_collection:7:on:mine',
-		'rag_collection:9:on:locked',
 		'tool:search_web:on:mine',
-		'tool:netcheck:on:locked',
+		'tool:memory:off:mine',
 		'connector:jira:off:mine',
-		'connector:erp:on:locked',
 		'skill:brand-voice:off:mine',
+		'rag_collection:9:on:locked',
+		'tool:netcheck:on:locked',
+		'connector:erp:on:locked',
 		'skill:secret-skill:on:locked'
 	]);
+	const title = (ref: string) => cards.find((c) => c.ref === ref)?.item;
+	assert.equal(title('jira')?.title, 'Jira', 'the server names what the manager holds');
+	assert.deepEqual([title('netcheck')?.title, title('netcheck')?.description, title('netcheck')?.editable], ['netcheck', '', false], 'what they do not hold: its reference alone');
+});
+
+test('a catalog entry standing for several tools switches all of them', () => {
+	const spec: Spec = ensureShape({});
+	const memory = abilities(spec, [], resources).find((c) => c.ref === 'memory')!;
+	assert.deepEqual(memory.refs, ['remember', 'recall']);
+	setAbility(spec, memory, true);
+	assert.deepEqual(spec.main.tools, ['remember', 'recall']);
+	assert.ok(abilities(spec, [], resources).find((c) => c.ref === 'memory')?.on);
+	setAbility(spec, memory, false);
+	assert.deepEqual(spec.main.tools, []);
 });
 
 test('switching abilities edits the spec, and knowledge binds a single collection', () => {
@@ -603,6 +637,7 @@ test('each section sums itself up in one line', () => {
 	assert.equal(summary('slots', spec, ctx), '«agents-tpl-slot-name», «agents-tpl-slot-email»');
 	assert.equal(summary('identity', spec, ctx), 'agents-setup-identity-email_code');
 	assert.equal(summary('routes', spec, ctx), 'Invoices → Billing · agents-setup-sum-routes-other(agents-setup-rule-person)');
+	assert.equal(summary('routes', spec, { ...ctx, agents: [] }), 'Invoices → b1 · agents-setup-sum-routes-other(agents-setup-rule-person)', 'an agent not shared with the viewer: its id');
 	assert.equal(summary('site', spec, ctx), 'agents-setup-sum-site-none');
 });
 
@@ -647,12 +682,12 @@ test('a proposed tone selects its chips by id and keeps only the rest as free te
 	assert.equal(suggestedTone({ chips: ['brief'], language: null, response: '' }, { ...current, language: 'fr' }).language, 'fr');
 });
 
-test('a slot is named by its label, the managed ones from the catalog', () => {
-	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
+test('a slot is named by its label, the managed ones from the catalog, the rest by their key as it is', () => {
+	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma_name: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
 	assert.equal(slotLabel(spec, 'speicher_groesse', tr), 'Speichergröße');
-	assert.equal(slotLabel(spec, 'firma', tr), 'Firma');
+	assert.equal(slotLabel(spec, 'firma_name', tr), 'firma_name');
 	assert.equal(slotLabel(spec, 'topic', tr), '«agents-slot-label-topic»');
-	assert.equal(slotLabel(spec, 'gone', tr), 'Gone');
+	assert.equal(slotLabel(spec, 'gone', tr), 'gone');
 });
 
 test('details keep the order they were given, and unordered slots follow by name', () => {
@@ -726,4 +761,61 @@ test('publishState tells blocked, recommended-only and ready apart', () => {
 	assert.equal(publishState([]), 'ready');
 	assert.equal(publishState([advice]), 'recommended');
 	assert.equal(publishState([advice, blocking]), 'blocked');
+});
+
+test('the voice picker lists the speech model\'s own voices', () => {
+	const r: AgentResources = {
+		...resources,
+		models: { chat: [], transcription: [], speech: [{ id: 'tts-1', gdpr: true, nda: true, voices: ['alloy', 'onyx'] }, { id: 'kokoro', gdpr: true, nda: true, voices: ['af_heart'] }] },
+		defaults: { chat: null, transcription: null, speech: 'kokoro' }
+	};
+	const voice = { input: false, output: true, voice: '', transcriptionModel: '', speechModel: 'tts-1' };
+	assert.deepEqual(speechVoices(voice, r), ['alloy', 'onyx']);
+	assert.deepEqual(speechVoices({ ...voice, speechModel: '' }, r), ['af_heart'], 'unset: the default model\'s');
+	assert.deepEqual(speechVoices({ ...voice, voice: 'nova' }, r), ['alloy', 'onyx', 'nova'], 'what is set stays visible');
+	assert.deepEqual(speechVoices({ ...voice, speechModel: 'gone' }, r), []);
+});
+
+test('each person route keeps where it announces through an unrelated edit', () => {
+	const spec: Spec = {};
+	const person = (topic: string) => ({ route: null, topic, details: true, identity: false, target: { kind: 'human' as const }, bind: {} });
+	writeSlots(spec, [{ key: '', label: 'E-mail', kind: 'email', values: [], fresh: true }]);
+	writeHandoffs(spec, { rules: [person('Billing'), person('Tech')], fallback: true, custom: [] });
+	spec.routes.billing.human = { notify: ['slack'] };
+	const before = { billing: structuredClone(spec.routes.billing.human), tech: structuredClone(spec.routes.tech.human), fallback: structuredClone(spec.routes.fallback.human) };
+
+	const read = readHandoffs(throughEditor(spec));
+	writeHandoffs(spec, { ...read, rules: [...read.rules, person('Sales')] });
+	writeSlots(spec, [...readSlots(spec), { key: '', label: 'Phone', kind: 'phone', values: [], fresh: true }]);
+
+	assert.deepEqual(spec.routes.billing.human, before.billing);
+	assert.deepEqual(spec.routes.tech.human, before.tech, 'every channel stays every channel');
+	assert.deepEqual(spec.routes.fallback.human, before.fallback);
+	assert.equal(sharedNotify(readHandoffs(spec)), undefined, 'the routes differ: no shared choice');
+});
+
+test('one choice for every person route only while they agree', () => {
+	const spec: Spec = {};
+	const person = { route: null, topic: 'Billing', details: false, identity: false, target: { kind: 'human' as const }, bind: {} };
+	writeHandoffs(spec, { rules: [person], fallback: true, custom: [] });
+	const h = readHandoffs(spec);
+	assert.equal(sharedNotify(h), null, 'all of them: every channel');
+	writeHandoffs(spec, notifyEverywhere(h, ['slack']));
+	assert.deepEqual(spec.routes.billing.human, { notify: ['slack'] });
+	assert.deepEqual(spec.routes.fallback.human, { notify: ['slack'] });
+	assert.deepEqual(sharedNotify(readHandoffs(throughEditor(spec))), ['slack']);
+
+	spec.routes.billing.human.inbox = 'support';
+	writeHandoffs(spec, notifyEverywhere(readHandoffs(spec), null));
+	assert.deepEqual(spec.routes.billing.human, { inbox: 'support' }, 'every channel: no list, the rest of the route kept');
+	assert.deepEqual(spec.routes.fallback.human, {});
+});
+
+test('the notification choice covers what exists, and all of it is every channel', () => {
+	const available = ['push', 'slack'];
+	assert.deepEqual(notifyOn(null, available), ['push', 'slack'], 'unset: everything announces');
+	assert.deepEqual(notifyOn(['slack', 'discord'], available), ['slack']);
+	assert.deepEqual(setNotify(null, available, 'push', false), ['slack']);
+	assert.equal(setNotify(['slack'], available, 'push', true), null, 'everything on again: every channel');
+	assert.deepEqual(setNotify(['slack'], available, 'slack', false), []);
 });

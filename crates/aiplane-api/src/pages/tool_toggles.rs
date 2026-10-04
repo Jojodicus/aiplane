@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Capability catalog shared by chat and token settings. Each visible row
-//! represents one toggle key; runtime grants remain the outer bound.
+//! Capability catalog shared by chat, token settings and the agent setup.
+//! Each visible row represents one toggle key; runtime grants remain the
+//! outer bound. Every surface builds a row through the constructors on
+//! [`CapabilityEntry`], so a resource reads the same wherever it is offered:
+//! a tool by its catalog copy, a connector, skill or knowledge base by what
+//! its admin wrote on it, and nothing in its place when that is empty.
 
 use std::collections::HashSet;
 
+use aiplane_core::server::db::{mcp_catalog, rag};
+use aiplane_features::server::skills::Skill;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::tools::catalog::Category;
 use aiplane_runtime::server::tools::catalog::{self, ToolEntry};
+use aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
 
 #[derive(Clone, serde::Serialize)]
 pub struct CapabilityEntry {
@@ -20,6 +27,78 @@ pub struct CapabilityEntry {
     pub order: u8,
     pub can_disable: bool,
     pub icon: Option<String>,
+}
+
+/// The `kind` of a knowledge base row, which only the agent setup offers.
+pub const COLLECTION_KIND: &str = "rag_collection";
+
+impl CapabilityEntry {
+    pub fn tool(entry: ToolEntry) -> Self {
+        Self {
+            key: entry.key,
+            kind: "tool",
+            title: entry.title,
+            description: entry.description,
+            group: entry.category.key().to_string(),
+            order: entry.category.order(),
+            can_disable: true,
+            icon: None,
+        }
+    }
+
+    pub fn connector(connector: mcp_catalog::Connector) -> Self {
+        Self {
+            key: format!("{MCP_ID_PREFIX}{}", connector.key),
+            kind: "tool",
+            title: connector.name,
+            description: connector.description.unwrap_or_default(),
+            group: Category::Integrations.key().to_string(),
+            order: Category::Integrations.order(),
+            can_disable: true,
+            icon: connector.icon,
+        }
+    }
+
+    /// A skill the registry no longer knows keeps its name and no description.
+    pub fn skill(name: String, skill: Option<&Skill>) -> Self {
+        let (title, description) = skill.map_or_else(
+            || (name.clone(), String::new()),
+            |s| (s.title.clone(), s.description.clone()),
+        );
+        Self {
+            key: name,
+            kind: "skill",
+            title,
+            description,
+            group: "skills".to_string(),
+            order: u8::MAX,
+            can_disable: true,
+            icon: None,
+        }
+    }
+
+    pub fn collection(collection: rag::Collection) -> Self {
+        Self {
+            key: collection.id.to_string(),
+            kind: COLLECTION_KIND,
+            title: collection.name,
+            description: collection.description.unwrap_or_default(),
+            group: Category::Knowledge.key().to_string(),
+            order: Category::Knowledge.order(),
+            can_disable: true,
+            icon: None,
+        }
+    }
+}
+
+/// Category order first, then title: how every capability list reads.
+pub fn sort_entries<T>(rows: &mut [T], entry: impl Fn(&T) -> &CapabilityEntry) {
+    rows.sort_by(|left, right| {
+        let (left, right) = (entry(left), entry(right));
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.title.cmp(&right.title))
+    });
 }
 
 /// The capabilities an API token of this account can use: everything
@@ -57,16 +136,7 @@ pub async fn capabilities_for_user(
         .filter(|entry| {
             entry.category != Category::Integrations && entry.key != catalog::READ_SKILL_ID
         })
-        .map(|entry| CapabilityEntry {
-            key: entry.key,
-            kind: "tool",
-            title: entry.title,
-            description: entry.description,
-            group: entry.category.key().to_string(),
-            order: entry.category.order(),
-            can_disable: true,
-            icon: None,
-        })
+        .map(CapabilityEntry::tool)
         .collect::<Vec<_>>();
     let role_ids = state.role_ids_for(roles);
     let admin = state.rbac.is_admin(&role_ids);
@@ -91,11 +161,7 @@ pub async fn capabilities_for_user(
         if !connector.enabled || !connector.allows(&role_ids, admin) {
             continue;
         }
-        let key = format!(
-            "{}{}",
-            aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX,
-            connector_key
-        );
+        let key = format!("{MCP_ID_PREFIX}{connector_key}");
         let permitted = match &mcp_grant {
             aiplane_core::server::rbac::resolver::McpGrant::Unscoped => true,
             aiplane_core::server::rbac::resolver::McpGrant::Scoped(grants) => grants
@@ -105,16 +171,7 @@ pub async fn capabilities_for_user(
         if !permitted {
             continue;
         }
-        views.push(CapabilityEntry {
-            key,
-            kind: "tool",
-            title: connector.name,
-            description: connector.description.unwrap_or_default(),
-            group: Category::Integrations.key().to_string(),
-            order: Category::Integrations.order(),
-            can_disable: true,
-            icon: connector.icon,
-        });
+        views.push(CapabilityEntry::connector(connector));
     }
     let registry = state.combined_skills_for(user_id);
     let skill_names = if state
@@ -128,27 +185,10 @@ pub async fn capabilities_for_user(
         Vec::new()
     };
     for name in skill_names {
-        let (title, description) = registry
-            .as_ref()
-            .and_then(|skills| skills.get(&name))
-            .map(|skill| (skill.title.clone(), skill.description.clone()))
-            .unwrap_or_else(|| (name.clone(), String::new()));
-        views.push(CapabilityEntry {
-            key: name,
-            kind: "skill",
-            title,
-            description,
-            group: "skills".to_string(),
-            order: u8::MAX,
-            can_disable: true,
-            icon: None,
-        });
+        let skill = registry.as_ref().and_then(|skills| skills.get(&name));
+        views.push(CapabilityEntry::skill(name, skill));
     }
-    views.sort_by(|left, right| {
-        left.order
-            .cmp(&right.order)
-            .then_with(|| left.title.cmp(&right.title))
-    });
+    sort_entries(&mut views, |entry| entry);
     views
 }
 
@@ -159,6 +199,12 @@ pub fn entries_for_roles(state: &RamaState, roles: &[String]) -> Vec<ToolEntry> 
     let role_ids = state.rbac.role_ids_for(roles);
     let mut allowed = state.rbac.allowed_tools(&role_ids, &state.tools());
     state.expand_comfyui_tools(&mut allowed, &role_ids);
+    entries_for_tools(state, &allowed)
+}
+
+/// The catalog rows for exactly the tool ids `allowed`: one per toggle key,
+/// so a family (memory, a typst template, ComfyUI) is one row.
+pub fn entries_for_tools(state: &RamaState, allowed: &[String]) -> Vec<ToolEntry> {
     let comfyui_metas = state
         .comfyui()
         .as_ref()
@@ -177,7 +223,7 @@ pub fn entries_for_roles(state: &RamaState, roles: &[String]) -> Vec<ToolEntry> 
         .unwrap_or_default();
     catalog::entries(
         &state.tools(),
-        &allowed,
+        allowed,
         &state.typst_templates(),
         &comfyui_metas,
     )

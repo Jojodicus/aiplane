@@ -152,6 +152,7 @@ mod tests {
                 agents: &HashMap::new(),
                 live_specs: &HashMap::new(),
                 model_defaults: &Default::default(),
+                speech_voices: &HashMap::new(),
                 allow_private: false,
             },
             Stage::Draft,

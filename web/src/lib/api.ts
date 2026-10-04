@@ -47,16 +47,28 @@ export interface CanvasDocument {
 	updated_at: string;
 }
 
-export interface ChatCapability {
+/**
+ * One row of a capability list (`tool_toggles::CapabilityEntry`): the chat
+ * picker and the agent setup build theirs the same way on the server, so a
+ * resource reads alike in both. `description` is the resource's own, or empty.
+ */
+export interface CapabilityItem {
 	key: string;
-	kind: 'tool' | 'skill';
+	kind: string;
 	title: string;
 	description: string;
 	group: string;
 	order: number;
+	icon: string | null;
+	/** Whether the viewer maintains the resource on `config_url`. */
+	editable?: boolean;
+	config_url?: string | null;
+}
+
+export interface ChatCapability extends CapabilityItem {
+	kind: 'tool' | 'skill';
 	state: 'off' | 'auto' | 'on';
 	can_disable: boolean;
-	icon: string | null;
 }
 
 export interface ChatAsset {

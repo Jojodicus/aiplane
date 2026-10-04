@@ -52,7 +52,7 @@
 				value={main.model ?? ''}
 				held={granted.models}
 				resources={null}
-				emptyLabel={granted.defaults?.chat ? t('agents-setup-model-default', { model: granted.defaults.chat }) : t('agents-canvas-model-default')}
+				emptyLabel={granted.defaults?.chat ? t('agents-setup-model-default', { model: granted.defaults.chat }) : null}
 				ariaLabel={t('agents-main-model')}
 				onchange={setModel}
 			/>
@@ -84,7 +84,10 @@
 				{#each toolOptions as tool (tool.id)}
 					<label class="label cursor-pointer justify-start gap-2 whitespace-normal">
 						<input class="checkbox checkbox-sm" type="checkbox" checked={main.tools.includes(tool.id)} onchange={(e) => (main.tools = toggle(main.tools, tool.id, e.currentTarget.checked))} />
-						<span class="font-mono text-sm">{tool.name}</span>
+						<span class="flex flex-col">
+							<span class="text-sm">{tool.name}</span>
+							{#if tool.name !== tool.id}<span class="font-mono text-xs text-base-content/60">{tool.id}</span>{/if}
+						</span>
 					</label>
 				{/each}
 			</div>

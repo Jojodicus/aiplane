@@ -34,10 +34,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Themenbereich mit { $count } Themen, streng durchgesetzt
 }
 agents-setup-preview = So sieht es auf Ihrer Website aus
-agents-setup-preview-greeting = Hallo! Ich bin { $name }. Wie kann ich Ihnen helfen?
 agents-setup-preview-offtopic = Wie funktioniert ein Dieselmotor?
 agents-setup-preview-free = Ohne strenge Durchsetzung entscheidet das Modell selbst und antwortet oft trotzdem.
-agents-setup-preview-placeholder = Nachricht …
 agents-setup-modal-note = Änderungen landen im Entwurf.
 agents-setup-apply = Übernehmen
 agents-setup-assistant = Assistent
@@ -128,15 +126,7 @@ agents-setup-strict-hint = Vor jeder Antwort prüft ein kleines Modell, ob die F
 agents-setup-strict-needs = Ein strenger Themen-Wächter braucht mindestens ein Thema und eine Antwort für andere Themen.
 agents-setup-scope-try = Probieren Sie es unter „Ausprobieren“ aus: Der Test-Chat zeigt für jede Nachricht das Urteil des Themen-Wächters.
 agents-setup-abilities-lead = Was darf der Agent nutzen? Die nötigen Zugriffe werden automatisch vergeben, soweit Sie sie selbst haben.
-agents-setup-knowledge = Wissen
-agents-setup-knowledge-desc = Antwortet aus der Wissensdatenbank „{ $name }“.
 agents-setup-knowledge-no-search = Sie dürfen die Wissenssuche selbst nicht nutzen und können sie dem Agenten deshalb nicht geben. Fragen Sie einen Admin.
-agents-setup-abilities = Fähigkeiten
-agents-setup-connector-desc = { $count ->
-    [one] Über den Connector „{ $name }“ ({ $count } Werkzeug).
-   *[other] Über den Connector „{ $name }“ ({ $count } Werkzeuge).
-}
-agents-setup-skill-desc = Folgt den Anweisungen des Skills „{ $name }“.
 agents-setup-locked = Von jemand anderem vergeben
 agents-setup-locked-hint = Sie haben das selbst nicht und können es deshalb nicht ändern. Fragen Sie einen Admin.
 agents-setup-kept-live = Bleibt vergeben, weil die veröffentlichte Version es nutzt.
@@ -207,6 +197,10 @@ agents-setup-fallback = Sonst, wenn der Agent nicht weiterweiß,
 agents-setup-fallback-human = an einen Menschen übergeben
 agents-setup-fallback-none = das Gespräch freundlich beenden
 agents-setup-routes-note = Was der Spezialist erfährt, wird automatisch aus den gesammelten Angaben übergeben, zum Beispiel die bestätigte Kundennummer, nie das ganze Gespräch.
+agents-setup-notify = Übergabe an eine Person ankündigen
+agents-setup-notify-hint = Alle, die antworten dürfen, finden sie im Posteingang. Zusätzlich ankündigen über:
+agents-setup-notify-push = Push-Benachrichtigung an alle, die antworten dürfen
+agents-setup-notify-none = Noch kein Kanal für Ankündigungen. Unten einen Slack- oder Discord-Kanal hinzufügen.
 agents-setup-rule-needs-identity = Dieser Spezialist arbeitet mit bestätigten Kundendaten, deshalb verlangt die Regel eine bestätigte Identität.
 agents-setup-rule-no-identity = Um erst nach bestätigter Identität zu übergeben, richten Sie zuerst die Identitätsprüfung ein.
 agents-setup-rule-no-details = Um erst zu übergeben, wenn alle Angaben vorliegen, legen Sie diese zuerst unter „Infos sammeln“ an.
@@ -280,7 +274,8 @@ agents-setup-voice-output = Antworten können vorgelesen werden
 agents-setup-voice-transcription-model = Spracherkennung
 agents-setup-voice-speech-model = Sprachausgabe
 agents-setup-voice-voice = Stimme (optional)
-agents-setup-voice-voice-hint = Leer lassen für die Standardstimme der Sprache des Besuchers.
+agents-setup-voice-voice-hint = Die Stimmen, die das Sprachausgabe-Modell anbietet.
+agents-setup-voice-default = Standard für die Sprache des Besuchers
 agents-setup-voice-unavailable-input = Spracheingabe ist nicht verfügbar, weil für Sie kein Spracherkennungsmodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
 agents-setup-voice-unavailable-output = Vorlesen ist nicht verfügbar, weil für Sie kein Sprachausgabemodell freigegeben ist – wenden Sie sich an eine Administratorin oder einen Administrator.
 
@@ -313,6 +308,3 @@ agents-setup-ready-recommended-pill = Bereit, mit Empfehlungen
 agents-setup-test-save-all = Alle als Tests speichern
 agents-setup-proposing = Aus Ihrer Beschreibung wird eine Einrichtung entworfen. Das dauert meist 20 bis 40 Sekunden.
 agents-setup-abilities-search = Fähigkeiten suchen
-agents-setup-abilities-none-found = Keine Fähigkeit passt zu Ihrer Suche.
-agents-setup-abilities-show-all = Alle Fähigkeiten anzeigen ({ $count })
-agents-setup-abilities-none-chosen = Die meisten Agenten brauchen keine weiteren Fähigkeiten. Suchen Sie oben gezielt danach oder lassen Sie sich alle anzeigen.

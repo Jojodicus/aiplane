@@ -534,7 +534,7 @@ async fn the_final_stored_answer_is_spoken_once_and_then_replayed() {
 async fn the_owners_voice_is_used_when_the_spec_names_one() {
     let mock = upstream().await;
     let mut voice = both();
-    voice["voice"] = json!("nova");
+    voice["voice"] = json!("thorsten");
     let e = voice_embed(&mock, voice, json!({})).await;
     let token = e.visitor().await;
     let turn = e.answered(&token).await;
@@ -542,7 +542,78 @@ async fn the_owners_voice_is_used_when_the_spec_names_one() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     let sent = &mock.received_requests().await.unwrap()[0];
     let body: Value = serde_json::from_slice(&sent.body).unwrap();
-    assert_eq!(body["voice"], "nova");
+    assert_eq!(body["voice"], "thorsten");
+}
+
+/// A speech model's voices do not depend on its backends being up: during
+/// an outage the setup still lists them and a valid voice still publishes.
+#[tokio::test]
+async fn a_speech_models_voices_survive_an_outage_of_its_backends() {
+    let mock = upstream().await;
+    let e = voice_embed(&mock, both(), json!({})).await;
+    for pool in e.fx.state.upstreams.pools() {
+        for backend in &pool.backends {
+            backend.set_healthy(false);
+        }
+    }
+    let (_, body) = e.fx.get(&e.fx.alice, "/api/v0/agent-resources").await;
+    let tts = body["models"]["speech"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == TTS_MODEL)
+        .cloned()
+        .unwrap_or_else(|| panic!("{TTS_MODEL} is not offered: {body}"));
+    assert_eq!(tts["voices"], json!(["alloy", "thorsten"]), "{body}");
+
+    let mut s = spec("v2");
+    let mut voice = both();
+    voice["voice"] = json!("thorsten");
+    s["publish"]["voice"] = voice;
+    let (status, body) = e.fx.put_draft(&e.fx.alice, &e.agent, s).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = e.fx.publish(&e.fx.alice, &e.agent).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// The setup offers a speech model's own voices, and publishing refuses
+/// one it does not offer, naming those it does.
+#[tokio::test]
+async fn a_voice_the_speech_model_does_not_offer_is_refused_at_publish() {
+    let mock = upstream().await;
+    let e = voice_embed(&mock, both(), json!({})).await;
+    let (status, body) = e.fx.get(&e.fx.alice, "/api/v0/agent-resources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tts = body["models"]["speech"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == TTS_MODEL)
+        .cloned()
+        .unwrap_or_else(|| panic!("{TTS_MODEL} is not offered: {body}"));
+    assert_eq!(tts["voices"], json!(["alloy", "thorsten"]));
+
+    let mut s = spec("v2");
+    let mut voice = both();
+    voice["voice"] = json!("nova");
+    s["publish"]["voice"] = voice;
+    let (status, body) = e.fx.put_draft(&e.fx.alice, &e.agent, s.clone()).await;
+    assert_eq!(status, StatusCode::OK, "a draft may hold it: {body}");
+    let (status, body) = e.fx.publish(&e.fx.alice, &e.agent).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let issue = &body["error"]["issues"][0];
+    assert_eq!(issue["path"], "publish.voice.voice");
+    let message = issue["message"].as_str().unwrap();
+    assert!(
+        message.contains("`nova`") && message.contains("alloy, thorsten"),
+        "{issue}"
+    );
+
+    s["publish"]["voice"]["voice"] = json!("alloy");
+    let (status, body) = e.fx.put_draft(&e.fx.alice, &e.agent, s).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = e.fx.publish(&e.fx.alice, &e.agent).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
 #[tokio::test]

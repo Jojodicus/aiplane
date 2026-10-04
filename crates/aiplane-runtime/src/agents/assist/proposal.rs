@@ -333,7 +333,7 @@ pub fn changes_schema() -> Value {
                 "why": { "type": "string" },
             })) },
             "knowledge": { "type": "array",
-                "description": "knowledge bases by name, from list_grantable `rag_collections`",
+                "description": "knowledge bases by name: the `title` of a list_grantable item of kind `rag_collection`",
                 "items": object(json!({
                     "name": { "type": "string" },
                     "why": { "type": "string" },

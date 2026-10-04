@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { base } from '$app/paths';
 	import type { ChatCapability } from '$lib/api';
-	import { capabilityCounts, filterCapabilities, type CapabilityStateFilter } from '$lib/capability-picker';
+	import { capabilityCounts, type CapabilityStateFilter } from '$lib/capability-picker';
 	import { t } from '$lib/i18n.svelte';
-	import { toolCategoryLabel } from '$lib/tools';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import CapabilityBrowser from '$lib/components/capabilities/CapabilityBrowser.svelte';
 
 	/** `showTrigger: false` is for a caller that opens the picker itself
 	 *  through `show()` — from inside another dialog, whose box would
@@ -24,28 +23,11 @@
 
 	let dialog: HTMLDialogElement;
 	let open = $state(false);
-	let query = $state('');
-	let selectedGroup = $state('');
 	let stateFilter = $state<CapabilityStateFilter>('all');
 	let busy = $state(false);
 	const active = $derived(capabilities.filter((capability) => capability.state === 'on'));
 	const counts = $derived(capabilityCounts(capabilities));
-	const groups = $derived(
-		Array.from(new Set(capabilities.map((capability) => capability.group))).map((name) => ({
-			name,
-			rows: capabilities.filter((capability) => capability.group === name)
-		}))
-	);
-	const shown = $derived(filterCapabilities(capabilities, {
-		group: query.trim() ? null : selectedGroup || null,
-		state: stateFilter,
-		query
-	}));
 	const stateFilters: CapabilityStateFilter[] = ['all', 'on', 'auto', 'off'];
-	let groupOptions = $derived([
-		{ value: '', label: t('chat-render-all-tools-label'), description: t('chat-render-tool-count', { count: capabilities.length }) },
-		...groups.map((group) => ({ value: group.name, label: toolCategoryLabel(group.name), description: t('chat-render-tool-count', { count: group.rows.length }) }))
-	]);
 
 	function stateLabel(state: CapabilityStateFilter): string {
 		return t(`chat-render-state-${state}-label`);
@@ -118,66 +100,24 @@
 			</header>
 
 			{#if capabilities.length > 0}
-				<div class="flex flex-col gap-3 border-b border-base-300 px-4 py-3 sm:px-6 lg:flex-row lg:items-center">
-					<label class="input w-full lg:max-w-xl">
-						<span aria-hidden="true">⌕</span>
-						<input bind:value={query} placeholder={t('chat-render-tools-search-placeholder')} />
-					</label>
-					<div role="tablist" class="tabs tabs-box tabs-sm max-w-full overflow-x-auto">
-						{#each stateFilters as state (state)}
-							<button type="button" role="tab" class="tab gap-1 whitespace-nowrap {stateFilter === state ? 'tab-active' : ''}" aria-selected={stateFilter === state} onclick={() => (stateFilter = state)}>
-								{stateLabel(state)} <span class="badge badge-sm badge-ghost">{stateCount(state)}</span>
-							</button>
-						{/each}
-					</div>
-				</div>
-
-				<div class="grid min-h-0 flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">
-					<nav class="hidden overflow-y-auto border-r border-base-300 bg-base-200/25 p-3 md:block" aria-label={t('chat-render-tools-category-label')}>
-						<ul class="menu w-full gap-1">
-							<li><button type="button" class={selectedGroup === '' ? 'menu-active' : ''} onclick={() => { selectedGroup = ''; query = ''; }}><span class="min-w-0 flex-1 truncate">{t('chat-render-all-tools-label')}</span><span class="badge badge-sm">{capabilities.length}</span></button></li>
-							{#each groups as group (group.name)}
-								<li><button type="button" class={selectedGroup === group.name ? 'menu-active' : ''} onclick={() => { selectedGroup = group.name; query = ''; }}><span class="min-w-0 flex-1 truncate">{toolCategoryLabel(group.name)}</span><span class="badge badge-sm">{group.rows.length}</span></button></li>
+				<CapabilityBrowser items={capabilities} labelledby={dialogId} filter={(capability) => stateFilter === 'all' || capability.state === stateFilter}>
+					{#snippet toolbar()}
+						<div role="tablist" class="tabs tabs-box tabs-sm max-w-full overflow-x-auto">
+							{#each stateFilters as state (state)}
+								<button type="button" role="tab" class="tab gap-1 whitespace-nowrap {stateFilter === state ? 'tab-active' : ''}" aria-selected={stateFilter === state} onclick={() => (stateFilter = state)}>
+									{stateLabel(state)} <span class="badge badge-sm badge-ghost">{stateCount(state)}</span>
+								</button>
 							{/each}
-						</ul>
-					</nav>
-
-					<section class="flex min-h-0 min-w-0 flex-col" aria-labelledby={dialogId}>
-						<div class="border-b border-base-300 p-3 md:hidden">
-							<SearchableSelect options={groupOptions} bind:value={selectedGroup} onchange={() => (query = '')} ariaLabel={t('chat-render-tools-category-label')} class="w-full" />
 						</div>
-						<div class="flex flex-col gap-3 border-b border-base-300 px-4 py-3 sm:flex-row sm:items-center sm:px-6">
-							<div class="min-w-0 flex-1">
-								<h3 class="truncate text-lg font-semibold">{query.trim() ? t('chat-render-tools-search-results') : selectedGroup ? toolCategoryLabel(selectedGroup) : t('chat-render-all-tools-label')}</h3>
-								<p class="text-sm text-base-content/60">{t('chat-render-tool-count', { count: shown.length })}</p>
-							</div>
-							{#if !query.trim() && shown.length > 0}
-								<div class="flex flex-col gap-1 sm:items-end">
-									<span class="text-xs font-medium text-base-content/60">{t('chat-render-tools-set-group')}</span>
-									{@render segmented(shown)}
-								</div>
-							{/if}
+					{/snippet}
+					{#snippet groupActions(rows)}
+						<div class="flex flex-col gap-1 sm:items-end">
+							<span class="text-xs font-medium text-base-content/60">{t('chat-render-tools-set-group')}</span>
+							{@render segmented(rows)}
 						</div>
-
-						<div class="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6">
-							{#if shown.length > 0}
-								<ul class="divide-y divide-base-300/60">
-									{#each shown as capability (`${capability.kind}:${capability.key}`)}
-										<li class="flex flex-col gap-3 py-4 sm:flex-row sm:items-center">
-											<div class="min-w-0 flex-1">
-												<h4 class="font-medium">{capability.title}</h4>
-												{#if capability.description}<p class="mt-1 max-w-3xl text-sm text-base-content/60">{capability.description}</p>{/if}
-											</div>
-											{@render segmented([capability])}
-										</li>
-									{/each}
-								</ul>
-							{:else}
-								<div class="flex h-full min-h-48 items-center justify-center text-center text-base-content/60">{t('chat-render-tools-empty')}</div>
-							{/if}
-						</div>
-					</section>
-				</div>
+					{/snippet}
+					{#snippet control(capability)}{@render segmented([capability])}{/snippet}
+				</CapabilityBrowser>
 
 				<footer class="flex min-h-16 items-center gap-3 border-t border-base-300 px-4 sm:px-6">
 					<p class="min-w-0 flex-1 truncate text-sm text-base-content/60">{t('chat-render-tools-summary', counts)}</p>

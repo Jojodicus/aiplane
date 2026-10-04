@@ -31,10 +31,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] 包含 { $count } 个主题的列表，严格执行
 }
 agents-setup-preview = 在你网站上的样子
-agents-setup-preview-greeting = 你好！我是 { $name }。有什么可以帮你？
 agents-setup-preview-offtopic = 柴油发动机是怎么工作的？
 agents-setup-preview-free = 不严格执行时，由模型自行判断，往往仍会作答。
-agents-setup-preview-placeholder = 消息 …
 agents-setup-modal-note = 更改会保存到草稿。
 agents-setup-apply = 应用
 agents-setup-assistant = 助手
@@ -125,14 +123,7 @@ agents-setup-strict-hint = 每次回答前，一个小模型会检查问题是�
 agents-setup-strict-needs = 严格的主题守卫至少需要一个主题和一条针对其他主题的回复。
 agents-setup-scope-try = 在“试用”标签页中试一试：测试聊天会显示主题守卫对每条消息的判定。
 agents-setup-abilities-lead = 智能体可以使用什么？所需的访问权限会在你本人权限范围内自动授予。
-agents-setup-knowledge = 知识
-agents-setup-knowledge-desc = 根据知识库“{ $name }”回答。
 agents-setup-knowledge-no-search = 你自己无权使用知识搜索，因此无法分配给智能体。请联系管理员。
-agents-setup-abilities = 能力
-agents-setup-connector-desc = { $count ->
-   *[other] 通过连接器“{ $name }”（{ $count } 个工具）。
-}
-agents-setup-skill-desc = 遵循技能“{ $name }”的说明。
 agents-setup-locked = 由他人授予
 agents-setup-locked-hint = 你本人没有这项权限，因此无法更改。请联系管理员。
 agents-setup-kept-live = 仍然保留授权，因为已发布的版本在使用它。
@@ -202,6 +193,10 @@ agents-setup-fallback = 否则，当智能体无法帮助时，
 agents-setup-fallback-human = 转交给人工
 agents-setup-fallback-none = 礼貌地结束对话
 agents-setup-routes-note = 专员获得的信息会根据已收集的内容自动传递，例如已确认的客户编号，绝不会是整段对话。
+agents-setup-notify = 通知转交给人工
+agents-setup-notify-hint = 所有可以回复的人都会在收件箱中看到。另外通过以下方式通知：
+agents-setup-notify-push = 向所有可以回复的人发送推送通知
+agents-setup-notify-none = 尚无可用于通知的渠道。请在下方添加 Slack 或 Discord 渠道。
 agents-setup-rule-needs-identity = 该专员处理已确认的客户数据，因此这条规则需要已确认的身份。
 agents-setup-rule-no-identity = 若要仅在身份确认后转交，请先设置身份验证。
 agents-setup-rule-no-details = 若要在所有信息齐全后才转交，请先在“要收集的信息”中添加这些信息。
@@ -273,7 +268,8 @@ agents-setup-voice-output = 回答可以被朗读
 agents-setup-voice-transcription-model = 语音识别
 agents-setup-voice-speech-model = 语音输出
 agents-setup-voice-voice = 声音（可选）
-agents-setup-voice-voice-hint = 留空则使用访客语言的默认声音。
+agents-setup-voice-voice-hint = 语音输出模型提供的声音。
+agents-setup-voice-default = 访客语言的默认声音
 agents-setup-voice-unavailable-input = 语音输入不可用，因为没有为您启用任何语音识别模型——请联系管理员。
 agents-setup-voice-unavailable-output = 朗读回答不可用，因为没有为您启用任何语音输出模型——请联系管理员。
 
@@ -306,6 +302,3 @@ agents-setup-ready-recommended-pill = 就绪，附带建议
 agents-setup-test-save-all = 全部保存为测试
 agents-setup-proposing = 正在根据您的描述起草设置，通常需要 20 到 40 秒。
 agents-setup-abilities-search = 搜索能力
-agents-setup-abilities-none-found = 没有符合搜索条件的能力。
-agents-setup-abilities-show-all = 显示全部能力（{ $count }）
-agents-setup-abilities-none-chosen = 大多数智能体不需要更多能力。可在上方搜索，或显示全部。

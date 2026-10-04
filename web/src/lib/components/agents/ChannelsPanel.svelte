@@ -10,7 +10,7 @@
 	 * host. With `details` off a message carries only the agent, the kind and
 	 * the inbox link.
 	 */
-	let { agentId, writable }: { agentId: string; writable: boolean } = $props();
+	let { agentId, writable, onchannels = () => {} }: { agentId: string; writable: boolean; onchannels?: (channels: NotifyChannel[]) => void } = $props();
 
 	let channels = $state<NotifyChannel[]>([]);
 	let kind = $state<ChannelKind>('slack');
@@ -23,6 +23,7 @@
 
 	async function reload() {
 		channels = await agentsApi.channels(agentId);
+		onchannels(channels);
 	}
 
 	async function run(action: () => Promise<unknown>) {

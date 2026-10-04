@@ -15,6 +15,7 @@ tools-location-unavailable = Не удалось получить доступ �
 
 # SPA-only: the Svelte /tools toggle list.
 tools-toggle-aria = Переключить { $name }
+tools-no-description = Нет описания
 
 # Section headings for the tool catalog, shared by /tools, the per-token
 # capability panel, the chat capability picker and the admin grant matrix.

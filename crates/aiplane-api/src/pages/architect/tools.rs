@@ -118,8 +118,10 @@ impl Tool for ArchitectTool {
             Kind::ListGrantable => (
                 "What the person may give an agent: models by kind (`models.chat`, \
                  `models.transcription`, `models.speech`), the gateway's default model of each \
-                 kind (`defaults`, what an agent runs on when its draft names none), tools, \
-                 connectors, skills and knowledge collections.",
+                 kind (`defaults`, what an agent runs on when its draft names none), and \
+                 `items`: the tools, connectors, skills and knowledge collections, each with its \
+                 own `title` and `description`, the `grant` it takes (`kind` and `refs`) and the \
+                 tool ids it adds to the draft (`tools`).",
                 json!({ "type": "object", "properties": {}, "additionalProperties": false }),
             ),
             Kind::ProposeSetup => (

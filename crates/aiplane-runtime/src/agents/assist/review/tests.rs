@@ -228,6 +228,7 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
         agents: &w.agents,
         live_specs: &w.live,
         model_defaults: &Default::default(),
+        speech_voices: &HashMap::new(),
         allow_private: false,
     };
     spec::check(&draft, &ctx, Stage::Draft).unwrap();
@@ -298,8 +299,8 @@ fn knowledge_is_offered_by_knowledge_base_never_as_the_search_tools() {
             .iter()
             .map(|a| (a.id.as_str(), a.name.as_str()))
             .collect::<Vec<_>>(),
-        [("search_web", "Search web")],
-        "a tool without a title of its own is named the way its card is"
+        [("search_web", "search_web")],
+        "a tool is named as the candidates name it, never made up from its id"
     );
     assert_eq!(
         s.knowledge
@@ -639,6 +640,7 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
         agents: &w.agents,
         live_specs: &w.live,
         model_defaults: &Default::default(),
+        speech_voices: &HashMap::new(),
         allow_private: false,
     };
     spec::check(&out.draft, &ctx, Stage::Draft).unwrap();
@@ -690,6 +692,7 @@ fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() 
             agents: &w.agents,
             live_specs: &w.live,
             model_defaults: &Default::default(),
+            speech_voices: &HashMap::new(),
             allow_private: false,
         },
         Stage::Draft,

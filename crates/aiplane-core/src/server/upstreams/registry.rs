@@ -1900,15 +1900,30 @@ impl UpstreamRegistry {
     /// reaching the upstream as an unknown id.
     pub fn speech_voices_for(&self, access: &PoolAccess) -> Vec<String> {
         let d = self.data();
-        let pools = || {
+        Self::voices_of(
             d.pools
                 .values()
-                .filter(|p| p.kind == PoolKind::Speech && access.allows(p))
-        };
+                .filter(|p| p.kind == PoolKind::Speech && access.allows(p)),
+        )
+    }
+
+    /// The voices of the speech pools that know `model` (health aside, so an
+    /// outage does not empty the list), ordered as
+    /// [`Self::speech_voices_for`] orders them: what an agent's
+    /// `publish.voice.voice` may name for that model.
+    pub fn speech_voices_of(&self, model: &str) -> Vec<String> {
+        let d = self.data();
+        Self::voices_of(d.pools.values().filter(|p| {
+            p.kind == PoolKind::Speech
+                && (p.configured_models.iter().any(|c| c == model) || p.knows_model(model))
+        }))
+    }
+
+    fn voices_of<'p>(pools: impl Iterator<Item = &'p Arc<Pool>> + Clone) -> Vec<String> {
         // The operator's explicit menu comes first and in their order — the
         // house voice belongs at the top, not wherever the alphabet puts it.
         let mut voices: Vec<String> = Vec::new();
-        for p in pools() {
+        for p in pools.clone() {
             for v in &p.offer_voices {
                 if !voices.contains(v) {
                     voices.push(v.clone());
@@ -1918,7 +1933,7 @@ impl UpstreamRegistry {
         // Then whatever the language map resolves to, so a deployment that
         // never fills the menu still offers its configured voices rather than
         // nothing at all. Sorted, since a HashMap has no order to honour.
-        let mut resolved: Vec<String> = pools()
+        let mut resolved: Vec<String> = pools
             .flat_map(|p| p.voices.values().cloned())
             .filter(|v| !voices.contains(v))
             .collect();
@@ -3588,6 +3603,57 @@ mod tests {
         assert_eq!(
             reg.speech_voices_for(&PoolAccess::all()),
             vec!["alloy", "onyx", "sage"]
+        );
+    }
+
+    #[test]
+    fn a_speech_model_offers_the_voices_of_the_pools_serving_it() {
+        let pool = |model: &str, voices: &str| -> UpstreamPoolConfig {
+            toml::from_str(&format!(
+                r#"
+                kind = "speech"
+                models = ["{model}"]
+                offer_voices = [{voices}]
+                [[backend]]
+                name = "{model}-backend"
+                base_url = "http://{model}.example.com"
+            "#
+            ))
+            .unwrap()
+        };
+        let reg = build(vec![
+            ("cloud", pool("tts-1", r#""marin", "alloy""#)),
+            ("local", pool("kokoro", r#""af_heart""#)),
+        ]);
+
+        assert_eq!(reg.speech_voices_of("tts-1"), vec!["marin", "alloy"]);
+        assert_eq!(reg.speech_voices_of("kokoro"), vec!["af_heart"]);
+        assert!(reg.speech_voices_of("unknown").is_empty());
+    }
+
+    #[test]
+    fn a_speech_model_keeps_its_voices_while_its_backends_are_down() {
+        let cfg: UpstreamPoolConfig = toml::from_str(
+            r#"
+            kind = "speech"
+            offer_voices = ["af_heart"]
+            [[backend]]
+            name = "kokoro"
+            base_url = "http://kokoro.example.com"
+        "#,
+        )
+        .unwrap();
+        let reg = build(vec![("local", cfg)]);
+        let pool = reg.data().pools.get("local").unwrap().clone();
+        let backend = &pool.backends[0];
+        backend.set_models(HashSet::from(["kokoro".to_string()]));
+        assert_eq!(reg.speech_voices_of("kokoro"), vec!["af_heart"]);
+
+        backend.set_healthy(false);
+        assert_eq!(
+            reg.speech_voices_of("kokoro"),
+            vec!["af_heart"],
+            "an outage does not take the model's voices away"
         );
     }
 

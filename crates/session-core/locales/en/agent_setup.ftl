@@ -33,10 +33,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Topic list with { $count } topics, strictly enforced
 }
 agents-setup-preview = How it looks on your website
-agents-setup-preview-greeting = Hello! I am { $name }. How can I help you?
 agents-setup-preview-offtopic = How does a diesel engine work?
 agents-setup-preview-free = Without strict enforcement the model decides for itself, and often answers anyway.
-agents-setup-preview-placeholder = Message …
 agents-setup-modal-note = Changes go into the draft.
 agents-setup-apply = Apply
 agents-setup-assistant = Assistant
@@ -127,15 +125,7 @@ agents-setup-strict-hint = Before every answer a small model checks whether the 
 agents-setup-strict-needs = A strict topic guard needs at least one topic and an answer for other topics.
 agents-setup-scope-try = Try it in the “Try it” tab: the test chat shows the topic guard’s verdict for every message.
 agents-setup-abilities-lead = What may the agent use? The access it needs is granted automatically, as far as you hold it yourself.
-agents-setup-knowledge = Knowledge
-agents-setup-knowledge-desc = Answers from the knowledge base “{ $name }”.
 agents-setup-knowledge-no-search = You may not use the knowledge search yourself, so you cannot give it to the agent. Ask an admin.
-agents-setup-abilities = Abilities
-agents-setup-connector-desc = { $count ->
-    [one] Through the “{ $name }” connector ({ $count } tool).
-   *[other] Through the “{ $name }” connector ({ $count } tools).
-}
-agents-setup-skill-desc = Follows the instructions of the skill “{ $name }”.
 agents-setup-locked = Granted by someone else
 agents-setup-locked-hint = You do not hold this yourself, so you cannot change it. Ask an admin.
 agents-setup-kept-live = Still granted, because the published version uses it.
@@ -206,6 +196,10 @@ agents-setup-fallback = Otherwise, when the agent cannot help,
 agents-setup-fallback-human = hand over to a person
 agents-setup-fallback-none = end the conversation politely
 agents-setup-routes-note = What the specialist learns is passed on automatically from the details collected, for example the confirmed customer number, never the whole conversation.
+agents-setup-notify = Announce a hand-off to a person
+agents-setup-notify-hint = Everyone who may answer finds it in the inbox. Announce it also on:
+agents-setup-notify-push = Push notification to whoever may answer
+agents-setup-notify-none = No channel to announce on yet. Add a Slack or Discord channel below.
 agents-setup-rule-needs-identity = This specialist works with confirmed customer data, so the rule needs a confirmed identity.
 agents-setup-rule-no-identity = To hand over only after a confirmed identity, set up the identity check first.
 agents-setup-rule-no-details = To hand over only once all details are there, add them under “Information to collect” first.
@@ -279,7 +273,8 @@ agents-setup-voice-output = Answers can be read aloud
 agents-setup-voice-transcription-model = Speech recognition
 agents-setup-voice-speech-model = Speech output
 agents-setup-voice-voice = Voice (optional)
-agents-setup-voice-voice-hint = Leave it empty for the default voice of the visitor's language.
+agents-setup-voice-voice-hint = The voices the speech-output model offers.
+agents-setup-voice-default = Default for the visitor's language
 agents-setup-voice-unavailable-input = Voice input isn't available because no speech-recognition model is enabled for you — ask an admin.
 agents-setup-voice-unavailable-output = Reading answers aloud isn't available because no speech-output model is enabled for you — ask an admin.
 
@@ -312,6 +307,3 @@ agents-setup-ready-recommended-pill = Ready, with recommendations
 agents-setup-test-save-all = Save all as tests
 agents-setup-proposing = Drafting a setup from your description. This usually takes 20 to 40 seconds.
 agents-setup-abilities-search = Search abilities
-agents-setup-abilities-none-found = No ability matches your search.
-agents-setup-abilities-show-all = Show all abilities ({ $count })
-agents-setup-abilities-none-chosen = Most agents need no further abilities. Search for one above, or show them all.
