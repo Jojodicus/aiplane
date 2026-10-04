@@ -12,9 +12,9 @@
 //!
 //! - a heading that names an issue (`### What #84 built`);
 //! - an issue reference (`#120`) anywhere in the prose;
-//! - the phrases "no longer" and "instead of", which describe a change rather
-//!   than a state ("X rather than Y" states a design choice; "the rows are
-//!   gone" or "nothing writes it" state a fact).
+//! - the phrase "no longer", which narrates a change rather than a state
+//!   ("the rows are gone" or "nothing writes it" state a fact). "Instead of"
+//!   is left alone: it usually states a design choice, not a change.
 //!
 //! Fenced code blocks and inline code spans are skipped: `#242427` is a
 //! colour, and quoted code may say anything. A file that legitimately records
@@ -36,7 +36,7 @@ struct Allowed {
 /// is history — not a way to keep a "What #N built" section.
 const HISTORY_DOCS: &[Allowed] = &[];
 
-const PHRASES: &[&str] = &["no longer", "instead of"];
+const PHRASES: &[&str] = &["no longer"];
 
 fn docs_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

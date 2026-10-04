@@ -76,8 +76,10 @@ CREATE TABLE visitor_sessions (
   the chain (`visitor()`): session not expired, key not revoked, `Origin`
   allowed, agent enabled and published. Only then does the session slide, to
   `min(now + idle_ttl, max_expires_at)`. So a revoked key or a disabled agent
-  ends open conversations at their next request, and a request refused for
-  another reason does not slide it.
+  ends open conversations at their next request, and a request that fails
+  one of these checks does not slide it. Refusals that come later — a body
+  check, the rate and budget gate (`admit`), `turn_in_progress` — happen
+  after the slide, so they keep the session alive.
 - **Idle TTL:** the starting version's `publish.idle_ttl`, default 30 min.
   **Absolute cap:** 24 h (`MAX_VISITOR_SESSION`); `sessionStorage` normally
   ends the session sooner, with the tab.

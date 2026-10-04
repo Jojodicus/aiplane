@@ -59,8 +59,8 @@ below), so the editor points at the line.
 `crates/aiplane/tests/it/docs_current.rs` reads every `docs/*.md` the same
 way and fails, naming file, line and rule, on a heading that names an issue
 (`### What #84 built`), an issue reference (`#120`) in prose, and the
-phrases `no longer` and `instead of`, which narrate a change rather than
-state a fact. Fenced code blocks and inline code spans are skipped, so a
+phrase `no longer`, which narrates a change rather than states a fact
+(`instead of` is allowed: it usually states a design choice). Fenced code blocks and inline code spans are skipped, so a
 colour (`#242427`) or quoted code never trips it. A doc whose subject is
 history goes on its `HISTORY_DOCS` allow-list with the reason; the list is
 empty, and an entry that matches nothing fails like the architecture lists.
