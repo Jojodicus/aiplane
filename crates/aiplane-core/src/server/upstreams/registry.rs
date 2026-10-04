@@ -667,6 +667,11 @@ pub struct PoolAccess {
     /// it to ([`Self::reaches`]). An empty map reaches nothing. `None` for
     /// people, who go through their groups.
     pub granted_models: Option<Arc<ModelGrants>>,
+    /// Whether a system principal's granted alias also authorises what a
+    /// backend resolves it to. Off for a name a caller sends: that name must
+    /// be granted itself. On only where the gateway resolves a granted name
+    /// on its own ([`Self::resolving`]).
+    pub expand_aliases: bool,
 }
 
 /// A system principal's model grants, by name: the pools each routes
@@ -682,6 +687,7 @@ impl PoolAccess {
             is_admin: true,
             allowed_models: None,
             granted_models: None,
+            expand_aliases: false,
         }
     }
 
@@ -712,6 +718,7 @@ impl PoolAccess {
             is_admin: false,
             allowed_models: None,
             granted_models: Some(Arc::new(models)),
+            expand_aliases: false,
         }
     }
 
@@ -746,6 +753,32 @@ impl PoolAccess {
         Self {
             allowed_models: None,
             granted_models,
+            expand_aliases: true,
+            ..self.clone()
+        }
+    }
+
+    /// This access for a request naming `model`: [`Self::resolving`] when the
+    /// caller may name it, so the ids the gateway resolves it to route;
+    /// unchanged otherwise, so a name the caller holds no grant on stays
+    /// unknown to it.
+    #[must_use]
+    pub fn for_request(&self, model: &str) -> Self {
+        if self.grants_model(model) {
+            self.resolving()
+        } else {
+            self.clone()
+        }
+    }
+
+    /// This access, for routing what the gateway itself resolved from a
+    /// name the caller was allowed: the id a turn resolved a granted alias
+    /// to, the model a conversation compacts with. A granted alias then
+    /// authorises its target on the pools it resolves there.
+    #[must_use]
+    pub fn resolving(&self) -> Self {
+        Self {
+            expand_aliases: true,
             ..self.clone()
         }
     }
@@ -797,10 +830,10 @@ impl PoolAccess {
 
     /// Whether the caller may route `model` on `pool` (the token allowlist
     /// aside, which is checked once per request). A person: the pool's
-    /// groups. A system principal: a grant on `model` through `pool`, or a
-    /// grant through `pool` on a name a backend there resolves to `model` —
-    /// so a granted alias authorises its target, but only where it is the
-    /// alias's target.
+    /// groups. A system principal: a grant on `model` through `pool`, or —
+    /// when resolving ([`Self::resolving`]) — a grant through `pool` on a
+    /// name a backend there resolves to `model`, so a granted alias
+    /// authorises its target only where it is the alias's target.
     pub fn reaches(&self, pool: &Pool, model: &str) -> bool {
         let Some(granted) = &self.granted_models else {
             return self.allows(pool);
@@ -811,14 +844,15 @@ impl PoolAccess {
         {
             return true;
         }
-        granted.iter().any(|(name, pools)| {
-            name != model
-                && in_scope(pools, pool)
-                && pool
-                    .backends
-                    .iter()
-                    .any(|b| b.resolve(name).as_deref() == Some(model))
-        })
+        self.expand_aliases
+            && granted.iter().any(|(name, pools)| {
+                name != model
+                    && in_scope(pools, pool)
+                    && pool
+                        .backends
+                        .iter()
+                        .any(|b| b.resolve(name).as_deref() == Some(model))
+            })
     }
 }
 
@@ -3983,7 +4017,13 @@ mod tests {
         ]);
         seed_models(&reg, "chat", 0, &["Qwen/Qwen3"]);
         seed_models(&reg, "other", 0, &["Qwen/Qwen3"]);
-        let agent = PoolAccess::for_system(&principal_on(&[("fast", Some(&["chat", "other"]))]));
+        let caller = PoolAccess::for_system(&principal_on(&[("fast", Some(&["chat", "other"]))]));
+        assert!(
+            reg.acquire_for_access("Qwen/Qwen3", PoolKind::Chat, &caller)
+                .is_err(),
+            "a caller naming the target itself holds no grant on it"
+        );
+        let agent = caller.resolving();
         let real = reg
             .resolve_model_for("fast", PoolKind::Chat, &agent)
             .expect("the alias resolves");

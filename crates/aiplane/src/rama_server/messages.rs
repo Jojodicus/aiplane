@@ -104,7 +104,9 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     // Resolve aliases + the unknown-model fallback once, up front. This is
     // what makes `claude-sonnet-4-6` (a name no self-hosted backend serves)
     // route to whatever the operator aliased it to.
-    let access = state.pool_access_for_token(&user);
+    let access = state
+        .pool_access_for_token(&user)
+        .for_request(&requested_model);
     let (routing_model, automatic_decision) = match proxy::resolve_automatic_chat_route(
         &state,
         &user,
@@ -263,7 +265,9 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
     }
     let requested_model = translated.model.clone();
 
-    let access = state.pool_access_for_token(&user);
+    let access = state
+        .pool_access_for_token(&user)
+        .for_request(&requested_model);
     let (routing_model, automatic_decision) = match proxy::resolve_automatic_chat_route(
         &state,
         &user,

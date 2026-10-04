@@ -141,7 +141,7 @@ pub async fn compaction_target(
                 access.for_route_targets(&route.alias, route.members()),
             )
         }
-        _ => (requested.to_string(), access),
+        _ => (requested.to_string(), access.resolving()),
     };
     let model = state
         .upstreams

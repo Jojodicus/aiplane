@@ -336,7 +336,12 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
 
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
-    pools.insert("pool".to_string(), chat_pool(&upstream.uri(), vec![]));
+    let mut open = chat_pool(&upstream.uri(), vec![]);
+    open.backend[0].alias = Some(upstreams::config::AliasSpec::Targets(HashMap::from([(
+        "fast".to_string(),
+        "model-a".to_string(),
+    )])));
+    pools.insert("pool".to_string(), open);
     pools.insert(
         "vip".to_string(),
         chat_pool(&vip_upstream.uri(), vec!["vipgroup".into()]),
@@ -1416,6 +1421,54 @@ async fn a_minted_token_narrows_a_model_grant_to_the_minters_pools() {
             .is_empty(),
         "a manager's token never lands on a pool the manager may not use"
     );
+}
+
+/// A grant on the alias `fast` is a grant on the name `fast`: a caller
+/// naming its target `model-a` directly holds nothing — 404 on both chat
+/// dialects and on the model lookup, as for any model it was not granted.
+#[tokio::test]
+async fn a_granted_alias_does_not_grant_its_target_by_name() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    let (status, body) = fx.grant(&fx.manager, &id, "model", "fast").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (bearer, _) = fx.token(&fx.manager, &id).await;
+    let call = |uri: &'static str, model: &'static str| {
+        let bearer = bearer.clone();
+        let body = if uri == "/v1/messages" {
+            json!({"model": model, "max_tokens": 16,
+                   "messages": [{"role": "user", "content": "hi"}]})
+        } else {
+            json!({"model": model, "messages": [{"role": "user", "content": "hi"}]})
+        };
+        Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let status = |req| async { fx.app().serve(req).await.unwrap().status() };
+    assert_eq!(
+        status(call("/v1/chat/completions", "fast")).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(call("/v1/chat/completions", "model-a")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(call("/v1/messages", "model-a")).await,
+        StatusCode::NOT_FOUND
+    );
+    let lookup = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/models/model-a")
+        .header("authorization", format!("Bearer {bearer}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(status(lookup).await, StatusCode::NOT_FOUND);
 }
 
 const AGENT: &str = "erp";

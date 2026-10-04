@@ -747,7 +747,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
     // ones through.
     // Per-user pool access: a model served only by pools this caller can't
     // reach routes as `UnknownModel` → 404, identical to a nonexistent model.
-    let access = state.pool_access_for_token(&user);
+    let access = state.pool_access_for_token(&user).for_request(&model);
     let (routing_model, automatic_decision) = match resolve_automatic_chat_route(
         &state,
         &user,

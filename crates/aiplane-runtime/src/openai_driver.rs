@@ -1026,6 +1026,18 @@ async fn run_one_turn(
     };
 
     let access = policy.access(d);
+    // A system principal names a model it holds a grant on; the ids the turn
+    // then resolves that name to are the gateway's own resolution.
+    if !access.grants_model(&ctx.model) {
+        return Err(TurnError::Upstream {
+            message: format!(
+                "model `{}` is not granted to this principal; grant it (kind `model`) or pick \
+                 one it holds",
+                ctx.model
+            ),
+        });
+    }
+    let access = access.for_request(&ctx.model);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;

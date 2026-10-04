@@ -984,6 +984,7 @@ impl AppState {
             is_admin,
             allowed_models: None,
             granted_models: None,
+            expand_aliases: false,
         }
     }
 
