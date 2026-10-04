@@ -26,6 +26,7 @@ import {
 	splitList,
 	slotInfos,
 	testTurnLabel,
+	turnsToRead,
 	shareSubjectOptions,
 	shareSubjectLabel,
 	type SpecIssue
@@ -319,4 +320,16 @@ test('a share subject is picked from what the search found, by name where there 
 	assert.deepEqual(shareSubjectOptions(undefined, 'user'), []);
 	assert.equal(shareSubjectLabel({ subject_id: 'u1', name: 'Ada' }), 'Ada');
 	assert.equal(shareSubjectLabel({ subject_id: 'support' }), 'support');
+});
+
+test('the test chat reads each stopped answer once, never a running one or a message', () => {
+	const live = (id: string, role: string, status: string) => ({ turn: { id, role, status } });
+	const turns = [
+		live('u1', 'user', 'completed'),
+		live('a1', 'assistant', 'completed'),
+		live('a2', 'assistant', 'suspended'),
+		live('a3', 'assistant', 'in_progress')
+	];
+	assert.deepEqual(turnsToRead(turns, {}), ['a1', 'a2']);
+	assert.deepEqual(turnsToRead(turns, { a1: {} }), ['a2']);
 });

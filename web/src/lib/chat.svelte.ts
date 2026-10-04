@@ -52,7 +52,11 @@ const EVENT_NAMES = [
 	'idle'
 ] as const;
 
-export function createConversationController(sessionId: string): ConversationController {
+/**
+ * `eventsUrl` is the conversation's stream: a person's chat by default, or
+ * any other conversation speaking the same protocol (an agent's test chat).
+ */
+export function createConversationController(sessionId: string, eventsUrl = api.chatEventsUrl(sessionId)): ConversationController {
 	// The state object is plain data (see ConversationState for why the
 	// turns are an array) — `$state`'s deep proxy tracks every mutation
 	// applyEvent makes to it.
@@ -81,7 +85,7 @@ export function createConversationController(sessionId: string): ConversationCon
 		attach() {
 			closeCurrent();
 			attaches += 1;
-			const es = new EventSource(api.chatEventsUrl(sessionId));
+			const es = new EventSource(eventsUrl);
 			source = es;
 			es.onopen = () => {
 				retries = 0;

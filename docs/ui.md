@@ -106,6 +106,17 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
+### Bounded viewport
+
+A page that is a conversation fills the window instead of scrolling as a
+page: `boundedViewport(url)` (`lib/viewport.ts`, unit-tested) names them —
+the chat and an agent's Try it → Test chat. For those the shell's `main`
+does not scroll and its content is `h-full`; the page hands that height down
+a flex column (`min-h-0 flex-1` at every level), so only the message list
+scrolls and the composer stays in view whatever the header above it takes.
+No page guesses the space above it with a `calc(100dvh - …)`.
+`chat-viewport-layout.test.ts` pins the chain.
+
 The personal pages use one shared `SectionTabs` navigation component with
 path-backed tabs. `/tools` contains built-in tool controls (including location
 sharing), `/tools/integrations` the user's MCP connections, `/tools/skills`
@@ -579,30 +590,52 @@ are in `web/src/lib/components/agents/`.
   `ensureShape` gives every container a home and `cleanSpec` drops blanks
   before a save (`when` and `schema` are treated as opaque). Both clone through
   JSON because `structuredClone` refuses a Svelte proxy.
-- **Test chat** (`TestChat`, `DebugPanel`). Sends to `POST
-  /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
-  buffer is flagged with a Save button. Replies are plain (the turn is
-  synchronous); clicking a reply shows its debug: slots with value and
-  provenance, each by its label from the spec (`slotLabel`; the hand-off and
-  identity slots by catalog name) with the id in small print, each route's
-  gate with what keeps it closed (`gateHint`: the unmet condition in catalog
-  words with the slot's label, the server's message only for a condition
-  without a slot), a strict scope's
-  topic-guard verdict, the routing decision, sub-agent calls with outcome, and
-  tool-call decisions. "New conversation"
-  drops the `session_id`.
-- **A paused test turn.** A reply with `status: suspended` shows the
-  [suspension card](#suspension-card), led by what it waits for
-  (`suspensionLabel` per kind). The answer goes to `POST
-  /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume`, and its
-  reply replaces the paused one, since the same turn continued. In a test
-  conversation the resume answers with a fresh debug view too, so a verifier's
-  slot or a gate the decision opened shows on the reply. In a test
-  conversation the manager may answer a `secure_input` too. A hand-off to a
-  person (`human_answer`) shows its context as the inbox would, and a line
-  saying that in a live conversation it lands in the Inbox of the agent's
-  managers and responders. The card sits in the bubble's column of
-  the daisyUI `chat` grid (`col-start-2`).
+- **Test chat** (`TestChat`, `DebugPanel`). A streamed conversation like
+  any other: `POST /api/v0/agents/{id}/test/messages` (`sendTestMessage`)
+  runs the **saved draft** in the background, so an unsaved buffer is
+  flagged with a Save button, and a `ConversationController` opened on
+  `GET …/test/{session}/events` (`createConversationController(id,
+  eventsUrl)`) folds the frames, exactly as the chat page does. The
+  transcript and composer are `StreamedChat` (below). Whenever no turn runs,
+  each answer that stopped and has no debug view yet (`turnsToRead`) gets one
+  from `GET …/test/{session}/turns/{turn}/debug` (`testTurnView`), and a
+  fresh attach follows, so an answer the output filter rewrote shows as a
+  visitor would get it. "Show what happened" under an answer shows its
+  debug: slots with value and provenance, each by its label from the spec
+  (`slotLabel`; the hand-off and identity slots by catalog name) with the id
+  in small print, each route's gate with what keeps it closed (`gateHint`:
+  the unmet condition in catalog words with the slot's label, the server's
+  message only for a condition without a slot), a strict scope's topic-guard
+  verdict, the routing decision, sub-agent calls with outcome, and tool-call
+  decisions; the newest answer's is shown otherwise. Slots and gates are the
+  conversation's as they are when the view is read. "New conversation"
+  forgets the conversation.
+- **It fills the window.** Try it → Test chat is a
+  [bounded viewport](#bounded-viewport) like the chat: the agent page passes
+  the height down a flex column (`AgentShell` → the tab's content →
+  `TestChat` → the chat and "Behind the reply" grid), the transcript scrolls,
+  and the composer stays in view at every zoom and in every language; no
+  offset is guessed (`chat-viewport-layout.test.ts`).
+- **A paused test turn.** An answer whose turn is `suspended` shows the
+  [suspension card](#suspension-card) under it, led by what it waits for
+  (`waitingLead(kind, 'test')`), with the call's arguments from the
+  transcript. The answer goes to `POST
+  /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume` (`202`);
+  the chat attaches again and the same turn continues on the stream, and its
+  debug view is read anew once it stops, so a verifier's slot or a gate the
+  decision opened shows. In a test conversation the manager may answer a
+  `secure_input` too. A hand-off to a person (`human_answer`) shows its
+  context as the inbox would (the debug view's `handoff`), and a line saying
+  that in a live conversation it lands in the Inbox of the agent's managers
+  and responders. The card sits in the bubble's column of the daisyUI `chat`
+  grid (`col-start-2`).
+- **`StreamedChat`** (`components/chat/`) is the compact conversation the
+  test chat and the [agent architect](#agent-architect) share: the turns of a
+  controller as chat bubbles (tool calls, markdown, the working spinner, the
+  error), following the end with `chat-autoscroll`'s rules while the reader
+  is there, and the composer (Enter sends, Shift+Enter breaks the line). What
+  differs comes in as snippets: the architect's Undo row and dictation, the
+  test chat's status line, debug button and suspension card.
 - **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
   /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name
@@ -610,9 +643,8 @@ are in `web/src/lib/components/agents/`.
   response, so the card shows the ready-to-paste `<script>` tag
   (`embedSnippet`, pointing at this gateway's `/embed.js`) once, right then.
   The widget itself is [`embed.md`](embed.md).
-- **Not built yet.** A `state` or `gate` SSE event so the debug view could
-  stream, and conversation history for test sessions (they are stored with
-  `agent_version = 0`).
+- **Not built yet.** Conversation history for test sessions (they are
+  stored with `agent_version = 0`).
 
 ### Agent setup
 
@@ -763,9 +795,10 @@ while it is open.
   action, which plans that agent.
 - **The conversation** is the person's chat (`POST /api/v0/agent-architect`
   opens their newest one about the agent, *New conversation* a fresh one)
-  and streams through the same `createConversationController` as `/chat`.
-  User turns are `chat-end` bubbles, the architect's answers Markdown, and
-  every tool call shows in `ToolCalls` with its input and output.
+  and streams through the same `createConversationController` as `/chat`,
+  drawn by `StreamedChat` (shared with the test chat). User turns are
+  `chat-end` bubbles, the architect's answers Markdown, and every tool call
+  shows in `ToolCalls` with its input and output.
 - **Undo and links** (`lib/architect.ts`, unit-tested): a completed
   `update_agent_draft` offers *Undo*, which restores the revision it kept
   (`agentsApi.restoreDraft`; the server also revokes the grants that change

@@ -7,6 +7,7 @@
 	import { api } from '$lib/api';
 	import { loginPageUrl } from '$lib/auth';
 	import { navItemActive } from '$lib/nav';
+	import { boundedViewport } from '$lib/viewport';
 	import { featureEnabled, featureForRoute, visibleNavLinks } from '$lib/features';
 	import { pageTitleDescriptor } from '$lib/page-titles';
 	import { pageTitleOverride } from '$lib/page-title';
@@ -200,6 +201,8 @@
 		return page.url.pathname.startsWith(`${base}/chat`);
 	}
 
+	const bounded = $derived(boundedViewport(page.url, base));
+
 	onMount(() => {
 		// Keep <html lang> in step with the catalog: screen readers and the
 		// browser's own spellchecker read it, and app.html can only guess.
@@ -386,8 +389,8 @@
 			<BrandLockup />
 		</div>
 
-		<main class="relative z-10 min-h-0 min-w-0 flex-1 {isChatActive() ? 'overflow-hidden' : 'overflow-y-auto'}">
-			<div class="w-full {isChatActive() ? 'h-full px-4 py-3 sm:px-6' : 'px-4 pb-8 pt-6 sm:px-6'}">
+		<main class="relative z-10 min-h-0 min-w-0 flex-1 {bounded ? 'overflow-hidden' : 'overflow-y-auto'}">
+			<div class="w-full {bounded ? 'h-full px-4 py-3 sm:px-6' : 'px-4 pb-8 pt-6 sm:px-6'}">
 				{#if featureOff && routeFeature}
 					<!-- The URL still resolves — the feature behind it does not.
 					     Say which one, so an operator knows which switch to flip. -->

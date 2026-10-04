@@ -10,7 +10,7 @@
  * attached to the field they are about (by `path`).
  */
 import type { ActivityPage, Verification } from './agent-activity.ts';
-import type { Answer, HandoffContext, SuspensionView } from './suspension.ts';
+import type { Answer, HandoffContext } from './suspension.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request, type ApiIssue, type CapabilityItem } from './api.ts';
@@ -237,21 +237,13 @@ export interface TestDebug {
 	scope?: ScopeDebug | null;
 }
 
-/** What a suspended turn waits for, as a manager sees it. */
-export interface Suspension extends SuspensionView {
-	/** A hand-off to a person in the test chat: what the Inbox would show whoever answers it. */
-	context?: HandoffContext;
-}
-
-export interface TestTurn {
-	session_id: string;
+/** One test-chat turn's debug view, read once the turn stopped running. */
+export interface TestTurnView {
 	turn_id: string;
-	status: string;
-	answer: string | null;
-	error: string | null;
-	suspension: Suspension | null;
-	draft_version?: number;
-	debug?: TestDebug;
+	draft_version: number;
+	debug: TestDebug;
+	/** What the turn hands to a person while it waits on one: what the Inbox would show whoever answers it. */
+	handoff: HandoffContext | null;
 }
 
 /** A proposal of the prompt assistant (#117, `POST …/assist/suggest`): every piece already checked against the draft. */
@@ -384,13 +376,18 @@ export const agentsApi = {
 		call<AssistSuggestion>(`/api/v0/agents/${id}/assist/suggest`, json('POST', body)),
 	improve: (id: string, field: ImproveField, text: string) =>
 		call<{ suggestion: string; why: string }>(`/api/v0/agents/${id}/assist/improve`, json('POST', { field, text })),
-	testTurn: (id: string, message: string, sessionId: string | null) =>
-		call<TestTurn>(
-			`/api/v0/agents/${id}/test-turn`,
+	/** Send a test message to the draft; the turn streams on `testEventsUrl`. */
+	sendTestMessage: (id: string, message: string, sessionId: string | null) =>
+		call<{ session_id: string; turn_id: string }>(
+			`/api/v0/agents/${id}/test/messages`,
 			json('POST', sessionId ? { message, session_id: sessionId } : { message })
 		),
+	testEventsUrl: (id: string, sessionId: string) =>
+		`/api/v0/agents/${encodeURIComponent(id)}/test/${encodeURIComponent(sessionId)}/events`,
+	testTurnView: (id: string, sessionId: string, turnId: string) =>
+		call<TestTurnView>(`/api/v0/agents/${id}/test/${sessionId}/turns/${turnId}/debug`),
 	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: Answer) =>
-		call<TestTurn>(
+		call<{ turn_id: string }>(
 			`/api/v0/agents/${id}/conversations/${sessionId}/turns/${turnId}/resume`,
 			json('POST', { ...answer, request_id: requestId })
 		)
@@ -574,6 +571,16 @@ export function gateHint(unmet: Unmet, label: string, tr: (key: string, args?: R
 	if (!key || !unmet.slot) return unmet.message;
 	const expected = Array.isArray(unmet.expected) ? unmet.expected.map(shown).join(', ') : shown(unmet.expected);
 	return tr(key, { slot: label, expected, required: unmet.required ?? '', age: unmet.max_age ?? '' });
+}
+
+/** The test-chat answers that stopped running and whose debug view was not read yet. */
+export function turnsToRead(
+	turns: { turn: { id: string; role: string; status: string } }[],
+	read: Record<string, unknown>
+): string[] {
+	return turns
+		.filter((live) => live.turn.role === 'assistant' && live.turn.status !== 'in_progress' && !(live.turn.id in read))
+		.map((live) => live.turn.id);
 }
 
 export function testTurnLabel(status: string): string {
