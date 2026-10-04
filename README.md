@@ -841,7 +841,7 @@ Operational notes:
 
 ### Docker Compose
 
-For hosts running Docker rather than podman, [`deploy/compose.example.yml`](deploy/compose.example.yml) is the equivalent stack (gateway + self-hosted **Google Workspace** MCP server, plus the sandbox runner and egress proxy under the `sandbox` profile). The optional PDF OCR sidecar starts under the `ocr` profile; it requires `OCR_VLLM_BASE_URL` pointing at an Unlimited-OCR vLLM service.
+For hosts running Docker rather than podman, [`deploy/compose.example.yml`](deploy/compose.example.yml) is the equivalent stack. `up -d aiplane` needs only `deploy/aiplane.env`; every extra is a profile whose prerequisites are checked only when it is enabled: the self-hosted **Google Workspace** MCP server (`google-workspace`, needs `deploy/google-workspace-mcp.env`), the sandbox runner and egress proxy (`sandbox`), and the PDF OCR sidecar (`ocr`, needs `OCR_VLLM_BASE_URL` pointing at an Unlimited-OCR vLLM service).
 
 ### Kubernetes
 
