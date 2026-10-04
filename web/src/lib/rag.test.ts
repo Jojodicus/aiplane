@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { parseList, parseSources, profileFieldsJson, sourceLabel } from './rag.ts';
+import { listNotice, parseList, parseSources, profileFieldsJson, sourceLabel } from './rag.ts';
 
 test('RAG lists parse comma and newline separated values without empty entries', () => {
 	assert.deepEqual(parseList('*.rs, *.md\ntarget/\n'), ['*.rs', '*.md', 'target/']);
@@ -30,4 +30,30 @@ test('RAG profile fields pretty print for an editable JSON round trip', () => {
 
 test('aggregate sources use a compact repository label', () => {
 	assert.equal(sourceLabel('https://github.com/proxmox/qemu-server.git'), 'qemu-server');
+});
+
+const params = (query: string) => new URLSearchParams(query);
+
+test('queued notice names the ref the collection was saved with', () => {
+	assert.deepEqual(listNotice(params('notice=queued&name=docs&ref=release')), {
+		key: 'rag-toast-indexing-queued',
+		args: { name: 'docs', ref: 'release' }
+	});
+});
+
+test('queued notice without a ref omits it instead of assuming main', () => {
+	assert.deepEqual(listNotice(params('notice=queued&name=wiki')), {
+		key: 'rag-toast-source-indexing-queued',
+		args: { name: 'wiki' }
+	});
+});
+
+test('created-aggregate and saved notices carry the name', () => {
+	assert.deepEqual(listNotice(params('notice=created-aggregate&name=all')), { key: 'rag-toast-created-aggregate', args: { name: 'all' } });
+	assert.deepEqual(listNotice(params('notice=saved&name=docs')), { key: 'rag-toast-collection-saved', args: { name: 'docs' } });
+});
+
+test('no or unknown notice yields nothing', () => {
+	assert.strictEqual(listNotice(params('')), null);
+	assert.strictEqual(listNotice(params('notice=bogus&name=x')), null);
 });

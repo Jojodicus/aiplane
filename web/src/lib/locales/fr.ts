@@ -1925,6 +1925,7 @@ export const fr: Catalog = {
  "rag-toast-created-aggregate": "`{name}` créée (agrégat). Ajoutez les dépôts sources ci-dessous pour les indexer.",
  "rag-toast-indexing-queued": "L'indexation de `{name}` @ `{ref}` a été mise en file d'attente.",
  "rag-toast-rebuild-queued": "Reconstruction complète demandée.",
+ "rag-toast-source-indexing-queued": "L'indexation de `{name}` a été mise en file d'attente.",
  "rag-toast-source-updated": "Source mise à jour.",
  "rag-toast-sync-token": "URL de synchronisation (affichée une seule fois, non stockée) : {url}",
  "rag-toast-sync-token-cleared": "URL de synchronisation désactivée.",

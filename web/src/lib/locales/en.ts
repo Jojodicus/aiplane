@@ -1925,6 +1925,7 @@ export const en: Catalog = {
  "rag-toast-created-aggregate": "Created `{name}` (aggregate). Add source repos below to index them.",
  "rag-toast-indexing-queued": "Indexing `{name}` @ `{ref}` was queued.",
  "rag-toast-rebuild-queued": "Full rebuild requested.",
+ "rag-toast-source-indexing-queued": "Indexing `{name}` was queued.",
  "rag-toast-source-updated": "Source updated.",
  "rag-toast-sync-token": "Sync URL (shown once, it is not stored): {url}",
  "rag-toast-sync-token-cleared": "Sync URL disabled.",

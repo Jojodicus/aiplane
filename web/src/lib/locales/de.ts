@@ -1925,6 +1925,7 @@ export const de: Catalog = {
  "rag-toast-created-aggregate": "`{name}` (Aggregat) erstellt. Fügen Sie unten Quell-Repos hinzu, um sie zu indexieren.",
  "rag-toast-indexing-queued": "Indexierung von `{name}` @ `{ref}` wurde eingeplant.",
  "rag-toast-rebuild-queued": "Vollständiger Neuaufbau angefordert.",
+ "rag-toast-source-indexing-queued": "Indexierung von `{name}` wurde eingeplant.",
  "rag-toast-source-updated": "Quelle aktualisiert.",
  "rag-toast-sync-token": "Sync-URL (wird einmalig angezeigt und nicht gespeichert): {url}",
  "rag-toast-sync-token-cleared": "Sync-URL deaktiviert.",

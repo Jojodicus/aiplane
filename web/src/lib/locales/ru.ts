@@ -1941,6 +1941,7 @@ export const ru: Catalog = {
  "rag-toast-created-aggregate": "`{name}` создана (агрегат). Добавьте исходные репозитории ниже, чтобы их проиндексировать.",
  "rag-toast-indexing-queued": "Индексация `{name}` @ `{ref}` поставлена в очередь.",
  "rag-toast-rebuild-queued": "Запрошена полная пересборка индекса.",
+ "rag-toast-source-indexing-queued": "Индексация `{name}` поставлена в очередь.",
  "rag-toast-source-updated": "Источник обновлён.",
  "rag-toast-sync-token": "URL синхронизации (показывается один раз и не сохраняется): {url}",
  "rag-toast-sync-token-cleared": "URL синхронизации отключён.",

@@ -8,6 +8,7 @@ rag-empty-list = Aucune collection pour l'instant. Créez-en une ci-dessus.
 
 # Toasts — collection CRUD
 rag-toast-indexing-queued = L'indexation de `{ $name }` @ `{ $ref }` a été mise en file d'attente.
+rag-toast-source-indexing-queued = L'indexation de `{ $name }` a été mise en file d'attente.
 rag-toast-created-aggregate = `{ $name }` créée (agrégat). Ajoutez les dépôts sources ci-dessous pour les indexer.
 rag-toast-collection-saved = `{ $name }` enregistrée.
 rag-toast-vanished = La collection a disparu après l'enregistrement.

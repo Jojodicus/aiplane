@@ -8,6 +8,7 @@ rag-empty-list = Aún no hay colecciones. Cree una arriba.
 
 # Toasts — collection CRUD
 rag-toast-indexing-queued = Se puso en cola la indexación de `{ $name }` @ `{ $ref }`.
+rag-toast-source-indexing-queued = Se puso en cola la indexación de `{ $name }`.
 rag-toast-created-aggregate = `{ $name }` creada (agregado). Añada los repositorios de origen abajo para indexarlos.
 rag-toast-collection-saved = `{ $name }` guardada.
 rag-toast-vanished = La colección desapareció tras guardarse.

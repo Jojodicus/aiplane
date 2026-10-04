@@ -8,6 +8,7 @@ rag-empty-list = Пока нет коллекций. Создайте одну �
 
 # Toasts — collection CRUD
 rag-toast-indexing-queued = Индексация `{ $name }` @ `{ $ref }` поставлена в очередь.
+rag-toast-source-indexing-queued = Индексация `{ $name }` поставлена в очередь.
 rag-toast-created-aggregate = `{ $name }` создана (агрегат). Добавьте исходные репозитории ниже, чтобы их проиндексировать.
 rag-toast-collection-saved = `{ $name }` сохранена.
 rag-toast-vanished = Коллекция исчезла после сохранения.

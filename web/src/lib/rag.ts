@@ -118,3 +118,19 @@ export function sourceLabel(url: string): string {
 	const trimmed = url.replace(/\/$/, '');
 	return (trimmed.split(/[/:]/).pop() || trimmed).replace(/\.git$/, '');
 }
+
+/** The confirmation the collection list shows after the editor redirects back to it. */
+export function listNotice(params: URLSearchParams): { key: string; args: Record<string, string> } | null {
+	const name = params.get('name') ?? '';
+	const ref = params.get('ref');
+	switch (params.get('notice')) {
+		case 'created-aggregate':
+			return { key: 'rag-toast-created-aggregate', args: { name } };
+		case 'queued':
+			return ref ? { key: 'rag-toast-indexing-queued', args: { name, ref } } : { key: 'rag-toast-source-indexing-queued', args: { name } };
+		case 'saved':
+			return { key: 'rag-toast-collection-saved', args: { name } };
+		default:
+			return null;
+	}
+}

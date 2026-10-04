@@ -23,7 +23,7 @@
 		models: string[];
 		groups?: string[];
 		defaultModel?: string | null;
-		onsaved: (name: string, aggregate: boolean) => void | Promise<void>;
+		onsaved: (name: string, aggregate: boolean, gitRef: string | null) => void | Promise<void>;
 		oncancel?: () => void;
 	}>();
 
@@ -113,7 +113,7 @@
 				body.pat = form.pat || null;
 				await adminPost('/api/v0/rag/collections', body);
 			}
-			await onsaved(collection?.name ?? form.name, form.aggregate);
+			await onsaved(collection?.name ?? form.name, form.aggregate, form.source_kind === 'git' ? (body.git_ref as string) : null);
 			if (!collection) {
 				form.name = '';
 				form.description = '';

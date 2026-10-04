@@ -1910,6 +1910,7 @@ export const zh: Catalog = {
  "rag-toast-created-aggregate": "已创建 `{name}`（聚合）。请在下方添加源仓库以进行索引。",
  "rag-toast-indexing-queued": "`{name}` @ `{ref}` 的索引任务已排队。",
  "rag-toast-rebuild-queued": "已请求完整重建。",
+ "rag-toast-source-indexing-queued": "`{name}` 的索引任务已排队。",
  "rag-toast-source-updated": "源已更新。",
  "rag-toast-sync-token": "同步 URL（仅显示一次，不会保存）：{url}",
  "rag-toast-sync-token-cleared": "同步 URL 已停用。",
