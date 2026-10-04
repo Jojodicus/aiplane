@@ -304,6 +304,7 @@ export const de: Catalog = {
  "agents-an-limit-kinds": "Limit-Ablehnungen nach Art",
  "agents-an-limit-refusals": "Limit-Ablehnungen",
  "agents-an-limit-refusals-desc": "Abgewiesene Besucher",
+ "agents-an-metric": "Kennzahl",
  "agents-an-none": "In diesem Zeitraum nichts.",
  "agents-an-output-actions": "Aktionen des Ausgabefilters",
  "agents-an-output-blocks": "Sperren durch den Ausgabefilter",

@@ -1,7 +1,7 @@
 <script lang="ts" generics="V extends string">
 	import { segmentClass } from '$lib/ui-variants';
 
-	/** A small closed choice (2–4 options) shown all at once, as a daisyUI `join`. */
+	/** A small closed choice (a handful of options) shown all at once, as a daisyUI `join`. */
 	let {
 		options,
 		value = $bindable(),

@@ -264,6 +264,7 @@ agents-an-requests-desc = Einschließlich Unteragenten und Routing
 agents-an-tokens = Tokens
 agents-an-cost = Kosten
 agents-an-chart-title = Pro Tag
+agents-an-metric = Kennzahl
 agents-an-chart-empty = In diesem Zeitraum gab es keine Aktivität.
 agents-an-refusals = Ablehnungen
 agents-an-routes-chosen = Gewählte Routen

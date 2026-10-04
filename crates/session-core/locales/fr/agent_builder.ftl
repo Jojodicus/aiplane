@@ -264,6 +264,7 @@ agents-an-requests-desc = Y compris sous-agents et routage
 agents-an-tokens = Jetons
 agents-an-cost = Coût
 agents-an-chart-title = Par jour
+agents-an-metric = Indicateur
 agents-an-chart-empty = Aucune activité sur cette période.
 agents-an-refusals = Refus
 agents-an-routes-chosen = Routes choisies

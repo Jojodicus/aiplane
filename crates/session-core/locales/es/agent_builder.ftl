@@ -264,6 +264,7 @@ agents-an-requests-desc = Incluye subagentes y enrutamiento
 agents-an-tokens = Tokens
 agents-an-cost = Coste
 agents-an-chart-title = Por día
+agents-an-metric = Métrica
 agents-an-chart-empty = No hubo actividad en este periodo.
 agents-an-refusals = Rechazos
 agents-an-routes-chosen = Rutas elegidas

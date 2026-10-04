@@ -304,6 +304,7 @@ export const fr: Catalog = {
  "agents-an-limit-kinds": "Refus de limite par type",
  "agents-an-limit-refusals": "Refus de limite",
  "agents-an-limit-refusals-desc": "Visiteurs refusés",
+ "agents-an-metric": "Indicateur",
  "agents-an-none": "Rien sur cette période.",
  "agents-an-output-actions": "Actions du filtre de sortie",
  "agents-an-output-blocks": "Blocages du filtre de sortie",

@@ -304,6 +304,7 @@ export const ru: Catalog = {
  "agents-an-limit-kinds": "Отказы по лимитам по видам",
  "agents-an-limit-refusals": "Отказы по лимитам",
  "agents-an-limit-refusals-desc": "Отклонённые посетители",
+ "agents-an-metric": "Показатель",
  "agents-an-none": "За этот период ничего нет.",
  "agents-an-output-actions": "Действия выходного фильтра",
  "agents-an-output-blocks": "Блокировки выходного фильтра",
