@@ -598,8 +598,10 @@ are in `web/src/lib/components/agents/`.
   eventsUrl)`) folds the frames, exactly as the chat page does. The
   transcript and composer are `StreamedChat` (below). Whenever no turn runs,
   each answer that stopped and has no debug view yet (`turnsToRead`) gets one
-  from `GET …/test/{session}/turns/{turn}/debug` (`testTurnView`), and a
-  fresh attach follows, so an answer the output filter rewrote shows as a
+  from `GET …/test/{session}/turns/{turn}/debug` (`testTurnView`) — a pause
+  just answered only once the stream shows it past that request
+  (`settleAnswered`), and a `409 turn_in_progress` is read again when the
+  turn settles rather than shown (`readFailure`) — and a fresh attach follows, so an answer the output filter rewrote shows as a
   visitor would get it. "Show what happened" under an answer shows its
   debug: slots with value and provenance, each by its label from the spec
   (`slotLabel`; the hand-off and identity slots by catalog name) with the id

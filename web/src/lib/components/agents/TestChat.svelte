@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { agentsApi, testTurnLabel, turnsToRead, type AgentError, type Spec, type TestDebug, type TestTurnView } from '$lib/agents';
+	import { agentsApi, readFailure, settleAnswered, testTurnLabel, turnsToRead, type AgentError, type Spec, type TestDebug, type TestTurnView } from '$lib/agents';
 	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
 	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
 	import { t } from '$lib/i18n.svelte';
@@ -29,6 +29,10 @@
 	let selected = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let answering = $state<string | null>(null);
+	// Pauses just answered, by the request answered: their old
+	// debug view is gone, and a new one is read once the stream shows the
+	// turn moved on and stopped again.
+	let answered: Record<string, string> = {};
 	let reading = new Set<string>();
 
 	const turns = $derived(controller?.state.turns ?? []);
@@ -53,7 +57,8 @@
 	async function readStopped() {
 		const c = controller;
 		if (!c) return;
-		const ids = turnsToRead(c.state.turns, views).filter((id) => !reading.has(id));
+		answered = settleAnswered(c.state.turns, answered);
+		const ids = turnsToRead(c.state.turns, views, answered).filter((id) => !reading.has(id));
 		if (!ids.length) return;
 		for (const id of ids) reading.add(id);
 		try {
@@ -62,7 +67,12 @@
 			// row was final; a fresh snapshot shows what a visitor would get.
 			if (controller === c) c.attach();
 		} catch (err) {
-			error = (err as AgentError).message;
+			const failure = readFailure(err as AgentError);
+			// Not settled yet: the next attach ends when it is, and the stream's
+			// end reads it again.
+			if (failure === 'retry') {
+				if (controller === c) c.attach();
+			} else error = failure;
 		} finally {
 			for (const id of ids) reading.delete(id);
 		}
@@ -70,6 +80,7 @@
 
 	function open(sessionId: string) {
 		const c = createConversationController(sessionId, agentsApi.testEventsUrl(agentId, sessionId));
+		c.onTurnFinalized = () => void readStopped();
 		controller = c;
 		return c;
 	}
@@ -93,6 +104,7 @@
 		error = null;
 		try {
 			await agentsApi.resumeTurn(agentId, controller.id, turnId, waiting.request_id, decision);
+			answered[turnId] = waiting.request_id;
 			delete views[turnId];
 			controller.attach();
 		} catch (err) {
@@ -107,6 +119,7 @@
 		controller?.destroy();
 		controller = null;
 		views = {};
+		answered = {};
 		selected = null;
 		error = null;
 	}

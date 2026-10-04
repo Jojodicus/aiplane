@@ -573,14 +573,40 @@ export function gateHint(unmet: Unmet, label: string, tr: (key: string, args?: R
 	return tr(key, { slot: label, expected, required: unmet.required ?? '', age: unmet.max_age ?? '' });
 }
 
-/** The test-chat answers that stopped running and whose debug view was not read yet. */
-export function turnsToRead(
-	turns: { turn: { id: string; role: string; status: string } }[],
-	read: Record<string, unknown>
-): string[] {
+type TestTurnState = { turn: { id: string; role: string; status: string }; suspension?: { request_id: string } | null };
+
+/** Whether `live` still waits on the pause `requestId` was answered for. */
+const stillOn = (live: TestTurnState | undefined, requestId: string | undefined) =>
+	requestId !== undefined && live?.turn.status === 'suspended' && live.suspension?.request_id === requestId;
+
+/**
+ * The test-chat answers that stopped running and whose debug view was not
+ * read yet. A pause just answered (`answered`: turn → the request answered)
+ * is not one while the transcript still shows that pause: the stream has not
+ * shown the turn moving on yet.
+ */
+export function turnsToRead(turns: TestTurnState[], read: Record<string, unknown>, answered: Record<string, string> = {}): string[] {
 	return turns
-		.filter((live) => live.turn.role === 'assistant' && live.turn.status !== 'in_progress' && !(live.turn.id in read))
+		.filter(
+			(live) =>
+				live.turn.role === 'assistant' &&
+				live.turn.status !== 'in_progress' &&
+				!(live.turn.id in read) &&
+				!stillOn(live, answered[live.turn.id])
+		)
 		.map((live) => live.turn.id);
+}
+
+/** `answered` without the turns the transcript shows past the pause they were answered on. */
+export function settleAnswered(turns: TestTurnState[], answered: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(answered).filter(([id, requestId]) => stillOn(turns.find((live) => live.turn.id === id), requestId))
+	);
+}
+
+/** What a failed debug read means: a turn not settled yet is read again once it is, anything else is shown. */
+export function readFailure(err: AgentError): 'retry' | string {
+	return err.status === 409 && err.code === 'turn_in_progress' ? 'retry' : err.message;
 }
 
 export function testTurnLabel(status: string): string {

@@ -27,6 +27,8 @@ import {
 	slotInfos,
 	testTurnLabel,
 	turnsToRead,
+	settleAnswered,
+	readFailure,
 	shareSubjectOptions,
 	shareSubjectLabel,
 	type SpecIssue
@@ -332,4 +334,29 @@ test('the test chat reads each stopped answer once, never a running one or a mes
 	];
 	assert.deepEqual(turnsToRead(turns, {}), ['a1', 'a2']);
 	assert.deepEqual(turnsToRead(turns, { a1: {} }), ['a2']);
+});
+
+test('an answered pause is read again only once the stream shows it moved on', () => {
+	const live = (id: string, status: string, request = 'r1') => ({
+		turn: { id, role: 'assistant', status },
+		suspension: status === 'suspended' ? { request_id: request } : null
+	});
+	const answered = { a2: 'r1' };
+	const still = [live('a1', 'completed'), live('a2', 'suspended')];
+	assert.deepEqual(settleAnswered(still, answered), answered, 'the stream has not reported the resume yet');
+	assert.deepEqual(turnsToRead(still, { a1: {} }, answered), [], 'no debug request for a turn that is about to run');
+	const running = [live('a1', 'completed'), live('a2', 'in_progress')];
+	assert.deepEqual(settleAnswered(running, answered), {});
+	assert.deepEqual(turnsToRead(running, { a1: {} }, {}), []);
+	const done = [live('a1', 'completed'), live('a2', 'completed')];
+	assert.deepEqual(settleAnswered(done, answered), {}, 'a resume that finished before the attach counts too');
+	assert.deepEqual(turnsToRead(done, { a1: {} }, {}), ['a2']);
+	const pausedAgain = [live('a2', 'suspended', 'r2')];
+	assert.deepEqual(settleAnswered(pausedAgain, answered), {}, 'paused again on a new request');
+	assert.deepEqual(turnsToRead(pausedAgain, {}, answered), ['a2']);
+});
+
+test('a debug view that is not ready yet is retried, any other failure is shown', () => {
+	assert.equal(readFailure({ status: 409, code: 'turn_in_progress', message: 'running', issues: [] }), 'retry');
+	assert.equal(readFailure({ status: 404, code: 'not_found', message: 'gone', issues: [] }), 'gone');
 });
