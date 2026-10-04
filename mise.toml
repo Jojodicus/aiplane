@@ -515,6 +515,14 @@ description = "Scan the whole git history for committed secrets (gitleaks). Run 
 # the target path automatically.
 run = "gitleaks git . --redact --no-banner"
 
+[tasks.fmt-staged]
+description = "rustfmt --check on the staged Rust files only. Run by the pre-commit hook, so a commit is formatted when it is made and no 'rustfmt' follow-up commit is ever needed (AGENTS.md → 'One commit is complete')."
+run = '''
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')
+[ -z "$files" ] && exit 0
+echo "$files" | xargs rustfmt --check --edition 2024
+'''
+
 [tasks.secrets-staged]
 description = "Scan only the staged diff for secrets (gitleaks). Run by the pre-commit hook; use before committing anything credential-shaped."
 run = "gitleaks git . --staged --redact --no-banner"

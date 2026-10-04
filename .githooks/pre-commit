@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pre-commit hook: refuse to commit secrets.
+# pre-commit hook: refuse to commit secrets or unformatted Rust.
 #
 # Why at commit and not only at push: a credential that reaches a commit is
 # already in local history, and getting it back out means a rewrite. Catching
@@ -36,6 +36,17 @@ pre-commit: gitleaks found a secret in the staged changes — commit refused.
     it if it ever left this machine.
   * False positive? Add a scoped entry to .gitleaks.toml (allowlist the literal
     value, not the whole file), or bypass once with `git commit --no-verify`.
+
+EOF
+  exit 1
+fi
+
+if ! mise run fmt-staged; then
+  cat >&2 <<'EOF'
+
+pre-commit: staged Rust files are not rustfmt-clean — commit refused.
+  Run `mise run fmt`, stage the result and commit again; the formatting
+  belongs in this commit, not in a follow-up.
 
 EOF
   exit 1

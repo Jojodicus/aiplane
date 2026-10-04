@@ -40,13 +40,14 @@ The Rust binary and the UI build separately: `cargo build` needs no Node, and th
 | Everything CI runs (lint + tests + release build + SPA build) | `mise run ci` |
 | Scan the whole git history for committed secrets | `mise run secrets` |
 | Scan only the staged diff for secrets | `mise run secrets-staged` |
+| rustfmt --check the staged Rust files | `mise run fmt-staged` |
 | Enable the version-controlled git hooks | `mise run setup-hooks` |
 
 **Debug vs release.** `mise run build` (release) takes ~12 s cold-incremental and ~70 s from clean — only use it when you actually want optimised output (deploys, perf measurement). For day-to-day iteration (running locally, screenshotting pages, smoke-testing changes) use `mise run dev` or `mise run dev-build`; those produce a debug binary in ~2 s incremental (vs ~11 s for a release build). Runtime perf is identical for any UX you'd interact with; only synthetic benchmarks notice the difference.
 
 `mise run setup-hooks` points `core.hooksPath` at `.githooks/`. Run it once per clone — it installs three hooks:
 
-- **pre-commit** — gitleaks over the staged diff (~100 ms), so a credential can't reach local history in the first place.
+- **pre-commit** — gitleaks over the staged diff (~100 ms), so a credential can't reach local history in the first place, and `rustfmt --check` over the staged Rust files, so formatting lands in the commit it belongs to instead of a follow-up.
 - **pre-push** — the secret scan again over the *full* history, then lint + tests. Push is the last moment before something becomes public.
 - **commit-msg** — rejects `Co-authored-by:` / `Claude-*:` attribution trailers.
 
@@ -111,13 +112,25 @@ just "see AGENTS.md":
 ## Task
 <issue / goal, the acceptance criteria, and what is out of scope>
 
+## Confirmed design
+<link to the confirmed design: reused mechanisms, data model, UI data
+sources and user flow. No confirmed design → don't delegate yet.>
+
 ## Before writing code
-- Search for an existing helper first and name what you found (or that you
-  found nothing): `rg -n '<verb>|<noun>' crates/`, the "Shared mechanisms" of
-  the design doc, docs/architecture.md → "Crate boundaries". Reuse beats a
-  second copy; a missing block is reported back, not improvised.
+- Search for the existing mechanism first and name what you found (or that
+  you found nothing) — backend helpers, but equally product concepts: the
+  model list, the capability catalog, approvals (`chat_turn_suspensions`),
+  sharing, settings, UI components, catalog strings.
+  `rg -n '<verb>|<noun>' crates/ web/src/`, the "Shared mechanisms" of the
+  design doc, docs/architecture.md → "Crate boundaries". Reuse or extend; a
+  second mechanism is reported back for approval, never improvised
+  (AGENTS.md rule 11).
+- Facts only (AGENTS.md rule 12): show a resource's own data; missing data is
+  shown as missing, never invented. No code without a caller in this change.
 - Crate placement: say which crate the new code goes in and why it cannot go
   higher (AGENTS.md → "The gateway crate stack").
+- A requirement that contradicts the existing product, or a design gap you
+  hit, is reported back — not resolved by guessing.
 
 ## Invariants to keep
 - Outbound URLs the operator does not configure (a user's, a model's, an
@@ -140,11 +153,18 @@ The architecture tests check the first four (docs/testing.md).
   command as `CARGO_BUILD_JOBS=4 mise run …`.
 - Climb the feedback ladder (check → test-crate → lint-crate) and run
   `mise run verify` once, at the end.
-- Commits per item; never `--no-verify`; never push or merge unless asked.
+- Commits per item, each complete (code, tests, docs, i18n, generated
+  files, formatting — AGENTS.md "One commit is complete"); commit at every
+  green state so nothing is lost if you stop; never `--no-verify`; never push
+  or merge unless asked.
+- Leave the maintainer's environment alone: their dev server, browser window
+  and database (AGENTS.md "The maintainer's environment is theirs").
 
 ## Report
-- What changed and where, the helpers reused, anything left undone, and the
-  verify result.
+- Always end with a report, also when stopping early: what changed and where,
+  the mechanisms reused (and any second one you'd need, for approval),
+  behaviour changes the maintainer should decide on, anything left undone,
+  and the verify result.
 ```
 
 Why the build discipline: two agents building this workspace at once each run a
