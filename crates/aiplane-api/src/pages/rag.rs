@@ -9,7 +9,6 @@
 use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
-use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response};
 
 use aiplane_core::server::db::rag as rag_db;
@@ -35,6 +34,13 @@ fn sync_hook_token(path: &str) -> Option<String> {
 /// changed is established by the walk that follows, which is cheap on a
 /// source that supports subtree pruning. Accepting a payload here would mean
 /// trusting an unauthenticated caller's description of the corpus.
+/// What a sync hook queued.
+#[derive(serde::Serialize)]
+struct SyncQueued {
+    collection: String,
+    queued: usize,
+}
+
 pub async fn rag_sync_hook(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     // Read the token off the raw URI, not through `Path`: rama's extractor
     // lowercases every segment, and `rotate_sync_token` mints from a
@@ -42,30 +48,19 @@ pub async fn rag_sync_hook(State(state): State<Arc<RamaState>>, req: Request) ->
     // which is to say very nearly all of them — hashes to something that
     // matches no row, and the hook 404s forever.
     let Some(token) = sync_hook_token(req.uri().path()) else {
-        return (
-            rama::http::StatusCode::NOT_FOUND,
-            [(rama::http::header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"unknown sync token"}"#,
-        )
-            .into_response();
+        return super::not_found("unknown sync token");
     };
     // A missing collection and a wrong token get the same answer: anything
     // else turns this into an oracle for guessing valid tokens.
     let Ok(Some(collection)) = rag_db::find_by_sync_token(&state.db, &token).await else {
-        return (
-            rama::http::StatusCode::NOT_FOUND,
-            [(rama::http::header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"unknown sync token"}"#,
-        )
-            .into_response();
+        return super::not_found("unknown sync token");
     };
     let Some(indexer) = state.indexer.as_ref() else {
-        return (
+        return super::json_error(
             rama::http::StatusCode::SERVICE_UNAVAILABLE,
-            [(rama::http::header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"the indexer is not running"}"#,
-        )
-            .into_response();
+            "indexer_unavailable",
+            "the indexer is not running; check the RAG settings at /admin/settings",
+        );
     };
     let refs = rag_db::list_refs(&state.db, collection.id)
         .await
@@ -86,12 +81,11 @@ pub async fn rag_sync_hook(State(state): State<Arc<RamaState>>, req: Request) ->
         queued,
         "rag: sync hook fired"
     );
-    (
+    super::json_ok(
         rama::http::StatusCode::ACCEPTED,
-        [(rama::http::header::CONTENT_TYPE, "application/json")],
-        // Serialised, not interpolated: a collection name containing a quote
-        // or a backslash would otherwise emit invalid JSON to the caller.
-        serde_json::json!({ "collection": collection.name, "queued": queued }).to_string(),
+        SyncQueued {
+            collection: collection.name,
+            queued,
+        },
     )
-        .into_response()
 }
