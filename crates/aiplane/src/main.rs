@@ -628,7 +628,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Agent conversations idle past their agent's retention period are deleted,
     // with their sub-agent runs, state and visitor sessions.
-    aiplane_runtime::agents::retention::spawn_retention_sweeper(state.db.clone());
+    aiplane_runtime::agents::retention::spawn_retention_sweeper(state.clone());
 
     // Before anything can fire: no run pending now can still be running, so
     // close them rather than let the history show them as running forever.

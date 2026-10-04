@@ -389,7 +389,7 @@ async fn retention_deletes_only_the_agents_idle_conversations() {
             .unwrap();
     }
 
-    let swept = retention::sweep(&e.fx.state.db, jiff::Timestamp::now())
+    let swept = retention::sweep(&e.fx.state.db, None, jiff::Timestamp::now())
         .await
         .unwrap();
     assert_eq!(

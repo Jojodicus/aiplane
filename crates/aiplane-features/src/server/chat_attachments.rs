@@ -450,6 +450,81 @@ pub async fn reclaim_all(cfg: &S3Config, refs: &[AttachmentRef]) {
     }
 }
 
+/// The turns a chat delete takes: every turn of `session_id` at or after
+/// `from_seq` (0: the whole conversation).
+#[derive(Debug, Clone, Copy)]
+pub struct Doomed<'a> {
+    pub session_id: &'a str,
+    pub from_seq: i64,
+}
+
+impl<'a> Doomed<'a> {
+    pub fn session(session_id: &'a str) -> Self {
+        Self {
+            session_id,
+            from_seq: 0,
+        }
+    }
+}
+
+/// The bucket objects a finished chat delete orphaned, still to be removed.
+#[must_use = "a delete's attachments stay in the bucket until they are reclaimed"]
+pub struct Reclaim {
+    s3: Option<S3Config>,
+    refs: Vec<AttachmentRef>,
+}
+
+impl Reclaim {
+    /// Remove them now; the caller waits.
+    pub async fn now(self) {
+        if let Some(cfg) = &self.s3 {
+            reclaim_all(cfg, &self.refs).await;
+        }
+    }
+
+    /// Remove them off the caller's path: a slow or flaky bucket must not
+    /// delay the answer a person waits on, and a failed DELETE only leaves
+    /// an orphan (S3 DELETE is idempotent, so a later delete can retry).
+    pub fn in_background(self) {
+        if self.s3.is_some() && !self.refs.is_empty() {
+            tokio::spawn(self.now());
+        }
+    }
+}
+
+/// The one way chat rows are deleted: list the attachments the `doomed`
+/// turns reference, run `delete`, and hand back what to reclaim once it
+/// removed something (`Ok(true)`). Listing comes first because once the rows
+/// are gone the markers are gone with them, and the bucket objects can never
+/// be found again. `None` when `delete` removed nothing, so nothing is
+/// reclaimed.
+///
+/// Listing is housekeeping and never blocks the delete: without `s3`, or
+/// when the listing fails (logged), there is simply nothing to reclaim.
+pub async fn delete_reclaiming<E>(
+    db: &chat_db::Pool,
+    s3: Option<&S3Config>,
+    doomed: &[Doomed<'_>],
+    delete: impl std::future::Future<Output = Result<bool, E>>,
+) -> Result<Option<Reclaim>, E> {
+    let mut refs = Vec::new();
+    if s3.is_some() {
+        for d in doomed {
+            match attachments_from_seq(db, d.session_id, d.from_seq).await {
+                Ok(found) => refs.extend(found),
+                Err(err) => tracing::warn!(
+                    error = %err, session_id = %d.session_id,
+                    "listing the attachments of turns about to be deleted",
+                ),
+            }
+        }
+    }
+    Ok(delete.await?.then(|| Reclaim {
+        s3: s3.cloned(),
+        refs,
+    }))
+}
+
 /// Both views in one query: every session attachment plus the current
 /// round's subset. The hot `run_in_sandbox` staging path needs both, so
 /// this avoids walking the session's turns twice.
@@ -1170,6 +1245,89 @@ mod tests {
                 bytes: size,
             },
         )
+    }
+
+    fn fake_bucket(endpoint: &str) -> S3Config {
+        S3Config {
+            endpoint: endpoint.into(),
+            region: "us-east-1".into(),
+            bucket: "b".into(),
+            access_key: Some("ak".into()),
+            secret_key: Some("sk".into()),
+            access_key_env: None,
+            secret_key_env: None,
+            key_prefix: "chat".into(),
+        }
+    }
+
+    async fn deleted_keys(server: &wiremock::MockServer) -> Vec<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "DELETE")
+            .map(|r| r.url.path().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_delete_reclaims_what_its_turns_referenced_and_only_once_it_removed_them() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let cfg = fake_bucket(&server.uri());
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let kept = marker_for("t-0", "kept.png", "image/png", 1);
+        let gone = marker_for("t-1", "gone.pdf", "application/pdf", 2);
+        seed_turn_full(&pool, "t-0", 0, "user", Some(&kept), None).await;
+        seed_turn_full(&pool, "t-1", 1, "assistant", None, Some(&gone)).await;
+
+        let doomed = [Doomed {
+            session_id: "s1",
+            from_seq: 1,
+        }];
+        let nothing = delete_reclaiming(&pool, Some(&cfg), &doomed, async {
+            Ok::<_, std::convert::Infallible>(false)
+        })
+        .await
+        .unwrap();
+        assert!(nothing.is_none(), "a delete that removed nothing reclaims nothing");
+
+        delete_reclaiming(&pool, Some(&cfg), &doomed, async {
+            chat_db::delete_turns_from_seq(&pool, "s1", 1)
+                .await
+                .map(|_| true)
+        })
+        .await
+        .unwrap()
+        .expect("the turn went")
+        .now()
+        .await;
+        assert_eq!(deleted_keys(&server).await, ["/b/chat/t-1/gone.pdf"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_bucket_a_delete_still_runs() {
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        seed_turn_full(&pool, "t-0", 0, "user", Some("x"), None).await;
+        let reclaim = delete_reclaiming(&pool, None, &[Doomed::session("s1")], async {
+            chat_db::delete_turns_from_seq(&pool, "s1", 0)
+                .await
+                .map(|_| true)
+        })
+        .await
+        .unwrap();
+        assert!(reclaim.is_some());
+        assert!(chat_db::list_turns(&pool, "s1").await.unwrap().is_empty());
     }
 
     #[tokio::test]

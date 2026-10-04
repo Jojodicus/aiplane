@@ -1798,8 +1798,13 @@ model rule, and retention.
   Per agent it deletes the conversations — root sessions it owns, visitor and
   test-chat (`agent_version = 0`) alike — whose last activity
   (`chat_sessions.updated_at`) is older than `retention_days`, together with
-  every sub-agent run below them, however deep. The foreign keys take turns,
-  tool calls, `agent_state` and the visitor session. The selection requires
+  every sub-agent run below them, however deep. It deletes them the way a
+  person's chat is deleted, through
+  `aiplane_features::server::chat_attachments::delete_reclaiming`: the files
+  their turns reference are listed first, the rows go (one transaction per
+  conversation, re-checking that it is still idle and waits for nothing),
+  then the files leave the S3 bucket. The foreign keys take turns, tool
+  calls, `agent_state` and the visitor session. The selection requires
   `user_id IS NULL` at every step, so a person's chat is never touched. Each
   sweep that deleted something writes `conversations_swept` with
   `{retention_days, conversations, sub_agent_runs}` — counts only.

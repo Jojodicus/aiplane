@@ -10,16 +10,20 @@
 //! `publish.audit_retention_days`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aiplane_agents::db::agent_audit::{self, AuditKind};
 use aiplane_agents::db::agent_retention::{self, Swept};
 use aiplane_agents::db::agents as agents_db;
+use aiplane_core::server::config::S3Config;
 use aiplane_core::server::db::{DbError, Pool};
+use aiplane_features::server::chat_attachments::{self, Doomed};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use super::spec::AgentSpec;
+use crate::rama_server::state::RamaState;
 
 /// How long an agent keeps a conversation after its last message when its
 /// live version sets no `publish.retention_days`, or it has none.
@@ -37,7 +41,15 @@ const SWEEP_EVERY: Duration = Duration::from_secs(3_600);
 /// id, only for agents where something was; each of those is also audited
 /// on the agent, as counts. `now` is a parameter so tests can move past a
 /// retention period without waiting for it.
-pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>, DbError> {
+///
+/// A conversation goes the way every chat delete goes
+/// ([`chat_attachments::delete_reclaiming`]): the files its turns and its
+/// sub-agent runs' turns reference are removed from `s3` with it.
+pub async fn sweep(
+    pool: &Pool,
+    s3: Option<&S3Config>,
+    now: Timestamp,
+) -> Result<HashMap<String, Swept>, DbError> {
     let live = agents_db::live_specs(pool).await?;
     let mut swept = HashMap::new();
     for agent in agents_db::list_all(pool).await? {
@@ -51,8 +63,7 @@ pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>
         let audit_days = spec.as_ref().map_or(DEFAULT_AUDIT_RETENTION_DAYS, |s| {
             s.publish.audit_retention_days()
         });
-        let gone =
-            agent_retention::delete_idle_conversations(pool, &id, days_before(now, days)).await?;
+        let gone = delete_idle_conversations(pool, s3, &id, days_before(now, days)).await?;
         sweep_activity(pool, &id, audit_days, days_before(now, audit_days)).await?;
         if gone.is_empty() {
             continue;
@@ -71,6 +82,27 @@ pub async fn sweep(pool: &Pool, now: Timestamp) -> Result<HashMap<String, Swept>
         )
         .await;
         swept.insert(id, gone);
+    }
+    Ok(swept)
+}
+
+async fn delete_idle_conversations(
+    pool: &Pool,
+    s3: Option<&S3Config>,
+    agent_id: &str,
+    idle_before: Timestamp,
+) -> Result<Swept, DbError> {
+    let mut swept = Swept::default();
+    for conversation in agent_retention::idle_conversations(pool, agent_id, idle_before).await? {
+        let doomed: Vec<Doomed<'_>> = conversation.sessions().map(Doomed::session).collect();
+        let delete =
+            agent_retention::delete_conversation(pool, agent_id, &conversation, idle_before);
+        if let Some(reclaim) = chat_attachments::delete_reclaiming(pool, s3, &doomed, delete).await?
+        {
+            reclaim.now().await;
+            swept.conversations += 1;
+            swept.sub_agent_runs += conversation.sub_agent_runs.len() as u64;
+        }
     }
     Ok(swept)
 }
@@ -106,12 +138,13 @@ async fn sweep_activity(
 
 /// Sweep at boot and then every hour. Boot matters: a gateway that was down
 /// past a retention deadline deletes on start, not an hour later.
-pub fn spawn_retention_sweeper(pool: Pool) {
+pub fn spawn_retention_sweeper(state: Arc<RamaState>) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_EVERY);
         loop {
             tick.tick().await;
-            match sweep(&pool, Timestamp::now()).await {
+            let config = state.config();
+            match sweep(&state.db, config.chat.s3.as_ref(), Timestamp::now()).await {
                 Ok(swept) if !swept.is_empty() => {
                     let conversations: u64 = swept.values().map(|s| s.conversations).sum();
                     tracing::info!(
@@ -215,7 +248,7 @@ mod tests {
         let now = Timestamp::now();
         let (agent, session) = agent_with_a_logged_conversation(&pool, now - 2 * DAY).await;
 
-        let swept = sweep(&pool, now + DAY / 2).await.unwrap();
+        let swept = sweep(&pool, None, now + DAY / 2).await.unwrap();
         assert_eq!(swept[&agent].conversations, 1, "the conversation is gone");
         assert_eq!(
             chain_len(&pool, &session).await,
@@ -223,7 +256,7 @@ mod tests {
             "its log outlives it until the log's own retention"
         );
 
-        sweep(&pool, now + 3 * DAY).await.unwrap();
+        sweep(&pool, None, now + 3 * DAY).await.unwrap();
         assert_eq!(
             chain_len(&pool, &session).await,
             0,
@@ -256,8 +289,97 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sweep(&pool, now).await.unwrap();
+        sweep(&pool, None, now).await.unwrap();
         assert_eq!(chain_len(&pool, &session).await, 3);
+    }
+
+    /// The sweep deletes a conversation the way a person deletes a chat: the
+    /// files its turns referenced, and its sub-agent runs' turns, leave the
+    /// bucket with it.
+    #[tokio::test]
+    async fn a_swept_conversations_attachments_leave_the_bucket() {
+        use aiplane_features::server::chat_attachments::{UploadOutcome, marker_line};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let bucket = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&bucket)
+            .await;
+        let s3 = S3Config {
+            endpoint: bucket.uri(),
+            region: "us-east-1".into(),
+            bucket: "b".into(),
+            access_key: Some("ak".into()),
+            secret_key: Some("sk".into()),
+            access_key_env: None,
+            secret_key_env: None,
+            key_prefix: "chat".into(),
+        };
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let now = Timestamp::now();
+        let (agent, session) = agent_with_a_logged_conversation(&pool, now - 2 * DAY).await;
+        let file = |name: &str| UploadOutcome {
+            filename: name.into(),
+            mime: "application/pdf".into(),
+            bytes: 1,
+        };
+        session_core::db::create_user_turn(
+            &pool,
+            &session,
+            "upload",
+            &marker_line("upload", &file("invoice.pdf")),
+        )
+        .await
+        .unwrap();
+        session_core::db::create_assistant_turn_in_progress(&pool, &session, "parent", "m")
+            .await
+            .unwrap();
+        let sub = run_sessions::create_principal_session(
+            &pool,
+            &run_sessions::NewRunSession {
+                principal_id: &agent,
+                title: None,
+                parent_turn_id: Some("parent"),
+                agent_version: Some(1),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        session_core::db::create_user_turn(
+            &pool,
+            &sub,
+            "sub-upload",
+            &marker_line("sub-upload", &file("receipt.pdf")),
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+            .bind((now - 2 * DAY).to_string())
+            .bind(&session)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let swept = sweep(&pool, Some(&s3), now).await.unwrap();
+        assert_eq!(swept[&agent].conversations, 1);
+        assert_eq!(swept[&agent].sub_agent_runs, 1);
+        let mut deleted: Vec<String> = bucket
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "DELETE")
+            .map(|r| r.url.path().to_string())
+            .collect();
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            ["/b/chat/sub-upload/receipt.pdf", "/b/chat/upload/invoice.pdf"]
+        );
     }
 
     #[test]
