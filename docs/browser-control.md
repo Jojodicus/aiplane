@@ -25,7 +25,8 @@ address ready to copy:
    chat page opens by itself, or from the toolbar icon). The first time, Chrome
    asks for access to websites.
 4. Ask in a conversation. The assistant works in its own window, in a tab group
-   named "Assistant"; the icon is green while it may act.
+   named "Assistant"; the icon is green on AIplane and in that window while it
+   may act, and grey on every other page.
 
 The page can only tell "installed but not paired with this origin" from "not
 installed" by silence: the content script exists on paired origins only, so
@@ -97,7 +98,7 @@ user grants is now a site the assistant may work on.
 
 What bounds it instead: the extension does nothing until switched on for the
 session, and that switch is a click no page can produce; the toolbar icon is
-green while it is armed and Chrome shows its own bar over the assistant's
+green on the gateway and the assistant's window while it is armed and Chrome shows its own bar over the assistant's
 window; `list_tabs` is still refused under a per-site grant, because it belongs
 to no site; and every step is in the popup's activity list and in
 `browser_action_audit`. The honest summary is that this trades a guardrail for
@@ -130,6 +131,15 @@ mid-batch. `chrome.permissions.request` only works inside a user gesture, and a
 message arriving from a web page is not one — an in-flow request is rejected
 every time. A batch that needs a permission the extension does not hold is
 refused with an instruction the user can act on.
+
+Chrome's permission dialog takes the focus, and the popup closes with its
+script before the answer arrives. So the popup first records the click
+(`arm_pending`, in session storage), then asks; the worker's
+`permissions.onAdded` listener switches on once the broad grant is held, for a
+paired gateway, within `ARM_PENDING_MS` (two minutes) of the click
+(`pendingArm` in `policy.js`). Both halves are the user's own — a click in the
+extension's UI and an answer in Chrome's dialog. A refusal the popup survives
+to see clears the record; one it does not lets the record expire.
 
 The consequence is stated plainly: with the broad grant and no per-write
 confirmation (see *The trust boundary*), the on/off switch is the only
@@ -351,6 +361,15 @@ Refusals are recorded in the activity log with Chrome's own message, because
 The switch then pushes back: `arm` and `disarm` message every open tab of that
 origin, so the page reflects the click that caused it rather than polling.
 
+The popup offers *Switch on* only on a paired gateway's tab, and *Switch off*
+on any tab while the extension is armed (`popupSwitch` in `policy.js`): turning
+it off only takes rights away, so it must not depend on finding the right tab.
+
+The icon is painted per tab (`showsOn` in `policy.js`): green with an "on" badge
+on the gateway that armed it and in the assistant's window, grey on every other
+tab, whose popup still names the armed gateway. Tabs are repainted on arm,
+disarm, popup open, navigation and when a tab moves between windows.
+
 ## Shipping it
 
 The extension is versioned with AIplane, not separately:
@@ -435,11 +454,16 @@ Not covered by automated tests, and it needs a real browser:
 
 1. `chrome://extensions` → Developer mode → *Load unpacked* → `extension/`.
 2. Extension *Settings* → pair the gateway URL → accept Chrome's dialog.
-3. Open AIplane, click the extension icon, *Switch on*.
+3. Open AIplane, click the extension icon, *Switch on*. On a fresh install
+   (no website access yet) Chrome's dialog closes the popup; accepting it must
+   switch the extension on without a second click.
 4. Ask for something that reads a page: the batch should run with no dialog.
 5. Ask for something that clicks: it must run with no dialog too, and appear in
    the popup's activity list.
-6. With the extension switched off, the same request must come back as
+6. Switch it off from the toolbar popup on a different tab (a new tab page):
+   the icon there must already be grey, the button must be there, and the
+   AIplane tab's icon must go grey too. With the extension
+   switched off, the same request must come back as
    `no_extension` — after the short grace period, not after a two-minute
    timeout.
 7. Leave the conversation idle for a minute after switching the extension on,

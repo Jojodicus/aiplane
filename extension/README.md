@@ -55,6 +55,8 @@ one you are looking at — a chat loading in a background tab will not put
 anything over what you are reading. You can always switch it on yourself from
 the toolbar icon, which carries a badge while a question is waiting.
 
+Switching off works from the toolbar icon on any tab, not just your AIplane's.
+
 ## After you reload the extension
 
 Chrome throws away the registration that puts this extension on your AIplane,
@@ -76,8 +78,11 @@ at, so there is nothing for you to do.
 
 ## Telling at a glance whether it is on
 
-The toolbar icon is **green with an "on" badge** while the extension may act and
-**grey** while it may not, and its tooltip names AIplane it is armed for.
+The toolbar icon is **green with an "on" badge** on the pages where the extension
+acts — your AIplane and the assistant's window — while it is switched on, and
+**grey** everywhere else, so an ordinary page never looks "on". Its tooltip
+names the AIplane it is armed for; the popup on a grey tab still says so and
+switches it off.
 Chrome's "is debugging this browser" bar over the assistant's window says the
 same thing from the other side.
 
@@ -116,7 +121,7 @@ like this unusable, and a setting nobody keeps switched on protects nobody.
 
 What carries the weight instead is the switch: the extension does nothing until
 you turn it on from the toolbar, that click is one no web page can produce, the
-icon is green the whole time it is on, Chrome shows its own bar over the
+icon is green on your AIplane and in the assistant's window while it is on, Chrome shows its own bar over the
 assistant's window, and every step is listed in the popup and in AIplane's
 audit trail. Turning it off releases everything at once.
 

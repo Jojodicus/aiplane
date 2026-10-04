@@ -20,7 +20,11 @@ import {
 	isWrite,
 	pairableOrigins,
 	originOf,
-	permissionsFor
+	permissionsFor,
+	ARM_PENDING_MS,
+	pendingArm,
+	popupSwitch,
+	showsOn
 } from './policy.js';
 
 test('the default is one broad grant, not per-site prompts', () => {
@@ -228,4 +232,59 @@ test('a real host is never paired together with another name', () => {
 	assert.deepEqual(pairableOrigins('https://gw.example.com'), ['https://gw.example.com']);
 	assert.deepEqual(pairableOrigins('https://localhost:8080'), ['https://localhost:8080']);
 	assert.deepEqual(pairableOrigins('nonsense'), []);
+});
+
+test('the popup can switch off from any tab, but switch on only on the gateway', () => {
+	const gateways = ['https://llm.example.com'];
+	// Off is always safe to offer: it only takes rights away. Hiding it on other
+	// pages left a green icon with no way to turn it off short of closing Chrome.
+	assert.equal(
+		popupSwitch({ gateways, origin: 'chrome://newtab', armedFor: 'https://llm.example.com' }),
+		'switch_off'
+	);
+	assert.equal(popupSwitch({ gateways, origin: null, armedFor: 'https://llm.example.com' }), 'switch_off');
+	assert.equal(
+		popupSwitch({ gateways, origin: 'https://llm.example.com', armedFor: 'https://llm.example.com' }),
+		'switch_off'
+	);
+	assert.equal(popupSwitch({ gateways, origin: 'https://llm.example.com', armedFor: null }), 'switch_on');
+	assert.equal(popupSwitch({ gateways, origin: 'https://evil.example', armedFor: null }), 'not_gateway');
+	// Armed for another gateway: switching on here would silently move the
+	// grant, so the popup offers to switch the current one off first.
+	assert.equal(
+		popupSwitch({
+			gateways: [...gateways, 'https://other.example.com'],
+			origin: 'https://other.example.com',
+			armedFor: 'https://llm.example.com'
+		}),
+		'switch_off'
+	);
+	assert.equal(popupSwitch({ gateways: [], origin: 'https://llm.example.com', armedFor: null }), 'unpaired');
+});
+
+test('the icon is on only where the extension acts: the gateway and the assistant window', () => {
+	const armed = { origin: 'https://llm.example.com' };
+	const working = { armed, workingWindowId: 7 };
+	assert.equal(showsOn(working, { url: 'https://llm.example.com/chat', windowId: 1 }), true);
+	assert.equal(showsOn(working, { url: 'https://shop.example/cart', windowId: 7 }), true);
+	// Switched on, but nothing happens on the user's other pages, so their icon
+	// must not claim otherwise.
+	assert.equal(showsOn(working, { url: 'https://shop.example/cart', windowId: 1 }), false);
+	assert.equal(showsOn(working, { url: 'chrome://newtab/', windowId: 1 }), false);
+	assert.equal(showsOn({ armed, workingWindowId: null }, { url: undefined, windowId: 1 }), false);
+	assert.equal(
+		showsOn({ armed: null, workingWindowId: 7 }, { url: 'https://llm.example.com/', windowId: 7 }),
+		false
+	);
+});
+
+test('a switch-on interrupted by the permission dialog completes only while it is fresh', () => {
+	// Chrome's dialog closes the popup, so the worker finishes the switch-on
+	// when the grant arrives. A grant long after the click is not that answer.
+	const pending = { origin: 'https://llm.example.com', at: 1_000 };
+	assert.equal(pendingArm(pending, 1_000 + ARM_PENDING_MS), 'https://llm.example.com');
+	assert.equal(pendingArm(pending, 1_000 + ARM_PENDING_MS + 1), null);
+	assert.equal(pendingArm(pending, 999), null);
+	assert.equal(pendingArm(null, 1_000), null);
+	assert.equal(pendingArm({ at: 1_000 }, 1_000), null);
 });

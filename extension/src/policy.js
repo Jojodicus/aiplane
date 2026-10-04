@@ -242,3 +242,47 @@ export function pairableOrigins(origin) {
 export function isPairedGateway(origin, settings) {
 	return withDefaults(settings).gateways.includes(origin);
 }
+
+/**
+ * Which switch the popup offers on the tab in front of the user.
+ *
+ * Off is offered wherever the extension is armed: it only takes rights away,
+ * so no page needs to be in front for it. On is offered only on a paired
+ * gateway, because the gesture is what binds the grant to that origin.
+ *
+ * @returns {'switch_off' | 'switch_on' | 'not_gateway' | 'unpaired'}
+ */
+export function popupSwitch({ gateways, origin, armedFor }) {
+	if (armedFor) return 'switch_off';
+	if (gateways.length === 0) return 'unpaired';
+	if (!origin || !gateways.includes(origin)) return 'not_gateway';
+	return 'switch_on';
+}
+
+/**
+ * Whether the toolbar icon shows "on" for `tab`: the paired gateway that armed
+ * the extension, and the assistant's own window. Everywhere else it is grey,
+ * because nothing happens there.
+ */
+export function showsOn({ armed, workingWindowId }, tab) {
+	if (!armed) return false;
+	if (workingWindowId !== null && tab.windowId === workingWindowId) return true;
+	return originOf(tab.url ?? '') === armed.origin;
+}
+
+/** How long a click on "switch on" waits for Chrome's permission dialog. */
+export const ARM_PENDING_MS = 2 * 60 * 1000;
+
+/**
+ * The gateway a pending switch-on is for, while it is still fresh.
+ *
+ * The popup records the click before asking Chrome for host access, because
+ * Chrome's dialog takes the focus and the popup closes before it hears the
+ * answer. The worker finishes the switch-on when the grant arrives; a grant
+ * long after the click is not an answer to it.
+ */
+export function pendingArm(pending, now) {
+	if (!pending?.origin || typeof pending.at !== 'number') return null;
+	const age = now - pending.at;
+	return age >= 0 && age <= ARM_PENDING_MS ? pending.origin : null;
+}
