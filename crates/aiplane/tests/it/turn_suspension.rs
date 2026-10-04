@@ -18,7 +18,9 @@
 //!   - a paused conversation holds new messages back until it is settled, and
 //!     cancelling it gives up on the decision;
 //!   - a connector tool in `ask` mode is offered in chat and waits the same
-//!     way: it runs once approved and never when denied.
+//!     way: it runs once approved and never when denied;
+//!   - `schedule_action` asks the same way, and its approval survives a
+//!     restart.
 
 use crate::common;
 
@@ -694,4 +696,61 @@ async fn a_connector_tool_in_ask_mode_waits_in_chat_and_runs_only_once_approved(
             "{decision}: {content}"
         );
     }
+}
+
+#[tokio::test]
+async fn scheduling_waits_for_an_approval_that_survives_a_restart() {
+    use aiplane_runtime::server::scheduled;
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("gateway.db");
+    let server = upstream_calling(
+        tool_call(
+            "schedule_action",
+            json!({"name": "Weekly summary", "prompt": "Summarise last week.", "cron": "0 8 * * 1"}),
+        ),
+        "Scheduled.",
+        Duration::ZERO,
+    )
+    .await;
+    let registry = || ToolRegistry::new().with(aiplane_tools::schedule::ScheduleAction);
+    let before = boot_with(&db_path, &server.uri(), registry(), &["schedule_action"]).await;
+    let cookie = common::seed_session(&before, "alice", "alice@example.com").await;
+    let session_id = conversation(&before).await;
+    let turn_id = submit(&before, &cookie, &session_id).await;
+    let paused = wait_for_status(&before, &session_id, &turn_id, TurnStatus::Suspended).await;
+    let waiting = paused.suspension.expect("the schedule waits for alice");
+    assert_eq!(waiting.tool.as_deref(), Some("schedule_action"));
+    assert!(
+        waiting
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Weekly summary")),
+        "{waiting:?}"
+    );
+    assert!(
+        scheduled::list_for_user(&before.db, "alice")
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing is scheduled before the approval"
+    );
+    before.db.close().await;
+    drop(before);
+
+    let after = boot_with(&db_path, &server.uri(), registry(), &["schedule_action"]).await;
+    let (status, body) = resume(
+        &after,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "allow_once", "request_id": waiting.request_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let done = wait_for_status(&after, &session_id, &turn_id, TurnStatus::Completed).await;
+    assert_eq!(done.turn.content.as_deref(), Some("Scheduled."));
+    let stored = scheduled::list_for_user(&after.db, "alice").await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].name, "Weekly summary");
+    assert!(!stored[0].tools_enabled);
 }

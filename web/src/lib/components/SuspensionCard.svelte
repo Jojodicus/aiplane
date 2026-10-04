@@ -61,6 +61,7 @@
 	<div class="card-body gap-3 p-4 text-sm">
 		{@render children?.()}
 		{#if lead}<p class="m-0">{lead}</p>{/if}
+		{#if waiting.detail}<p class="m-0 font-semibold break-words">{waiting.detail}</p>{/if}
 
 		{#if waiting.question}
 			<div>

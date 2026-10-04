@@ -9,8 +9,12 @@
 //! answers a denial itself; an approval runs the call again with
 //! [`Suspend::Decided`], and only then does the wrapped tool run.
 //!
-//! Where pausing is impossible (`/v1`, headless runs) the call is refused:
-//! a tool that needs approval never runs without one.
+//! Where pausing is impossible (`/v1`) the call is refused: a tool that
+//! needs approval never runs without one.
+//!
+//! A tool that must check its arguments before it asks (so the person is
+//! never asked about a call that cannot run) follows the same protocol
+//! itself, through [`approval`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +49,37 @@ impl AskFirst {
     }
 }
 
+/// Where a call that needs an approval stands.
+#[derive(Debug)]
+pub enum Approval {
+    /// The person approved this call: run it.
+    Granted,
+    /// Return this body: it pauses the turn until the person decides.
+    Ask(Value),
+}
+
+/// The approval protocol of [`AskFirst`] for tool `id`'s call: pause for
+/// `request` the first time, run once approved, refuse a denial and refuse
+/// where nothing can pause.
+pub fn approval(
+    ctx: &ToolContext,
+    id: &str,
+    request: SuspendRequest,
+) -> Result<Approval, ToolError> {
+    match &ctx.suspend {
+        Suspend::Decided(_, Decision::AllowOnce) => Ok(Approval::Granted),
+        Suspend::Decided(_, other) => Err(ToolError::Failed(format!(
+            "`{id}` was not approved (decision: {:?}), so it did not run.",
+            other.kind()
+        ))),
+        Suspend::Available => Ok(Approval::Ask(tool_suspend(request))),
+        Suspend::Unavailable => Err(ToolError::Failed(format!(
+            "`{id}` runs only after the user approves the call, and this run cannot \
+             pause to ask. Do not retry it here."
+        ))),
+    }
+}
+
 impl Tool for AskFirst {
     fn id(&self) -> &str {
         self.inner.id()
@@ -55,28 +90,10 @@ impl Tool for AskFirst {
     }
 
     fn run<'a>(&'a self, ctx: ToolContext, args: Value) -> ToolFuture<'a> {
-        match &ctx.suspend {
-            Suspend::Decided(_, Decision::AllowOnce) => self.inner.run(ctx, args),
-            Suspend::Decided(_, other) => {
-                let refusal = format!(
-                    "`{}` was not approved (decision: {:?}), so it did not run.",
-                    self.id(),
-                    other.kind()
-                );
-                Box::pin(async move { Err(ToolError::Failed(refusal)) })
-            }
-            Suspend::Available => {
-                let request = SuspendRequest::approval(self.timeout);
-                Box::pin(async move { Ok(tool_suspend(request)) })
-            }
-            Suspend::Unavailable => {
-                let refusal = format!(
-                    "`{}` runs only after the user approves the call, and this run cannot \
-                     pause to ask. Do not retry it here.",
-                    self.id()
-                );
-                Box::pin(async move { Err(ToolError::Failed(refusal)) })
-            }
+        match approval(&ctx, self.id(), SuspendRequest::approval(self.timeout)) {
+            Ok(Approval::Granted) => self.inner.run(ctx, args),
+            Ok(Approval::Ask(pause)) => Box::pin(async move { Ok(pause) }),
+            Err(refusal) => Box::pin(async move { Err(refusal) }),
         }
     }
 

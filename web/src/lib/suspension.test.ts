@@ -81,10 +81,12 @@ test('a card from a suspended turn finds its call in the transcript', () => {
 	];
 	assert.deepEqual(waitingFrom(view, calls).call, { name: 'mcp__crm__delete_contact', arguments: '{"id":7}' });
 	assert.deepEqual(waitingFrom(view).call, { name: 'mcp__crm__delete_contact', arguments: '' });
+	assert.equal(waitingFrom({ ...view, message: '“Weekly”: At 08:00, on Mon.' }).detail, '“Weekly”: At 08:00, on Mon.');
 	const handoff = waitingFrom({ ...view, kind: 'human_answer', message: 'May we refund?', tool: undefined, tool_call_id: undefined }, [], {
 		visitor_message: 'hi'
 	});
 	assert.equal(handoff.question, 'May we refund?');
+	assert.equal(handoff.detail, null, "a hand-off's message is its question");
 	assert.equal(handoff.call, null);
 	assert.deepEqual(handoff.context, { visitor_message: 'hi' });
 });

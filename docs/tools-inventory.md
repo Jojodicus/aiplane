@@ -99,12 +99,14 @@ a schedule, since "can see my schedule but not change it" is not a
 distinction anyone configures.
 
 `schedule_action` and `delete_scheduled_action` are chat-only for a reason
-that isn't about attaching output: both require an `ask_user` confirmation,
+that isn't about attaching output: both wait for the person's approval,
 because the action they write later runs **as the user**, unattended, until
 removed. That makes a scheduled action a persistent prompt-injection vector,
-so a human has to approve it — which also means a scheduled run cannot create
-further scheduled actions (the headless worker has a session but nobody
-watching, so the confirmation goes unanswered and the write is refused).
+so a human has to approve it. The approval is the durable pause every
+approval uses (`ask_first::approval`): the call shows a preview of the
+schedule, the person answers in the chat or the inbox, and it survives a
+restart. A scheduled run that calls them pauses too, and nothing is written
+unless its owner approves from the inbox.
 
 ## Conditionally registered
 

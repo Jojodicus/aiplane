@@ -10,6 +10,11 @@
 //! progress, files staged for a render: all cold by the next message. Asking
 //! *inside* the turn keeps the work alive.
 //!
+//! That is also why it is not a durable suspension like an approval
+//! (`AskFirst`): a suspension ends the worker, and with it the leases a
+//! question is asked to keep warm. A question is answered in seconds by
+//! whoever is watching; a decision that may take hours is an approval.
+//!
 //! Mechanically it is the same rendezvous `get_user_location` uses: inject a
 //! card onto the live SSE stream, park on the feedback hub keyed by the
 //! assistant turn id, and wait for `POST /api/v0/me/ask/feedback/{turn_id}`.
@@ -229,80 +234,6 @@ impl Tool for AskUser {
                 )),
             }
         })
-    }
-}
-
-/// How a [`confirm`] prompt came back.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Confirmation {
-    /// The user picked the affirmative option.
-    Approved,
-    /// The user picked the negative option, dismissed the card, or typed
-    /// something instead of choosing.
-    Declined {
-        /// What they said, when they typed rather than clicked — worth
-        /// relaying so the model can act on "not Mondays, Tuesdays".
-        text: Option<String>,
-    },
-    /// Nobody answered in time, or nobody was watching.
-    NoAnswer,
-}
-
-/// Ask the user to confirm an action, reusing `ask_user`'s card + rendezvous.
-///
-/// Exists so a tool with a persistent side effect can require a human "yes"
-/// without reimplementing the SSE card and the hub wait. `schedule_action` is
-/// the first caller: an action created from injected text would otherwise run
-/// **as the user**, on a schedule, indefinitely — persistence is what makes
-/// prompt injection there worth a confirmation step, where an ordinary tool
-/// call isn't.
-///
-/// Returns [`Confirmation::NoAnswer`] off the chat path rather than erroring,
-/// so the caller decides what "no human here" means for its own operation.
-pub async fn confirm(
-    ctx: &ToolContext,
-    question: &str,
-    header: &str,
-    approve_label: &str,
-    decline_label: &str,
-) -> Confirmation {
-    let (Some(fb), Some(turn_id)) = (ctx.chat_feedback.as_ref(), ctx.assistant_turn_id.as_deref())
-    else {
-        return Confirmation::NoAnswer;
-    };
-    let prompt = Prompt {
-        question: question.to_string(),
-        header: Some(header.to_string()),
-        options: vec![
-            Choice {
-                label: approve_label.to_string(),
-                description: None,
-                preview: None,
-            },
-            Choice {
-                label: decline_label.to_string(),
-                description: None,
-                preview: None,
-            },
-        ],
-        multi_select: false,
-    };
-    match request_answer(fb, turn_id, &prompt).await {
-        Some(AskReply::Answered { choices, text }) => {
-            // A click on the affirmative button is the only "yes". Free text
-            // is never read as approval: "yes but move it to 07:00" is a
-            // change request, and treating it as consent would write the
-            // wrong thing.
-            if choices.iter().any(|c| c == approve_label) {
-                Confirmation::Approved
-            } else {
-                Confirmation::Declined {
-                    text: text.filter(|t| !t.trim().is_empty()),
-                }
-            }
-        }
-        Some(AskReply::Dismissed) => Confirmation::Declined { text: None },
-        None => Confirmation::NoAnswer,
     }
 }
 

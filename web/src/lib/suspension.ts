@@ -47,6 +47,8 @@ export interface Waiting {
 	kind: SuspensionKind;
 	/** A hand-off's question. */
 	question?: string | null;
+	/** What an approved call would do, in the tool's own words (`schedule_action`'s preview). */
+	detail?: string | null;
 	/** An approval's call, with its raw arguments. */
 	call?: { name: string; arguments: string } | null;
 	context?: HandoffContext | null;
@@ -70,6 +72,7 @@ export function waitingFrom(
 	return {
 		kind: view.kind,
 		question: view.kind === 'human_answer' ? (view.message ?? null) : null,
+		detail: view.kind === 'human_answer' ? null : (view.message ?? null),
 		call: call ? { name: call.name, arguments: call.arguments_json } : view.tool ? { name: view.tool, arguments: '' } : null,
 		context,
 		options: view.options,

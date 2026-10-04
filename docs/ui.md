@@ -826,7 +826,9 @@ agent builder's test chat and a person's own chat. Its pure half is
   `state.<slot>.description` when the hand-off is stored, the hand-off and
   identity slots by catalog name, else the key; a value the model may not see
   as who vouched for it), the transcript when the route hands it over; an
-  approval's tool and its arguments, pretty-printed; the minutes left.
+  approval's tool and its arguments, pretty-printed, and what the call would
+  do when the tool says so (the request's `message`, e.g. `schedule_action`'s
+  preview); the minutes left.
 - **What it offers** is exactly the request's `options` (`decisionButtons`):
   Approve once and Deny for an approval, an answer field with its submit
   button and Decline for a value. A request offering nothing (a visitor
