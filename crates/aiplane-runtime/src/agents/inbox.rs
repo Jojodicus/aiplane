@@ -485,9 +485,20 @@ async fn channels(
     }
 }
 
+/// Whether `viewer` answers for at least one published agent — what decides,
+/// next to a waiting item, that the inbox is worth showing them at all.
+pub async fn answers_for_published(state: &RamaState, viewer: &Viewer) -> Result<bool, DbError> {
+    for (agent_id, live) in agents_db::publication_status(&state.db).await? {
+        if live && agent_standing(state, viewer, &agent_id).await?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The JSON form of an item list, for the API.
-pub fn items_json(items: &[InboxItem]) -> Value {
-    json!({ "items": items, "count": items.len() })
+pub fn items_json(items: &[InboxItem], answers: bool) -> Value {
+    json!({ "items": items, "count": items.len(), "answers": answers })
 }
 
 #[cfg(test)]

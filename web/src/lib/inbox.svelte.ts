@@ -6,9 +6,9 @@
 // `version`, which the inbox page watches to refetch its list.
 import { browser } from '$app/environment';
 import { base } from '$app/paths';
-import { countFromFrame, INBOX_EVENTS } from './inbox.ts';
+import { frameOf, INBOX_EVENTS } from './inbox.ts';
 
-export const inboxLive = $state({ count: 0, version: 0 });
+export const inboxLive = $state({ count: 0, answers: false, version: 0 });
 
 let source: EventSource | null = null;
 
@@ -17,9 +17,10 @@ export function watchInbox(): void {
 	if (!browser || source) return;
 	source = new EventSource(`${base}${INBOX_EVENTS}`, { withCredentials: true });
 	source.addEventListener('inbox', (event) => {
-		const count = countFromFrame((event as MessageEvent<string>).data);
-		if (count === null) return;
-		inboxLive.count = count;
+		const frame = frameOf((event as MessageEvent<string>).data);
+		if (frame === null) return;
+		inboxLive.count = frame.count;
+		inboxLive.answers = frame.answers;
 		inboxLive.version += 1;
 	});
 }

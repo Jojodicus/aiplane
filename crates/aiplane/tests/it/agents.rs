@@ -1100,3 +1100,44 @@ async fn a_loop_route_saves_from_the_json_tab_and_names_its_problems() {
         ]
     );
 }
+
+/// The sidebar shows the inbox only to whoever something can arrive for: an
+/// item waits, or they answer for a published agent. `answers` is that
+/// second half, from the same standing rule the inbox lists items by.
+#[tokio::test]
+async fn the_inbox_says_whether_its_viewer_answers_for_a_published_agent() {
+    let fx = fixture().await;
+    let answers = |body: &Value| body["answers"].as_bool();
+    let id = fx.runnable("helper").await;
+    for who in [&fx.root, &fx.alice, &fx.plain] {
+        let (status, body) = fx.get(who, "/api/v0/agents/inbox").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            answers(&body),
+            Some(false),
+            "nothing is published yet: {body}"
+        );
+    }
+
+    let (status, body) = fx.publish(&fx.alice, &id).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        answers(&fx.get(&fx.root, "/api/v0/agents/inbox").await.1),
+        Some(true)
+    );
+    assert_eq!(
+        answers(&fx.get(&fx.alice, "/api/v0/agents/inbox").await.1),
+        Some(true)
+    );
+    assert_eq!(
+        answers(&fx.get(&fx.plain, "/api/v0/agents/inbox").await.1),
+        Some(false)
+    );
+
+    let (status, body) = fx.share(&fx.alice, &id, "user", "plain", "respond").await;
+    assert!(status.is_success(), "{body}");
+    assert_eq!(
+        answers(&fx.get(&fx.plain, "/api/v0/agents/inbox").await.1),
+        Some(true)
+    );
+}

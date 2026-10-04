@@ -817,12 +817,21 @@ while it is open.
 
 ## Inbox
 
-`/inbox` (sidebar: Workspace → Inbox, for every signed-in person) lists what
+`/inbox` (sidebar: Workspace → Inbox) lists what
 waits for them: an agent's approvals and handoffs when they are an admin, a
 manager with a `read` or `write` share, or hold a `respond` share (the
 agent's responders), and their own paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
+
+- **The sidebar entry** appears only where something can arrive
+  (`inboxShown`): an item waits (with its count as a badge), the person
+  answers for at least one published agent, or the inbox is open. Both
+  facts ride the `inbox` frame of `GET /api/v0/agents/inbox/events`
+  (`{count, answers}`); `answers` is the inbox's own standing rule
+  (`inbox::answers_for_published`) over the published agents, read when the
+  stream attaches. An installation without agents shows no inbox until a
+  person's own run pauses; a push or channel link opens `/inbox` either way.
 
 - **An item** (`{…, question?, call?, detail?, context?}`: `detail` is an
   approval's `message`, such as `schedule_action`'s preview) is a

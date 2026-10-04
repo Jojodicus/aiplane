@@ -13,6 +13,7 @@
 	import { pageTitleOverride } from '$lib/page-title';
 	import { loadMe, me } from '$lib/session.svelte';
 	import { inboxLive, watchInbox } from '$lib/inbox.svelte';
+	import { inboxShown } from '$lib/inbox';
 	import { sidebar, refreshSidebar, searchAsYouType, openSearch, closeSearch } from '$lib/sidebar.svelte';
 	import { feedback, loadConfig } from '$lib/feedback.svelte';
 	import { t, locale } from '$lib/i18n.svelte';
@@ -171,7 +172,10 @@
 	// is worse than no entry. The same map answers a URL typed by hand.
 	const features = $derived(me.value?.features);
 	const visibleWorkspaceLinks = $derived(
-		visibleNavLinks(workspaceLinks, features).filter(([, path]) => path !== '/agents' || me.value?.can_manage_agents)
+		visibleNavLinks(workspaceLinks, features).filter(
+			([, path]) =>
+				(path !== '/agents' || me.value?.can_manage_agents) && (path !== '/inbox' || inboxShown(inboxLive, isActive('/inbox')))
+		)
 	);
 	const visibleAccountLinks = $derived(visibleNavLinks(accountLinks, features));
 	const visibleAdminLinks = $derived(visibleNavLinks(adminLinks, features));

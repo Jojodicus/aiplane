@@ -48,19 +48,30 @@ const post = (body: unknown): RequestInit => ({
 export const INBOX_EVENTS = '/api/v0/agents/inbox/events';
 
 export const inboxApi = {
-	list: () => request<{ items: InboxItem[]; count: number }>('/api/v0/agents/inbox').then((r) => r.items),
+	list: () => request<{ items: InboxItem[]; count: number; answers: boolean }>('/api/v0/agents/inbox').then((r) => r.items),
 	answer: (id: string, answer: Answer) =>
 		request<{ turn_id: string }>(`/api/v0/agents/inbox/${encodeURIComponent(id)}/answer`, post(answer))
 };
 
-/** The count an `inbox` frame of the events stream carries, or `null` for anything else. */
-export function countFromFrame(data: string): number | null {
+/** What one `inbox` frame says: the waiting items and whether the viewer answers for a published agent. */
+export interface InboxFrame {
+	count: number;
+	answers: boolean;
+}
+
+export function frameOf(data: string): InboxFrame | null {
 	try {
 		const parsed = JSON.parse(data);
-		return parsed && parsed.type === 'inbox' && Number.isInteger(parsed.count) && parsed.count >= 0 ? parsed.count : null;
+		if (!parsed || parsed.type !== 'inbox' || !Number.isInteger(parsed.count) || parsed.count < 0) return null;
+		return { count: parsed.count, answers: parsed.answers === true };
 	} catch {
 		return null;
 	}
+}
+
+/** The sidebar shows the inbox only where something can arrive: an item waits, the viewer answers for an agent, or it is open. */
+export function inboxShown(frame: InboxFrame, open: boolean): boolean {
+	return frame.count > 0 || frame.answers || open;
 }
 
 /** Fluent key of an item's kind badge. */

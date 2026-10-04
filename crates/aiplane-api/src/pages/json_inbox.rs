@@ -58,8 +58,13 @@ fn item_not_found(id: &str) -> Response {
 /// GET /api/v0/agents/inbox
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_, user) = or_return!(super::require_session_json(&state, &req).await);
-    match inbox::list(&state, &Viewer::of(&state, &user)).await {
-        Ok(items) => json_ok(StatusCode::OK, inbox::items_json(&items)),
+    let viewer = Viewer::of(&state, &user);
+    let listed = match inbox::list(&state, &viewer).await {
+        Ok(items) => items,
+        Err(err) => return internal(err),
+    };
+    match inbox::answers_for_published(&state, &viewer).await {
+        Ok(answers) => json_ok(StatusCode::OK, inbox::items_json(&listed, answers)),
         Err(err) => internal(err),
     }
 }
@@ -180,10 +185,10 @@ pub(super) async fn resume_as_staff(state: Arc<RamaState>, d: StaffDecision<'_>)
     json_ok(StatusCode::ACCEPTED, json!({ "turn_id": d.turn_id }))
 }
 
-fn count_frame(count: usize) -> rama::bytes::Bytes {
+fn count_frame(count: usize, answers: bool) -> rama::bytes::Bytes {
     rama::bytes::Bytes::from(format!(
         "event: inbox\ndata: {}\n\n",
-        json!({ "type": "inbox", "count": count })
+        json!({ "type": "inbox", "count": count, "answers": answers })
     ))
 }
 
@@ -199,8 +204,12 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(items) => items,
         Err(err) => return internal(err),
     };
+    let answers = match inbox::answers_for_published(&state, &viewer).await {
+        Ok(answers) => answers,
+        Err(err) => return internal(err),
+    };
     let (tx, rx) = rama::futures::channel::mpsc::unbounded();
-    let _ = tx.unbounded_send(Ok(count_frame(first.len())));
+    let _ = tx.unbounded_send(Ok(count_frame(first.len(), answers)));
     let mut seen = ids(&first);
     tokio::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -214,7 +223,7 @@ pub async fn events(State(state): State<Arc<RamaState>>, req: Request) -> Respon
                 Ok(items) => {
                     let now = ids(&items);
                     if now != seen {
-                        let _ = tx.unbounded_send(Ok(count_frame(items.len())));
+                        let _ = tx.unbounded_send(Ok(count_frame(items.len(), answers)));
                         seen = now;
                         last_sent = tokio::time::Instant::now();
                     }

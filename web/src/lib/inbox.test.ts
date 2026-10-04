@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { countFromFrame, focused, itemHeading, itemLink, kindLabel, type InboxItem } from './inbox.ts';
+import { focused, frameOf, inboxShown, itemHeading, itemLink, kindLabel, type InboxItem } from './inbox.ts';
 
 function item(over: Partial<InboxItem> = {}): InboxItem {
 	return {
@@ -17,11 +17,19 @@ function item(over: Partial<InboxItem> = {}): InboxItem {
 	};
 }
 
-test('an inbox frame carries the count, anything else does not', () => {
-	assert.equal(countFromFrame('{"type":"inbox","count":3}'), 3);
-	assert.equal(countFromFrame('{"type":"inbox","count":-1}'), null);
-	assert.equal(countFromFrame('{"type":"other","count":3}'), null);
-	assert.equal(countFromFrame('nope'), null);
+test('an inbox frame carries the count and whether the viewer answers for an agent, anything else does not', () => {
+	assert.deepEqual(frameOf('{"type":"inbox","count":3,"answers":true}'), { count: 3, answers: true });
+	assert.deepEqual(frameOf('{"type":"inbox","count":0}'), { count: 0, answers: false });
+	assert.equal(frameOf('{"type":"inbox","count":-1}'), null);
+	assert.equal(frameOf('{"type":"other","count":3}'), null);
+	assert.equal(frameOf('nope'), null);
+});
+
+test('the inbox is shown when something waits, when the viewer answers for an agent, or while it is open', () => {
+	assert.equal(inboxShown({ count: 0, answers: false }, false), false);
+	assert.equal(inboxShown({ count: 2, answers: false }, false), true);
+	assert.equal(inboxShown({ count: 0, answers: true }, false), true);
+	assert.equal(inboxShown({ count: 0, answers: false }, true), true);
 });
 
 test('a responder gets no link into the agent, a manager and an owner do', () => {
