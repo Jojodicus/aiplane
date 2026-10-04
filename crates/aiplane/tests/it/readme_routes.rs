@@ -1,71 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Drift guard for the README's **HTTP endpoints** table.
-//!
-//! The table in `README.md` is hand-written (a curated, grouped summary —
-//! not a 1:1 dump), and rama's `Router` exposes no way to enumerate its
-//! registered routes at runtime. So instead of generating the table, this
-//! test pins the contract between the two sources of truth:
-//!
-//!   1. the real routes declared in `rama_server/router.rs`
-//!      (`.with_get("…")`, `.with_post("…")`, …), and
-//!   2. the paths documented in the README endpoint table.
-//!
-//! It fails CI when they drift, in either direction:
-//!   - a route exists in `router.rs` but nothing in the README covers it
-//!     (a new endpoint was added without documenting it), or
-//!   - the README documents a path that no route serves (a stale/typo'd
-//!     entry left behind after a rename/removal).
-//!
-//! Routes intentionally absent from the public table (the OIDC browser
-//! dance, the debug-only seeding endpoints) are listed in `UNDOCUMENTED`
-//! below — so adding a new internal route still forces a conscious choice:
-//! document it, or allow-list it here. Keep that list tight: every stale
-//! prefix silently widens the guard, and a future route landing under one
-//! would escape the documentation requirement this test exists to enforce.
+//! Drift guard for the manual's exact registered-operation index.
 
 use std::path::Path;
 
 /// HTTP verbs the router registers (`with_get` → `GET`, …) and that the
-/// README may prefix a path with (`GET /healthz`).
+/// API reference may prefix a path with (`GET /healthz`).
 const METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
-/// Path prefixes for routes deliberately not listed in the README's
-/// HTTP endpoints table. Matched with the same coverage rule as the
-/// documented patterns (a `/*` suffix is a prefix glob).
-const UNDOCUMENTED: &[&str] = &[
-    "/auth/*",  // OIDC browser flow (covered in prose)
-    "/__dev/*", // debug-only e2e seeding — does not exist in release builds
-    // Compatibility alias, not a public surface: attachment markers stored in
-    // turn content carry this path (`chat_attachments::proxy_url`), so it must
-    // keep resolving. The documented route is `/api/v0/chat/attachment/…`.
-    "/chat/attachment/*",
-];
-
-/// `pat` covers concrete path `actual`. A trailing `/*` is a prefix glob;
-/// a plain prefix also covers its sub-paths (so `/chat` covers
-/// `/chat/{id}/messages`), except `/` which matches only itself.
-fn path_covers(pat: &str, actual: &str) -> bool {
-    if let Some(prefix) = pat.strip_suffix("/*") {
-        return actual == prefix || actual.starts_with(&format!("{prefix}/"));
-    }
-    if pat == "/" {
-        return actual == "/";
-    }
-    actual == pat || actual.starts_with(&format!("{pat}/"))
-}
-
-/// A documented `(method?, path)` covers an actual `(method, path)` route.
-/// A README entry without a method (UI-nav rows, `/api/v0/*`) matches any
-/// method.
 fn doc_covers(doc: &(Option<String>, String), route: &(String, String)) -> bool {
-    if let Some(m) = &doc.0
-        && m != &route.0
-    {
-        return false;
-    }
-    path_covers(&doc.1, &route.1)
+    doc.0.as_deref() == Some(route.0.as_str()) && doc.1 == route.1
 }
 
 /// Extract every `(METHOD, path)` route registered in `router.rs` by
@@ -93,15 +38,15 @@ fn actual_routes(src: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Parse the README's "HTTP endpoints" table into documented
+/// Parse the API reference's "HTTP endpoints" table into documented
 /// `(method?, path)` entries — every backtick token in each row's first
 /// column.
-fn documented_routes(readme: &str) -> Vec<(Option<String>, String)> {
-    let start = readme
+fn documented_routes(reference: &str) -> Vec<(Option<String>, String)> {
+    let start = reference
         .find("### HTTP endpoints")
-        .expect("README is missing the `### HTTP endpoints` section");
+        .expect("API reference is missing the `### HTTP endpoints` section");
     let mut out = Vec::new();
-    for line in readme[start..].lines().skip(1) {
+    for line in reference[start..].lines().skip(1) {
         let t = line.trim();
         if t.starts_with("## ") || t.starts_with("### ") {
             break; // next section
@@ -134,43 +79,39 @@ fn documented_routes(readme: &str) -> Vec<(Option<String>, String)> {
 }
 
 #[test]
-fn readme_http_endpoints_match_router() {
+fn manual_http_endpoints_match_router() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let router_src = std::fs::read_to_string(manifest.join("src/rama_server/router.rs"))
         .expect("read router.rs");
-    let readme = std::fs::read_to_string(manifest.join("../../README.md")).expect("read README.md");
+    let reference = std::fs::read_to_string(manifest.join("../../docs/reference/api.md"))
+        .expect("read docs/reference/api.md");
 
     let actual = actual_routes(&router_src);
-    let docs = documented_routes(&readme);
+    let docs = documented_routes(&reference);
 
     assert!(!actual.is_empty(), "parsed zero routes from router.rs");
     assert!(
         !docs.is_empty(),
-        "parsed zero entries from the README table"
+        "parsed zero entries from the API reference table"
     );
 
     let mut errors = Vec::new();
 
-    // 1. Every real route is either documented or explicitly allow-listed.
     for route in &actual {
-        if UNDOCUMENTED.iter().any(|p| path_covers(p, &route.1)) {
-            continue;
-        }
         if !docs.iter().any(|d| doc_covers(d, route)) {
             errors.push(format!(
-                "  route `{} {}` is not in the README HTTP endpoints table \
-                 (document it, or add a prefix to UNDOCUMENTED)",
+                "  route `{} {}` is not in the API reference HTTP endpoints table \
+                 (document the exact method and path)",
                 route.0, route.1
             ));
         }
     }
 
-    // 2. Every documented path is served by at least one real route.
     for doc in &docs {
         if !actual.iter().any(|r| doc_covers(doc, r)) {
             let m = doc.0.as_deref().unwrap_or("(any)");
             errors.push(format!(
-                "  README documents `{} {}` but no such route exists in router.rs",
+                "  API reference documents `{} {}` but no such route exists in router.rs",
                 m, doc.1
             ));
         }
@@ -178,7 +119,24 @@ fn readme_http_endpoints_match_router() {
 
     assert!(
         errors.is_empty(),
-        "README HTTP endpoints table is out of sync with router.rs:\n{}",
+        "API reference HTTP endpoints table is out of sync with router.rs:\n{}",
         errors.join("\n")
     );
+}
+
+#[test]
+fn an_operation_index_entry_does_not_cover_an_undocumented_child() {
+    let documented = (Some("GET".to_owned()), "/api/v0/chat".to_owned());
+    assert!(!doc_covers(
+        &documented,
+        &("GET".to_owned(), "/api/v0/chat/sessions".to_owned())
+    ));
+    assert!(!doc_covers(
+        &documented,
+        &("POST".to_owned(), "/api/v0/chat".to_owned())
+    ));
+    assert!(doc_covers(
+        &documented,
+        &("GET".to_owned(), "/api/v0/chat".to_owned())
+    ));
 }

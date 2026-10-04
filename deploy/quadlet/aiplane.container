@@ -7,7 +7,7 @@
 #   printf 'AIPLANE_SESSION_KEY=%s\n' "$(openssl rand -hex 32)" \
 #     | sudo tee /etc/aiplane/aiplane.env >/dev/null
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now aiplane.service
+#   sudo systemctl start aiplane.service
 #
 # That is the whole install. No config file: upstream pools, models, groups
 # and the OIDC provider are all configured in the browser and stored in the

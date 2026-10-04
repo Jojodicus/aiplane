@@ -358,7 +358,7 @@ sudo cp deploy/quadlet/discord-mcp.container /etc/containers/systemd/
 sudo install -m 0600 deploy/quadlet/discord-mcp.example.env /etc/aiplane/discord-mcp.env
 sudo $EDITOR /etc/aiplane/discord-mcp.env            # DISCORD_TOKEN=...
 sudo systemctl daemon-reload
-sudo systemctl enable --now discord-mcp.service
+sudo systemctl start discord-mcp.service
 ```
 
 Endpoint: `/mcp` (container port 8085). Keep it internal-only (private network),

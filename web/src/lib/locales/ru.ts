@@ -1714,6 +1714,7 @@ export const ru: Catalog = {
  "nav-connectors": "Коннекторы",
  "nav-conversations-label": "Беседы",
  "nav-delete-conversation": "Удалить беседу",
+ "nav-documentation": "Документация",
  "nav-flow-error-back": "Вернуться в приложение",
  "nav-flow-error-heading": "Подключение не было завершено",
  "nav-flow-error-title": "Ошибка подключения — AIplane",

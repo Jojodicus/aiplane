@@ -16,6 +16,7 @@ test('the public HMR origin proxies every gateway-owned route to the private bac
 		'/healthz',
 		'/readyz',
 		'/openapi.json',
+		'/docs',
 		'/__dev'
 	]) {
 		assert.deepEqual(proxy[route], { target });

@@ -47,6 +47,9 @@ use crate::rama_server::RamaState;
 ///
 /// An allowlist, deliberately: see the [module docs](self).
 fn serves_before_setup(path: &str) -> bool {
+    if path == "/docs" || path.starts_with("/docs/") {
+        return true;
+    }
     // The wizard's client route. Its API (below) decides whether it may be
     // *used* (first run, recovery window, or gone) — see `setup_api`.
     if path == "/setup" || path.starts_with("/setup/") {
@@ -178,6 +181,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documentation_is_available_while_configuring_a_fresh_installation() {
+        for path in [
+            "/docs",
+            "/docs/",
+            "/docs/getting-started/",
+            "/docs/search/search_index.json",
+            "/docs/llms.txt",
+        ] {
+            assert!(serves_before_setup(path), "{path} must serve before setup");
+        }
+        assert!(!serves_before_setup("/docs-private"));
+    }
 
     #[test]
     fn the_wizard_and_the_shell_it_needs_are_reachable() {

@@ -251,11 +251,4 @@ TTS service.
 | Example catalog + the custom node (the operator's copy source) | `examples/comfyui-workflows/`, `examples/comfyui-nodes/` |
 | Catalog drift guard (manifest ↔ graph agreement) | `crates/aiplane-features/tests/comfyui_catalog.rs` |
 | HTTP client + execution loop | `crates/aiplane-features/src/server/comfyui/` |
-| Tool registration | `crates/aiplane-runtime/src/server/tools/comfyui_workflow.rs` (one tool impl, parameterised by manifest) |
-
-## Roadmap
-
-- **Phase 1 (this PR)**: `[comfyui]` config block, manifest loader, single-image-output workflow execution, `comfyui_<id>` tool registration, parameter substitution + validation.
-- **Phase 2**: multi-output workflows (video + audio), longer-running job queue with progress events surfaced to chat UI.
-- **Phase 3**: image-input workflows (edit, image-to-video), mask uploads.
-- **Phase 4**: ComfyUI worker as a managed sidecar with health checks + version pinning.
+| Tool registration | `crates/aiplane-runtime/src/server/comfyui_tool.rs` (one tool impl, parameterised by manifest) |

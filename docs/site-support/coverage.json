@@ -1,0 +1,188 @@
+{
+  "ui_pages": [
+    {
+      "source": "web/src/routes/+page.svelte",
+      "documentation": "guide/getting-started.md"
+    },
+    {
+      "source": "web/src/routes/admin/(access)/groups/+page.svelte",
+      "documentation": "admin/access.md"
+    },
+    {
+      "source": "web/src/routes/admin/(access)/limits/+page.svelte",
+      "documentation": "admin/access.md"
+    },
+    {
+      "source": "web/src/routes/admin/(access)/tokens/+page.svelte",
+      "documentation": "admin/access.md"
+    },
+    {
+      "source": "web/src/routes/admin/(access)/users/+page.svelte",
+      "documentation": "admin/access.md"
+    },
+    {
+      "source": "web/src/routes/admin/comfyui/+page.svelte",
+      "documentation": "admin/settings.md"
+    },
+    {
+      "source": "web/src/routes/admin/comfyui/jobs/+page.svelte",
+      "documentation": "admin/settings.md"
+    },
+    {
+      "source": "web/src/routes/admin/connectors/+page.svelte",
+      "documentation": "admin/integrations.md"
+    },
+    {
+      "source": "web/src/routes/admin/connectors/[key]/audit/+page.svelte",
+      "documentation": "admin/integrations.md"
+    },
+    {
+      "source": "web/src/routes/admin/connectors/[key]/edit/+page.svelte",
+      "documentation": "admin/integrations.md"
+    },
+    {
+      "source": "web/src/routes/admin/connectors/new/+page.svelte",
+      "documentation": "admin/integrations.md"
+    },
+    {
+      "source": "web/src/routes/admin/models/+page.svelte",
+      "documentation": "admin/models.md"
+    },
+    {
+      "source": "web/src/routes/admin/models/edit/+page.svelte",
+      "documentation": "admin/models.md"
+    },
+    {
+      "source": "web/src/routes/admin/settings/+page.svelte",
+      "documentation": "admin/settings.md"
+    },
+    {
+      "source": "web/src/routes/admin/skills/+page.svelte",
+      "documentation": "admin/integrations.md"
+    },
+    {
+      "source": "web/src/routes/admin/upstreams/+page.svelte",
+      "documentation": "admin/models.md"
+    },
+    {
+      "source": "web/src/routes/agents/+page.svelte",
+      "documentation": "agent-guide/create.md"
+    },
+    {
+      "source": "web/src/routes/agents/[id]/+page.svelte",
+      "documentation": "agent-guide/create.md"
+    },
+    {
+      "source": "web/src/routes/agents/[id]/setup/[step]/+page.svelte",
+      "documentation": "agent-guide/create.md"
+    },
+    {
+      "source": "web/src/routes/chat/+page.svelte",
+      "documentation": "guide/chat.md"
+    },
+    {
+      "source": "web/src/routes/chat/[id]/+page.svelte",
+      "documentation": "guide/chat.md"
+    },
+    {
+      "source": "web/src/routes/inbox/+page.svelte",
+      "documentation": "agent-guide/run-observe.md"
+    },
+    {
+      "source": "web/src/routes/login/+page.svelte",
+      "documentation": "guide/getting-started.md"
+    },
+    {
+      "source": "web/src/routes/rag/+page.svelte",
+      "documentation": "admin/knowledge.md"
+    },
+    {
+      "source": "web/src/routes/rag/[id]/edit/+page.svelte",
+      "documentation": "admin/knowledge.md"
+    },
+    {
+      "source": "web/src/routes/rag/new/+page.svelte",
+      "documentation": "admin/knowledge.md"
+    },
+    {
+      "source": "web/src/routes/rag/profiles/+page.svelte",
+      "documentation": "admin/knowledge.md"
+    },
+    {
+      "source": "web/src/routes/scheduled/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/scheduled/[id]/edit/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/scheduled/[id]/runs/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/scheduled/new/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/settings/+page.svelte",
+      "documentation": "guide/account-and-usage.md"
+    },
+    {
+      "source": "web/src/routes/settings/memory/+page.svelte",
+      "documentation": "guide/account-and-usage.md"
+    },
+    {
+      "source": "web/src/routes/settings/notifications/+page.svelte",
+      "documentation": "guide/account-and-usage.md"
+    },
+    {
+      "source": "web/src/routes/settings/tokens/+page.svelte",
+      "documentation": "guide/account-and-usage.md"
+    },
+    {
+      "source": "web/src/routes/setup/+page.svelte",
+      "documentation": "getting-started.md"
+    },
+    {
+      "source": "web/src/routes/tools/+page.svelte",
+      "documentation": "guide/tools-and-integrations.md"
+    },
+    {
+      "source": "web/src/routes/tools/browser/+page.svelte",
+      "documentation": "guide/tools-and-integrations.md"
+    },
+    {
+      "source": "web/src/routes/tools/integrations/+page.svelte",
+      "documentation": "guide/tools-and-integrations.md"
+    },
+    {
+      "source": "web/src/routes/tools/skills/+page.svelte",
+      "documentation": "guide/tools-and-integrations.md"
+    },
+    {
+      "source": "web/src/routes/usage/+page.svelte",
+      "documentation": "guide/account-and-usage.md"
+    },
+    {
+      "source": "web/src/routes/webhooks/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/webhooks/[id]/edit/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/webhooks/[id]/rerun/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/webhooks/[id]/runs/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    },
+    {
+      "source": "web/src/routes/webhooks/new/+page.svelte",
+      "documentation": "guide/automation-and-inbox.md"
+    }
+  ]
+}

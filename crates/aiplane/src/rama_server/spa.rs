@@ -140,7 +140,7 @@ async fn serve(root: &Path, req: &Request) -> Response {
     let rel = if rel.is_empty() { "index.html" } else { rel };
 
     // Security: resolve within the root, refusing any traversal.
-    let file_path = match resolve_path(root, rel) {
+    let mut file_path = match resolve_path(root, rel) {
         Some(p) => p,
         None => {
             return Response::builder()
@@ -149,6 +149,33 @@ async fn serve(root: &Path, req: &Request) -> Response {
                 .unwrap();
         }
     };
+
+    if (path == "/docs" || path.starts_with("/docs/"))
+        && tokio::fs::metadata(&file_path)
+            .await
+            .is_ok_and(|metadata| metadata.is_dir())
+    {
+        let index = file_path.join("index.html");
+        if tokio::fs::metadata(&index)
+            .await
+            .is_ok_and(|metadata| metadata.is_file())
+        {
+            if !path.ends_with('/') {
+                let mut location = format!("{path}/");
+                if let Some(query) = req.uri().query() {
+                    location.push('?');
+                    location.push_str(query);
+                }
+                return Response::builder()
+                    .status(StatusCode::PERMANENT_REDIRECT)
+                    .header(header::LOCATION, location)
+                    .header(header::CACHE_CONTROL, NO_CACHE)
+                    .body(Body::empty())
+                    .expect("documentation directory redirect");
+            }
+            file_path = index;
+        }
+    }
 
     // A real file wins.
     match tokio::fs::read(&file_path).await {
@@ -326,7 +353,7 @@ fn content_type(ext: &str) -> &'static str {
 /// which was simply not true of that directory.)
 fn cache_control(ext: &str, filename: &str, rel_path: &str) -> &'static str {
     let _ = ext;
-    if filename == "index.html" || filename == "sw.js" {
+    if filename == "index.html" || filename == "sw.js" || rel_path.starts_with("docs/") {
         NO_CACHE
     } else if rel_path.contains("_app/immutable/") {
         IMMUTABLE_CACHE
@@ -398,6 +425,63 @@ mod tests {
     /// The embed widget is one unhashed file at a stable URL that owners paste
     /// into their pages: it must be served as JavaScript and must never be
     /// `immutable`, or a fixed widget could not reach sites that cached it.
+    #[tokio::test]
+    async fn documentation_directories_serve_their_own_index_and_redirect_to_slash() {
+        let (_d, root) = spa_tempdir();
+        std::fs::create_dir_all(root.join("docs/guide/chat")).unwrap();
+        std::fs::write(root.join("docs/index.html"), "documentation home").unwrap();
+        std::fs::write(
+            root.join("docs/guide/chat/index.html"),
+            "chat documentation",
+        )
+        .unwrap();
+        for (path, target) in [
+            ("/docs?lang=en", "/docs/?lang=en"),
+            ("/docs/guide/chat", "/docs/guide/chat/"),
+        ] {
+            let resp = serve(&root, &get(path)).await;
+            assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+            assert_eq!(resp.headers()[header::LOCATION], target);
+        }
+        for (path, body) in [
+            ("/docs/", "documentation home"),
+            ("/docs/guide/chat/", "chat documentation"),
+        ] {
+            let resp = serve(&root, &get(path)).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            assert_eq!(resp.headers()[header::CACHE_CONTROL], NO_CACHE);
+            assert_eq!(drain(resp).await, body.as_bytes());
+        }
+    }
+
+    #[tokio::test]
+    async fn documentation_exports_are_plain_text_and_missing_pages_are_not_spa_routes() {
+        let (_d, root) = spa_tempdir();
+        std::fs::create_dir_all(root.join("docs/markdown")).unwrap();
+        for path in ["llms.txt", "llms-full.txt", "markdown/README.md"] {
+            std::fs::write(root.join("docs").join(path), "canonical docs").unwrap();
+            let resp = serve(&root, &get(&format!("/docs/{path}"))).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            assert_eq!(resp.headers()[header::CACHE_CONTROL], NO_CACHE);
+            assert_eq!(
+                resp.headers()[header::CONTENT_TYPE],
+                "text/plain; charset=utf-8"
+            );
+        }
+        assert_eq!(
+            serve(&root, &get("/docs/missing/")).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            serve(&root, &get("/docs/assets/missing.js")).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            serve(&root, &get("/docs/../../secret")).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
     #[tokio::test]
     async fn serves_the_embed_widget_as_revalidating_javascript() {
         let (_d, root) = spa_tempdir();

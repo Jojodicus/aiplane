@@ -88,8 +88,8 @@ internal to the registry.
 |---|---|
 | `None` (unknown) | Try the request. If upstream returns a capability-rejection 400, auto-learn (`None` → `Some(false)`). |
 | `Some(true)` | Proceed normally — the model supports this capability. Auto-learning never overwrites this. |
-| `Some(false)` + no fallback | Reject early with a clear error: *"This model cannot process images."* |
-| `Some(false)` + fallback configured | Route the content to the fallback model transparently. Show info banner. |
+| `Some(false)` + no fallback | Tool-result images are passed through unchanged. The capability flag does not make every image request fail early. |
+| `Some(false)` + fallback configured | Tool-result images are described by the configured vision fallback and replaced with text when that call succeeds. A failure keeps the original image. Other image paths are unchanged. |
 
 ## Files
 

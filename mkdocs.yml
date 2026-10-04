@@ -1,0 +1,81 @@
+site_name: croit AIplane documentation
+site_description: User, administration, operations and API documentation for croit AIplane.
+docs_dir: docs
+site_dir: target/frontend/build/docs
+use_directory_urls: true
+theme:
+  name: material
+  font: false
+  logo: img/croit-logo-white.svg
+  favicon: img/favicon.svg
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+plugins:
+  - search
+hooks:
+  - docs/site-support/exports.py
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    not_found: warn
+    unrecognized_links: warn
+    anchors: warn
+nav:
+  - Home: README.md
+  - Product comparison: product-comparison.md
+  - Getting started:
+      - Install and configure: getting-started.md
+      - Start using AIplane: guide/getting-started.md
+  - User guide:
+      - Conversations: guide/chat.md
+      - Files and documents: guide/files-and-canvas.md
+      - Tools and integrations: guide/tools-and-integrations.md
+      - Account and usage: guide/account-and-usage.md
+      - Automation and inbox: guide/automation-and-inbox.md
+  - Agents:
+      - Create an agent: agent-guide/create.md
+      - Permissions: agent-guide/permissions.md
+      - Test and publish: agent-guide/test-publish.md
+      - Runs and decisions: agent-guide/run-observe.md
+      - Advanced spec: agent-guide/spec-reference.md
+  - Administration:
+      - Models and routing: admin/models.md
+      - Access: admin/access.md
+      - Operator settings: admin/settings.md
+      - Settings reference: admin/settings-reference.md
+      - Integrations and skills: admin/integrations.md
+      - Knowledge: admin/knowledge.md
+  - Operations:
+      - Deployment: operations/deployment.md
+      - Backup and recovery: operations/backup-recovery.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Reference:
+      - HTTP API: reference/api.md
+      - Environment and process: reference/environment.md
+      - Tool contracts: reference/tools.md
+      - Tool inventory: tools-inventory.md
+      - Documentation system: documentation-system.md

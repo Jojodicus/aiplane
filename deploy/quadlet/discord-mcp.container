@@ -26,7 +26,7 @@
 #        /etc/aiplane/discord-mcp.env
 #   sudo $EDITOR /etc/aiplane/discord-mcp.env          # set DISCORD_TOKEN
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now discord-mcp.service
+#   sudo systemctl start discord-mcp.service
 #
 # Then, as a gateway admin, open /admin/connectors, enable Discord, and set its
 # URL to http://discord-mcp:8085/mcp. No credential is configured on the

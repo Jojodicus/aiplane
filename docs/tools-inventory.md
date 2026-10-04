@@ -1,39 +1,25 @@
 # Tool inventory
 
-Every tool AIplane can offer an LLM, with the condition under which it is
-registered. For *how* tools work — the trait, the registry, RBAC, the
-tool-call loop — see [`tools-rbac.md`](tools-rbac.md).
-
-This file is **drift-guarded**: `crates/aiplane/tests/it/tools_inventory.rs`
-discovers the real tool ids from the source and fails CI when one is missing
-here (or when this file names an id no tool implements). Adding a tool
-therefore forces a conscious choice — document it, or allow-list it in that
-test's `UNDOCUMENTED`.
-
-Deliberately **no line numbers and no crate-relative paths** in this file.
-Both rot on every refactor, and this document existing in a stale state is the
-exact failure it was written to fix. Symbols (`category_for`,
-`requires_chat_session`, `ToolRegistry::with`) survive file moves; a tool id is
-itself a stable contract.
+This inventory explains which tools are available, when they appear, and how
+their switches work. An administrator configures the required service and
+grants access; people can then choose tools for a conversation. See the
+[tool contracts reference](reference/tools.md) for arguments, results and
+limits, or [tools and integrations](guide/tools-and-integrations.md) for the
+browser workflow.
 
 ## How to read the columns
 
-- **Gate** — what has to be true for the tool to be registered at all. A tool
-  that is *never* registered is invisible to the model; a tool that is
-  registered but unusable would waste a round-trip on a guaranteed error,
-  which is why several tools are gated rather than always-on (see
-  "Registration gates" below).
-- **Chat-only** — `requires_chat_session` returns true, so the `/v1` proxy
-  paths do not advertise it. These need a live chat turn to attach output to.
-- **Toggle key** — the switch on `/tools` (and the argument the model passes
-  to `enable_tools`). Several tools share one key: users reason about
-  "Memory", not about `remember` and `recall` separately.
+- **Gate** — the configuration or service that must be available before the
+  tool appears.
+- **Chat-only** — the tool needs an AIplane conversation and is unavailable to
+  direct model API requests.
+- **Toggle key** — the switch an administrator can grant and a person can
+  enable for their conversation. Related tools may share one switch.
 
 The `/tools` UI shows admins read-only rows for optional image, GeoIP, and
-sandbox tools when their backend is absent. Their switches are disabled and
-link to the operator setup page; the registry and model tool list still omit
-them. Registered tools with missing storage, RAG indexer, or push setup are
-also marked unavailable on this page.
+sandbox tools when their service is absent. Their switches are disabled and
+link to the relevant setup page. Tools that need storage, knowledge indexing,
+or notification setup also show when that prerequisite is missing.
 
 ## Always registered
 
@@ -45,7 +31,7 @@ message rather than being absent.
 |---|---|---|---|
 | `enable_tools` | — | *(hidden, always on)* | The lazy-disclosure bootstrap: turns other tool groups on for the rest of the conversation. Not presented as a toggle — `allowed_tools_for_session` force-keeps `BOOTSTRAP_TOOL_ID`, so a switch for it would be inert. |
 | `search_gateway_tools` | — | *(hidden, `/v1` only)* | Searches the Auto capabilities allowed by an API token and exposes at most five matching tool schemas in the next model round. |
-| `company_echo` | — | *(hidden)* | Smoke test for the tool-call loop. Hidden from `/tools` and from `enable_tools` via `is_hidden`; still RBAC-grantable. |
+| `company_echo` | — | *(hidden)* | Diagnostic echo tool for checking a custom installation's tool connection. It is hidden from normal tool selection. |
 | `get_current_timestamp` | — | `get_current_timestamp` | Timezone-aware current date/time, from the caller's `users.timezone`. |
 | `convert_currency` | — | `convert_currency` | Currency conversion at daily ECB reference rates. |
 | `ask_user` | yes | `ask_user` | Ask the user a short question mid-turn and wait for the answer, rather than guessing. Needs a live chat turn *and* someone watching it; times out and reports `answered: false` otherwise. |
@@ -53,9 +39,9 @@ message rather than being absent.
 | `get_user_location` | — | `get_user_location` | Caller's location: a browser GPS prompt when a live chat turn is watching, else coarse GeoIP. |
 | `generate_qr_code` | yes | `generate_qr_code` | QR codes (URL, WiFi, vCard, SEPA) as PNG/SVG, rendered in-process. |
 | `search_web` | — | `search_web` | Web search via SearXNG, Brave, or Tavily, with optional domain and recency filters. A confirmed exhausted provider quota triggers another configured provider; the result identifies the one used. Tavily has a separate Enable switch and is eligible only when enabled with a stored key. Configured on `/admin/settings?tab=web-search`. |
-| `browser_control` | yes | `browser_control` | Act in the user's own logged-in browser (navigate, read, click, type, screenshot) through the extension paired with the open chat page. Actions travel as a batch and run in order. Chat-only by construction — the transport *is* the open conversation. Everything it returns is untrusted page content, and the extension, not AIplane, decides what may run — nothing does until the user switches it on. Users set it up at `/tools/browser`. See [`browser-control.md`](browser-control.md). |
-| `show_screenshot` | yes | `show_screenshot` | Show the user a capture of the page in their browser — viewport, whole page, one element (`ref`) or a rectangle (`region`) — as an inline attachment in the reply. The user never sees a `browser_control` screenshot (those are for the model), so this is the tool for "show me". Same extension and rendezvous as `browser_control`, its own toggle; needs `[chat.s3]` and refuses before touching the browser without it. The model gets the same image back. See [`browser-control.md`](browser-control.md#showing-the-user). |
-| `fetch_url` | — | `fetch_url` | HTTP GET through `outbound_guard` (public hosts only unless `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; every redirect re-checked; 32 MiB read cap). HTML is reduced to readable text unless `raw` is set; images come back viewable; other binary returns metadata. |
+| `browser_control` | yes | `browser_control` | Act in the user's own logged-in browser (navigate, read, click, type, screenshot) through the extension paired with the open chat page. Actions travel as a batch and run in order. The extension, not AIplane, decides what may run; nothing happens until the user switches it on. Users set it up at `/tools/browser`. See [tools and integrations](guide/tools-and-integrations.md). |
+| `show_screenshot` | yes | `show_screenshot` | Show the user a capture of their browser page — viewport, whole page, one element (`ref`) or a rectangle (`region`) — as an inline attachment in the reply. Browser-control screenshots are for the assistant; this tool shows a capture to the user. It uses the browser extension and needs attachment storage. See [tools and integrations](guide/tools-and-integrations.md). |
+| `fetch_url` | — | `fetch_url` | HTTP GET through `outbound_guard` (public hosts only unless `$AIPLANE_ALLOW_PRIVATE_NETWORKS`; every redirect re-checked; 32 MiB read cap, 4 MiB returned-text cap). HTML is reduced to readable text unless `raw` is set; images come back viewable; other binary returns metadata. |
 | `wikipedia` | — | `wikipedia` | Summary of the best-matching Wikipedia article. |
 | `dns_lookup` | — | `dns_lookup` | DNS records over DoH. |
 | `whois_lookup` | — | `whois_lookup` | Domain registration via RDAP. |
@@ -68,7 +54,7 @@ message rather than being absent.
 | `load_image_url` | yes | `load_image_url` | Fetch an image from a URL (through `outbound_guard`, like `fetch_url`) and keep it as a reusable conversation attachment. |
 | `import_file` | yes | `document` | Turn a text attachment (upload or produced artifact) into an editable, versioned canvas document — server-side, so the content never round-trips through the model. The on-ramp that makes an uploaded `.typ`/`.csv`/`.json`/`.md` editable a passage at a time (and hand-editable by the user); `offer_download` is the exit ramp. Text formats only: binary attachments stay attachments, already usable by id (`att:` refs, sandbox staging, `fetch_attachment`). Capped at the same 512 KB the document tools can write. |
 | `create_document` | yes | `document` | Open a canvas document. |
-| `edit_document` | yes | `document` | Replace a canvas document's content. |
+| `edit_document` | yes | `document` | Apply passage edits to text-format canvas documents, or JSON Patch to JSON/TOML documents; every edit creates a version. |
 | `edit_document_section` | yes | `document` | Edit one section of a canvas document. |
 | `read_document` | yes | `document` | Read a canvas document back. |
 | `list_documents` | yes | `document` | List the conversation's canvas documents. |
@@ -150,11 +136,9 @@ That answer changes what the model is offered:
   at all, and `run_in_sandbox`'s schema has **no `network` property**, with a
   description that states plainly there is no network rather than implying a
   permission the model could ask for. This is the "absent beats
-  always-failing" rule below: before this, `capture_webpage` was advertised on
-  an offline runner and every call failed with `network egress requested but
-  not configured on this runner`.
+  always-failing" rule below.
 - **Egress** → both tools register and `network` appears as an option.
-- **Unknown** (runner unreachable at boot, or one older than the health field)
+- **Unknown** (runner unreachable at boot or health response without the egress field)
   → treated as *available*. Withdrawing capabilities needs positive evidence;
   an unreachable runner breaks every sandbox tool anyway, so hiding a subset
   would turn a transient outage into an apparent permanent capability loss.
@@ -219,8 +203,8 @@ downloadable file. Both copy inside AIplane — content never round-trips
 through the model, which is what made "give me that file" cost two passes of
 the whole payload and invite retyping drift.
 
-The user can **hand-edit** a document in the panel (`POST
-/chat/{id}/document/{doc_id}/edit`, owner-only, newest version only). That save
+The user can **hand-edit** a document in the panel (`PUT
+/api/v0/chat/sessions/{id}/documents/{doc_id}`, owner-only, newest version only). That save
 is a normal new version, marked as authored by the user — the panel's version
 switcher labels those revisions (`v3 · you`) so a history stops reading as
 interchangeable numbers, and `read_document` / `list_document_versions` /
@@ -250,57 +234,32 @@ the user threw away.
 These have no fixed id — one tool per discovered template / workflow /
 connected server. The drift guard matches them by prefix.
 
-| Family | Source | Toggle key |
+| Tool IDs | When they are available | Toggle key |
 |---|---|---|
-| `typst_<id>` plus `_edit` / `_read` / `_pptx` | one per directory under `[typst] templates_dir`, discovered at boot | `typst_<id>` (the render id; variants collapse onto it via `entry_key_for`) |
-| `comfyui_<id>` | one per manifest in the `[comfyui]` catalog, hot-reloadable | `comfyui` — **one key for the whole family**, so a newly reloaded workflow is enabled automatically |
-| `mcp__<server>__<tool>` | per-user MCP connectors, connected lazily per request | `mcp__<server>` — one key per integration |
-| the agent architect's tools: `list_agents`, `read_agent`, `list_grantable`, `propose_setup`, `create_agent_draft`, `update_agent_draft`, `run_test_turn` | built per turn for an architect conversation (`pages::architect::tools`, [`agent-builder.md`](agent-builder.md#agent-architect)); they act with the person's rights through the agent routes' own functions; no publish tool | none — persona-scoped, never in the chat catalog or registry, and the person's own tools are not offered beside them |
-| `set_<slot>` | one per slot of an agent's `state` whose `set_by` lists `llm` (`agents::slot_tools`, [`agent-spec.md`](agent-spec.md#state)) | none — never in the chat catalog or registry; offered only inside an agent run, and needs no grant |
-| `forward_request` | one per agent run whose spec has `routes` (`agents::router`, [`agent-runs.md`](agent-runs.md#the-router)): takes no arguments; picks an open route and runs its sub-agent | none — like `set_<slot>`, run-scoped and never registered |
-| `request_human` | one per main-agent run whose spec has a `human` route (`agents::human`, [`agent-hil.md`](agent-hil.md)): takes `{question}`; hands the conversation to a person on an open human route and waits for their answer | none — run-scoped and never registered |
-| `finish` | one per agent run under a finish contract, i.e. every routed sub-agent (`finish::FinishTool`, [`tools-rbac.md`](tools-rbac.md#finish-contract)): takes `{result}`, checked against the contract's schema; a valid call ends the run (`ToolPhase::Terminal`) | none — run-scoped and never registered |
-| `verify_<id>_request_code`, `verify_<id>_submit_code` | two per `mcp_code` verifier of an agent (`agents::verifier::otp`, [`agent-visitors.md`](agent-visitors.md#identity-verifiers)): take no arguments; send a one-time code through the agent's connector and pause for the visitor to type it into a secure field | none — run-scoped like `set_<slot>` |
-| `verify_<id>` | one per `lookup` verifier (`agents::verifier::lookup`): takes no arguments; checks slots the visitor filled against a granted tool | none — run-scoped like `set_<slot>` |
+| `typst_<id>` plus `_edit` / `_read` / `_pptx` | Each installed Typst template provides its own document and conversion actions. | `typst_<id>` |
+| `comfyui_<id>` | Each enabled ComfyUI workflow provides a matching action. | `comfyui` |
+| `mcp__<server>__<tool>` | Actions exposed by a connected personal or shared MCP integration. | `mcp__<server>` |
+| Agent builder actions | Available to the assistant while creating or editing an agent, according to the builder user's permissions. | Managed by the agent builder |
+| `set_<slot>` | Available during an agent run for slots the agent is allowed to fill. | Managed by the agent |
+| `forward_request` | Available when an agent has configured sub-agent routes. | Managed by the agent |
+| `request_human` | Available when an agent can hand work to a person. | Managed by the agent |
+| `finish` | Available when an agent has a result contract to satisfy. | Managed by the agent |
+| `verify_<id>_request_code`, `verify_<id>_submit_code` | Available when an agent requires one-time-code verification. | Managed by the agent |
+| `verify_<id>` | Available when an agent requires lookup-based verification. | Managed by the agent |
 
-`BoundTool` (`agents/bind.rs`) is not a family either: it wraps one granted
-tool inside an agent run, keeps its id, hides the bound arguments from the
-schema and fills them in on every call.
+Some document conversions also need the sandbox service and an enabled output
+format. Connector-returned files become conversation attachments. For how to
+configure these services, see [integrations](admin/integrations.md).
 
-`AskFirst` (`server/tools/ask_first.rs`) is not a family: it wraps one tool
-and keeps its id, so the wrapped tool's own row above applies. It only changes
-*when* the tool runs — after the user approves the call (see
-[`tools-rbac.md`](tools-rbac.md#suspend-and-resume)).
+## Availability and access
 
-File bytes an MCP tool returns (base64, inline — the only way the protocol has) are spilled into conversation attachments before the result reaches the model, and referenced by `<turn_id>/<filename>` id like any upload. See [`connectors.md`](connectors.md) → *Files a connector returns become conversation artifacts*.
+Some tools need a configured service, such as image generation, geolocation,
+knowledge indexing or the sandbox. Those tools appear when the service is
+available. Other tools remain visible when setup is incomplete and show which
+prerequisite is missing.
 
-`typst_<id>_pptx` additionally requires `[sandbox]` (the conversion runs
-there) and the template opting in via a `[pptx]` block in its manifest.
-
-## Registration gates: why not just register everything
-
-A registered-but-unusable tool costs a full model round-trip to discover it
-cannot work, and the model has no way to tell "misconfigured" from "wrong tool
-for the job". So the rule is:
-
-- **Missing capability → don't register.** `lookup_ip` can do nothing without
-  a GeoIP database; `generate_image` needs an image pool. Absent is better
-  than always-failing.
-- **Missing storage → register, fail clearly.** `generate_qr_code` renders
-  in-process and only needs `[chat.s3]` to *deliver* the file. Registering it
-  keeps the RBAC config stable across deployments that differ only in storage.
-- **Wrong request path → register, don't advertise.** The chat-only tools
-  above are real capabilities that simply need a chat turn.
-  `requires_chat_session` keeps them out of the `/v1` tool list rather than
-  letting the model pick one and get an error.
-
-## Adding a tool
-
-1. Implement `Tool` and register it with `ToolRegistry::with` (ids must match
-   OpenAI's function-name regex — the registry asserts this).
-2. Grant it to at least one role in `[rbac]`, or no one can use it.
-3. Give it a category in `category_for` and display copy in `display_meta`,
-   or it renders on `/tools` under "Utility" with its LLM-facing description.
-4. If its `run` hard-fails without a chat session, add it to
-   `requires_chat_session`.
-5. Add a row above. CI will remind you if you forget.
+An administrator must grant access to a tool before it is available to a
+person. The conversation switch controls whether the assistant can use an
+available tool during that conversation. Tools that act through a connected
+service can also require approval before they make a change. See [agent
+permissions](agent-guide/permissions.md) and [approvals](guide/automation-and-inbox.md).

@@ -92,3 +92,16 @@ async fn the_catch_all_does_not_shadow_the_api() {
     );
     assert!(build["version"].as_str().unwrap().starts_with('v'));
 }
+
+#[tokio::test]
+async fn documentation_urls_reach_the_existing_static_handler_without_login() {
+    for path in [
+        "/docs",
+        "/docs/",
+        "/docs/guide/chat/",
+        "/docs/llms.txt",
+        "/docs/markdown/README.md",
+    ] {
+        assert_eq!(get(path).await.0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+}

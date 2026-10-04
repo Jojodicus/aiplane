@@ -192,7 +192,7 @@ run = "cargo build --package aiplane"
 
 [tasks.build]
 description = "Release build of the gateway binary. Slow (~12 s cold incremental, ~70 s from clean) — only use this when you actually want optimised output (deploys, perf measurement). For day-to-day work use `mise run dev` or `mise run dev-build`."
-depends = ["fetch-typst-cli", "fetch-pdfium"]
+depends = ["fetch-typst-cli", "fetch-pdfium", "build-web"]
 run = "cargo build --release --package aiplane"
 
 [tasks.fetch-typst-cli]
@@ -292,7 +292,7 @@ npm --prefix web ci --no-audit --no-fund
 npm --prefix web run prepare
 """
 
-[tasks.build-web]
+[tasks.build-spa]
 description = "Build the SvelteKit SPA (adapter-static) and the standalone embed widget (web/embed -> embed.js) into target/frontend/build/. The Dockerfile COPYs that directory into the image; the gateway serves it from the root when AIPLANE_STATIC_DIR points there."
 depends = ["web-install"]
 sources = ["web/src/**/*", "web/static/**/*", "web/embed/**/*", "web/shared/**/*", "web/vite.config.ts", "web/vite.embed.config.ts", "web/package.json"]
@@ -326,6 +326,11 @@ cp -r web/build target/frontend/build
 npm --prefix web run build:embed
 test -s target/frontend/build/embed.js
 """
+
+[tasks.build-web]
+description = "Build the cached SPA and embed widget, then always rebuild version-matched documentation in target/frontend/build/."
+depends = ["build-spa"]
+run = "mise run build-docs"
 
 [tasks.check-web]
 description = "svelte-check (typescript + a11y + Svelte diagnostics) across web/src."
@@ -617,3 +622,52 @@ echo "swept $swept files older than ${days}d"
 [tasks.check]
 description = "Fast type-check across the workspace (no codegen). The cheapest rung of the ladder: check → test-crate/lint-crate → verify → ci."
 run = "cargo check --workspace --all-targets"
+
+[tasks.test-docs-exports]
+description = "Test documentation publication allowlist, Markdown/LLM exports and build identity."
+tools = { python = "3.12.14" }
+run = "python3 -m unittest discover -s docs/site-support -p 'test_*.py'"
+
+[tasks.lock-docs]
+description = "Resolve the documentation builder's hash-pinned Python dependencies."
+tools = { uv = "0.12.21" }
+run = "RUST_LOG=warn uv pip compile --quiet --generate-hashes --universal --python-version 3.12 docs/site-support/requirements.in -o docs/site-support/requirements.txt"
+
+[tasks.docs-install]
+description = "Install the documentation builder into an isolated, hash-verified environment."
+tools = { python = "3.12.14", uv = "0.12.21" }
+sources = ["docs/site-support/requirements.txt"]
+outputs = ["target/docs-venv/.installed"]
+run = """
+set -eu
+RUST_LOG=warn uv venv --python 3.12.14 --allow-existing target/docs-venv
+RUST_LOG=warn uv pip sync --python target/docs-venv/bin/python --require-hashes docs/site-support/requirements.txt
+touch target/docs-venv/.installed
+"""
+
+[tasks.build-docs]
+description = "Build searchable offline documentation and Markdown/LLM exports into the installed frontend."
+depends = ["docs-install", "test-docs-exports", "docs-check"]
+run = "target/docs-venv/bin/python -m mkdocs build --strict"
+
+[tasks.dev-docs]
+description = "Preview the documentation locally on port 8091."
+depends = ["docs-install"]
+run = "target/docs-venv/bin/python -m mkdocs serve --dev-addr 127.0.0.1:8091"
+
+[tasks.docs-screenshots]
+description = "Capture documentation screenshots from the isolated seeded gateway."
+run = """
+set -eu
+if [ -z "${PLAYWRIGHT_DIR:-}" ]; then
+  playwright_entry="$(find "$(mise where 'npm:@playwright/cli')" -path '*/node_modules/playwright/index.mjs' -print -quit)"
+  : "${playwright_entry:?Playwright is missing from the mise installation}"
+  export PLAYWRIGHT_DIR="${playwright_entry%/index.mjs}"
+fi
+export AIPLANE_URL="${AIPLANE_URL:-http://127.0.0.1:8090}"
+node e2e/docs-screenshots.mjs
+"""
+
+[tasks.docs-check]
+description = "Check published documentation coverage against UI pages, exact routes, settings and relative links."
+run = "python3 docs/site-support/check_coverage.py"

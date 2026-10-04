@@ -1683,6 +1683,7 @@ export const zh: Catalog = {
  "nav-connectors": "连接器",
  "nav-conversations-label": "对话",
  "nav-delete-conversation": "删除对话",
+ "nav-documentation": "文档",
  "nav-flow-error-back": "返回应用",
  "nav-flow-error-heading": "连接未完成",
  "nav-flow-error-title": "连接失败 — AIplane",

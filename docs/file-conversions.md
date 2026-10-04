@@ -26,8 +26,9 @@ which tool/engine does each job, and — importantly — what each path can and
 - **Upload → our template:** `fetch_attachment` extracts the content verbatim and
   hands back image refs; the **model maps** that content onto our slide layouts /
   letter fields (a deliberate design choice — layout mapping is judgment a tool
-  can't do well). Content (text + images) is preserved; the *layout* is
-  re-expressed in our style, which is the point. See [Gaps](#gaps--limitations).
+  can't do well). The extractor supplies text and image references, but the
+  model decides what enters the new document. Review the output against the
+  source when completeness matters. See [Gaps](#gaps--limitations).
 
 ## The tools
 
@@ -82,7 +83,7 @@ Each path below: **how it's done**, and the **expectation / limitation**.
 | "Make a branded croit **letter** from this." | `fetch_attachment` (verbatim content) → model maps recipient/body → `typst_letter` | ◐ Works, but **LLM-mediated**: the model decides what maps to recipient/subject/body. Content is verbatim; the mapping is judgment. |
 | "Make a branded **one-pager** from this text." | `fetch_attachment` → `typst_onepager` | ◐ Same — model re-authors the content into fields. |
 | "I need an editable Word/PowerPoint of this branded doc." | `typst_*` auto-emits `.docx`/`.pptx` | ✅ Works (with the fidelity caveats below). |
-| "Convert my `.pptx` into **our** presentation style, without losing content." | `fetch_attachment` (verbatim slides + `att:` image refs) → model maps each slide onto a croit layout, carrying images via their refs → `typst_presentation` | ◐ **Content preserved, layout re-styled.** Text/tables/notes come back verbatim and images are carried through — nothing is dropped. What is *not* 1:1 is the layout: the model chooses the closest croit layout per slide (by design — that's the migration). Not a pixel-copy of the source. |
+| "Convert my `.pptx` into **our** presentation style, without losing content." | `fetch_attachment` (structured slides + `att:` image refs) → model maps content onto a template layout → `typst_presentation` | ◐ Model-mediated reconstruction. Review slide count, text, tables, notes and images against the source; neither completeness nor identical layout is guaranteed. |
 | "Extract the text/tables from this PDF/docx." | `fetch_attachment` (PDF text tier; Office structured JSON) | ✅ Verbatim text/tables; PDF table structure approximate. |
 | "Summarize/critique this uploaded deck." | `convert_document(images)` → vision model reads slides | ✅ Works for *understanding*; not for editing. |
 
@@ -90,17 +91,14 @@ Each path below: **how it's done**, and the **expectation / limitation**.
 
 Ordered by how much they bite.
 
-1. **Upload→template is content-faithful but layout is the LLM's call.**
-   `fetch_attachment` now returns an uploaded deck/doc as **verbatim structured
-   content** (python-pptx/docx/openpyxl, no rewording) plus `att:` refs for every
-   embedded image, and the presentation renderer stages those images. So the
-   *content* (text, tables, notes, images) survives a `.pptx → our presentation`
-   migration. What is deliberately **not** preserved is the source *layout*: the
-   model picks the closest croit slide layout per slide. This is by design — a
-   tool can't make good layout-mapping decisions, and re-styling into our system
-   is the whole point. Residual risk is the usual LLM one (a mis-mapped layout,
-   an image dropped from a field), not a lossy extraction step. Same shape for
-   `.docx` → letter/one-pager.
+1. **Upload→template requires source/output comparison.**
+   The Office extractor provides structured content and image references;
+   supported content is read without model rewording at this extraction step.
+   The model then chooses the text, image references and layout fields passed
+   to the renderer. It can omit or alter material. Office constructs outside
+   the extractor's supported representation may also be missing. Check the
+   rendered document against the source before relying on completeness. The
+   same limitation applies to a document re-authored as a letter or one-pager.
 
 2. **Editable DOCX (letter/one-pager) carries content, not fixed layout.**
    typst can't emit `.docx`, so the export compiles the template to HTML and

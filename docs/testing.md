@@ -106,7 +106,7 @@ Write the test before the code — red, green, refactor (**TDD**). Tests are **s
 ## Mocking philosophy
 
 - **Upstream LLMs are always mocked in tests.** Real upstream calls in tests are forbidden. `wiremock` runs in-process.
-- **OIDC is mocked end-to-end.** `crates/aiplane/tests/oidc_integration.rs` builds the IdP out of wiremock: a discovery document, a JWKS carrying the public half of a freshly minted RSA dev keypair, and a token endpoint that returns an RS256-signed ID token whose `nonce` matches whatever AIplane just generated.
+- **OIDC is mocked end-to-end.** `crates/aiplane/tests/it/oidc_integration.rs` builds the IdP out of wiremock: a discovery document, a JWKS carrying the public half of a freshly minted RSA dev keypair, and a token endpoint that returns an RS256-signed ID token whose `nonce` matches whatever AIplane just generated.
 - **DB is real-but-ephemeral.** Integration tests open SQLite via `db::open(":memory:")`. The schema migrations run exactly as in prod; the in-memory backing just means we don't leak files. One pool per test.
 
 ## What every PR must include

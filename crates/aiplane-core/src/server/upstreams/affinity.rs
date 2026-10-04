@@ -219,7 +219,7 @@ pub const AFFINITY_HEADER: &str = "x-aiplane-affinity";
 /// The same header under the name it had before the project was renamed to
 /// croit AIplane. Still read, because it is a wire contract already baked into
 /// client launch scripts; [`AFFINITY_HEADER`] wins when a request carries both.
-/// Neither is forwarded upstream. See `docs/renaming.md`.
+/// Neither is forwarded upstream. See `docs/compatibility.md`.
 pub const LEGACY_AFFINITY_HEADER: &str = "x-gateway-affinity";
 
 /// The affinity key for a caller that already knows its conversation's identity

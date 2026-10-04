@@ -1,0 +1,191 @@
+[
+  {
+    "file": "docs/img/guide/chat-overview.png",
+    "route": "/chat/5d2cfe1f-8758-4759-a0b7-17508db389bc",
+    "selector": "[data-chat-composer]",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2800,
+    "height": 1900,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/chat-composer.png",
+    "route": "/chat/5d2cfe1f-8758-4759-a0b7-17508db389bc",
+    "selector": "[data-chat-composer]",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 196,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/capability-picker.png",
+    "route": "/chat/5d2cfe1f-8758-4759-a0b7-17508db389bc",
+    "selector": "dialog[aria-labelledby=\"tool-selector-title\"] .modal-box",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2800,
+    "height": 1900,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/upstream-pool.png",
+    "route": "/admin/models?tab=upstreams",
+    "selector": "article.card",
+    "matchingText": "wiremock-chat",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 500,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/automatic-routes.png",
+    "route": "/admin/models?tab=routing",
+    "selector": "article.card",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 416,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/memory-preferences.png",
+    "route": "/settings/memory",
+    "selector": "section.card",
+    "matchingText": "Preferences",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 308,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/token-card.png",
+    "route": "/settings/tokens",
+    "selector": "li.card",
+    "matchingText": "Local laptop",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 450,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/browser-status.png",
+    "route": "/tools/browser",
+    "selector": "section.card",
+    "matchingText": "Status",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 352,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/knowledge-collection.png",
+    "route": "/rag",
+    "selector": "article.card",
+    "matchingText": "acme-api",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 560,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/scheduled-action.png",
+    "route": "/scheduled",
+    "selector": "article.card",
+    "matchingText": "Weekly dependency report",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 422,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/integration-card.png",
+    "route": "/tools/integrations",
+    "selector": ".card",
+    "matchingText": "Google",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 2128,
+    "height": 236,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/content-guard.png",
+    "route": "/admin/settings?tab=access",
+    "selector": "[data-testid=\"settings-section-content_guard\"]",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 1680,
+    "height": 492,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/agent-checklist.png",
+    "route": "/agents/1020fa0d-2771-479a-ac85-edf4d9204782",
+    "selector": "[data-agent-tab] aside section.card",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 640,
+    "height": 316,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  },
+  {
+    "file": "docs/img/guide/document-canvas.png",
+    "route": "/chat/e4e837cb-299b-4113-82d4-ac03e16e6e83",
+    "selector": "aside[aria-label=\"Canvas\"]",
+    "viewport": {
+      "width": 1400,
+      "height": 950
+    },
+    "scale": 2,
+    "width": 808,
+    "height": 1262,
+    "data": "Synthetic dev-ui fixture; actual application components."
+  }
+]

@@ -34,55 +34,21 @@ AIplane is a single Rust binary built on **rama 0.3**, which is a proxy-native H
 
 ## Crate boundaries
 
-AIplane is one binary assembled from a layered stack of crates under
-`crates/`. The layering is load-bearing for dev-build speed, not just tidiness:
-as one ~108k-line compilation unit, editing *any* file re-ran the whole
-frontend + codegen. Each crate below depends
-only on the ones beneath it, so an edit recompiles that crate and what sits above
-it — never what sits below.
+AIplane is one binary assembled from a layered stack. An edit recompiles its crate and the crates that depend on it. The most frequently edited handlers and tools sit above shared runtime and persistence code.
 
-```
-gateway            bin + router/proxy/api/oidc     14.0k  ← thinnest, most-edited glue
-   ├── aiplane-api     the /api/v0 JSON handlers   17.5k  ← siblings: neither
-   └── aiplane-tools   the tool implementations    24.1k  ←   depends on the other
-          └── aiplane-runtime  tool API + AppState/RamaState + chat/agent driver  58.1k
-                 ├── aiplane-features  RAG, skills, ComfyUI, push, geoip, …   25.5k  ← siblings: neither
-                 └── aiplane-agents    agent tables, run sessions, rates       7.4k  ←   depends on the other
-                        └── aiplane-core      db, config, crypto, rbac, upstreams  45.6k
-                               ├── session-core   chat-UI substrate (owner-agnostic) 10.5k
-                               └── shared         OpenAI wire types
+```text
+aiplane            binary, router, proxy, OIDC
+   ├── aiplane-api     browser JSON handlers
+   └── aiplane-tools   tool implementations
+          └── aiplane-runtime  tool API, AppState, chat and agent drivers
+                 ├── aiplane-features  optional subsystems
+                 └── aiplane-agents    agent persistence, run sessions, rates
+                        └── aiplane-core  database, crypto, RBAC, upstreams
+                               ├── session-core  owner-agnostic chat substrate
+                               └── shared        wire types
 ```
 
-(Lines of Rust under each crate's `src/`.)
-
-What that buys, in lines that must recompile after a one-line edit (the crate
-edited plus every crate above it):
-
-| edit site | recompiled |
-|---|---|
-| `gateway` | 13,971 |
-| `aiplane-tools` | 38,077 |
-| `aiplane-api` | 31,518 |
-| `aiplane-runtime` | 113,723 |
-| `aiplane-agents` | 121,086 |
-| `aiplane-features` | 139,241 |
-| `aiplane-core` | 192,178 |
-
-As one compilation unit, before the split, every edit recompiled the whole
-crate (97,310 lines when it was measured, at about half today's size). The
-gains are front-loaded deliberately: the layers that churn most (handlers,
-tools, glue — about 60% of file touches over six months) are the cheapest to
-rebuild, and `aiplane-core` — the one that costs a full rebuild — is the
-least-edited. UI work recompiles no Rust at all.
-
-**Agent persistence has a crate of its own.** The agent DB accessors (about
-7k lines) sit in `aiplane-agents`, not in `aiplane-core`: an agent DB edit
-recompiles 121k lines (that crate, the runtime and the three above it) and
-does not touch `aiplane-core` or `aiplane-features`; in `aiplane-core` the same
-edit would cost the full 192k. Putting them in `aiplane-runtime` would cost the
-same for an agent DB edit but add their 7.4k lines to every runtime edit (121k
-rather than 114k), and the runtime is edited far more often — hence a crate of
-its own, beside `aiplane-features` so neither waits for the other.
+`aiplane-api` and `aiplane-tools` are siblings; neither depends on the other. The same holds for `aiplane-features` and `aiplane-agents`. Agent-table accessors belong in `aiplane-agents`, keeping an agent persistence edit from recompiling the core or optional feature layer. Current line counts and rebuild times depend on the checkout and machine; the Cargo dependency graph defines the boundary.
 
 **Rule of thumb when adding code:** put it as high in the stack as it will go.
 Something only belongs in `aiplane-core` if code below the feature layer genuinely
@@ -95,12 +61,7 @@ encodes the levels above and fails on any upward or sideways Cargo edge, naming
 it. See [`testing.md`](testing.md#architecture-tests).
 
 ### `crates/shared`
-Pure data types, no I/O:
-- OpenAI request/response schema (`ChatCompletionRequest`, `ChatCompletionResponse`, streaming chunk type, tool-call types, audio transcription types).
-- Tool descriptors (`ToolDef`, `ToolSchema`), role identifiers, RBAC rule types.
-- Gateway error type (rendered identically by server and CLI).
-
-Depends only on `serde`, `serde_json`, `thiserror`.
+I/O-free wire types and encoding helpers: the browser API types in `api`, the sandbox runner contract in `sandbox`, and base64/hex helpers. It depends on `serde`, `serde_json` and `jiff`.
 
 ### `crates/session-core`
 The chat substrate: the `chat_*` tables' accessors, the worker registry, the
@@ -197,7 +158,7 @@ other, so a tool edit and a page edit stay independent.
 The tool implementations — one module per tool family (`fetch_url`,
 `fetch_attachment`, `search_web`, `typst_render`, `document`, `rag`, `memory`,
 `qr`, `netcheck`, …). Each holds `Tool` impls; they plug into the machinery in
-`aiplane-runtime` and are registered into the `ToolRegistry` that `gateway`'s
+`aiplane-runtime` and are registered into the `ToolRegistry` that `aiplane`'s
 `main.rs` builds.
 
 A pure sink like `aiplane-api`, and a sibling of it. Two tests live in
@@ -228,10 +189,10 @@ handler would collapse the split. `build_info.rs` (and the `build.rs` that stamp
 the git SHA into it) lives here too, because it keeps a new commit from
 invalidating `aiplane-core`.
 
-### `crates/gateway`
+### `crates/aiplane`
 The binary and its routing glue — deliberately thin:
 - `router.rs` — builds the `rama::http::service::web::Router`, mounting handlers from `aiplane-api` and this crate.
-- `proxy.rs` — `/v1/{models,chat/completions,audio/transcriptions,audio/speech,embeddings,images/generations,images/edits}` handlers. The chat path branches between a streaming fast-path (no tool grants) and the buffered tool-call loop; embeddings, images, and speech are byte-dumb relays to their pool kind.
+- `proxy.rs` — `/v1/{models,chat/completions,audio/transcriptions,audio/speech,embeddings,images/generations,images/edits}` handlers. The chat path branches between a byte-dumb path and a gateway-owned tool loop with buffered and streaming forms; embeddings, images, and speech are byte-dumb relays to their pool kind.
 - `api.rs` — session-authed JSON at `/api/v0/*`.
 - `oidc_handlers.rs` — `/auth/{login,callback,logout}`, backed by a `pending_logins` row keyed by the OIDC `state` parameter.
 - `rag_api.rs`, `sandbox_api.rs`, `comfyui_api.rs`, `setup_api.rs` — the remaining JSON surfaces. (`setup_api.rs` lives here rather than in `aiplane-api` so the first-run wizard's API survived the removal of the page stack.)
@@ -254,19 +215,17 @@ answers 503 and nothing else changes, which is what makes a headless deployment
 
 ## Request flow: `POST /v1/chat/completions`
 
-1. **`rama_server::auth::require_bearer`** validates `Authorization: Bearer gwk_…` against the `tokens` table, resolves the user. 401 on miss.
-2. **RBAC** (`state.rbac`) maps the user's OIDC roles → role IDs → set of allowed tool IDs.
-3. **Branch on the request body:**
-   - *Fast path* — no allowed tools. Nothing to inject, so resolve `model` → pool → backend via `state.upstreams.acquire_for`, then `forward_streaming` wraps the upstream's `bytes_stream()` in a `rama::http::Body::from_stream`. The `Acquired` guard rides inside the stream's scan closure so the in-flight slot stays held for the lifetime of the response. (A client-supplied `tools` array does *not* divert here — when the user has grants we take the tool path and union ours in.)
-   - *Tool path* — taken whenever the user has tool grants, including when the client brought its own `tools` (unioned in, de-duped by name). The runner in `server::tools::runner` injects tool defs, forces `stream: false`, and loops: acquire pool → forward → if the turn's `tool_calls` are gateway-owned *only*, execute them concurrently and feed the results back as `role: "tool"` messages → re-POST. A turn that calls any client-owned tool is returned to the client unchanged (it drives its own tools). Bounded by `MAX_TOOL_ROUNDS`. The last round asks for a final answer rather than erroring, and a turn the budget closed carries the `aiplane.tool_budget_exhausted` signal (see [`gateway-api.md`](gateway-api.md#tool-round-budget)). Final response carries an `x-gateway-tool-rounds` header.
-4. **`Acquired::drop`** releases the in-flight slot. The pool's atomic counter decrements on the next pick.
+1. **Authenticate the credential.** `aiplane_runtime::rama_server::auth::require_bearer` accepts a gateway bearer or `x-api-key`, resolves a person or system principal, and applies the credential's effective restrictions.
+2. **Resolve access and routing.** The requested model can name a real model, an alias or an automatic route. The proxy checks pool access, model restrictions and applicable limits before upstream work.
+3. **Execute the appropriate path.** With no gateway-owned tool layer, the proxy forwards the request and relays the response. With gateway tools, it combines gateway and client tool definitions and drives buffered or streamed upstream rounds. It executes gateway-owned calls and returns client-owned calls to the client. The round budget bounds the turn and requests a final answer when exhausted; see [the gateway contract](gateway-api.md#tool-round-budget).
+4. **Release capacity.** An `Acquired` guard holds the backend's in-flight slot for the lifetime of the request/response work and releases it on drop.
 
 ## Request flow: chat (JSON over SSE)
 
 Submitting and reading a reply are two separate requests — the SPA holds one long-lived stream open per conversation and posts messages into it.
 
 1. **`POST /api/v0/chat/sessions/{id}/messages`** (`pages::chat::json_api::message_send`) resolves the user from the session cookie, confirms they own the session, and reads the body (multipart when there are attachments).
-2. It registers a per-user **worker** slot (a broadcast channel keyed by the user id). A second concurrent submit for the same user is refused rather than racing a parallel stream.
+2. Submission uses the existing worker registry and durable work queue. The server returns `placement: started`, `folded` or `queued`: a message starts work, joins running work or waits for capacity. The client renders that server decision rather than maintaining its own submission queue.
 3. It persists the user turn + an `in_progress` assistant turn, auto-titles the session (a heuristic title synchronously, then a background LLM-generated one), and spawns the assistant worker. The worker drives the model — tool-call loop and reasoning included — writing every increment to SQLite and pushing a `TurnUpdate` onto its broadcast after each write. It runs to completion whether or not anyone is listening.
 4. **`GET /api/v0/chat/sessions/{id}/events`** (`session_core::chat_json`) is the read side. It emits a `snapshot` rebuilt from the DB, then subscribes to the broadcast and, on each coalesced flush (≥120 ms), diffs the turn row against what this subscriber has already seen and emits `turn_delta` / `reasoning_delta` / `tool_call_started` / `tool_call_done` / `turn_finalized`. It closes on `turn_finalized`, or emits `idle` and closes when no worker is live.
 5. **Reconnect is just re-attach.** There is no `Last-Event-ID` replay because the DB *is* the replayer: the snapshot on attach subsumes anything missed. That is why closing a tab mid-stream loses nothing.

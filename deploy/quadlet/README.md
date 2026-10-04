@@ -56,7 +56,7 @@ Generate the service unit, then start it:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now aiplane.service
+sudo systemctl start aiplane.service
 
 # Logs + status:
 journalctl -u aiplane.service -f
@@ -95,7 +95,7 @@ sudo install -m 0600 deploy/quadlet/google-workspace-mcp.example.env \
      /etc/aiplane/google-workspace-mcp.env
 sudo $EDITOR /etc/aiplane/google-workspace-mcp.env     # OAuth client + URLs + signing key
 sudo systemctl daemon-reload
-sudo systemctl enable --now google-workspace-mcp.service
+sudo systemctl start google-workspace-mcp.service
 ```
 
 **Don't drop the `.volume` unit.** This server is the authorization server for
@@ -141,7 +141,7 @@ sudo cp deploy/quadlet/gitlab-mcp.container /etc/containers/systemd/
 sudo install -m 0644 deploy/quadlet/gitlab-mcp.example.env /etc/aiplane/gitlab-mcp.env
 sudo $EDITOR /etc/aiplane/gitlab-mcp.env               # GITLAB_API_URL=https://<your-gitlab>/api/v4
 sudo systemctl daemon-reload
-sudo systemctl enable --now gitlab-mcp.service
+sudo systemctl start gitlab-mcp.service
 ```
 
 The unit joins `llm.network` (same as AIplane + other MCP sidecars) with no
@@ -173,7 +173,7 @@ sudo cp deploy/quadlet/discord-mcp.container /etc/containers/systemd/
 sudo install -m 0600 deploy/quadlet/discord-mcp.example.env /etc/aiplane/discord-mcp.env
 sudo $EDITOR /etc/aiplane/discord-mcp.env              # DISCORD_TOKEN=... (Developer Portal → Bot)
 sudo systemctl daemon-reload
-sudo systemctl enable --now discord-mcp.service
+sudo systemctl start discord-mcp.service
 ```
 
 Then, as a gateway admin, open **`/admin/connectors`**, **Enable** Discord and
