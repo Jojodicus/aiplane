@@ -255,9 +255,18 @@ CREATE TABLE agent_shares (
 - A share names a user or group that exists: a user id from `users`, a group
   the RBAC resolver knows (`Resolver::has_group` — database groups, which the
   `[rbac]` config seeds, and the bootstrap admin group). The sharing panel
-  picks them from `GET /api/v0/agent-resources` → `subjects` (users with name
-  and address, groups; each marked `manager` when a `read` or `write` share
-  would take effect), never as free text.
+  picks them from a search, never as free text:
+  `GET /api/v0/agents/{id}/share-subjects?q=`, for whoever may change the
+  shares (`write`). *Chosen (privacy):* holding `can_manage_agents` must not
+  hand anyone the people directory, which only admins list
+  (`/api/v0/admin/users`). So it answers a search, never a roster: nothing
+  for a query under two characters, at most eight users and eight groups
+  (name or address contains it, case-insensitive; `users::search`), a user
+  as id and display name, their address only when the query is exactly it,
+  and no hint whether a subject holds the agent-management permission. The
+  share route says so when it does not (`422 share_needs_agent_manager`,
+  naming `respond` as what can still be given). A share in the list carries
+  the person's display name, for whoever may see the shares.
 
 **Grants are not versioned.** They belong to the principal and persist until
 reconfigured, as decided. If a live spec references a tool whose grant was
@@ -488,6 +497,7 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 | GET | `/api/v0/agents/{id}/shares` | read | The shares |
 | POST | `/api/v0/agents/{id}/shares` | write | `{subject_kind: user\|group, subject_id, access: respond\|read\|write}`; 404 for a user or group that does not exist, 422 `share_needs_agent_manager` if a `read` or `write` holder lacks the permission |
 | POST | `/api/v0/agents/{id}/shares/revoke` | write | `{subject_kind, subject_id}` |
+| GET | `/api/v0/agents/{id}/share-subjects?q=` | write | `{users: [{id, name, email?}], groups: [name]}`: at most 8 of each matching `q`, nothing under 2 characters, `email` only on an exact address match (§2 Shares) |
 | DELETE | `/api/v0/agents/{id}` | write | Delete the agent and its principal |
 
 An invalid spec is `422` with `error.code = "invalid_agent_spec"`. The

@@ -156,12 +156,27 @@ pub(super) fn agent_json(a: &agents_db::AgentRow, access: Access) -> Value {
     })
 }
 
-fn share_json(s: &agents_db::ShareRow) -> Value {
-    json!({
-        "subject_kind": s.subject_kind.as_str(),
-        "subject_id": s.subject_id,
-        "access": s.access.as_str(),
-    })
+/// The shares as the API shows them: a person's share carries their display
+/// name, so the people an agent is shared with are recognisable by whoever
+/// may see its shares.
+async fn shares_json(state: &RamaState, rows: &[agents_db::ShareRow]) -> Result<Value, Response> {
+    let mut out = Vec::with_capacity(rows.len());
+    for s in rows {
+        let mut v = json!({
+            "subject_kind": s.subject_kind.as_str(),
+            "subject_id": s.subject_id,
+            "access": s.access.as_str(),
+        });
+        if s.subject_kind == SubjectKind::User
+            && let Some(u) = users::find_by_id(&state.db, &s.subject_id)
+                .await
+                .map_err(internal)?
+        {
+            v["name"] = json!(u.name);
+        }
+        out.push(v);
+    }
+    Ok(Value::Array(out))
 }
 
 fn version_json(v: &agents_db::VersionRow) -> Value {
@@ -447,7 +462,7 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         .iter()
         .map(super::json_principals::grant_json)
         .collect();
-    v["shares"] = shares.iter().map(share_json).collect();
+    v["shares"] = or_return!(shares_json(&state, &shares).await);
     v["audit"] = audit
         .iter()
         .map(|e| {
@@ -763,13 +778,58 @@ pub async fn set_live(State(state): State<Arc<RamaState>>, req: Request) -> Resp
 pub async fn shares(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 1, Access::Read).await);
-    match agents_db::shares(&state.db, &agent.principal.id).await {
-        Ok(rows) => json_ok(
-            StatusCode::OK,
-            json!({ "shares": rows.iter().map(share_json).collect::<Vec<_>>() }),
-        ),
-        Err(err) => internal(err),
+    let rows = match agents_db::shares(&state.db, &agent.principal.id).await {
+        Ok(rows) => rows,
+        Err(err) => return internal(err),
+    };
+    let shares = or_return!(shares_json(&state, &rows).await);
+    json_ok(StatusCode::OK, json!({ "shares": shares }))
+}
+
+/// The shortest query a share-subject search answers.
+const SUBJECT_QUERY_MIN_CHARS: usize = 2;
+/// The most users, and the most groups, one search returns.
+const SUBJECT_MATCHES: usize = 8;
+
+/// GET /api/v0/agents/{id}/share-subjects?q= — the users and groups matching
+/// `q`, for whoever may change the agent's shares. A search, never a roster:
+/// nothing for a query shorter than [`SUBJECT_QUERY_MIN_CHARS`], at most
+/// [`SUBJECT_MATCHES`] of each, a user as id and display name, their address
+/// only when `q` is exactly it. Whether a subject may hold `read` or `write`
+/// is not shown; the share route says so when it may not.
+pub async fn share_subjects(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    let user = or_return!(require_agent_manager(&state, &req).await);
+    or_return!(agent_at(&state, &req, &user, 1, Access::Write).await);
+    let q = super::query_map(&req)
+        .get("q")
+        .map(|q| q.trim().to_string())
+        .unwrap_or_default();
+    if q.chars().count() < SUBJECT_QUERY_MIN_CHARS {
+        return json_ok(StatusCode::OK, json!({ "users": [], "groups": [] }));
     }
+    let found = match users::search(&state.db, &q, SUBJECT_MATCHES as i64).await {
+        Ok(found) => found,
+        Err(err) => return internal(err),
+    };
+    let users: Vec<Value> = found
+        .into_iter()
+        .map(|u| {
+            let mut v = json!({ "id": u.id, "name": u.name });
+            if u.email.eq_ignore_ascii_case(&q) {
+                v["email"] = json!(u.email);
+            }
+            v
+        })
+        .collect();
+    let needle = q.to_lowercase();
+    let groups: Vec<String> = state
+        .rbac
+        .group_names()
+        .into_iter()
+        .filter(|g| g.to_lowercase().contains(&needle))
+        .take(SUBJECT_MATCHES)
+        .collect();
+    json_ok(StatusCode::OK, json!({ "users": users, "groups": groups }))
 }
 
 #[derive(Deserialize)]

@@ -322,27 +322,22 @@ test('a grant option is labelled by its title, with the reference when one item 
 	assert.deepEqual(grantOptions(resources, 'skill'), []);
 });
 
-test('a share subject is picked from the users and groups that exist; read and write offer only managers', () => {
-	const subjects = {
+test('a share subject is picked from what the search found, by name where there is one', () => {
+	const found = {
 		users: [
-			{ id: 'u1', name: 'Ada', email: 'ada@example.com', manager: true },
-			{ id: 'u2', name: null, email: 'sam@example.com', manager: false }
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: null, email: 'sam@example.com' },
+			{ id: 'u3', name: null }
 		],
-		groups: [
-			{ name: 'managers', manager: true },
-			{ name: 'support', manager: false }
-		]
+		groups: ['managers']
 	};
-	assert.deepEqual(shareSubjectOptions(subjects, 'user', 'respond'), [
-		{ value: 'u1', label: 'Ada <ada@example.com>' },
-		{ value: 'u2', label: 'sam@example.com' }
+	assert.deepEqual(shareSubjectOptions(found, 'user'), [
+		{ value: 'u1', label: 'Ada' },
+		{ value: 'u2', label: 'sam@example.com' },
+		{ value: 'u3', label: 'u3' }
 	]);
-	assert.deepEqual(shareSubjectOptions(subjects, 'user', 'read'), [{ value: 'u1', label: 'Ada <ada@example.com>' }]);
-	assert.deepEqual(shareSubjectOptions(subjects, 'group', 'write'), [{ value: 'managers', label: 'managers' }]);
-	assert.deepEqual(shareSubjectOptions(subjects, 'group', 'respond').map((o) => o.value), ['managers', 'support']);
-	assert.deepEqual(shareSubjectOptions(undefined, 'user', 'respond'), []);
-
-	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'user', subject_id: 'u2' }), 'sam@example.com');
-	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'user', subject_id: 'gone' }), 'gone');
-	assert.equal(shareSubjectLabel(subjects, { subject_kind: 'group', subject_id: 'support' }), 'support');
+	assert.deepEqual(shareSubjectOptions(found, 'group'), [{ value: 'managers', label: 'managers' }]);
+	assert.deepEqual(shareSubjectOptions(undefined, 'user'), []);
+	assert.equal(shareSubjectLabel({ subject_id: 'u1', name: 'Ada' }), 'Ada');
+	assert.equal(shareSubjectLabel({ subject_id: 'support' }), 'support');
 });

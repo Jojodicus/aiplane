@@ -348,6 +348,10 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             "/api/v0/agents/{id}/shares/revoke",
             pages::json_agents::revoke_share,
         )
+        .with_get(
+            "/api/v0/agents/{id}/share-subjects",
+            pages::json_agents::share_subjects,
+        )
         .with_get("/api/v0/agents/{id}/channels", pages::json_inbox::channels)
         .with_post(
             "/api/v0/agents/{id}/channels",

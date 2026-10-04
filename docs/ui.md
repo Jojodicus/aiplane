@@ -808,10 +808,12 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
 - **Workbench.** The agent workbench's Sharing panel (Settings tab) offers
   the `respond` level next to `read` and `write`: users or groups who answer
   the inbox and need no agent-management permission. The subject is picked
-  (`SearchableSelect`) from the users and groups that exist
-  (`GET /api/v0/agent-resources` → `subjects`); for `read` and `write` only
-  those holding the permission are offered (`shareSubjectOptions` in
-  `web/src/lib/agents.ts`). Below it, *Notification channels* (Slack or
+  with `SearchableSelect` in server-search mode (`onsearch`: the component
+  shows the caller's results unfiltered) from
+  `GET /api/v0/agents/{id}/share-subjects?q=` — a few matches from two
+  characters on, never the roster ([`agents.md`](agents.md) §2 Shares). A
+  subject that may not hold `read` or `write` is refused by the server, and
+  its message is shown. Below it, *Notification channels* (Slack or
   Discord incoming webhooks; the URL is write-only, the list shows its host,
   whether the message carries details, and its language). A `read` share sees
   both read-only.

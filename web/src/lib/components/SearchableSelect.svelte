@@ -18,7 +18,8 @@
 		class: className = '',
 		disabled = false,
 		onchange,
-		onchangemany
+		onchangemany,
+		onsearch
 	}: {
 		id?: string;
 		options: SearchOption[];
@@ -35,6 +36,10 @@
 		disabled?: boolean;
 		onchange?: (value: string) => void;
 		onchangemany?: (values: string[]) => void;
+		/** Search on the server: called with every query, and `options` are its
+		 * results as they arrive, shown unfiltered. For lists that must not be
+		 * handed to the browser whole. */
+		onsearch?: (query: string) => void;
 	} = $props();
 
 	let root = $state<HTMLDivElement>();
@@ -44,7 +49,7 @@
 	let open = $state(false);
 	let query = $state('');
 	let activeIndex = $state(0);
-	let filtered = $derived(filterSearchOptions(options, query));
+	let filtered = $derived(onsearch ? options : filterSearchOptions(options, query));
 	let selected = $derived(options.find((option) => option.value === value));
 	/* One predicate for "this row is part of the current selection", so the
 	 * check mark, the weight and `aria-selected` cannot disagree. */
@@ -126,6 +131,7 @@
 		place();
 		open = true;
 		query = '';
+		onsearch?.('');
 		const selectedIndex = options.findIndex(
 			(option) => !option.disabled && isChosen(option.value)
 		);
@@ -158,6 +164,11 @@
 
 	function search(event: Event) {
 		query = (event.currentTarget as HTMLInputElement).value;
+		if (onsearch) {
+			onsearch(query);
+			activeIndex = 0;
+			return;
+		}
 		const next = filterSearchOptions(options, query);
 		activeIndex = next.findIndex((option) => !option.disabled);
 	}
@@ -233,7 +244,7 @@
 			<label class="input input-sm flex w-full shrink-0 items-center gap-2">
 				<svg class="size-4 shrink-0 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
 				<input bind:this={searchInput} class="min-w-0 flex-1" value={query} oninput={search} onkeydown={onSearchKeydown} placeholder={t('searchable-select-search-placeholder')} aria-label={t('searchable-select-search-aria', { field: ariaLabel })} />
-				{#if query}<button type="button" class="btn btn-ghost btn-xs btn-circle" onclick={() => { query = ''; activeIndex = nextEnabledOptionIndex(options, -1, 1); void tick().then(() => searchInput?.focus()); }} aria-label={t('searchable-select-clear-search')}>✕</button>{/if}
+				{#if query}<button type="button" class="btn btn-ghost btn-xs btn-circle" onclick={() => { query = ''; onsearch?.(''); activeIndex = nextEnabledOptionIndex(options, -1, 1); void tick().then(() => searchInput?.focus()); }} aria-label={t('searchable-select-clear-search')}>✕</button>{/if}
 			</label>
 
 			{#if filtered.length > 0}

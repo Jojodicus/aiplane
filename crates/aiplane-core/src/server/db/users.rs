@@ -116,6 +116,33 @@ pub async fn list_all(pool: &Pool) -> Result<Vec<User>, DbError> {
     rows.iter().map(map_row).collect()
 }
 
+/// At most `limit` users whose name or email contains `query`, ignoring
+/// case; one whose email is exactly `query` first, then by name. Picks a
+/// person to share with without handing anyone the roster: the caller decides
+/// how short a query it serves and what of each match it shows.
+pub async fn search(pool: &Pool, query: &str, limit: i64) -> Result<Vec<User>, DbError> {
+    let pattern = format!(
+        "%{}%",
+        query
+            .to_lowercase()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let rows = sqlx::query(
+        r#"SELECT * FROM users
+           WHERE lower(coalesce(name, '')) LIKE ?1 ESCAPE '\' OR lower(email) LIKE ?1 ESCAPE '\'
+           ORDER BY lower(email) = lower(?2) DESC, lower(coalesce(name, email)), id
+           LIMIT ?3"#,
+    )
+    .bind(&pattern)
+    .bind(query)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(map_row).collect()
+}
+
 /// Updates just the `timezone` column for an existing user. Bumps
 /// `updated_at`. Called from the `POST /api/v0/me/timezone` handler
 /// after the browser's `Intl.DateTimeFormat().resolvedOptions().
@@ -271,6 +298,42 @@ mod tests {
         super::super::open(std::path::Path::new(":memory:"))
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn search_matches_name_or_email_capped_with_an_exact_email_first() {
+        let pool = pool().await;
+        for (id, name, email) in [
+            ("u1", Some("Ada Lovelace"), "ada@example.com"),
+            ("u2", Some("Adam Smith"), "adam@corp.test"),
+            ("u3", None, "zed_ada@example.com"),
+            ("u4", Some("Bob"), "bob@example.com"),
+        ] {
+            let mut u = fixture(id);
+            u.name = name.map(str::to_string);
+            u.email = email.into();
+            upsert(&pool, &u).await.unwrap();
+        }
+        let ids = |users: Vec<User>| users.into_iter().map(|u| u.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(search(&pool, "ADA", 10).await.unwrap()),
+            ["u1", "u2", "u3"]
+        );
+        assert_eq!(ids(search(&pool, "ada", 2).await.unwrap()).len(), 2);
+        assert_eq!(
+            ids(search(&pool, "adam@corp.test", 10).await.unwrap()),
+            ["u2"]
+        );
+        assert_eq!(
+            ids(search(&pool, "zed_ada@example.com", 10).await.unwrap())[0],
+            "u3",
+            "an exact address comes first"
+        );
+        assert!(
+            search(&pool, "%", 10).await.unwrap().is_empty(),
+            "wildcards are literal"
+        );
+        assert_eq!(ids(search(&pool, "d_a", 10).await.unwrap()), ["u3"]);
     }
 
     #[tokio::test]

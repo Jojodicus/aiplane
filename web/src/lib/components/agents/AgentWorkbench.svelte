@@ -127,7 +127,7 @@
 		/>
 	{:else if sub === 'sharing' && ws.detail}
 		<div class="space-y-6">
-			<SharingPanel agentId={ws.id} shares={ws.detail.shares} subjects={ws.resources?.subjects} writable={ws.writable} onchanged={() => ws.refresh(true)} />
+			<SharingPanel agentId={ws.id} shares={ws.detail.shares} writable={ws.writable} onchanged={() => ws.refresh(true)} />
 			<ChannelsPanel agentId={ws.id} writable={ws.writable} />
 			<EmbedKeysPanel agentId={ws.id} writable={ws.writable} />
 		</div>
