@@ -26,3 +26,6 @@
 >
 	{login ? t('login-source-link') : t('nav-source-line', { version })}
 </a>
+<a href="/docs/" class="link link-hover ml-3" data-sveltekit-reload>
+	{t('nav-documentation')}
+</a>

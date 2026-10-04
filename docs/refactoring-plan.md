@@ -1,5 +1,7 @@
 # Refactoring- & Dev-Speed-Plan
 
+> Repository-only historical record. This file preserves a past design, migration or audit snapshot; its completion claims, measurements, routes and examples are not the current product reference. Use the [documentation index](README.md) for current instructions.
+
 Ergebnis eines Codebase-weiten Sweeps (Ziel: Komplexität senken, Wartbarkeit
 erhöhen, Dev-Builds beschleunigen — **ohne Funktionsänderung**).
 

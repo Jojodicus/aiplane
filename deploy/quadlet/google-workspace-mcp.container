@@ -14,7 +14,7 @@
 #        /etc/aiplane/google-workspace-mcp.env
 #   sudo $EDITOR /etc/aiplane/google-workspace-mcp.env   # client id/secret + URLs
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now google-workspace-mcp.service
+#   sudo systemctl start google-workspace-mcp.service
 #
 # IMPORTANT — this server is NOT a purely internal sidecar. The OAuth consent
 # runs in the *user's browser*: gateway → this server's /authorize → Google →

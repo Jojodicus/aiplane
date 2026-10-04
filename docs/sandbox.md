@@ -449,7 +449,7 @@ against `SANDBOX_MAX_LEASES`).
 | Path | What |
 |---|---|
 | `crates/sandbox-runner/` | The runner service (warm pool, podman + OCI-runtime orchestration, `/run` API). |
-| `crates/aiplane-runtime/src/server/tools/sandbox.rs` | AIplane sandbox tools. |
+| `crates/aiplane-runtime/src/server/tools/sandbox/` | AIplane sandbox tools. |
 | `crates/shared/src/sandbox.rs` | The runner↔gateway wire contract. |
 | `sandbox-image/` | The gold workload image (`Containerfile` + `sandbox-agent`). |
 | `deploy/sandbox-runner/Containerfile` | The runner image — built by CI; the host runner binary is extracted from it. |

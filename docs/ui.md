@@ -300,11 +300,11 @@ refreshes this read model without restarting AIplane.
 
 ### Routes that are not `/api/v0`
 
-Six routes outlived the server-rendered pages because they are not a UI:
+Public triggers and provider authorization round trips use these routes outside `/api/v0`:
 
 | Route | Why it is not under `/api/v0` |
 |---|---|
-| `POST /hooks/{secret}`, `POST /hooks/rag/{token}` | Public triggers. The URL *is* the credential; a third party (a file host's webhook, a cron line) calls them. |
+| `GET /hooks/{secret}`, `POST /hooks/{secret}`, `POST /hooks/rag/{token}` | Public triggers. The URL *is* the credential; a third party (a file host's webhook, a cron line) calls them. |
 | `GET /rag/{id}/connect`, `GET /rag/oauth/callback` | RAG source OAuth round trip. The redirect URI is registered with an external provider, so the path is not ours to change. |
 | `POST /integrations/{key}/connect`, `POST /integrations/{key}/retry`, `GET /integrations/callback` | Per-user MCP connector OAuth, same shape. |
 

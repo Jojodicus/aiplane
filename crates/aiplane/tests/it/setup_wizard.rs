@@ -888,3 +888,23 @@ fn urlencoding_of(value: &str) -> String {
         .trim_start_matches("v=")
         .to_string()
 }
+
+#[tokio::test]
+async fn documentation_is_reachable_before_initial_setup() {
+    let state = unconfigured_state().await;
+    let app = service(Arc::new(state));
+    for path in [
+        "/docs",
+        "/docs/",
+        "/docs/llms.txt",
+        "/docs/search/search_index.json",
+    ] {
+        let resp = app.serve(common::req(Method::GET, path)).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{path} must reach the undeployed static handler"
+        );
+        assert!(resp.headers().get(rama::http::header::LOCATION).is_none());
+    }
+}

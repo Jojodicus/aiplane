@@ -13,7 +13,7 @@
 #   sudo install -m 0644 deploy/quadlet/gitlab-mcp.example.env /etc/aiplane/gitlab-mcp.env
 #   sudo $EDITOR /etc/aiplane/gitlab-mcp.env          # set GITLAB_API_URL
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now gitlab-mcp.service
+#   sudo systemctl start gitlab-mcp.service
 #
 # Then in the gateway: /admin/connectors → "GitLab (self-managed / CE)" → set the
 # MCP server URL to http://gitlab-mcp:3002/mcp → Save → Enable. Each user pastes

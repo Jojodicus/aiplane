@@ -63,3 +63,5 @@ login-page-title = Sign in — AIplane
 page-title-branded = { $title } — AIplane
 
 admin-access-heading = Zugriff & Limits
+
+nav-documentation = Dokumentation

@@ -1,5 +1,7 @@
 # Remote document sources for RAG — implementation plan
 
+> Repository-only historical record. This file preserves a past design, migration or audit snapshot; its completion claims, measurements, routes and examples are not the current product reference. Use the [documentation index](README.md) for current instructions.
+
 **Status: all four phases are implemented**, except ACL-faithful per-user filtering and provider delta feeds — see the end of [`fileshare-rag.md`](fileshare-rag.md). Both of the questions this feature exists to answer now work end to end. This document is the
 design agreement for indexing a customer's file host into AIplane's
 existing RAG subsystem. It started as "index a Nextcloud" and was widened, on

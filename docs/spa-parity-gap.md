@@ -1,5 +1,7 @@
 # The string corpus, and what the SPA port left behind
 
+> Repository-only historical record. This file preserves a past design, migration or audit snapshot; its completion claims, measurements, routes and examples are not the current product reference. Use the [documentation index](README.md) for current instructions.
+
 `crates/session-core/locales/<lang>/*.ftl` is the canonical string corpus for
 both halves of the product: the server renders a few strings itself (tool
 prompts, the OAuth callback pages, proxy errors) and the SPA renders the rest.

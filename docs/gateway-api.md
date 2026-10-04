@@ -16,6 +16,8 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | POST | `/v1/chat/completions`     | Bearer | Streaming + non-streaming. Server-side tool execution when the caller's token has tool grants (see [`tools-rbac.md`](tools-rbac.md)); otherwise a byte-for-byte passthrough. Routes to the `chat` pool. |
+| POST | `/v1/messages` | Bearer or `x-api-key` | Anthropic Messages compatibility, streaming and buffered replies; see [Claude Code](claude-code.md). |
+| POST | `/v1/messages/count_tokens` | Bearer or `x-api-key` | Anthropic-shaped input-token counting for client context management; see [Claude Code](claude-code.md). |
 | POST | `/v1/systemone`            | Bearer | TypeSafe System One-compatible typed decisions. Byte-dumb relay to the `system_one` pool; non-streaming. |
 | POST | `/v1/embeddings`           | Bearer | Single + batch. Byte-dumb relay to the `embedding` pool; non-streaming. |
 | POST | `/v1/images/generations`   | Bearer | JSON (`{model, prompt, size, …}`) in, OpenAI images envelope (`data[].b64_json` or `.url`) out. Byte-dumb relay to the `image` pool. |
@@ -26,7 +28,7 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | GET  | `/v1/models/{id}`          | Bearer | Retrieve a single model object, or `404 model_not_found` if no backend serves the id. `{id}` is a catch-all because model ids contain `/`. |
 | GET  | `/v1/sandbox/files/{run}/{filename}` | Bearer | Downloads a file a sandbox run produced for the caller, scoped to the caller's user (see `sandbox_api`). |
 | GET  | `/healthz`                 | none | Liveness. Returns `{"status":"ok"}`. |
-| GET  | `/readyz`                  | none | Readiness. Returns `{"status":"ok"}`. |
+| GET  | `/readyz`                  | none | Returns HTTP 200 and `{"status":"ok"}` after setup completes; before setup, HTTP 503 and `{"status":"setup_required"}`. This checks setup state, not upstream health. |
 
 `POST /v1/audio/translations` is **not** implemented — no route is registered.
 
@@ -61,7 +63,7 @@ The gateway's existing `GET /v1/models` remains OpenAI-shaped. The SDK's `system
 
 ## Authentication
 
-Every `/v1/*` call must send `Authorization: Bearer gwk_<64 hex chars>`. AIplane validates the token (SHA-256 lookup against active tokens) and resolves the caller's user before doing any work; on success it background-bumps the token's `last_used_at`. A missing, malformed, or unknown token gets a `401` with an OpenAI-shaped envelope and a `WWW-Authenticate: Bearer realm="gateway"` header:
+Every `/v1/*` call must supply a gateway credential using `Authorization: Bearer <token>` or `x-api-key: <token>`. The bearer header takes precedence. Person tokens use `gwk_`; system-principal tokens use `gws_` and resolve the principal's effective grants. Browser cookies do not authenticate `/v1/*`. AIplane validates active tokens by SHA-256 lookup before doing work. A missing, malformed, or unknown token gets a `401` with an OpenAI-shaped envelope and a `WWW-Authenticate: Bearer realm="gateway"` header:
 
 ```json
 {
@@ -131,7 +133,7 @@ A turn that calls a client-owned tool is handed back to the client as always, an
 `POST /v1/chat/completions` with `"stream": true` returns `text/event-stream`:
 
 - Upstream SSE frames are relayed 1:1 — AIplane does not reframe `data:` lines. The deltas are tapped in parallel through a repetition-based loop guard; a model that collapses into a loop is cut off with a terminating error chunk and `[DONE]`, while a long-but-progressing answer streams through untouched.
-- When the caller has tool grants, intermediate tool-loop rounds are executed against the upstream **non-streaming** even though the client asked for a stream; only the final round streams to the client.
+- The gateway-owned tool loop opens an upstream stream for each round. It accumulates tool-call deltas, suppresses gateway-owned calls from the client stream, executes them and continues with their results. Client-owned calls are handed back to the client. A budget-closing final round can be held until complete so ignored tool calls cannot leak into its answer.
 - This is distinct from the web UI's chat, which posts to `POST /api/v0/chat/sessions/{id}/messages` and reads `GET /api/v0/chat/sessions/{id}/events` — SSE carrying AIplane's own JSON event protocol (`snapshot`, `turn_delta`, `tool_call_done`, …), not OpenAI SSE. See [`ui.md`](ui.md#chat-streaming-the-json-event-protocol).
 
 ## Header handling
@@ -198,10 +200,12 @@ Status codes AIplane itself produces:
 |---|---|---|
 | `400` | `invalid_request` | Malformed body, missing `model`, unparseable multipart. |
 | `401` | `unauthorized` | Missing / malformed / unknown bearer token. |
+| `403` | `model_not_allowed` | The credential's model restriction excludes the requested model. |
+| `429` | `rate_limit_exceeded` | An applicable request, token or cost limit is exceeded; inspect the response and `Retry-After`. |
 | `404` | `model_not_found` | No backend in any pool serves the requested model. |
 | `500` | `internal_error` | Internal failure or unparseable upstream JSON. |
 | `502` | `upstream_unreachable` | A chosen backend was contacted but the transport/read failed. |
 | `502` | `tool_budget_exhausted` | Tool rounds ran, but the model never produced text, even in the closing round after the budget ran out. See [Tool-round budget](#tool-round-budget). |
 | `503` | `upstream_unreachable` | No healthy backend for the model's pool, or the pool is saturated. |
 
-There is no built-in per-user rate limiting today.
+The shared limit enforcer checks applicable subject, group, global and token rules. Pool metering policy participates in the decision. Configure limits through the administration surfaces and token quotas; see [access and limits](admin/access.md).

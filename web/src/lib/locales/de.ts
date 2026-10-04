@@ -1698,6 +1698,7 @@ export const de: Catalog = {
  "nav-connectors": "Konnektoren",
  "nav-conversations-label": "Unterhaltungen",
  "nav-delete-conversation": "Unterhaltung löschen",
+ "nav-documentation": "Dokumentation",
  "nav-flow-error-back": "Zurück zur App",
  "nav-flow-error-heading": "Diese Verbindung wurde nicht abgeschlossen",
  "nav-flow-error-title": "Verbindung fehlgeschlagen — AIplane",

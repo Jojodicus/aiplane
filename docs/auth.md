@@ -7,7 +7,7 @@ Two distinct concerns, often conflated; keep them separate in code and docs.
 
 ## Login (OIDC)
 
-We use the `openidconnect` crate (PKCE, discovery, code exchange) against any standards-compliant OIDC provider — Keycloak, Authentik, Auth0, Okta, Microsoft Entra, Google. The provider is configured by issuer URL; we never hard-code one.
+AIplane uses its own OIDC client in `aiplane_core::server::auth::oidc`, with `reqwest` for discovery and authorization-code exchange. It uses SHA-256 PKCE, state and nonce, verifies ID-token signatures against the provider's JWKS, and validates issuer, audience and token times. Configure the provider by issuer URL and register AIplane's callback URL with that provider.
 
 ### Config
 
@@ -61,13 +61,13 @@ to boot at all (it signs sessions and derives the at-rest key).
 
 Standard server-side OIDC:
 
-1. User hits a protected page → middleware sees no session → redirects to `/auth/login`.
-2. `/auth/login` generates PKCE verifier + state, stashes them in the session, and 302s to the provider's auth endpoint.
+1. The SPA detects a missing session and sends the browser to `/login`; the sign-in action starts `/auth/login`.
+2. `/auth/login` generates PKCE verifier, nonce and state, stores the pending flow in `pending_logins`, sets a browser-binding cookie, and redirects to the provider's authorization endpoint.
 3. Provider redirects back to `/auth/callback?code=…&state=…`.
 4. Gateway verifies state, exchanges code for ID/access tokens, validates the ID token signature, extracts subject + email + roles claim.
 5. Gateway upserts the user in SQLite, attaches the user id to the session, redirects to the originally requested page.
 
-Sessions are a hand-rolled `SessionStore` (see `rama_server::session`): an HMAC-SHA256-signed cookie `id=<session_id>.<hmac-b64url>` plus a row in the `sessions` table. The pending OIDC handshake (PKCE verifier + nonce + return_to) lives in `pending_logins`, keyed by the OIDC `state` parameter. Cookie attributes: `HttpOnly; Secure; SameSite=Lax`.
+Sessions use `SessionStore` (see `aiplane_core::rama_server::session`): an HMAC-SHA256-signed cookie `id=<session_id>.<hmac-b64url>` plus a row in the `sessions` table. The pending OIDC handshake (PKCE verifier + nonce + return_to) lives in `pending_logins`, keyed by the OIDC `state` parameter. The callback also checks that the browser-binding cookie matches the returned state. Session cookies use `HttpOnly`, `SameSite=Lax`, `Path=/` and `Max-Age`; `Secure` is set when the configured public URL uses HTTPS.
 
 ### Endpoints
 
@@ -75,11 +75,12 @@ Sessions are a hand-rolled `SessionStore` (see `rama_server::session`): an HMAC-
 |---|---|---|---|
 | GET  | `/auth/login`        | none | Start browser OIDC flow |
 | GET  | `/auth/callback`     | state cookie | OIDC redirect target — for a sign-in *and* for the wizard's test login, told apart by `pending_logins.purpose` |
-| POST | `/auth/logout`       | session | Clear session, revoke gateway tokens (optional) |
+| POST | `/auth/logout`       | session cookie when present | Delete that browser session and clear its cookie; API tokens remain active |
 | GET  | `/setup`             | open on a first run; one-time token in recovery | Setup wizard |
-| POST | `/setup/test`        | same | Stash the entered provider and start the test login |
-| POST | `/setup/restart`     | same | Discard the proven login, back to screen 1 |
-| POST | `/setup/finish`      | same | Persist, create the admin group, swap the live client in |
+| GET | `/api/v0/setup/state` | same | Read wizard state |
+| POST | `/api/v0/setup/test`        | same | Stash the entered provider and start the test login |
+| POST | `/api/v0/setup/restart`     | same | Discard the proven login, back to screen 1 |
+| POST | `/api/v0/setup/finish`      | same | Persist, create the admin group, swap the live client in |
 
 ## Ongoing API auth (gateway tokens)
 
@@ -108,21 +109,21 @@ Each token row carries:
 - `created_at`, `last_used_at`, `expires_at`
 - `revoked_at` (nullable)
 
-The web UI lets users name, list, and revoke their tokens. Token plaintext is shown **once**, on creation.
+The web UI lets users create, configure, rotate, revoke and remove their tokens at `/settings/tokens`. Token plaintext is revealed on creation and rotation, not returned by a normal listing. Tokens also carry tool policy and can have model restrictions and quotas. See [the token guide](guide/account-and-usage.md#create-an-api-token).
 
 ### Auth resolution on rama
 
 The rama proxy router resolves auth inline at the top of each handler (no middleware layer — rama Service-style handlers receive the full `Request` and run their own gate):
 
-1. Read `Authorization: Bearer …` *or* the signed session cookie.
+1. On `/v1/*`, read `Authorization: Bearer …` or `x-api-key`. The bearer header takes precedence; browser session cookies do not authenticate this surface.
 2. For bearer: hash + look up in `tokens`. Reject 401 on miss / revoked / expired.
-3. For session cookie: verify HMAC, look up `sessions` row, hydrate the `users` row.
-4. Bump `last_used_at` on bearer hits (debounced — at most once per minute per token).
+3. Resolve the token's owner and model restrictions.
+4. Update a person's token's `last_used_at` in the background. System-token touches use the separate debounced path described below.
 5. Build a `UserCtx` whose `principal` is `Principal::User { id, roles }`; the allowed-tools set is derived from it per request (`AppState::api_tool_layer`).
 
 A bearer starting `gws_` takes a different branch before any of this: see below.
 
-The distinction between API routes (`/v1/*`, `/api/v0/*`) and page routes (`/`, `/settings/tokens`, `/chat`) only matters for the *failure* mode: API routes return 401 JSON, page routes 303 to `/login`. The lookup itself is the same.
+Session-scoped `/api/v0/*` routes authenticate with the browser cookie and return JSON errors when authentication is missing. The SPA handles navigation to `/login`. API bearer authentication and browser-session authentication are distinct gates.
 
 ## System principals and `gws_` tokens
 

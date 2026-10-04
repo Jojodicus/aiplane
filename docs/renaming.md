@@ -5,6 +5,8 @@ Copyright (C) 2026 croit GmbH
 
 # croit LLM Gateway is now croit AIplane
 
+> Repository-only historical record. This file preserves a past design, migration or audit snapshot; its completion claims, measurements, routes and examples are not the current product reference. Use the [documentation index](README.md) for current instructions.
+
 Same software, same repository, same database. The product grew past the
 category its old name described: a gateway is one of the things AIplane does,
 not what it is.

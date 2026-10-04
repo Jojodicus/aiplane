@@ -13,6 +13,7 @@ export function gatewayDevProxy(target: string): Record<string, DevProxyTarget> 
 		'/healthz': gateway,
 		'/readyz': gateway,
 		'/openapi.json': gateway,
+		'/docs': gateway,
 		'/__dev': gateway,
 		'^/rag/(?:[^/]+/connect|oauth/callback)$': gateway,
 		'^/integrations/(?:callback|[^/]+/(?:connect|retry))$': gateway

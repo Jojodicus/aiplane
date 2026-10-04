@@ -55,7 +55,7 @@ The Rust binary and the UI build separately: `cargo build` needs no Node, and th
 
 CI runs the same scan in a dedicated `secret scan` job with `fetch-depth: 0`, which is the backstop for pushes made with `--no-verify` or from a clone where `setup-hooks` was never run.
 
-Credentials belong in `mise.local.toml` or the DB (sealed under `AIPLANE_ENCRYPTION_KEY`) — all gitignored or outside the tree. Tool configs that carry tokens (`.codex/`, editor/agent configs) should live in `$HOME`, not in the repo.
+Credentials belong in `mise.local.toml` or the DB (sealed with `AIPLANE_ENCRYPTION_KEY` when set, otherwise a key derived from `AIPLANE_SESSION_KEY`) — all gitignored or outside the tree. Tool configs that carry tokens (`.codex/`, editor/agent configs) should live in `$HOME`, not in the repo.
 
 Anything not covered: add a task to `mise.toml` rather than typing the raw command into a script. Discoverability matters.
 
@@ -265,7 +265,7 @@ and `target/` there instead.
 
 ## Layout while developing
 
-`mise run dev` starts Vite on public `127.0.0.1:8080` and `cargo run --package gateway` on private `127.0.0.1:8081`. Vite owns the browser origin and proxies every gateway-owned route, including `/chat/attachment/*`, OAuth callbacks, liveness endpoints, `/api`, `/v1`, and `/auth`. On startup the binary:
+`mise run dev` starts Vite on public `127.0.0.1:8080` and `cargo run --package aiplane` on private `127.0.0.1:8081`. Vite owns the browser origin and proxies every gateway-owned route, including `/chat/attachment/*`, OAuth callbacks, liveness endpoints, `/api`, `/v1`, and `/auth`. On startup the binary:
 
 - binds the private address supplied by the task (`127.0.0.1:8081`);
 - opens the SQLite database at `$AIPLANE_DB_PATH` (default `gateway.sqlite`) and runs migrations;
@@ -289,8 +289,8 @@ a stub gateway with mock backends and a pre-seeded session instead.
 
 Env config is layered through mise, not a `.env` file:
 
-- **`mise.toml` `[env]`** holds the non-secret defaults committed to the repo (`RUST_BACKTRACE=1`, `RUST_LOG=info,gateway=debug,aiplane_core=debug,aiplane_features=debug,aiplane_agents=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug`).
-- **`mise.local.toml` `[env]`** holds secrets and machine-local overrides — it is **gitignored**. This is where local dev keys go: `AIPLANE_SESSION_KEY`, `AIPLANE_OIDC_CLIENT_SECRET`, `AIPLANE_ENCRYPTION_KEY`, provider keys (`OPENAI_API_KEY`, `ZAI_API_KEY`, …), etc.
+- **`mise.toml` `[env]`** holds the non-secret defaults committed to the repo (`RUST_BACKTRACE=1`, `RUST_LOG=info,aiplane=debug,aiplane_core=debug,aiplane_features=debug,aiplane_agents=debug,aiplane_runtime=debug,aiplane_tools=debug,aiplane_api=debug`).
+- **`mise.local.toml` `[env]`** holds secrets and machine-local overrides — it is **gitignored**. This is where local dev keys go: `AIPLANE_SESSION_KEY`, `AIPLANE_ENCRYPTION_KEY`, provider keys (`OPENAI_API_KEY`, `ZAI_API_KEY`, …), etc.
 
 Web-search settings are **not** environment variables any more. Provider, SearXNG URL, Brave API key, and Tavily API key live in the database and are set under **Web search** on `/admin/settings?tab=web-search` (keys sealed at rest like every other gateway secret). `SEARCH_PROVIDER`, `SEARXNG_URL`, and `BRAVE_SEARCH_API_KEY` are still read at boot to fill settings that are still empty; there is no Tavily environment-variable import. Once a setting is present in the database, its environment variable is ignored.
 
@@ -301,21 +301,22 @@ Which env vars each subsystem needs is documented in `docs/auth.md` (OIDC) and `
 ### `RUST_LOG` and the crate split
 
 A tracing target is the *crate* a span or event was emitted from, so AIplane
-now emits under six targets rather than one:
+now emits under the following crate targets:
 
 | target | covers |
 |---|---|
-| `gateway` | router, `/v1` proxy, `/api/v0`, OIDC handlers, `main` |
+| `aiplane` | router, `/v1` proxy, `/api/v0`, OIDC handlers, `main` |
 | `aiplane_core` | config, DB, crypto, RBAC, upstreams, auth, sessions |
 | `aiplane_features` | RAG, skills, ComfyUI, push, geoip, typst discovery, attachments, PDF/OCR/speech |
+| `aiplane_agents` | agent tables, visitor rates and inbox channel notifications |
 | `aiplane_runtime` | the tool registry/catalog/runner, `AppState`, the chat driver, scheduler, webhooks |
 | `aiplane_tools` | the tool implementations (`fetch_url`, `search_web`, typst, document, …) |
 | `aiplane_api` | the `/api/v0` JSON handlers, including the chat event stream |
 
-A bare `RUST_LOG=info,gateway=debug` therefore only raises the level for the
+A bare `RUST_LOG=info,aiplane=debug` therefore only raises the level for the
 routing glue — page and tool logs stay at `info`. The committed defaults in
 `mise.toml`, `Dockerfile`, `deploy/compose.example.yml`, and
-`deploy/quadlet/gateway.container` all name the six targets explicitly.
+`deploy/quadlet/aiplane.container` all name these targets explicitly.
 
 **If you run AIplane from your own env or unit file, update `RUST_LOG` when
 you deploy this change** — an unchanged filter silently drops page and tool logs

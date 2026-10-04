@@ -116,6 +116,9 @@ COPY --chown=root:root --chmod=0644 target/release/libpdfium.so /usr/local/lib/l
 # `AIPLANE_STATIC_DIR` (rama_server::spa). Read-only layer: the handler
 # only reads.
 COPY --chown=gateway:gateway target/frontend/build /usr/share/gateway/ui
+RUN test -s /usr/share/gateway/ui/docs/index.html \
+ && test -s /usr/share/gateway/ui/docs/llms.txt \
+ && test -s /usr/share/gateway/ui/docs/search/search_index.json
 
 # The data directory AIPLANE_DATA_DIR points at, owned by the runtime user.
 # Without this the "one env var and a volume" quickstart fails on Docker: a

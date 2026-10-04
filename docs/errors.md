@@ -1,77 +1,39 @@
 # Error handling
 
-We treat error messages as a product surface — users hit them when something goes wrong, and a confusing message wastes someone's afternoon. This doc codifies how we structure errors so they stay useful.
+Error messages are a product surface. Write them so the reader understands the attempted operation, the cause and an actionable next step. This page separates implementation conventions from the observable HTTP envelopes.
 
-## Three tiers of error types
+## Implementation conventions
 
-| Tier | Where | Crate to use | Why |
-|---|---|---|---|
-| **Domain errors** that cross an API boundary (HTTP response, server-fn return, CLI exit code) | `shared`, public modules of `gateway` and `cli` | `thiserror` | Stable variant tags so callers can match. Each variant maps to a documented OpenAI-style `error.code`. |
-| **Internal errors** that bubble up through a binary | `gateway` server pipeline, `cli` command handlers | `anyhow` + `.context(...)` | Cheap to add context, preserves a chain of *what was being attempted*. |
-| **`panic!`** | Unreachable code only | — | A panic means a bug. Don't use panics for expected failure modes. |
+Use `thiserror` for typed errors crossing module or API boundaries. Use `anyhow` with `.context(...)` inside application pipelines to preserve what was being attempted. Treat a panic as a programming error, not an expected response to invalid input or an unavailable upstream.
 
-The boundary rule: **errors that an external observer sees** (HTTP body, CLI stderr, audit log) must be `thiserror`-typed. Inside a function, use `anyhow` freely.
+Prefer one useful context chain over repeatedly logging the same failure at every layer. Log sensitive internal details only at an appropriate boundary and return a safe message to the caller. User-visible application strings use the shared translation catalogs where the boundary supports them.
 
-## Anatomy of a good error message
+A useful message answers:
 
-Three things, in this order:
+1. What operation was being attempted?
+2. What went wrong?
+3. What can the reader do about it?
 
-1. **What was happening** — the operation, in plain language.
-2. **What went wrong** — the specific cause.
-3. **What to do about it** (when there's a non-trivial answer).
+For example, a model-access error should name the model and suggest listing accessible models or asking an administrator about permissions. This is a writing example, not a promise of the exact text every handler returns.
 
-Bad:
-```
-Error: forbidden
-```
+## HTTP envelopes
 
-Good:
-```
-Error: cannot call /v1/chat/completions
-Caused by: model `gpt-4o` is not granted to your role `finance`.
-Help: ask an admin to add the model to your role, or list available models with `GET /v1/models`.
-```
+The proxy, browser JSON API and Anthropic compatibility layer have separate protocol boundaries; there is no single `server::api::error::IntoResponse` module shared by them.
 
-In code that uses `anyhow`, build it with `.context()`:
+| Surface | Implementation | Envelope |
+| --- | --- | --- |
+| OpenAI-compatible proxy | `crates/aiplane/src/rama_server/proxy.rs` | `{"error":{"message":"…","type":"…","code":"…"}}` for gateway-generated errors |
+| Browser JSON API | `crates/aiplane-api/src/pages/mod.rs`, `json_error` and related helpers | `{"error":{"message":"…","type":"…","code":"…"}}`, with optional additional fields |
+| Anthropic compatibility | `crates/aiplane-core/src/server/anthropic/error.rs` and `crates/aiplane/src/rama_server/messages.rs` | Anthropic-shaped protocol errors |
 
-```rust
-let upstream = pool
-    .pick()
-    .ok_or_else(|| anyhow!("no healthy backend in pool `{}`", pool.name))
-    .with_context(|| format!("routing model `{}`", req.model))?;
-```
+In the proxy's general error helper, `type` and `code` use the supplied code. Model-not-found has the more specific OpenAI request-error shape, including `param: model`. Upstream error bodies can be relayed rather than rewritten. See [Gateway HTTP API](gateway-api.md#errors) and [Claude Code](claude-code.md) for the client contracts.
 
-`thiserror` variants carry structured fields; their `Display` impl produces the short form. The "help" line is added at the boundary where the error becomes user-facing — see `gateway::server::api::error::IntoResponse`.
-
-## Mapping to the OpenAI error shape
-
-The HTTP boundary in AIplane converts the internal error tree to:
-
-```json
-{ "error": { "message": "...", "type": "...", "code": "..." } }
-```
-
-- `message` — user-facing prose. May be multi-sentence. Includes the "help" line.
-- `type` — coarse class: `invalid_request_error`, `permission_denied`, `upstream_error`, `internal_error`.
-- `code` — stable machine-readable id matched 1:1 with a `thiserror` variant.
-
-The mapping lives in **one** place: `gateway::server::api::error`. Don't sprinkle `IntoResponse` impls across handlers.
-
-## Logging vs returning
-
-Don't log inside library code. Log at the boundary:
-- Gateway: the request middleware logs every `5xx` with the full error chain at WARN.
-
-Re-logging the same error at every level of a call stack produces noise. One log per error chain.
+Streaming errors must follow the stream's protocol: an HTTP status cannot be replaced after response headers have been sent. Clients should inspect terminal error events/chunks as well as the original HTTP status.
 
 ## Sensitive data
 
-Errors never include secrets — tokens, passwords, raw OIDC client secret. Use the `Redacted<T>` newtype in `shared` (`Debug` and `Display` print `***`) for any field that holds a secret. PII (emails, user ids) is fine; secrets are not.
+Do not include passwords, bearer credentials, client secrets or raw provider keys in returned messages or logs. Use the existing secret-handling and logging conventions of the relevant subsystem. Include personal data only when the operation requires it and the reader has permission to receive it.
 
 ## Testing errors
 
-Every `thiserror` variant gets at least one test that:
-- Provokes it through the normal pipeline.
-- Asserts the resulting `error.code` and `error.type`.
-
-This prevents drift — if the variant goes away or the code changes, tests break loudly.
+Exercise the actual failure through its boundary and assert the observable status, stable code and protocol envelope. Check that sensitive information is absent. For a streaming failure, assert the terminal event/chunk and closure behavior. Use state-based tests and real in-memory/database or mock upstream collaborators according to [the testing strategy](testing.md).

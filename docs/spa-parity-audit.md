@@ -1,5 +1,7 @@
 # SPA parity audit
 
+> Repository-only historical record. This file preserves a past design, migration or audit snapshot; its completion claims, measurements, routes and examples are not the current product reference. Use the [documentation index](README.md) for current instructions.
+
 This checklist tracks the Svelte migration against the production UI at
 `https://llm.croit.io`. A page is complete only when the production and local
 versions expose the same information and actions, follow the same information

@@ -1,47 +1,77 @@
-# Docs
+# croit AIplane documentation
 
-This directory holds the design docs for **croit AIplane**. The agent-facing entry point lives at [`/AGENTS.md`](../AGENTS.md); start there. These files go deeper on specific subsystems — the OpenAI-compatible LLM gateway is one of them, not the product.
+Connect your users and applications to models, tools, agents and company
+knowledge. This manual explains the current application, the permissions and
+services each capability needs, and how to operate it.
 
-## Index
+![A conversation in croit AIplane, showing a model response, an approved tool call and the resulting answer. The conversation uses synthetic demo data.](img/guide/chat-overview.png)
 
-| Doc | What it covers |
+*A conversation can combine a model response with an approved tool. This example uses synthetic demo data.*
+
+## How AIplane fits together
+
+AIplane connects people and applications to the models they are allowed to use,
+and gives those models access to approved tools and company knowledge. People
+can work in the chat interface; applications can use the OpenAI-compatible API.
+Models may run on your own infrastructure or come from a provider. Integrations
+and knowledge sources depend on what the installation has enabled and configured.
+
+![Overview of users and applications connecting through croit AIplane to model providers, tools and company knowledge.](img/architecture.svg)
+
+*The diagram shows the main connections around AIplane. Available providers,
+integrations and features vary with each installation's configuration.*
+
+## Start here
+
+- **Installing AIplane:** [Get started](getting-started.md) takes you from
+  prerequisites through setup to your first chat and API request.
+- **Joining an existing installation:** [Start using AIplane](guide/getting-started.md).
+- **Operating a deployment:** [Deployment](operations/deployment.md),
+  [backups and recovery](operations/backup-recovery.md), and
+  [troubleshooting](operations/troubleshooting.md).
+
+## Use AIplane
+
+| Task | Guide |
 |---|---|
-| [`renaming.md`](renaming.md) | **croit LLM Gateway → croit AIplane** — what the rename changed, what kept its old name and why, and what an upgrade needs from you (images, environment variables, Helm, the at-rest key) |
-| [`architecture.md`](architecture.md) | High-level system diagram, request flow, crate boundaries |
-| [`dev-workflow.md`](dev-workflow.md) | mise tasks, two-terminal dev loop (cargo + tailwind --watch), and the traps that have cost us time (git-env leaks through hooks, pushing at a sibling worktree, daisyUI 4 classes) |
-| [`dependencies.md`](dependencies.md) | Dep policy + the current allowed list and rationale |
-| [`auth.md`](auth.md) | OIDC discovery, gateway-minted tokens, sessions |
-| [`gateway-api.md`](gateway-api.md) | OpenAI-compatible HTTP API, streaming, transcription |
-| [`upstreams.md`](upstreams.md) | Provider config, model→backend routing, load balancing, health |
-| [`automatic-routing.md`](automatic-routing.md) | Provider-neutral virtual model aliases, System One selection, fallback, session affinity, shadow rollout |
-| [`claude-code.md`](claude-code.md) | **Claude Code through AIplane** — the Anthropic Messages compatibility layer at `/v1/messages`: setup, model aliasing, what is translated, and the known limits |
-| [`tools-rbac.md`](tools-rbac.md) | Tool registry, role→tool mapping, server-side execution loop |
-| [`tools-inventory.md`](tools-inventory.md) | Every tool id with its registration gate, toggle key, and whether it is chat-only (CI-drift-guarded) |
-| [`file-conversions.md`](file-conversions.md) | How uploads are read and documents produced/converted — tools, formats, expectations, limitations, gaps |
-| [`releases.md`](releases.md) | **Versioning + releases** — the date-based `YYMM.RELEASE.BUILD` scheme (shared with croit ERP), where the number comes from, image/chart tag ownership, and how a release is cut |
-| [`kubernetes.md`](kubernetes.md) | **Running on Kubernetes** — the Helm chart in `deploy/helm/`: step-by-step install, the session key, day-2 operations, backups, MCP sidecars, the sandbox options, and why it is one replica |
-| [`ocr.md`](ocr.md) | Internal document-OCR sidecar contract and Unlimited-OCR deployment requirements |
-| [`fileshare-rag.md`](fileshare-rag.md) | **Fileshare RAG** — indexing a file share (Nextcloud, ownCloud, OpenCloud, WebDAV) into RAG: the provider abstraction, extraction ladder, document profiles, structured queries, incremental sync |
-| [`nextcloud-rag-plan.md`](nextcloud-rag-plan.md) | The design record behind `fileshare-rag.md`: what was decided and why, what is deliberately not built, and the cited external protocol behaviour |
-| [`browser-control.md`](browser-control.md) | **Browser control** — the Chrome extension that lets a conversation act in the user's own logged-in browser: user setup (`/tools/browser`), the transport over the chat session, the trust boundary, site access, publishing to the Chrome Web Store |
-| [`agents.md`](agents.md) | **Agents** — the trust rules, system principals and default-deny grants, agent definitions, shares, models, shared mechanisms, crate placement; the map of the agent docs below |
-| [`agent-spec.md`](agent-spec.md) | The agent spec: layout, validation, the typed `AgentSpec`, state slots, gates |
-| [`agent-runs.md`](agent-runs.md) | One agent run: system message, synthetic tools, call chain, router, sub-agents and loops, bound arguments, topic guard, output filter, side calls |
-| [`agent-hil.md`](agent-hil.md) | People in the loop: durable suspend/resume of agent runs, approvals, hand-offs, the inbox, notifications |
-| [`agent-visitors.md`](agent-visitors.md) | The public endpoint: embed keys, visitor sessions, rates, owner budget, retention, identity verifiers, voice, the widget |
-| [`agent-a2a.md`](agent-a2a.md) | A2A: serving an agent to other platforms, and external agents as route targets |
-| [`agent-activity-log.md`](agent-activity-log.md) | The hash-chained activity log of every agent, and the analytics derived from it |
-| [`agent-builder.md`](agent-builder.md) | What the builder runs on: test chat, grantable resources, evaluation, setup and prompt assistants, the agent architect, draft revisions |
-| [`embed.md`](embed.md) | **Embedding an agent** — the `<script>` snippet, attributes, theming, what the widget holds, CSP for host sites, trying it with `dev-ui` |
-| [`connectors.md`](connectors.md) | Per-user MCP connector catalog — operator setup for Google/GitHub/Atlassian/GitLab + troubleshooting |
-| [`ui.md`](ui.md) | The SvelteKit SPA in `web/` — how it is built and served, the generated OpenAPI contract, the chat event protocol, theming, PWA |
-| [`testing.md`](testing.md) | Test layers, mocking strategy, coverage targets |
-| [`errors.md`](errors.md) | Error type tiers, message anatomy, OpenAI mapping |
-| [`comfyui.md`](comfyui.md) | Headless ComfyUI worker — workflows, manifests, operator config |
+| Choose models, send messages, share, fork and export conversations | [Conversations](guide/chat.md) |
+| Upload files, edit canvas documents, inspect versions and download results | [Files and documents](guide/files-and-canvas.md) |
+| Enable capabilities, connect your accounts, use browser control and skills | [Tools and integrations](guide/tools-and-integrations.md) |
+| Manage preferences, tokens, notifications, usage and limits | [Your account](guide/account-and-usage.md) |
+| Schedule prompts, trigger webhooks and respond to pending decisions | [Automation and inbox](guide/automation-and-inbox.md) |
 
-## Editing rules
+## Administer the installation
 
-- One topic per file. If a doc grows past ~400 lines or starts to cover two distinct subjects, split it.
-- Code samples must compile (or be marked `// pseudocode`). If something is aspirational, say so.
-- Update docs in the same commit as the code change. If you change the auth flow, update `auth.md`.
-- Cross-link freely — a reader landing on any one doc should be able to find the related ones in two clicks.
+| Task | Guide |
+|---|---|
+| Connect upstreams, configure models, aliases and automatic routes | [Models and routing](admin/models.md) |
+| Manage users, groups, rights, tokens and limits | [Access administration](admin/access.md) |
+| Configure optional services and content policy | [Operator settings](admin/settings.md) |
+| Look up every declared operator field | [Settings reference](admin/settings-reference.md) |
+| Configure connector catalogs, audit activity and global skills | [Integrations](admin/integrations.md) |
+| Index and maintain knowledge collections and extraction profiles | [Knowledge](admin/knowledge.md) |
+
+## Build and publish agents
+
+- [Create an agent](agent-guide/create.md).
+- [Configure permissions](agent-guide/permissions.md).
+- [Test and publish](agent-guide/test-publish.md).
+- [Observe runs and handle decisions](agent-guide/run-observe.md).
+
+## Reference
+
+- [HTTP API](reference/api.md): model protocols, authentication and accepted endpoints.
+- [Environment and process](reference/environment.md).
+- [Tool inventory](tools-inventory.md): tool IDs, availability gates and dynamic families.
+- [Documentation website and LLM exports](documentation-system.md): where to read or download this build's documentation.
+
+## Read with a language model
+
+The built website contains `llms.txt`, `llms-full.txt`, and a `markdown/`
+directory with the published source pages. In an installation these are
+under `/docs/`; the public website carries the same formats. See
+[export details](documentation-system.md) for paths and build identity.
+
+The manual uses the application's actual behaviour. Optional capabilities
+require their configured services and grants; screenshots use synthetic data
+from the real application, including prerequisites, permissions and limits.
