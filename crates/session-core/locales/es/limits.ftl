@@ -30,6 +30,7 @@ limits-edit-heading = Editar límite
 limits-edit-submit = Guardar cambios
 limits-saved = límite guardado para { $subject }
 limits-subject-token = Token de API
+limits-subject-system = Agente
 
 # Tabla de reglas de la SPA: título, columna «gestionado por» y confirmación.
 limits-delete-confirm = ¿Eliminar esta regla?

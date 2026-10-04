@@ -30,6 +30,7 @@ limits-edit-heading = Edit limit
 limits-edit-submit = Save changes
 limits-saved = saved limit for { $subject }
 limits-subject-token = API token
+limits-subject-system = Agent
 
 # SPA rule table: its heading, the "managed by" column, and the delete prompt.
 limits-delete-confirm = Delete this rule?

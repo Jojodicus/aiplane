@@ -30,6 +30,7 @@ limits-edit-heading = Изменить лимит
 limits-edit-submit = Сохранить изменения
 limits-saved = лимит сохранён для { $subject }
 limits-subject-token = API-токен
+limits-subject-system = Агент
 
 # Таблица правил в SPA: заголовок, колонка «кем задано» и подтверждение удаления.
 limits-delete-confirm = Удалить это правило?

@@ -4,7 +4,7 @@
 	import { n, t } from '$lib/i18n.svelte';
 
 	let { data, onedit, onremove }: { data: AdminLimitsData; onedit: (rule: AdminLimitRule) => void; onremove: (rule: AdminLimitRule) => Promise<void> } = $props();
-	const subjectNames: LimitSubjectNames = { global: t('limits-subject-global'), role: t('limits-subject-role'), user: t('limits-subject-user'), token: t('limits-subject-token') };
+	const subjectNames: LimitSubjectNames = { global: t('limits-subject-global'), role: t('limits-subject-role'), user: t('limits-subject-user'), token: t('limits-subject-token'), system: t('limits-subject-system') };
 	function dimensionLabel(rule: AdminLimitRule): string {
 		return rule.dimension === 'cost' ? t('limits-dim-cost-short') : t(`limits-dim-${rule.dimension}`);
 	}

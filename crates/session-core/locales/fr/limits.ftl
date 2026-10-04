@@ -30,6 +30,7 @@ limits-edit-heading = Modifier la limite
 limits-edit-submit = Enregistrer les modifications
 limits-saved = limite enregistrée pour { $subject }
 limits-subject-token = Jeton d'API
+limits-subject-system = Agent
 
 # Tableau des règles de la SPA : titre, colonne « géré par » et confirmation.
 limits-delete-confirm = Supprimer cette règle ?

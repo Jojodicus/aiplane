@@ -220,9 +220,9 @@ reverse proxy that is *not* listed, every visitor shares the proxy's bucket.
 `limits::Enforcer::check_agent`. The spec's `publish.budget` (`monthly_cost`
 > 0 in the currency models are priced in, and/or `monthly_tokens` ≥ 1; no
 default) becomes month-window limits labelled `AgentSpec`. An operator may add
-a `limits` rule with subject **`system`** (subject id = the agent's id) at
-`/api/v0/admin/limits`; the admin limits page in the SPA offers no `system`
-subject, so that rule is set through the API. Each is its own ceiling — the
+a `limits` rule with subject **`system`** (subject id = the agent's id) on
+the admin limits page (subject "Agent", the agents listed by name) or at
+`/api/v0/admin/limits`. Each is its own ceiling — the
 tightest decides, none widens another — measured against
 `usage_events.agent_id`.
 

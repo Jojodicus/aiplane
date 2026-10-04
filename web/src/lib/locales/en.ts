@@ -1618,6 +1618,7 @@ export const en: Catalog = {
  "limits-saved": "saved limit for {subject}",
  "limits-subject-global": "Everyone (default)",
  "limits-subject-role": "Role",
+ "limits-subject-system": "Agent",
  "limits-subject-token": "API token",
  "limits-subject-user": "User",
  "limits-win-day": "Day",

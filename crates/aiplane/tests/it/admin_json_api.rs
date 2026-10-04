@@ -1066,6 +1066,10 @@ async fn limits_upsert_and_delete() {
     )
     .await;
     let parsed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert!(
+        parsed["agents"].is_array(),
+        "the limits page offers agents as a subject: {parsed}"
+    );
     let rule = parsed["limits"]
         .as_array()
         .unwrap()

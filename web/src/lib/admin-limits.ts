@@ -1,4 +1,4 @@
-export type LimitSubjectType = 'global' | 'role' | 'user' | 'token';
+export type LimitSubjectType = 'global' | 'role' | 'user' | 'token' | 'system';
 export type LimitDimension = 'requests' | 'tokens' | 'cost';
 export type LimitWindow = 'hour' | 'day' | 'week' | 'month';
 
@@ -17,6 +17,7 @@ export interface AdminLimitsData {
 	limits: AdminLimitRule[];
 	users: { id: string; email: string }[];
 	tokens: { id: string; name: string; owner: string }[];
+	agents: { id: string; name: string }[];
 	roles: string[];
 	models: string[];
 	currency: string;
@@ -27,9 +28,11 @@ export interface LimitSubjectNames {
 	role: string;
 	user: string;
 	token: string;
+	system: string;
 }
 
-export function limitSubjectName(subject: Pick<AdminLimitRule, 'subject_type' | 'subject_id'>, data: Pick<AdminLimitsData, 'users' | 'tokens'>): string {
+export function limitSubjectName(subject: Pick<AdminLimitRule, 'subject_type' | 'subject_id'>, data: Pick<AdminLimitsData, 'users' | 'tokens' | 'agents'>): string {
+	if (subject.subject_type === 'system') return data.agents.find((agent) => agent.id === subject.subject_id)?.name ?? subject.subject_id;
 	if (subject.subject_type === 'user') return data.users.find((user) => user.id === subject.subject_id)?.email ?? subject.subject_id;
 	if (subject.subject_type === 'token') {
 		const token = data.tokens.find((candidate) => candidate.id === subject.subject_id);
@@ -38,7 +41,7 @@ export function limitSubjectName(subject: Pick<AdminLimitRule, 'subject_type' | 
 	return subject.subject_id;
 }
 
-export function limitSubjectLabel(subject: Pick<AdminLimitRule, 'subject_type' | 'subject_id'>, data: Pick<AdminLimitsData, 'users' | 'tokens'>, names: LimitSubjectNames): string {
+export function limitSubjectLabel(subject: Pick<AdminLimitRule, 'subject_type' | 'subject_id'>, data: Pick<AdminLimitsData, 'users' | 'tokens' | 'agents'>, names: LimitSubjectNames): string {
 	if (subject.subject_type === 'global') return names.global;
 	return `${names[subject.subject_type]}: ${limitSubjectName(subject, data)}`;
 }

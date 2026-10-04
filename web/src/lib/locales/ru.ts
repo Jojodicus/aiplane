@@ -1634,6 +1634,7 @@ export const ru: Catalog = {
  "limits-saved": "лимит сохранён для {subject}",
  "limits-subject-global": "Все (по умолчанию)",
  "limits-subject-role": "Роль",
+ "limits-subject-system": "Агент",
  "limits-subject-token": "API-токен",
  "limits-subject-user": "Пользователь",
  "limits-win-day": "День",

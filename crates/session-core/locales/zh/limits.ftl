@@ -30,6 +30,7 @@ limits-edit-heading = 编辑限制
 limits-edit-submit = 保存更改
 limits-saved = 已保存 { $subject } 的限制
 limits-subject-token = API 令牌
+limits-subject-system = 智能体
 
 # SPA 规则表：标题、“来源”列与删除确认。
 limits-delete-confirm = 要删除此规则吗？

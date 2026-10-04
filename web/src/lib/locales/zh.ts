@@ -1603,6 +1603,7 @@ export const zh: Catalog = {
  "limits-saved": "已保存 {subject} 的限制",
  "limits-subject-global": "所有人（默认）",
  "limits-subject-role": "角色",
+ "limits-subject-system": "智能体",
  "limits-subject-token": "API 令牌",
  "limits-subject-user": "用户",
  "limits-win-day": "天",

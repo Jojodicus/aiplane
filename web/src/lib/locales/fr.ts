@@ -1618,6 +1618,7 @@ export const fr: Catalog = {
  "limits-saved": "limite enregistrée pour {subject}",
  "limits-subject-global": "Tout le monde (par défaut)",
  "limits-subject-role": "Rôle",
+ "limits-subject-system": "Agent",
  "limits-subject-token": "Jeton d'API",
  "limits-subject-user": "Utilisateur",
  "limits-win-day": "Jour",

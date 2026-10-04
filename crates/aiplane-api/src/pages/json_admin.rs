@@ -860,12 +860,27 @@ pub async fn limits_list(State(state): State<Arc<RamaState>>, req: Request) -> R
         .into_iter()
         .map(|t| serde_json::json!({ "id": t.id, "name": t.name, "owner": t.user_email }))
         .collect::<Vec<_>>();
+    let agents = match aiplane_agents::db::agents::list_all(&state.db).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|a| {
+                let name = if a.principal.display.is_empty() {
+                    a.principal.name
+                } else {
+                    a.principal.display
+                };
+                serde_json::json!({ "id": a.principal.id, "name": name })
+            })
+            .collect::<Vec<_>>(),
+        Err(err) => return internal(err),
+    };
     json_ok(
         StatusCode::OK,
         serde_json::json!({
             "limits": rules.iter().map(limit_json).collect::<Vec<_>>(),
             "users": users,
             "tokens": tokens,
+            "agents": agents,
             // Groups are database rows now, not `[[roles]]` in a config file.
             "roles": roles,
             "models": state.upstreams.all_models(),

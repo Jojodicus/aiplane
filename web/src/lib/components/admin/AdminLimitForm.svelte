@@ -16,7 +16,8 @@
 		{ value: '', label: t('limits-field-subject-id-ph') },
 		...(subjectType === 'role' ? data.roles.map((role) => ({ value: role, label: role })) : []),
 		...(subjectType === 'user' ? data.users.map((user) => ({ value: user.id, label: user.email, keywords: [user.id] })) : []),
-		...(subjectType === 'token' ? data.tokens.map((token) => ({ value: token.id, label: token.name, description: token.owner, keywords: [token.id] })) : [])
+		...(subjectType === 'token' ? data.tokens.map((token) => ({ value: token.id, label: token.name, description: token.owner, keywords: [token.id] })) : []),
+		...(subjectType === 'system' ? data.agents.map((agent) => ({ value: agent.id, label: agent.name, keywords: [agent.id] })) : [])
 	]);
 	let modelOptions = $derived([{ value: '', label: t('limits-all-models') }, ...data.models.map((candidate) => ({ value: candidate, label: candidate }))]);
 	$effect(() => {
@@ -46,7 +47,7 @@
 	<div class="card-body gap-3">
 		<h2 class="card-title text-base">{t(editing ? 'limits-edit-heading' : 'limits-add-heading')}</h2>
 		<form class="m-0 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-			<div class="flex flex-col gap-1"><label class="label-text text-xs opacity-70" for="limit-subject-type">{t('limits-field-subject')}</label><select id="limit-subject-type" class="select w-full" value={subjectType} onchange={changeSubjectType}><option value="global">{t('limits-subject-global')}</option><option value="role">{t('limits-subject-role')}</option><option value="user">{t('limits-subject-user')}</option><option value="token">{t('limits-subject-token')}</option></select></div>
+			<div class="flex flex-col gap-1"><label class="label-text text-xs opacity-70" for="limit-subject-type">{t('limits-field-subject')}</label><select id="limit-subject-type" class="select w-full" value={subjectType} onchange={changeSubjectType}><option value="global">{t('limits-subject-global')}</option><option value="role">{t('limits-subject-role')}</option><option value="user">{t('limits-subject-user')}</option><option value="token">{t('limits-subject-token')}</option><option value="system">{t('limits-subject-system')}</option></select></div>
 			<div class="flex flex-col gap-1"><label class="label-text text-xs opacity-70" for="limit-subject-id">{t('limits-field-subject-id')}</label><SearchableSelect id="limit-subject-id" options={subjectOptions} bind:value={subjectId} ariaLabel={t('limits-field-subject-id')} class="w-full" disabled={subjectType === 'global'} /></div>
 			<div class="flex flex-col gap-1"><label class="label-text text-xs opacity-70" for="limit-model">{t('limits-field-model')}</label><SearchableSelect id="limit-model" options={modelOptions} bind:value={model} ariaLabel={t('limits-field-model')} class="w-full" /></div>
 			<div class="flex flex-col gap-1"><label class="label-text text-xs opacity-70" for="limit-dimension">{t('limits-field-dimension')}</label><select id="limit-dimension" class="select w-full" bind:value={dimension}><option value="requests">{t('limits-dim-requests')}</option><option value="tokens">{t('limits-dim-tokens')}</option><option value="cost">{t('limits-dim-cost', { cur: data.currency })}</option></select></div>
