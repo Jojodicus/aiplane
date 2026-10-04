@@ -10,7 +10,8 @@
 //!
 //! - **The handoff** is the question and a small context built from state —
 //!   the visitor's last message and the slots as the model sees them (never a
-//!   verifier's or the host's value). The transcript goes along only when the
+//!   verifier's or the host's value), each under the `label` its manager gave
+//!   it (`state.<slot>.description`) when it has one. The transcript goes along only when the
 //!   route sets `transcript: true`. It is stored with the pause and shown in
 //!   the inbox; it is audited as `human_handoff` with the run chain.
 //! - **The answer** goes back through the main agent: it is the call's
@@ -120,9 +121,20 @@ async fn context(
         .view(schema)
         .into_iter()
         .filter(|v| v.status == SlotStatus::Set)
-        .map(|v| match v.value {
-            Some(value) => json!({ "slot": v.slot, "value": value }),
-            None => json!({ "slot": v.slot, "set_by": v.by }),
+        .map(|v| {
+            let mut slot = match v.value {
+                Some(value) => json!({ "slot": v.slot, "value": value }),
+                None => json!({ "slot": v.slot, "set_by": v.by }),
+            };
+            if let Some(label) = schema
+                .slot(&v.slot)
+                .and_then(|def| def.description.as_deref())
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+            {
+                slot["label"] = json!(label);
+            }
+            slot
         })
         .collect();
     let turns = chat::list_turns(&ctx.db, session)

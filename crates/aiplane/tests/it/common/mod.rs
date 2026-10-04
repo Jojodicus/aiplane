@@ -783,6 +783,111 @@ pub fn post_json(uri: &str, cookie: &str, body: &str) -> rama::http::Request {
         .unwrap()
 }
 
+/// `GET uri` as the person behind `cookie`: the status and the JSON body.
+pub async fn get_json(
+    state: &RamaState,
+    cookie: &str,
+    uri: &str,
+) -> (rama::http::StatusCode, serde_json::Value) {
+    let req = rama::http::Request::builder()
+        .method(rama::http::Method::GET)
+        .uri(uri)
+        .header("cookie", format!("id={cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app(state.clone()).serve(req).await.unwrap();
+    let status = resp.status();
+    let bytes = read_body(resp).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// `POST uri` with a JSON `body` as the person behind `cookie`.
+pub async fn post_for_json(
+    state: &RamaState,
+    cookie: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (rama::http::StatusCode, serde_json::Value) {
+    let resp = app(state.clone())
+        .serve(post_json(uri, cookie, &body.to_string()))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = read_body(resp).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// One test-chat message to `agent`'s draft, followed to where it stops:
+/// `POST …/test/messages`, then [`test_chat_settled`]. A refused message
+/// comes back as it was refused.
+pub async fn test_chat_turn(
+    state: &RamaState,
+    cookie: &str,
+    agent: &str,
+    body: serde_json::Value,
+) -> (rama::http::StatusCode, serde_json::Value) {
+    let (status, sent) = post_for_json(
+        state,
+        cookie,
+        &format!("/api/v0/agents/{agent}/test/messages"),
+        body,
+    )
+    .await;
+    if status != rama::http::StatusCode::ACCEPTED {
+        return (status, sent);
+    }
+    let session = sent["session_id"].as_str().unwrap();
+    let turn = sent["turn_id"].as_str().unwrap();
+    (
+        rama::http::StatusCode::OK,
+        test_chat_settled(state, cookie, agent, session, turn).await,
+    )
+}
+
+/// Test-chat turn `turn` as the page ends up showing it: its debug view
+/// (which waits for the turn to settle), then the turn as stored — status,
+/// answer, error, and the pause with the hand-off it waits on.
+pub async fn test_chat_settled(
+    state: &RamaState,
+    cookie: &str,
+    agent: &str,
+    session: &str,
+    turn: &str,
+) -> serde_json::Value {
+    use session_core::db as chat;
+    let (status, view) = get_json(
+        state,
+        cookie,
+        &format!("/api/v0/agents/{agent}/test/{session}/turns/{turn}/debug"),
+    )
+    .await;
+    assert_eq!(status, rama::http::StatusCode::OK, "{view}");
+    let row = chat::get_turn_with_tools(&state.db, session, turn)
+        .await
+        .unwrap()
+        .expect("the turn exists");
+    let mut suspension = serde_json::to_value(&row.suspension).unwrap();
+    if !view["handoff"].is_null() {
+        suspension["context"] = view["handoff"].clone();
+    }
+    serde_json::json!({
+        "session_id": session,
+        "turn_id": turn,
+        "status": row.turn.status,
+        "answer": (row.turn.status == chat::TurnStatus::Completed).then_some(row.turn.content),
+        "error": row.turn.error_message,
+        "suspension": suspension,
+        "draft_version": view["draft_version"],
+        "debug": view["debug"],
+    })
+}
+
 /// Seed a chat session for `user` with one in-progress assistant turn under
 /// `turn_id` — the unit the mid-turn feedback endpoints key on.
 pub async fn seed_turn(state: &RamaState, user: &str, turn_id: &str) {

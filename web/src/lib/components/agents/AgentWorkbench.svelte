@@ -87,7 +87,7 @@
 	</div>
 {/if}
 
-<div class="pt-1">
+<div data-agent-tab class={sub === 'test' ? 'flex min-h-0 flex-1 flex-col' : 'pt-1'}>
 	{#if tab === 'setup' && !advanced}
 		<SetupOverview onadvanced={() => navigate({ view: 'advanced', sub: null })} />
 	{:else if sub === 'edit'}

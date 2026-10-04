@@ -19,6 +19,10 @@ chat-error-turn-interrupted = Внутренняя ошибка прервала
 # turn-status line the server never renders itself.
 chat-list-empty = Пока нет бесед. Начните новую выше.
 chat-turn-stopped = остановлено
+chat-waiting-approval = Запустит { $tool } только после вашего одобрения.
+chat-waiting-value = Ждёт значение, которое можете ввести только вы. Оно передаётся инструменту, а не модели.
+chat-waiting-answer = Ждёт ответа человека.
+chat-composer-paused = Сначала одобрите или отклоните запрос выше; следующее сообщение ждёт этого решения.
 chat-prompt-heading = Ассистент спрашивает
 chat-prompt-placeholder = Введите ответ…
 chat-prompt-answer = Ответить

@@ -103,6 +103,10 @@ pub struct InboxItem {
     /// An approval's call — the innermost one, inside a sub-agent run too.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call: Option<WaitingCall>,
+    /// What an approved call would do, in the tool's own words (the
+    /// request's `message`, e.g. `schedule_action`'s preview).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     /// A handoff's context: the visitor's last message, the model's view of
     /// the slots, the transcript when the route hands it over.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -218,10 +222,12 @@ async fn item(
         SessionOwner::User(_) => None,
     };
     let waiting = innermost(&state.db, &p.suspension).await?;
-    let call = (waiting.kind == SuspensionKind::Approval).then(|| WaitingCall {
+    let approval = waiting.kind == SuspensionKind::Approval;
+    let call = approval.then(|| WaitingCall {
         name: waiting.tool_call.name.clone(),
         arguments: waiting.tool_call.arguments.clone(),
     });
+    let detail = approval.then(|| waiting.message.clone()).flatten();
     let context = handoff_of(p.suspension.run_context.as_ref()).cloned();
     Ok(InboxItem {
         id: p.suspension.request_id.clone(),
@@ -237,6 +243,7 @@ async fn item(
             .then(|| p.suspension.message.clone())
             .flatten(),
         call,
+        detail,
         context,
         options: p.suspension.kind.options().to_vec(),
         created_at: p.suspension.created_at,

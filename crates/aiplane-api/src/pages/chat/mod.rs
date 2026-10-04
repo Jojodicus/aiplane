@@ -84,6 +84,9 @@ mod title;
 #[derive(Debug)]
 pub(crate) enum SubmitTurnError {
     RateLimited,
+    /// The conversation waits for a decision on a paused turn; the message
+    /// was not stored. The text says which turn and what to do.
+    DecisionPending(String),
     /// A DB write failed; the message is the human-readable cause. Any worker
     /// slot reserved along the way has been released by the time this travels
     /// to the caller.
@@ -193,6 +196,24 @@ pub(crate) async fn submit_turn(
     ))
 }
 
+/// [`SubmitTurnError::DecisionPending`] while conversation `session_id` waits
+/// for a decision — the agent runs' rule ([`refuse_if_waiting`]).
+///
+/// [`refuse_if_waiting`]: aiplane_runtime::agents::run::refuse_if_waiting
+pub(crate) async fn refuse_while_paused(
+    state: &RamaState,
+    session_id: &str,
+) -> Result<(), SubmitTurnError> {
+    use aiplane_runtime::agents::profile::AgentRunError;
+    match aiplane_runtime::agents::run::refuse_if_waiting(state, session_id).await {
+        Ok(()) => Ok(()),
+        Err(err @ AgentRunError::DecisionPending { .. }) => {
+            Err(SubmitTurnError::DecisionPending(err.to_string()))
+        }
+        Err(err) => Err(SubmitTurnError::Db(err.to_string())),
+    }
+}
+
 /// One attempt at placing a message. `Ok(None)` means the conversation changed
 /// underneath it and the caller should try again.
 async fn submit_once(
@@ -203,17 +224,9 @@ async fn submit_once(
     user_msg: &str,
     req: &RequestCtx,
 ) -> Result<Option<SubmitOutcome>, SubmitTurnError> {
-    // A paused turn holds its conversation the way a running worker does, and
-    // there is no worker to fold into: the message waits for the decision.
-    if chat::suspended_turn_in_session(&state.db, &active.id)
-        .await
-        .map_err(|err| SubmitTurnError::Db(err.to_string()))?
-        .is_some()
-    {
-        return queue_for_later(state, user, active, submit, user_msg, req)
-            .await
-            .map(Some);
-    }
+    // A paused turn holds its conversation: a message now would run before
+    // the paused call, in a context its decision was not asked about.
+    refuse_while_paused(state, &active.id).await?;
 
     let assistant_turn_id = uuid::Uuid::new_v4().to_string();
     let outcome = state.chats.register(

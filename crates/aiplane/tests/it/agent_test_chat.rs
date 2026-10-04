@@ -2,9 +2,10 @@
 // Copyright (C) 2026 croit GmbH
 
 //! The agent builder's internal test chat end to end
-//! (`docs/agents.md` "What #90 built"): `POST /api/v0/agents/{id}/test-turn` runs the
-//! **draft** through the real run path on wiremock upstreams and returns the
-//! answer with the debug view only a manager gets.
+//! (`docs/agents.md` "What #90 built"): `POST /api/v0/agents/{id}/test/messages`
+//! runs the **draft** through the real run path on wiremock upstreams in the
+//! background; the conversation streams on `…/test/{session}/events`, and
+//! `…/turns/{turn}/debug` gives each turn's debug view only a manager gets.
 //!
 //! `alice` and `bob` hold `can_manage_agents`; `plain` holds nothing. The
 //! main agent (`support`) sets an `issue` slot, then `forward_request`
@@ -36,6 +37,7 @@ use aiplane_runtime::server::tools::time::CurrentTimestamp;
 struct Scripted {
     deltas: Vec<Value>,
     served: AtomicUsize,
+    delay: std::time::Duration,
 }
 
 impl wiremock::Respond for Scripted {
@@ -46,17 +48,26 @@ impl wiremock::Respond for Scripted {
             "data: {}\n\ndata: [DONE]\n\n",
             json!({"choices": [{"index": 0, "delta": delta}]})
         );
-        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+        ResponseTemplate::new(200)
+            .set_body_raw(sse, "text/event-stream")
+            .set_delay(self.delay)
     }
 }
 
 async fn llm(deltas: Vec<Value>) -> MockServer {
+    llm_after(deltas, std::time::Duration::ZERO).await
+}
+
+/// [`llm`], answering each round only after `delay`: long enough for a
+/// stream to attach while the turn still runs.
+async fn llm_after(deltas: Vec<Value>, delay: std::time::Duration) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(Scripted {
             deltas,
             served: AtomicUsize::new(0),
+            delay,
         })
         .mount(&server)
         .await;
@@ -143,8 +154,11 @@ fn chat_pool(upstream: &MockServer) -> UpstreamPoolConfig {
 }
 
 async fn fixture(main_script: Vec<Value>, tech_script: Vec<Value>) -> (Fx, MockServer) {
+    fixture_with(llm(main_script).await, tech_script).await
+}
+
+async fn fixture_with(main_llm: MockServer, tech_script: Vec<Value>) -> (Fx, MockServer) {
     let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
-    let main_llm = llm(main_script).await;
     let tech_llm = llm(tech_script).await;
     let guard_llm = off_topic_guard().await;
     let mut pools = HashMap::new();
@@ -166,7 +180,8 @@ async fn fixture(main_script: Vec<Value>, tech_script: Vec<Value>) -> (Fx, MockS
         app,
         SessionStore::new(pool.clone(), TEST_SECRET),
         aiplane_core::server::usage::UsageHandle::disabled(),
-    );
+    )
+    .with_agent_runner(Arc::new(aiplane_runtime::agents::embed::LiveAgentRunner));
     gateway_groups::upsert_group(&pool, "everyone", "", false, true)
         .await
         .unwrap();
@@ -276,8 +291,7 @@ impl Fx {
     }
 
     async fn turn(&self, cookie: &str, id: &str, body: Value) -> (StatusCode, Value) {
-        self.post(cookie, &format!("/api/v0/agents/{id}/test-turn"), body)
-            .await
+        common::test_chat_turn(&self.state, cookie, id, body).await
     }
 
     /// The published `tech` sub-agent and the unpublished `support` main
@@ -393,6 +407,90 @@ async fn a_draft_that_was_never_published_answers_with_the_manager_debug_view() 
         .map(|c| c["tool"].as_str().unwrap())
         .collect();
     assert_eq!(tools, ["set_issue", "forward_request"]);
+}
+
+#[tokio::test]
+async fn the_test_conversation_streams_like_any_chat_and_stays_out_of_the_inbox() {
+    let slow = llm_after(
+        vec![text("Streamed answer.")],
+        std::time::Duration::from_millis(400),
+    )
+    .await;
+    let (fx, _tech_llm) = fixture_with(slow, tech_script()).await;
+    let (support, _) = fx.support("Answer.").await;
+
+    let (status, sent) = fx
+        .post(
+            &fx.alice,
+            &format!("/api/v0/agents/{support}/test/messages"),
+            json!({ "message": "hello" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{sent}");
+    assert_eq!(sent["draft_version"], 0);
+    let session = sent["session_id"].as_str().unwrap();
+    let turn = sent["turn_id"].as_str().unwrap();
+
+    let resp = common::app(fx.state.clone())
+        .serve(
+            Request::builder()
+                .uri(format!("/api/v0/agents/{support}/test/{session}/events"))
+                .header("cookie", format!("id={}", fx.alice))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = tokio::time::timeout(std::time::Duration::from_secs(20), common::read_body(resp))
+        .await
+        .expect("the stream ends with the turn");
+    let frames: Vec<(String, Value)> = String::from_utf8_lossy(&body)
+        .split("\n\n")
+        .filter_map(|block| {
+            let event = block.lines().find_map(|l| l.strip_prefix("event: "))?;
+            let data = block.lines().find_map(|l| l.strip_prefix("data: "))?;
+            Some((event.to_string(), serde_json::from_str(data).unwrap()))
+        })
+        .collect();
+    let names: Vec<&str> = frames.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names.first(), Some(&"snapshot"), "{names:?}");
+    assert_eq!(frames[0].1["live_turn_id"], turn, "attached while it ran");
+    let streamed: String = frames
+        .iter()
+        .filter(|(n, f)| n == "turn_delta" && f["turn_id"] == turn)
+        .map(|(_, f)| f["text_delta"].as_str().unwrap())
+        .collect();
+    assert_eq!(streamed, "Streamed answer.");
+    assert_eq!(names.last(), Some(&"turn_finalized"), "{names:?}");
+
+    let done = common::test_chat_settled(&fx.state, &fx.alice, &support, session, turn).await;
+    assert_eq!(done["answer"], "Streamed answer.");
+    assert!(done["debug"]["routes"].is_array(), "{done}");
+
+    let (_, inbox) = fx
+        .send(&fx.alice, Method::GET, "/api/v0/agents/inbox", None)
+        .await;
+    assert_eq!(
+        inbox["count"], 0,
+        "a test conversation is never an inbox item"
+    );
+    for uri in [
+        format!("/api/v0/agents/{support}/test/nope/events"),
+        format!("/api/v0/agents/{support}/test/nope/turns/{turn}/debug"),
+    ] {
+        let (status, body) = fx.send(&fx.alice, Method::GET, &uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
+    }
+    let (status, _) = fx
+        .send(
+            &fx.plain,
+            Method::GET,
+            &format!("/api/v0/agents/{support}/test/{session}/events"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "not an agent manager");
 }
 
 #[tokio::test]

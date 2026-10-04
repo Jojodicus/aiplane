@@ -47,13 +47,11 @@ pub struct AgentReply {
     pub suspension: Option<chat::SuspensionView>,
 }
 
-/// Refuse a new message into a conversation that waits for a decision. The
-/// public endpoint queues the message instead (`docs/agents.md`); the
-/// synchronous entry points cannot.
-pub(crate) async fn refuse_if_waiting(
-    state: &RamaState,
-    session_id: &str,
-) -> Result<(), AgentRunError> {
+/// Refuse a new message into a conversation that waits for a decision: it
+/// would run before the paused call, in a context the decision was not asked
+/// about. The test chat and a person's own chat refuse; the public endpoint
+/// queues one message behind the decision instead (`docs/agents.md`).
+pub async fn refuse_if_waiting(state: &RamaState, session_id: &str) -> Result<(), AgentRunError> {
     match chat::suspended_turn_in_session(&state.db, session_id)
         .await
         .map_err(DbError::from)?

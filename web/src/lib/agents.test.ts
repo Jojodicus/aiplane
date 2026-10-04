@@ -25,9 +25,10 @@ import {
 	slotValueFromText,
 	splitList,
 	slotInfos,
-	suspensionLabel,
-	answerField,
 	testTurnLabel,
+	turnsToRead,
+	settleAnswered,
+	readFailure,
 	shareSubjectOptions,
 	shareSubjectLabel,
 	type SpecIssue
@@ -194,25 +195,6 @@ test('a closed gate is said with the slot’s label, a condition without a slot 
 	assert.equal(gateHint({ path: '', kind: 'unknown_route', message: 'there is no route `x`' }, 'x', tr), 'there is no route `x`');
 });
 
-test('a paused test turn says what it waits for', () => {
-	assert.equal(suspensionLabel('secure_input'), 'agents-test-waiting-secure-input');
-	assert.equal(suspensionLabel('approval'), 'agents-test-waiting-approval');
-	assert.equal(suspensionLabel('human_answer'), 'agents-test-waiting-human');
-});
-
-test('a staff answer is typed in the clear, a visitor secret masked', () => {
-	assert.deepEqual(answerField('human_answer'), {
-		secret: false,
-		label: 'inbox-answer-label',
-		submit: 'inbox-send-answer'
-	});
-	assert.deepEqual(answerField('secure_input'), {
-		secret: true,
-		label: 'agents-test-value-label',
-		submit: 'agents-test-answer'
-	});
-});
-
 test('renaming a key keeps its place and refuses a taken name', () => {
 	assert.deepEqual(Object.keys(renameKey({ a: 1, b: 2, c: 3 }, 'b', 'x')), ['a', 'x', 'c']);
 	assert.deepEqual(renameKey({ a: 1, b: 2 }, 'a', 'b'), { a: 1, b: 2 });
@@ -340,4 +322,41 @@ test('a share subject is picked from what the search found, by name where there 
 	assert.deepEqual(shareSubjectOptions(undefined, 'user'), []);
 	assert.equal(shareSubjectLabel({ subject_id: 'u1', name: 'Ada' }), 'Ada');
 	assert.equal(shareSubjectLabel({ subject_id: 'support' }), 'support');
+});
+
+test('the test chat reads each stopped answer once, never a running one or a message', () => {
+	const live = (id: string, role: string, status: string) => ({ turn: { id, role, status } });
+	const turns = [
+		live('u1', 'user', 'completed'),
+		live('a1', 'assistant', 'completed'),
+		live('a2', 'assistant', 'suspended'),
+		live('a3', 'assistant', 'in_progress')
+	];
+	assert.deepEqual(turnsToRead(turns, {}), ['a1', 'a2']);
+	assert.deepEqual(turnsToRead(turns, { a1: {} }), ['a2']);
+});
+
+test('an answered pause is read again only once the stream shows it moved on', () => {
+	const live = (id: string, status: string, request = 'r1') => ({
+		turn: { id, role: 'assistant', status },
+		suspension: status === 'suspended' ? { request_id: request } : null
+	});
+	const answered = { a2: 'r1' };
+	const still = [live('a1', 'completed'), live('a2', 'suspended')];
+	assert.deepEqual(settleAnswered(still, answered), answered, 'the stream has not reported the resume yet');
+	assert.deepEqual(turnsToRead(still, { a1: {} }, answered), [], 'no debug request for a turn that is about to run');
+	const running = [live('a1', 'completed'), live('a2', 'in_progress')];
+	assert.deepEqual(settleAnswered(running, answered), {});
+	assert.deepEqual(turnsToRead(running, { a1: {} }, {}), []);
+	const done = [live('a1', 'completed'), live('a2', 'completed')];
+	assert.deepEqual(settleAnswered(done, answered), {}, 'a resume that finished before the attach counts too');
+	assert.deepEqual(turnsToRead(done, { a1: {} }, {}), ['a2']);
+	const pausedAgain = [live('a2', 'suspended', 'r2')];
+	assert.deepEqual(settleAnswered(pausedAgain, answered), {}, 'paused again on a new request');
+	assert.deepEqual(turnsToRead(pausedAgain, {}, answered), ['a2']);
+});
+
+test('a debug view that is not ready yet is retried, any other failure is shown', () => {
+	assert.equal(readFailure({ status: 409, code: 'turn_in_progress', message: 'running', issues: [] }), 'retry');
+	assert.equal(readFailure({ status: 404, code: 'not_found', message: 'gone', issues: [] }), 'gone');
 });

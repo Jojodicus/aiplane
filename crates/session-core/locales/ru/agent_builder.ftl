@@ -277,11 +277,6 @@ agents-test-waiting-secure-input = Агент просит посетителя 
 agents-test-waiting-approval = Агент ждёт, пока сотрудник одобрит вызов { $tool }.
 agents-test-waiting-human = Агент ждёт ответа человека.
 agents-test-handoff-inbox-hint = В настоящем разговоре этот запрос появится во входящих у менеджеров и ответственных агента. Здесь, в тестовом чате, вы отвечаете на него сами.
-agents-test-value-label = Значение
-agents-test-answer = Передать инструменту
-agents-test-approve = Одобрить один раз
-agents-test-deny = Отклонить
-agents-test-expires = Истекает { $at }
 
 agents-debug-loop-worker = исполнитель, итерация { $iteration }
 agents-debug-loop-critic = критик, итерация { $iteration }

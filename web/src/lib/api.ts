@@ -332,6 +332,21 @@ export const api = {
 			{ method: 'POST' }
 		),
 
+	/**
+	 * POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume — answer what a
+	 * paused turn waits for. `202` once it runs again; the rest of the turn
+	 * arrives on the events stream.
+	 */
+	resumeChatTurn: (id: string, turnId: string, requestId: string, answer: { decision: string; value?: string }) =>
+		request<{ assistant_turn_id: string }>(
+			`/api/v0/chat/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/resume`,
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ...answer, request_id: requestId })
+			}
+		),
+
 	/** The events stream URL — for `new EventSource` (cookies ride along same-origin). */
 	chatEventsUrl: (id: string) => `/api/v0/chat/sessions/${encodeURIComponent(id)}/events`,
 

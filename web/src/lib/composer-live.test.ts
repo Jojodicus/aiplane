@@ -46,6 +46,11 @@ test('the composer textarea is never disabled', () => {
 	);
 });
 
+test('a conversation waiting for a decision keeps the draft but sends nothing', () => {
+	assert.match(sendFn, /\|\| paused\) return false/);
+	assert.match(conversation, /\{#if paused\}<p[^>]*role="status">\{t\('chat-composer-paused'\)\}/);
+});
+
 test('Enter means one thing again: send', () => {
 	const onKeydown = /function onKeydown[\s\S]*?\n\t\}/.exec(conversation)?.[0] ?? '';
 	assert.ok(onKeydown.includes('void send()'), 'Enter sends');

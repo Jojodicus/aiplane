@@ -1,15 +1,14 @@
 <script lang="ts">
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { agentsApi, type AgentError } from '$lib/agents';
-	import { canSend, conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '$lib/architect';
+	import { conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '$lib/architect';
 	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
 	import type { ToolCall } from '$lib/chat-protocol';
 	import { t } from '$lib/i18n.svelte';
 	import DictationButton from '$lib/components/chat/DictationButton.svelte';
-	import Markdown from '$lib/components/chat/Markdown.svelte';
-	import ToolCalls from '$lib/components/chat/ToolCalls.svelte';
+	import StreamedChat from '$lib/components/chat/StreamedChat.svelte';
 
 	/**
 	 * The architect's conversation, mounted while its window is open: it opens
@@ -30,12 +29,10 @@
 	let phase = $state<Phase>('starting');
 	let error = $state<string | null>(null);
 	let notice = $state<string | null>(null);
-	let text = $state('');
 	let model = '';
 	let controller = $state<ConversationController | null>(null);
 	let transcriptionModel = $state('');
 	let undone = $state<Record<string, boolean>>({});
-	let scroller = $state<HTMLDivElement | null>(null);
 
 	const turns = $derived(controller?.state.turns ?? []);
 	const working = $derived(controller?.state.liveTurnId != null);
@@ -63,19 +60,16 @@
 		}
 	}
 
-	async function send() {
-		if (!controller || !canSend(phase, text, controller.state.liveTurnId)) return;
-		const message = text.trim();
-		phase = 'sending';
+	async function send(message: string): Promise<boolean> {
+		if (!controller) return false;
 		error = null;
 		try {
 			await api.sendChatMessage(controller.id, { model, message });
-			text = '';
 			controller.attach();
+			return true;
 		} catch (err) {
 			error = (err as Error).message;
-		} finally {
-			phase = 'ready';
+			return false;
 		}
 	}
 
@@ -90,19 +84,6 @@
 			error = (err as AgentError).message;
 		}
 	}
-
-	function keydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-			event.preventDefault();
-			void send();
-		}
-	}
-
-	$effect(() => {
-		void turns.length;
-		void turns.at(-1)?.turn.content;
-		void tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
-	});
 
 	onMount(async () => {
 		void start(false);
@@ -125,64 +106,42 @@
 	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-warning text-sm" role="status"><span>{notice}</span></div>{/if}
 
-	<div bind:this={scroller} class="min-h-0 flex-1 overflow-y-auto rounded-box border border-base-300 bg-base-100 p-3" aria-live="polite">
-		{#if phase === 'starting'}
-			<p class="flex items-center gap-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-sm"></span>{t('architect-starting')}</p>
-		{:else if !turns.length}
-			<p class="m-0 text-sm text-base-content/60">{t('architect-empty')}</p>
-		{/if}
-		{#each turns as live (live.turn.id)}
-			{#if live.turn.role === 'user'}
-				<div class="chat chat-end">
-					<div class="chat-bubble border border-primary/20 bg-primary/10 text-base-content whitespace-pre-wrap">{live.turn.user_content}</div>
-				</div>
-			{:else}
-				<div class="chat chat-start">
-					<div class="chat-bubble flex w-full max-w-full flex-col gap-2 border border-base-300 bg-base-200 text-base-content">
-						{#if live.tool_calls.length}
-							<ToolCalls calls={live.tool_calls} label={toolLabel(t)} />
-							{@const path = agentId ? null : live.tool_calls.map(setupPath).findLast((p) => p !== null)}
-							<div class="flex flex-wrap gap-2">
-								{#each live.tool_calls as call (call.id)}
-									{#if undoTarget(call)}
-										{#if undone[call.id]}
-											<span class="badge badge-outline">{t('architect-undone')}</span>
-										{:else}
-											<button class="btn btn-xs" type="button" onclick={() => void undo(call)}>↶ {t('architect-undo')}</button>
-										{/if}
-									{/if}
-								{/each}
-								{#if path}<a class="btn btn-xs btn-ghost" href="{base}{path}">{t('architect-open-setup')}</a>{/if}
-							</div>
+	<StreamedChat
+		{turns}
+		{working}
+		disabled={phase !== 'ready'}
+		empty={phase === 'starting' ? '' : t('architect-empty')}
+		placeholder={t('architect-placeholder')}
+		sendLabel={t('architect-send')}
+		toolLabel={toolLabel(t)}
+		onsend={send}
+	>
+		{#snippet before()}
+			{#if phase === 'starting'}
+				<p class="m-0 flex items-center gap-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-sm"></span>{t('architect-starting')}</p>
+			{/if}
+		{/snippet}
+		{#snippet inside(live)}
+			{@const path = agentId ? null : live.tool_calls.map(setupPath).findLast((p) => p !== null)}
+			{#if live.tool_calls.some((call) => undoTarget(call)) || path}
+				<div class="flex flex-wrap gap-2">
+					{#each live.tool_calls as call (call.id)}
+						{#if undoTarget(call)}
+							{#if undone[call.id]}
+								<span class="badge badge-outline">{t('architect-undone')}</span>
+							{:else}
+								<button class="btn btn-xs" type="button" onclick={() => void undo(call)}>↶ {t('architect-undo')}</button>
+							{/if}
 						{/if}
-						{#if live.turn.content}<Markdown content={live.turn.content} />{/if}
-						{#if live.turn.status === 'in_progress' && !live.turn.content}
-							<span class="flex items-center gap-2 text-sm text-base-content/60"><span class="loading loading-dots loading-sm"></span>{t('architect-working')}</span>
-						{/if}
-						{#if live.turn.error_message}<p class="m-0 text-sm text-error">{live.turn.error_message}</p>{/if}
-					</div>
+					{/each}
+					{#if path}<a class="btn btn-xs btn-ghost" href="{base}{path}">{t('architect-open-setup')}</a>{/if}
 				</div>
 			{/if}
-		{/each}
-	</div>
-
-	<form class="flex items-end gap-2" onsubmit={(e) => { e.preventDefault(); void send(); }}>
-		<textarea
-			class="textarea min-h-11 flex-1 resize-none"
-			rows="2"
-			bind:value={text}
-			onkeydown={keydown}
-			placeholder={t('architect-placeholder')}
-			aria-label={t('architect-message-label')}
-			disabled={phase === 'starting' || phase === 'failed'}
-		></textarea>
-		{#if transcriptionModel}
-			<DictationButton
-				model={transcriptionModel}
-				ontranscript={(heard) => (text = text.trim() ? `${text.trimEnd()} ${heard}` : heard)}
-				onerror={(message) => (notice = message)}
-			/>
-		{/if}
-		<button class="btn btn-primary" type="submit" disabled={!canSend(phase, text, controller?.state.liveTurnId ?? null)}>{t('architect-send')}</button>
-	</form>
+		{/snippet}
+		{#snippet composer(append)}
+			{#if transcriptionModel}
+				<DictationButton model={transcriptionModel} ontranscript={append} onerror={(message) => (notice = message)} />
+			{/if}
+		{/snippet}
+	</StreamedChat>
 </div>

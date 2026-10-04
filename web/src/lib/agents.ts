@@ -10,7 +10,7 @@
  * attached to the field they are about (by `path`).
  */
 import type { ActivityPage, Verification } from './agent-activity.ts';
-import type { InboxContext } from './inbox.ts';
+import type { Answer, HandoffContext } from './suspension.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
 import { ApiError, request, type ApiIssue, type CapabilityItem } from './api.ts';
@@ -237,28 +237,13 @@ export interface TestDebug {
 	scope?: ScopeDebug | null;
 }
 
-/** What a suspended turn waits for, as a manager sees it. */
-export interface Suspension {
-	request_id: string;
-	kind: 'approval' | 'secure_input' | 'human_answer';
-	message?: string;
-	tool_call_id?: string;
-	tool?: string;
-	options: ('allow_once' | 'deny' | 'value')[];
-	expires_at: string;
-	/** A hand-off to a person in the test chat: what the Inbox would show whoever answers it. */
-	context?: InboxContext;
-}
-
-export interface TestTurn {
-	session_id: string;
+/** One test-chat turn's debug view, read once the turn stopped running. */
+export interface TestTurnView {
 	turn_id: string;
-	status: string;
-	answer: string | null;
-	error: string | null;
-	suspension: Suspension | null;
-	draft_version?: number;
-	debug?: TestDebug;
+	draft_version: number;
+	debug: TestDebug;
+	/** What the turn hands to a person while it waits on one: what the Inbox would show whoever answers it. */
+	handoff: HandoffContext | null;
 }
 
 /** A proposal of the prompt assistant (#117, `POST …/assist/suggest`): every piece already checked against the draft. */
@@ -286,9 +271,6 @@ export interface AssistSuggestion {
 }
 
 export type ImproveField = 'task' | 'tone' | 'refusal';
-
-/** The answer to a suspension: the decision, and the value only `value` carries. */
-export type ResumeDecision = { decision: 'allow_once' } | { decision: 'deny' } | { decision: 'value'; value: string };
 
 /* ---- errors --------------------------------------------------------- */
 
@@ -394,13 +376,18 @@ export const agentsApi = {
 		call<AssistSuggestion>(`/api/v0/agents/${id}/assist/suggest`, json('POST', body)),
 	improve: (id: string, field: ImproveField, text: string) =>
 		call<{ suggestion: string; why: string }>(`/api/v0/agents/${id}/assist/improve`, json('POST', { field, text })),
-	testTurn: (id: string, message: string, sessionId: string | null) =>
-		call<TestTurn>(
-			`/api/v0/agents/${id}/test-turn`,
+	/** Send a test message to the draft; the turn streams on `testEventsUrl`. */
+	sendTestMessage: (id: string, message: string, sessionId: string | null) =>
+		call<{ session_id: string; turn_id: string }>(
+			`/api/v0/agents/${id}/test/messages`,
 			json('POST', sessionId ? { message, session_id: sessionId } : { message })
 		),
-	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: ResumeDecision) =>
-		call<TestTurn>(
+	testEventsUrl: (id: string, sessionId: string) =>
+		`/api/v0/agents/${encodeURIComponent(id)}/test/${encodeURIComponent(sessionId)}/events`,
+	testTurnView: (id: string, sessionId: string, turnId: string) =>
+		call<TestTurnView>(`/api/v0/agents/${id}/test/${sessionId}/turns/${turnId}/debug`),
+	resumeTurn: (id: string, sessionId: string, turnId: string, requestId: string, answer: Answer) =>
+		call<{ turn_id: string }>(
 			`/api/v0/agents/${id}/conversations/${sessionId}/turns/${turnId}/resume`,
 			json('POST', { ...answer, request_id: requestId })
 		)
@@ -562,7 +549,6 @@ export function describeBindSource(source: unknown): string {
 
 /* ---- the test chat -------------------------------------------------- */
 
-/** The Fluent key that says what a suspended test turn waits for. */
 const GATE_HINTS: Record<string, string> = {
 	missing: 'agents-gate-missing',
 	invalid: 'agents-gate-invalid',
@@ -587,26 +573,40 @@ export function gateHint(unmet: Unmet, label: string, tr: (key: string, args?: R
 	return tr(key, { slot: label, expected, required: unmet.required ?? '', age: unmet.max_age ?? '' });
 }
 
-export function suspensionLabel(kind: Suspension['kind']): string {
-	switch (kind) {
-		case 'secure_input':
-			return 'agents-test-waiting-secure-input';
-		case 'approval':
-			return 'agents-test-waiting-approval';
-		default:
-			return 'agents-test-waiting-human';
-	}
-}
+type TestTurnState = { turn: { id: string; role: string; status: string }; suspension?: { request_id: string } | null };
+
+/** Whether `live` still waits on the pause `requestId` was answered for. */
+const stillOn = (live: TestTurnState | undefined, requestId: string | undefined) =>
+	requestId !== undefined && live?.turn.status === 'suspended' && live.suspension?.request_id === requestId;
 
 /**
- * How the test chat takes a pause's `value`: a code the visitor would type is
- * masked, a staff member's answer to a handoff is plain text they read back,
- * labelled as in the inbox.
+ * The test-chat answers that stopped running and whose debug view was not
+ * read yet. A pause just answered (`answered`: turn → the request answered)
+ * is not one while the transcript still shows that pause: the stream has not
+ * shown the turn moving on yet.
  */
-export function answerField(kind: Suspension['kind']): { secret: boolean; label: string; submit: string } {
-	return kind === 'human_answer'
-		? { secret: false, label: 'inbox-answer-label', submit: 'inbox-send-answer' }
-		: { secret: true, label: 'agents-test-value-label', submit: 'agents-test-answer' };
+export function turnsToRead(turns: TestTurnState[], read: Record<string, unknown>, answered: Record<string, string> = {}): string[] {
+	return turns
+		.filter(
+			(live) =>
+				live.turn.role === 'assistant' &&
+				live.turn.status !== 'in_progress' &&
+				!(live.turn.id in read) &&
+				!stillOn(live, answered[live.turn.id])
+		)
+		.map((live) => live.turn.id);
+}
+
+/** `answered` without the turns the transcript shows past the pause they were answered on. */
+export function settleAnswered(turns: TestTurnState[], answered: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(answered).filter(([id, requestId]) => stillOn(turns.find((live) => live.turn.id === id), requestId))
+	);
+}
+
+/** What a failed debug read means: a turn not settled yet is read again once it is, anything else is shown. */
+export function readFailure(err: AgentError): 'retry' | string {
+	return err.status === 409 && err.code === 'turn_in_progress' ? 'retry' : err.message;
 }
 
 export function testTurnLabel(status: string): string {

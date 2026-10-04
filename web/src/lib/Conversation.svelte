@@ -24,6 +24,8 @@
 	import ToolCalls from '$lib/components/chat/ToolCalls.svelte';
 	import ConversationCanvas from '$lib/components/chat/ConversationCanvas.svelte';
 	import MessageAttachments from '$lib/components/chat/MessageAttachments.svelte';
+	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
+	import { pausedTurn, waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
 	import { feedback, openDialog as openFeedback } from '$lib/feedback.svelte';
 	import { clearPageTitleOverride, setPageTitleOverride } from '$lib/page-title';
 	import { page } from '$app/state';
@@ -158,6 +160,8 @@
 	const turns = $derived(controller ? controller.state.turns : []);
 	const streaming = $derived(controller !== null && controller.state.liveTurnId !== null);
 	const prompt = $derived(controller?.state.prompt ?? null);
+	// A turn waiting for a decision holds the conversation until it is answered.
+	const paused = $derived(pausedTurn(turns));
 	const selectedModel = $derived(models.find((candidate) => candidate.id === model));
 	/**
 	 * Whether the effort control does anything for the selected model.
@@ -354,7 +358,7 @@
 
 	/** Voice turns submit exactly like typed ones — plus the flag. */
 	async function submitVoiceTurn(text: string) {
-		if (!model.trim() || sending) return;
+		if (!model.trim() || sending || paused) return;
 		sending = true;
 		try {
 			await api.sendChatMessage(id, { model: model.trim(), message: text, voice: true });
@@ -424,7 +428,7 @@
 	 */
 	async function send(): Promise<boolean> {
 		const text = draft.trim();
-		if ((!text && files.length === 0) || !model.trim() || sending) return false;
+		if ((!text && files.length === 0) || !model.trim() || sending || paused) return false;
 		sending = true;
 		notice = null;
 		const sentText = text;
@@ -634,6 +638,27 @@
 			return;
 		}
 		await loadMeta();
+	}
+
+	let answering = $state<string | null>(null);
+	let answerErrors = $state<Record<string, string>>({});
+
+	/** Answer what a paused turn waits for; the rest of the turn streams in on a fresh attach. */
+	async function answerSuspension(turnId: string, waiting: SuspensionView, answer: Answer): Promise<boolean> {
+		answering = turnId;
+		delete answerErrors[turnId];
+		try {
+			await api.resumeChatTurn(id, turnId, waiting.request_id, answer);
+			followEnd();
+			controller?.attach();
+			return true;
+		} catch (err) {
+			answerErrors[turnId] = err instanceof ApiError ? (err.serverMessage ?? err.message) : String(err);
+			if (err instanceof ApiError && err.code === 'not_suspended') controller?.attach();
+			return false;
+		} finally {
+			answering = null;
+		}
 	}
 
 	async function stop() {
@@ -907,6 +932,17 @@
 							</div>
 						{/if}
 
+						{#if entry.turn.status === 'suspended' && entry.suspension}
+							{@const waiting = entry.suspension}
+							<SuspensionCard
+								waiting={waitingFrom({ ...waiting, options: isOwner ? waiting.options : [] }, entry.tool_calls)}
+								lead={t(waitingLead(waiting.kind, 'chat'), { tool: waiting.tool ?? '' })}
+								busy={answering === entry.turn.id}
+								error={answerErrors[entry.turn.id] ?? null}
+								onanswer={(answer) => answerSuspension(entry.turn.id, waiting, answer)}
+							/>
+						{/if}
+
 						{#if shownAttachments.length > 0}<MessageAttachments attachments={shownAttachments} removable={isOwner && !streaming} onremove={(filename) => removeAttachment(entry.turn.id, filename)} />{/if}
 						<Markdown
 							content={parsed.text}
@@ -921,7 +957,7 @@
 							<div class="text-xs text-base-content/50">{t('chat-turn-stopped')}</div>
 						{/if}
 						<div class="text-xs opacity-50">{time(entry.turn.created_at)}</div>
-						{#if isOwner && entry.turn.status !== 'in_progress' && !streaming}
+						{#if isOwner && entry.turn.status !== 'in_progress' && entry.turn.status !== 'suspended' && !streaming}
 							<div class="flex gap-1 mt-1">
 								<button class="btn btn-ghost btn-xs" onclick={() => retry(entry.turn.id)}>
 									{t('render-retry-button')}
@@ -1024,6 +1060,7 @@
 {:else}
 <div data-chat-composer class="card mt-3 w-full shrink-0 border border-base-300 bg-base-100/85 backdrop-blur-sm">
 	<div class="flex flex-col gap-1 p-2">
+		{#if paused}<p class="m-0 px-2 text-sm text-warning" role="status">{t('chat-composer-paused')}</p>{/if}
 		<div class="flex flex-wrap items-center gap-2">
 			<CapabilityPicker capabilities={tools} onset={setCapability} />
 			<span class="flex-1"></span>
@@ -1125,7 +1162,7 @@
 					<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
 				</button>
 			{:else}
-				<button class="btn btn-sm btn-circle btn-primary" onclick={send} disabled={(!draft.trim() && files.length === 0) || !model.trim() || sending} aria-label={t('render-composer-send')} title={t('render-composer-send')}>
+				<button class="btn btn-sm btn-circle btn-primary" onclick={send} disabled={(!draft.trim() && files.length === 0) || !model.trim() || sending || paused !== null} aria-label={t('render-composer-send')} title={t('render-composer-send')}>
 					<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" /></svg>
 				</button>
 			{/if}

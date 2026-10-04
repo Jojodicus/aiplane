@@ -35,7 +35,6 @@ use serde_json::Value;
 
 use super::parse_duration;
 use crate::agents::a2a_client::{self, AuthKind};
-use crate::agents::approval::DEFAULT_APPROVAL_TIMEOUT;
 use crate::agents::bind::BindSource;
 use crate::agents::embed::{DEFAULT_IDLE_TTL, DEFAULT_IP_RATE, DEFAULT_VISITOR_RATE};
 use crate::agents::human::DEFAULT_HUMAN_TIMEOUT;
@@ -49,6 +48,7 @@ use crate::agents::verifier::{
     MAX_LIFETIME_CAP, SEND_TOOL_DEFAULT, SESSION_SENDS_DEFAULT, WriteSource,
 };
 use crate::budget::Budget;
+use crate::server::tools::ask_first::DEFAULT_APPROVAL_TIMEOUT;
 
 /// One agent's spec, as the validator accepted it.
 #[derive(Debug, Clone, Default, Deserialize)]

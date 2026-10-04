@@ -87,6 +87,29 @@ when only system principals should ever reach it.
 
 ---
 
+## Tool modes: always, ask, off
+
+Each connector tool has a mode, which the person sets on their Tools page;
+without one, a tool its server marks destructive and not read-only is `ask`,
+every other `always` (`manager::default_mode`). `off` is never offered.
+`always` is offered and runs as called. What `ask` means depends on whether
+anyone can answer a pause (`McpConnectionManager::layer_for_user`):
+
+- **In chat** (and a person's scheduled or webhook run) the tool is offered
+  behind [`AskFirst`](tools-rbac.md): each call pauses the turn as an
+  `approval`, the person answers it in the chat (or the inbox), and the call
+  runs only on *Approve once*. A denial, or no answer within an hour, reaches
+  the model as a tool error; the tool never runs. The pause is the durable
+  suspension every approval uses, so it survives a restart.
+- **Over `/v1`** nothing can pause, so the token's policy decides instead
+  (`token_mcp_policy`, *Allow “ask” MCP tools over API* on the token form): a
+  token allowed them runs `ask` tools without asking — a standing
+  pre-authorisation the person gave that token — and any other token is never
+  offered them. This is deliberately not a suspension: an API client cannot
+  answer one.
+- **An agent's run** never sees a person's modes; its approvals are its
+  spec's (`tool_resources.<tool>.permission`, [`agents.md`](agents.md#what-96-built)).
+
 ## Discord (a global connector)
 
 Discord is the shipped example of a global connector: a bot token authenticates

@@ -169,7 +169,8 @@ fn handoff_spec(human: Value) -> Value {
             "budget": { "rounds": 6 }
         },
         "state": {
-            "issue": { "type": "enum", "values": ["refund"], "set_by": ["llm"] },
+            "issue": { "type": "enum", "values": ["refund"], "set_by": ["llm"],
+                "description": "What the visitor needs" },
             "verified": { "type": "subject", "set_by": ["host"] }
         },
         "routes": {
@@ -248,7 +249,8 @@ async fn request_human_hands_off_to_a_responder_whose_answer_reaches_the_visitor
     assert_eq!(context["inbox"], "billing desk");
     assert_eq!(
         context["slots"],
-        json!([{ "slot": "issue", "value": "refund" }])
+        json!([{ "slot": "issue", "label": "What the visitor needs", "value": "refund" }]),
+        "each slot by the label its manager gave it"
     );
     assert!(
         context.get("transcript").is_none(),

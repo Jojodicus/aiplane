@@ -26,12 +26,16 @@
 //!   * **Tools are always off** for an action created here. The action can
 //!     ask the model to write something; it cannot make it act. Turning tools
 //!     on is a deliberate click on `/scheduled`.
-//!   * **Creating and deleting need a human "yes"**, via
-//!     [`crate::ask_user::confirm`]. That also makes them chat-only —
-//!     `requires_chat_session` keeps them off the `/v1` tool list, and a
-//!     scheduled action can't create more scheduled actions (the headless
-//!     worker has a session but nobody watching it, so the confirmation gets
-//!     no answer and the write is refused).
+//!   * **Creating and deleting need a person's approval**, through the
+//!     durable approval every tool uses ([`approval`], the protocol of
+//!     `AskFirst`): the call pauses the turn as an `approval` saying what would
+//!     be scheduled, the person answers in the chat or the inbox, and only an
+//!     approval runs it — after a restart too. The arguments are checked
+//!     first, so nobody is asked about a schedule that cannot be saved. Where
+//!     nothing can pause (`/v1`, kept off its tool list by
+//!     `requires_chat_session` anyway) the write is refused. A scheduled run
+//!     that calls them pauses like any other, and its owner decides in the
+//!     inbox.
 //!   * **Everything is scoped to `ctx.user_id`**, never to an id from the
 //!     arguments — the store's functions all take the owner as a parameter.
 //!
@@ -54,7 +58,8 @@ use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-use crate::ask_user::{Confirmation, confirm};
+use aiplane_runtime::server::tools::ask_first::{Approval, DEFAULT_APPROVAL_TIMEOUT, approval};
+use aiplane_runtime::suspend::SuspendRequest;
 
 /// Bounds mirroring the `/scheduled` form's own validation, so an action
 /// created here is one the edit form can also round-trip.
@@ -66,16 +71,16 @@ const MAX_PROMPT_LEN: usize = 8000;
 /// catches a wrong expression.
 const PREVIEW_RUNS: usize = 3;
 
-/// Ceiling on the per-tool timeout, since these tools wait for a human. Must
-/// exceed `ask_user`'s own wait or the runner would cancel the tool while the
-/// confirmation card is still up.
-const MAX_DURATION_SECS: u64 = 210;
-
 // ---------------------------------------------------------------------------
 // shared helpers
 
-fn max_duration() -> Option<std::time::Duration> {
-    Some(std::time::Duration::from_secs(MAX_DURATION_SECS))
+/// The pause for an approval of this call, with `preview` — what it would do —
+/// shown next to the decision.
+fn approval_request(preview: String) -> SuspendRequest {
+    SuspendRequest {
+        message: Some(preview),
+        ..SuspendRequest::approval(DEFAULT_APPROVAL_TIMEOUT)
+    }
 }
 
 /// The user's stored timezone, or UTC. Same source `get_current_timestamp`
@@ -131,16 +136,6 @@ fn action_json(action: &scheduled::ScheduledAction) -> Value {
     })
 }
 
-/// The wording of the "no human answered" refusal, shared by create + delete.
-fn no_answer_error(what: &str) -> ToolError {
-    ToolError::Failed(format!(
-        "nobody confirmed, so nothing was {what}. Scheduled actions run as the user \
-         later on, unattended, so this needs an explicit yes from a person who is \
-         watching. Tell the user what you were about to do and ask them to confirm \
-         in a normal message, or point them at the /scheduled page."
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // schedule_action
 
@@ -160,10 +155,6 @@ impl Tool for ScheduleAction {
         "schedule_action"
     }
 
-    fn max_duration(&self) -> Option<std::time::Duration> {
-        max_duration()
-    }
-
     fn schema(&self) -> ToolDef {
         ToolDef::function(
             self.id(),
@@ -173,7 +164,7 @@ impl Tool for ScheduleAction {
              a conversation the user can read afterwards, using the model you are \
              running on now. \
              \
-             The user has to confirm before anything is saved, so use this when \
+             The user has to approve before anything is saved, so use this when \
              they asked for something recurring — not to set yourself reminders. \
              The scheduled run has NO tools available (it can write, not act); if \
              the task needs tools, say so and point the user at the /scheduled \
@@ -285,35 +276,12 @@ impl Tool for ScheduleAction {
                 })
                 .collect();
 
-            // The user sees what will be created — schedule in words, the next
-            // run, and the timezone — before it exists.
-            let question = format!(
-                "Schedule “{name}”? {} First run {} ({timezone}). It will run without \
-                 tools, and you can change or delete it under Scheduled.",
-                cron.describe(),
-                pretty[0],
-            );
-            match confirm(
-                &ctx,
-                &question,
-                "Schedule this?",
-                "Yes, schedule it",
-                "No, don't",
-            )
-            .await
-            {
-                Confirmation::Approved => {}
-                Confirmation::Declined { text } => {
-                    return Ok(json!({
-                        "created": false,
-                        "reason": "declined",
-                        "user_said": text,
-                        "status": "The user did not want this scheduled. Do not create it, \
-                                   and do not ask again unless they bring it up. If they \
-                                   said what to change, offer the corrected version.",
-                    }));
-                }
-                Confirmation::NoAnswer => return Err(no_answer_error("scheduled")),
+            // The person sees what will be created — schedule in words, the
+            // first run and the timezone — before it exists. Data, not wording:
+            // the card around it is translated.
+            let preview = format!("“{name}”: {} → {} ({timezone})", cron.describe(), pretty[0],);
+            if let Approval::Ask(pause) = approval(&ctx, self.id(), approval_request(preview))? {
+                return Ok(pause);
             }
 
             let action = scheduled::create(
@@ -401,15 +369,11 @@ impl Tool for DeleteScheduledAction {
         "delete_scheduled_action"
     }
 
-    fn max_duration(&self) -> Option<std::time::Duration> {
-        max_duration()
-    }
-
     fn schema(&self) -> ToolDef {
         ToolDef::function(
             self.id(),
             "Delete one of the user's scheduled actions, by the `id` from \
-             `list_scheduled_actions`. The user has to confirm first. Deletion is \
+             `list_scheduled_actions`. The user has to approve first. Deletion is \
              permanent — the action and its schedule are gone, though the \
              conversations its past runs produced stay. Only use it when the user \
              asked for something to stop.",
@@ -449,34 +413,15 @@ impl Tool for DeleteScheduledAction {
                     ))
                 })?;
 
-            let question = format!(
-                "Delete the scheduled action “{}”? It runs {} This can't be undone.",
+            let preview = format!(
+                "“{}”: {}",
                 action.name,
                 Cron::parse(&action.cron)
                     .map(|c| c.describe())
-                    .unwrap_or_else(|_| format!("on `{}`.", action.cron)),
+                    .unwrap_or_else(|_| action.cron.clone()),
             );
-            match confirm(
-                &ctx,
-                &question,
-                "Delete this schedule?",
-                "Yes, delete it",
-                "No, keep it",
-            )
-            .await
-            {
-                Confirmation::Approved => {}
-                Confirmation::Declined { text } => {
-                    return Ok(json!({
-                        "deleted": false,
-                        "reason": "declined",
-                        "user_said": text,
-                        "id": action.id,
-                        "name": action.name,
-                        "status": "The user kept it. Leave it alone.",
-                    }));
-                }
-                Confirmation::NoAnswer => return Err(no_answer_error("deleted")),
+            if let Approval::Ask(pause) = approval(&ctx, self.id(), approval_request(preview))? {
+                return Ok(pause);
             }
 
             let removed = scheduled::delete(&ctx.db, ctx.person(self.id())?, id)
@@ -500,6 +445,8 @@ impl Tool for DeleteScheduledAction {
 mod tests {
     use super::*;
     use aiplane_core::server::db;
+    use aiplane_runtime::suspend::{Suspend, extract_suspend};
+    use session_core::db::{Decision, SuspensionKind};
 
     async fn seeded() -> db::Pool {
         let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
@@ -514,55 +461,31 @@ mod tests {
         pool
     }
 
-    /// A context off the chat path: a model, but no `chat_feedback`, so a
-    /// confirmation can never be answered.
+    /// A context off the chat path: a model, but nothing can pause, so an
+    /// approval can never be given.
     fn ctx_unattended(pool: &db::Pool) -> ToolContext {
+        ctx_with(pool, Suspend::Unavailable)
+    }
+
+    fn ctx_with(pool: &db::Pool, suspend: Suspend) -> ToolContext {
         ToolContext {
             principal: aiplane_core::server::principal::Principal::User {
                 id: "u1".into(),
                 roles: vec![],
             },
             model: Some("qwen-32b".into()),
+            suspend,
             ..ToolContext::for_test(pool.clone())
         }
     }
 
-    fn create_args() -> Value {
-        json!({
-            "name": "Weekly summary",
-            "prompt": "Summarise last week's tickets.",
-            "cron": "0 8 * * 1",
-        })
+    fn approved() -> Suspend {
+        Suspend::Decided(SuspensionKind::Approval, Decision::AllowOnce)
     }
 
-    /// The safety property: with nobody watching, nothing is written. This is
-    /// what stops a scheduled action (or a /v1 caller) from planting more
-    /// scheduled actions.
-    #[tokio::test]
-    async fn unattended_creation_is_refused_and_writes_nothing() {
-        let pool = seeded().await;
-        let err = ScheduleAction
-            .run(ctx_unattended(&pool), create_args())
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("nobody confirmed"), "{err}");
-        assert!(
-            scheduled::list_for_user(&pool, "u1")
-                .await
-                .unwrap()
-                .is_empty(),
-            "an unconfirmed action must not be stored"
-        );
-    }
-
-    /// Same for deletion — an unanswered confirmation must leave the action
-    /// in place.
-    #[tokio::test]
-    async fn unattended_deletion_is_refused_and_keeps_the_action() {
-        let pool = seeded().await;
-        let action = scheduled::create(
-            &pool,
+    async fn nightly(pool: &db::Pool) -> scheduled::ScheduledAction {
+        scheduled::create(
+            pool,
             NewAction {
                 user_id: "u1".into(),
                 name: "Nightly".into(),
@@ -577,94 +500,88 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+    }
 
+    fn create_args() -> Value {
+        json!({
+            "name": "Weekly summary",
+            "prompt": "Summarise last week's tickets.",
+            "cron": "0 8 * * 1",
+        })
+    }
+
+    /// The safety property: where nobody can be asked, nothing is written.
+    /// This is what stops a /v1 caller from planting scheduled actions.
+    #[tokio::test]
+    async fn unattended_creation_is_refused_and_writes_nothing() {
+        let pool = seeded().await;
+        let err = ScheduleAction
+            .run(ctx_unattended(&pool), create_args())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot pause"), "{err}");
+        assert!(
+            scheduled::list_for_user(&pool, "u1")
+                .await
+                .unwrap()
+                .is_empty(),
+            "an unconfirmed action must not be stored"
+        );
+    }
+
+    /// Same for deletion — without an approval the action stays.
+    #[tokio::test]
+    async fn unattended_deletion_is_refused_and_keeps_the_action() {
+        let pool = seeded().await;
+        let action = nightly(&pool).await;
         let err = DeleteScheduledAction
             .run(ctx_unattended(&pool), json!({"id": action.id}))
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("nobody confirmed"), "{err}");
+        assert!(err.contains("cannot pause"), "{err}");
         assert_eq!(
             scheduled::list_for_user(&pool, "u1").await.unwrap().len(),
             1
         );
     }
 
-    /// A context that looks like a live chat turn: a broadcast channel with a
-    /// subscriber (so the card is considered deliverable) and the two feedback
-    /// hubs. Returns the context plus the ask hub, so a test can answer the
-    /// confirmation the way `POST /api/v0/me/ask/feedback/{turn}` does.
-    fn ctx_watched(
-        pool: &db::Pool,
-    ) -> (
-        ToolContext,
-        std::sync::Arc<
-            aiplane_runtime::server::tools::feedback::FeedbackHub<
-                aiplane_runtime::server::tools::feedback::AskReply,
-            >,
-        >,
-        tokio::sync::broadcast::Receiver<session_core::workers::TurnUpdate>,
-    ) {
-        use aiplane_runtime::server::tools::{ChatFeedback, feedback::FeedbackHub};
-        let (broadcast, rx) = tokio::sync::broadcast::channel(16);
-        let ask_hub = std::sync::Arc::new(FeedbackHub::default());
-        let ctx = ToolContext {
-            principal: aiplane_core::server::principal::Principal::User {
-                id: "u1".into(),
-                roles: vec![],
-            },
-            model: Some("qwen-32b".into()),
-            assistant_turn_id: Some("t1".into()),
-            session_id: Some("s1".into()),
-            chat_feedback: Some(ChatFeedback {
-                ask_hub: ask_hub.clone(),
-                ..ChatFeedback::for_test(broadcast)
-            }),
-            ..ToolContext::for_test(pool.clone())
-        };
-        // The receiver is returned (not dropped) so `receiver_count()` stays
-        // non-zero for the life of the test — dropping it would make the tool
-        // conclude nobody is watching.
-        (ctx, ask_hub, rx)
+    /// In chat the call pauses for the person's approval, saying what would be
+    /// scheduled, and nothing is written until they give it.
+    #[tokio::test]
+    async fn in_chat_creation_waits_for_an_approval_and_writes_nothing_yet() {
+        let pool = seeded().await;
+        let out = ScheduleAction
+            .run(ctx_with(&pool, Suspend::Available), create_args())
+            .await
+            .unwrap();
+        let request = extract_suspend(&out).expect("the call waits for an approval");
+        assert_eq!(request.kind, SuspensionKind::Approval);
+        let preview = request.message.expect("what would be scheduled");
+        assert!(
+            preview.contains("Weekly summary") && preview.contains("Europe/Berlin"),
+            "{preview}"
+        );
+        assert!(
+            scheduled::list_for_user(&pool, "u1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
-    /// Answer the confirmation card once the tool has parked on the hub.
-    /// Mirrors what the feedback endpoint does.
-    async fn answer(
-        hub: &aiplane_runtime::server::tools::feedback::FeedbackHub<
-            aiplane_runtime::server::tools::feedback::AskReply,
-        >,
-        choice: &str,
-    ) {
-        use aiplane_runtime::server::tools::feedback::AskReply;
-        for _ in 0..200 {
-            if hub.resolve(
-                "t1",
-                AskReply::Answered {
-                    choices: vec![choice.to_string()],
-                    text: None,
-                },
-            ) {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        panic!("the tool never parked on the ask hub");
-    }
-
-    /// The confirmed path: the action is written, it carries the turn's model
+    /// The approved path: the action is written, it carries the turn's model
     /// and the user's timezone, tools are off, and the result hands the model
     /// the human schedule + next runs to read back.
     #[tokio::test]
-    async fn a_confirmed_action_is_created_with_tools_off_and_a_preview() {
+    async fn an_approved_action_is_created_with_tools_off_and_a_preview() {
         let pool = seeded().await;
-        let (ctx, hub, _rx) = ctx_watched(&pool);
-
-        let (out, ()) = tokio::join!(ScheduleAction.run(ctx, create_args()), async {
-            answer(&hub, "Yes, schedule it").await
-        });
-        let out = out.unwrap();
+        let out = ScheduleAction
+            .run(ctx_with(&pool, approved()), create_args())
+            .await
+            .unwrap();
 
         assert_eq!(out["created"], true, "{out:?}");
         assert_eq!(out["cron"], "0 8 * * 1", "{out:?}");
@@ -683,7 +600,6 @@ mod tests {
         assert!(out["schedule"].is_string(), "{out:?}");
         assert_eq!(out["next_runs"].as_array().unwrap().len(), PREVIEW_RUNS);
 
-        // And it really is in the store, owned by the caller.
         let stored = scheduled::list_for_user(&pool, "u1").await.unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].name, "Weekly summary");
@@ -691,58 +607,22 @@ mod tests {
         assert!(stored[0].next_run_at.is_some(), "must be armed to fire");
     }
 
-    /// Declining writes nothing and tells the model to drop it — the case
-    /// where the confirmation is doing its actual job.
+    /// Nothing but an approval is one: a denial, if the tool ever saw one,
+    /// writes nothing.
     #[tokio::test]
-    async fn a_declined_action_is_not_created() {
+    async fn a_denied_action_is_not_created() {
         let pool = seeded().await;
-        let (ctx, hub, _rx) = ctx_watched(&pool);
-
-        let (out, ()) = tokio::join!(ScheduleAction.run(ctx, create_args()), async {
-            answer(&hub, "No, don't").await
-        });
-        let out = out.unwrap();
-
-        assert_eq!(out["created"], false, "{out:?}");
-        assert_eq!(out["reason"], "declined", "{out:?}");
-        assert!(
-            scheduled::list_for_user(&pool, "u1")
-                .await
-                .unwrap()
-                .is_empty(),
-            "a declined action must not be stored"
+        let denied = Suspend::Decided(
+            SuspensionKind::Approval,
+            Decision::Deny {
+                reason: session_core::db::DenyReason::User,
+            },
         );
-    }
-
-    /// Free text is a change request, not consent: "yes, but at 07:00" must
-    /// not be read as approval.
-    #[tokio::test]
-    async fn typing_instead_of_clicking_yes_is_not_approval() {
-        use aiplane_runtime::server::tools::feedback::AskReply;
-        let pool = seeded().await;
-        let (ctx, hub, _rx) = ctx_watched(&pool);
-
-        let (out, ()) = tokio::join!(ScheduleAction.run(ctx, create_args()), async {
-            for _ in 0..200 {
-                if hub.resolve(
-                    "t1",
-                    AskReply::Answered {
-                        choices: vec![],
-                        text: Some("yes but make it 07:00".into()),
-                    },
-                ) {
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-            panic!("the tool never parked on the ask hub");
-        });
-        let out = out.unwrap();
-
-        assert_eq!(out["created"], false, "{out:?}");
-        assert_eq!(
-            out["user_said"], "yes but make it 07:00",
-            "the correction must reach the model: {out:?}"
+        assert!(
+            ScheduleAction
+                .run(ctx_with(&pool, denied), create_args())
+                .await
+                .is_err()
         );
         assert!(
             scheduled::list_for_user(&pool, "u1")
@@ -752,35 +632,31 @@ mod tests {
         );
     }
 
-    /// Deletion goes through the same gate, and a confirmed one really removes
-    /// the row.
+    /// Deletion goes through the same gate: it waits, and an approved one
+    /// really removes the row.
     #[tokio::test]
-    async fn a_confirmed_deletion_removes_the_action() {
+    async fn an_approved_deletion_removes_the_action() {
         let pool = seeded().await;
-        let action = scheduled::create(
-            &pool,
-            NewAction {
-                user_id: "u1".into(),
-                name: "Nightly".into(),
-                prompt: "check".into(),
-                model: "qwen-32b".into(),
-                cron: "0 3 * * *".into(),
-                timezone: "UTC".into(),
-                tools_enabled: false,
-                reuse_conversation: false,
-                reuse_rounds: 1,
-                next_run_at: None,
-            },
-        )
-        .await
-        .unwrap();
-        let (ctx, hub, _rx) = ctx_watched(&pool);
-
-        let (out, ()) = tokio::join!(
-            DeleteScheduledAction.run(ctx, json!({"id": action.id})),
-            async { answer(&hub, "Yes, delete it").await }
+        let action = nightly(&pool).await;
+        let asked = DeleteScheduledAction
+            .run(
+                ctx_with(&pool, Suspend::Available),
+                json!({"id": action.id}),
+            )
+            .await
+            .unwrap();
+        let request = extract_suspend(&asked).expect("the call waits for an approval");
+        assert!(request.message.unwrap().contains("Nightly"));
+        assert_eq!(
+            scheduled::list_for_user(&pool, "u1").await.unwrap().len(),
+            1
         );
-        assert_eq!(out.unwrap()["deleted"], true);
+
+        let out = DeleteScheduledAction
+            .run(ctx_with(&pool, approved()), json!({"id": action.id}))
+            .await
+            .unwrap();
+        assert_eq!(out["deleted"], true);
         assert!(
             scheduled::list_for_user(&pool, "u1")
                 .await
@@ -808,8 +684,8 @@ mod tests {
                 err.contains("cron") || err.contains("minute") || err.contains("5 fields"),
                 "for {bad:?}: {err}"
             );
-            // Crucially not the confirmation error: we never got that far.
-            assert!(!err.contains("nobody confirmed"), "for {bad:?}: {err}");
+            // Crucially not the approval refusal: we never got that far.
+            assert!(!err.contains("cannot pause"), "for {bad:?}: {err}");
         }
     }
 
@@ -961,7 +837,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("no scheduled action"), "{err}");
-        assert!(!err.contains("nobody confirmed"), "no confirmation: {err}");
+        assert!(!err.contains("cannot pause"), "no approval asked: {err}");
         // Still there.
         assert_eq!(
             scheduled::list_for_user(&pool, "u2").await.unwrap().len(),

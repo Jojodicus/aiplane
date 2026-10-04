@@ -1366,13 +1366,13 @@ async fn a_draft_reaches_the_test_chat_and_never_the_public_path() {
             .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    let (status, test) =
-        e.fx.post(
-            &e.fx.alice,
-            &format!("/api/v0/agents/{}/test-turn", e.agent),
-            json!({ "message": "manager here" }),
-        )
-        .await;
+    let (status, test) = crate::common::test_chat_turn(
+        &e.fx.state,
+        &e.fx.alice,
+        &e.agent,
+        json!({ "message": "manager here" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{test}");
     let token = e.visitor().await;
     let r = e.say(&token, "visitor here").await;

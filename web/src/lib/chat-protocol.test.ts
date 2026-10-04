@@ -118,6 +118,31 @@ test('finalizing the live turn makes the conversation idle', () => {
 	assert.equal(state.idle, true);
 });
 
+test('a pause leaves the turn waiting with what it waits for, and a snapshot carries it too', () => {
+	const waiting = {
+		request_id: 'r1',
+		kind: 'approval' as const,
+		tool_call_id: 'c1',
+		tool: 'mcp__crm__delete_contact',
+		options: ['allow_once' as const, 'deny' as const],
+		expires_at: '2026-01-01T01:00:00Z'
+	};
+	const state = newConversationState();
+	applyEvent(state, { type: 'snapshot', live_turn_id: 'a1', turns: [turn('a1', 'assistant', { status: 'in_progress' })] });
+	applyEvent(state, { type: 'suspended', turn_id: 'a1', ...waiting });
+	const live = state.turns.find((t) => t.turn.id === 'a1');
+	assert.equal(live?.turn.status, 'suspended');
+	assert.deepEqual(live?.suspension, waiting);
+	assert.equal(state.liveTurnId, null);
+	assert.equal(state.idle, true);
+
+	const reloaded = newConversationState();
+	applyEvent(reloaded, { type: 'snapshot', turns: [{ ...turn('a1', 'assistant', { status: 'suspended' }), suspension: waiting }] });
+	assert.deepEqual(reloaded.turns[0].suspension, waiting);
+	applyEvent(reloaded, { type: 'snapshot', live_turn_id: 'a1', turns: [turn('a1', 'assistant', { status: 'in_progress' })] });
+	assert.equal(reloaded.turns[0].suspension, null, 'a resumed turn waits for nothing');
+});
+
 test('info banners and tool prompts set and clear', () => {
 	const state = newConversationState();
 	applyEvent(state, { type: 'info', message: 'vision fallback' });

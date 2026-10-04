@@ -8,7 +8,8 @@
 //!   holder — `respond` answers without the agent-management permission),
 //!   and their own paused scheduled or webhook runs. Every signed-in person may ask; most see nothing.
 //! - `/api/v0/agents/inbox/{id}/answer` — answer one, through the same resume
-//!   the staff route (`json_agent_test::resume_turn`) and the chat use.
+//!   the staff route (`json_agent_test::resume_turn`, by [`resume_as_staff`])
+//!   and the chat use.
 //! - `/api/v0/agents/inbox/events` — a count frame whenever the set changes.
 //! - `/api/v0/agents/{id}/channels` — where a waiting turn is announced
 //!   besides Web Push. Managed with a share like the rest of the agent.
@@ -114,6 +115,35 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let Some(agent) = item.agent.clone() else {
         return item_not_found(&id);
     };
+    resume_as_staff(
+        state,
+        StaffDecision {
+            agent_id: &agent.id,
+            session_id: &item.session_id,
+            turn_id: &item.turn_id,
+            request_id: Some(&id),
+            decision,
+            user_id: &user.id,
+        },
+    )
+    .await
+}
+
+/// A member of staff's decision on a suspended turn of an agent's
+/// conversation.
+pub(super) struct StaffDecision<'a> {
+    pub agent_id: &'a str,
+    pub session_id: &'a str,
+    pub turn_id: &'a str,
+    pub request_id: Option<&'a str>,
+    pub decision: chat::Decision,
+    pub user_id: &'a str,
+}
+
+/// Claim the conversation and the pause for `decision`, and continue the turn
+/// in the background: `202 {turn_id}`. The inbox's answer and the staff
+/// resume route are this one path.
+pub(super) async fn resume_as_staff(state: Arc<RamaState>, d: StaffDecision<'_>) -> Response {
     let Some(runner) = state.agent_runner.clone() else {
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -121,8 +151,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
             "this gateway cannot run agent conversations — answer again after it was updated",
         );
     };
-    let Some(hold) = embed_rt::claim(&state.chats, &agent.id, &item.session_id, &item.turn_id)
-    else {
+    let Some(hold) = embed_rt::claim(&state.chats, d.agent_id, d.session_id, d.turn_id) else {
         return json_error(
             StatusCode::CONFLICT,
             "turn_in_progress",
@@ -132,13 +161,13 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let claimed = match claim(
         &state,
         AgentResume {
-            agent_id: &agent.id,
-            session_id: &item.session_id,
-            turn_id: &item.turn_id,
-            request_id: Some(&id),
-            decision,
+            agent_id: d.agent_id,
+            session_id: d.session_id,
+            turn_id: d.turn_id,
+            request_id: d.request_id,
+            decision: d.decision,
             by: ResumedBy::Staff {
-                user_id: user.id.clone(),
+                user_id: d.user_id.to_string(),
             },
         },
     )
@@ -148,7 +177,7 @@ pub async fn answer(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Err(err) => return resume_error(err),
     };
     embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
-    json_ok(StatusCode::ACCEPTED, json!({ "turn_id": item.turn_id }))
+    json_ok(StatusCode::ACCEPTED, json!({ "turn_id": d.turn_id }))
 }
 
 fn count_frame(count: usize) -> rama::bytes::Bytes {

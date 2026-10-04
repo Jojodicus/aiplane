@@ -3,6 +3,8 @@
 	import { onMount, type Snippet } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { boundedViewport } from '$lib/viewport';
 	import { agentsApi } from '$lib/agents';
 	import { checklist, publishState } from '$lib/agent-setup';
 	import { AgentWorkspace, provideWorkspace } from '$lib/agent-workspace.svelte';
@@ -17,6 +19,9 @@
 	// The layout keys the shell by the agent id, so a new id is a new shell.
 	// svelte-ignore state_referenced_locally
 	const ws = provideWorkspace(new AgentWorkspace(id));
+	// The test chat fills the window the shell bounds: the page passes the
+	// height on down a flex column instead of growing past it.
+	const bounded = $derived(boundedViewport(page.url, base));
 
 	onMount(() => void ws.load());
 	$effect(() => ws.remember());
@@ -44,7 +49,7 @@
 	}
 </script>
 
-<div class="w-full space-y-4">
+<div data-agent-page class="flex w-full flex-col gap-4 {bounded ? 'h-full min-h-0' : ''}">
 	<a class="link link-hover text-sm text-base-content/60" href="{base}/agents">← {t('agents-back')}</a>
 
 	{#if ws.loadError}

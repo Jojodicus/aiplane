@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ToolCall } from './chat-protocol.ts';
-import { canSend, changesAgent, conversationTitle, setupPath, toolLabel, undoTarget } from './architect.ts';
+import { changesAgent, conversationTitle, setupPath, toolLabel, undoTarget } from './architect.ts';
 
 const call = (name: string, output: unknown, status: ToolCall['status'] = 'completed'): ToolCall => ({
 	id: `${name}-1`,
@@ -37,15 +37,6 @@ test('a page reloads after a create or a draft change, not after a read', () => 
 	assert.ok(changesAgent(call('update_agent_draft', {})));
 	assert.ok(!changesAgent(call('update_agent_draft', null, 'errored')));
 	assert.ok(!changesAgent(call('read_agent', {})));
-});
-
-test('the composer sends only when ready, with text, and while no turn runs', () => {
-	assert.ok(canSend('ready', 'hello', null));
-	assert.ok(!canSend('ready', '   ', null));
-	assert.ok(!canSend('ready', 'hello', 'turn-1'));
-	assert.ok(!canSend('starting', 'hello', null));
-	assert.ok(!canSend('sending', 'hello', null));
-	assert.ok(!canSend('failed', 'hello', null));
 });
 
 test('the conversation is titled after the agent, or as a new one', () => {

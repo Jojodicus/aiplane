@@ -1,29 +1,20 @@
 <script lang="ts">
-	import {
-		agentsApi,
-		suspensionLabel,
-		answerField,
-		testTurnLabel,
-		type AgentError,
-		type ResumeDecision,
-		type Spec,
-		type Suspension,
-		type TestDebug,
-		type TestTurn
-	} from '$lib/agents';
-	import { slotLabel } from '$lib/agent-setup';
-	import { slotText } from '$lib/inbox';
+	import { onDestroy } from 'svelte';
+	import { agentsApi, readFailure, settleAnswered, testTurnLabel, turnsToRead, type AgentError, type Spec, type TestDebug, type TestTurnView } from '$lib/agents';
+	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
+	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
 	import { t } from '$lib/i18n.svelte';
-	import Markdown from '$lib/components/chat/Markdown.svelte';
+	import StreamedChat from '$lib/components/chat/StreamedChat.svelte';
+	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
 	import DebugPanel from './DebugPanel.svelte';
 
 	/**
 	 * The internal test chat: talks to the agent's saved **draft** the way a
-	 * visitor would talk to the published one, and shows the manager-only
-	 * debug view beside it. The agent's tools really run, as the agent's
-	 * principal. A conversation is the server's `session_id`; "new
-	 * conversation" simply forgets it. A hand-off to a person shows what the
-	 * Inbox would show whoever answers it, slots by their labels in `spec`.
+	 * visitor would talk to the published one, streamed like any conversation,
+	 * and shows the manager-only debug view beside it, read per turn once the
+	 * turn stops running. The agent's tools really run, as the agent's
+	 * principal. "New conversation" forgets the conversation; a pause is
+	 * answered in place with the shared suspension card.
 	 */
 	let { agentId, spec = {}, dirty, onsave, onturn }: {
 		agentId: string;
@@ -33,109 +24,115 @@
 		onturn?: (debug: TestDebug | null) => void;
 	} = $props();
 
-	type Message = {
-		role: 'visitor' | 'agent';
-		text: string;
-		status?: string;
-		error?: string | null;
-		debug?: TestDebug;
-		turnId?: string;
-		suspension?: Suspension | null;
-	};
-	let messages = $state<Message[]>([]);
-	let sessionId = $state<string | null>(null);
-	let draft = $state('');
-	let secret = $state('');
+	let controller = $state<ConversationController | null>(null);
+	let views = $state<Record<string, TestTurnView>>({});
+	let selected = $state<string | null>(null);
+	let error = $state<string | null>(null);
+	let answering = $state<string | null>(null);
+	// Pauses just answered, by the request answered: their old
+	// debug view is gone, and a new one is read once the stream shows the
+	// turn moved on and stopped again.
+	let answered: Record<string, string> = {};
+	let reading = new Set<string>();
 
-	function agentMessage(turn: TestTurn, debug?: TestDebug): Message {
-		return {
-			role: 'agent',
-			text: turn.answer ?? '',
-			status: turn.status,
-			error: turn.error,
-			debug,
-			turnId: turn.turn_id,
-			suspension: turn.suspension
-		};
-	}
+	const turns = $derived(controller?.state.turns ?? []);
+	const working = $derived(controller?.state.liveTurnId != null);
+	const latest = $derived(turns.findLast((live) => views[live.turn.id])?.turn.id ?? null);
+	const shown = $derived(views[selected ?? latest ?? '']?.debug ?? null);
 
-	/** Answer the pause of message `i`; the reply replaces it, as the same turn continued. */
-	async function answer(i: number, decision: ResumeDecision) {
-		const waiting = messages[i];
-		if (busy || !sessionId || !waiting?.turnId || !waiting.suspension) return;
-		busy = true;
-		error = null;
+	$effect(() => {
+		const debug = latest ? views[latest]?.debug : null;
+		if (debug) onturn?.(debug);
+	});
+
+	// Whenever nothing runs, every stopped turn gets its view: after a stream
+	// ended, and after an attach that found the turn already over.
+	$effect(() => {
+		if (!controller || working) return;
+		void turns.map((live) => live.turn.status).join();
+		void readStopped();
+	});
+
+	/** Read the debug view of every turn that stopped and has none yet, then catch the transcript up. */
+	async function readStopped() {
+		const c = controller;
+		if (!c) return;
+		answered = settleAnswered(c.state.turns, answered);
+		const ids = turnsToRead(c.state.turns, views, answered).filter((id) => !reading.has(id));
+		if (!ids.length) return;
+		for (const id of ids) reading.add(id);
 		try {
-			const turn = await agentsApi.resumeTurn(
-				agentId,
-				sessionId,
-				waiting.turnId,
-				waiting.suspension.request_id,
-				decision
-			);
-			messages[i] = agentMessage(turn, turn.debug ?? waiting.debug);
-			secret = '';
+			for (const id of ids) views[id] = await agentsApi.testTurnView(agentId, c.id, id);
+			// The output filter may have rewritten the answer after the turn's
+			// row was final; a fresh snapshot shows what a visitor would get.
+			if (controller === c) c.attach();
 		} catch (err) {
-			error = (err as AgentError).message;
+			const failure = readFailure(err as AgentError);
+			// Not settled yet: the next attach ends when it is, and the stream's
+			// end reads it again.
+			if (failure === 'retry') {
+				if (controller === c) c.attach();
+			} else error = failure;
 		} finally {
-			busy = false;
+			for (const id of ids) reading.delete(id);
 		}
 	}
-	let busy = $state(false);
-	let error = $state<string | null>(null);
-	let selected = $state<number | null>(null);
-	let scroller = $state<HTMLElement | null>(null);
 
-	// The newest exchange is what the manager is looking at; keep it in view
-	// as replies arrive instead of letting them grow below the fold.
-	$effect(() => {
-		void messages.length;
-		void busy;
-		scroller?.scrollTo({ top: scroller.scrollHeight });
-	});
+	function open(sessionId: string) {
+		const c = createConversationController(sessionId, agentsApi.testEventsUrl(agentId, sessionId));
+		c.onTurnFinalized = () => void readStopped();
+		controller = c;
+		return c;
+	}
 
-	const shown = $derived(
-		selected !== null && messages[selected]?.debug
-			? messages[selected].debug
-			: ([...messages].reverse().find((m) => m.debug)?.debug ?? null)
-	);
-
-	$effect(() => {
-		const latest = [...messages].reverse().find((m) => m.debug)?.debug;
-		if (latest) onturn?.(latest);
-	});
-
-	async function send() {
-		const text = draft.trim();
-		if (!text || busy) return;
-		busy = true;
+	async function send(message: string): Promise<boolean> {
 		error = null;
-		messages.push({ role: 'visitor', text });
-		draft = '';
 		selected = null;
 		try {
-			const turn = await agentsApi.testTurn(agentId, text, sessionId);
-			sessionId = turn.session_id;
-			messages.push(agentMessage(turn, turn.debug));
+			const sent = await agentsApi.sendTestMessage(agentId, message, controller?.id ?? null);
+			(controller?.id === sent.session_id ? controller : open(sent.session_id)).attach();
+			return true;
 		} catch (err) {
 			error = (err as AgentError).message;
-		} finally {
-			busy = false;
+			return false;
 		}
 	}
+
+	async function answer(turnId: string, waiting: SuspensionView, decision: Answer): Promise<boolean> {
+		if (!controller) return false;
+		answering = turnId;
+		error = null;
+		try {
+			await agentsApi.resumeTurn(agentId, controller.id, turnId, waiting.request_id, decision);
+			answered[turnId] = waiting.request_id;
+			delete views[turnId];
+			controller.attach();
+			return true;
+		} catch (err) {
+			error = (err as AgentError).message;
+			return false;
+		} finally {
+			answering = null;
+		}
+	}
+
 	function reset() {
 		onturn?.(null);
-		messages = [];
-		sessionId = null;
+		controller?.destroy();
+		controller = null;
+		views = {};
+		answered = {};
 		selected = null;
 		error = null;
 	}
+
+	onDestroy(() => controller?.destroy());
 </script>
 
-<div class="space-y-3">
+<div data-test-chat class="flex min-h-0 flex-1 flex-col gap-3">
 	<div class="flex flex-wrap items-center gap-2">
 		<p class="text-sm text-base-content/70">{t('agents-test-intro')}</p>
-		<button class="btn btn-ghost btn-sm ml-auto" type="button" onclick={reset} disabled={!messages.length}>{t('agents-test-new')}</button>
+		<button class="btn btn-ghost btn-sm ml-auto" type="button" onclick={reset} disabled={!turns.length || working}>{t('agents-test-new')}</button>
 	</div>
 	{#if dirty}
 		<div class="alert alert-warning alert-soft text-sm">
@@ -143,117 +140,45 @@
 			<button class="btn btn-sm" type="button" onclick={() => void onsave()}>{t('agents-save')}</button>
 		</div>
 	{/if}
+	{#if error}<div class="alert alert-error text-sm" role="alert"><span>{error}</span></div>{/if}
 
-	<div class="grid gap-4 lg:h-[calc(100dvh-16rem)] lg:min-h-96 lg:grid-cols-[3fr_2fr]">
-		<div class="flex h-[70dvh] min-h-80 flex-col rounded-box border border-base-300 lg:h-auto lg:min-h-0">
-			<div class="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" aria-live="polite" bind:this={scroller}>
-				{#each messages as message, i (i)}
-					<div class="chat {message.role === 'visitor' ? 'chat-end' : 'chat-start'}">
-						<div class="chat-header text-xs opacity-60">
-							{message.role === 'visitor' ? t('agents-test-visitor') : t('agents-test-agent')}
-						</div>
-						{#if message.role === 'agent'}
-							<div
-								class="chat-bubble {message.error ? 'chat-bubble-error' : 'chat-bubble-primary'} {selected === i ? 'outline-2 outline-offset-2 outline-base-content/40' : ''}"
-							>
-								{#if message.text}
-									<Markdown content={message.text.trim()} class="prose prose-sm max-w-none text-inherit" />
-								{:else if !message.error}…{/if}
-								{#if message.error}<p class="whitespace-pre-wrap">{message.error}</p>{/if}
-							</div>
-							<div class="chat-footer flex items-center gap-2 text-xs opacity-70">
-								{#if message.status && message.status !== 'completed'}<span>{t(testTurnLabel(message.status))}</span>{/if}
-								{#if message.debug}
-									<button class="btn btn-ghost btn-xs" type="button" aria-pressed={selected === i} onclick={() => (selected = i)}>
-										{t('agents-test-show-debug')}
-									</button>
-								{/if}
-							</div>
-							{#if message.status === 'suspended' && message.suspension}
-								{@const waiting = message.suspension}
-								<div class="card card-border bg-base-200 col-start-2 mt-1 w-full max-w-md">
-									<div class="card-body gap-2 p-3 text-sm">
-										<p>{t(suspensionLabel(waiting.kind), { tool: waiting.tool ?? '' })}</p>
-										{#if waiting.message}<p class="font-semibold">{waiting.message}</p>{/if}
-										{#if waiting.context?.visitor_message}
-											<div>
-												<p class="text-xs font-semibold text-base-content/60">{t('inbox-visitor-message')}</p>
-												<blockquote class="whitespace-pre-wrap break-words border-l-2 border-base-300 pl-3">{waiting.context.visitor_message}</blockquote>
-											</div>
-										{/if}
-										{#if waiting.context?.slots?.length}
-											<div>
-												<p class="text-xs font-semibold text-base-content/60">{t('inbox-slots')}</p>
-												<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-													{#each waiting.context.slots as slot (slot.slot)}
-														<dt class="text-base-content/70">{slotLabel(spec, slot.slot, t)}</dt>
-														<dd class="m-0 break-words">{slotText(slot) ?? t('inbox-slot-trusted', { by: slot.set_by ?? '' })}</dd>
-													{/each}
-												</dl>
-											</div>
-										{/if}
-										{#if waiting.kind === 'human_answer'}
-											<p class="text-xs text-base-content/60">{t('agents-test-handoff-inbox-hint')}</p>
-										{/if}
-										<p class="text-xs text-base-content/60">
-											{t('agents-test-expires', { at: new Date(waiting.expires_at).toLocaleString() })}
-										</p>
-										{#if waiting.options.includes('value')}
-											{@const field = answerField(waiting.kind)}
-											<form
-												class={field.secret ? 'join w-full' : 'flex w-full flex-col gap-2'}
-												onsubmit={(e) => { e.preventDefault(); void answer(i, { decision: 'value', value: secret }); }}
-											>
-												{#if field.secret}
-													<input
-														class="input input-sm join-item w-full"
-														type="password"
-														autocomplete="off"
-														bind:value={secret}
-														aria-label={t(field.label)}
-														placeholder={t(field.label)}
-													/>
-												{:else}
-													<textarea class="textarea textarea-sm w-full" rows="3" bind:value={secret} aria-label={t(field.label)} placeholder={t(field.label)}></textarea>
-												{/if}
-												<button class={field.secret ? 'btn btn-sm btn-primary join-item' : 'btn btn-sm btn-primary self-end'} type="submit" disabled={busy || !secret}>
-													{t(field.submit)}
-												</button>
-											</form>
-										{/if}
-										<div class="card-actions justify-end">
-											{#if waiting.options.includes('allow_once')}
-												<button class="btn btn-sm btn-primary" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'allow_once' })}>
-													{t('agents-test-approve')}
-												</button>
-											{/if}
-											<button class="btn btn-sm btn-ghost" type="button" disabled={busy} onclick={() => void answer(i, { decision: 'deny' })}>
-												{t('agents-test-deny')}
-											</button>
-										</div>
-									</div>
-								</div>
+	<div class="grid min-h-0 flex-1 gap-4 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-cols-[3fr_2fr] lg:grid-rows-1">
+		<div class="flex min-h-0 flex-col">
+			<StreamedChat
+				{turns}
+				{working}
+				empty={t('agents-test-empty')}
+				placeholder={t('agents-test-placeholder')}
+				sendLabel={t('agents-test-send')}
+				userLabel={t('agents-test-visitor')}
+				assistantLabel={t('agents-test-agent')}
+				highlighted={selected}
+				onsend={send}
+			>
+				{#snippet below(live)}
+					{#if live.turn.status !== 'in_progress'}
+						<div class="chat-footer flex items-center gap-2 text-xs opacity-70">
+							{#if live.turn.status !== 'completed'}<span>{t(testTurnLabel(live.turn.status))}</span>{/if}
+							{#if views[live.turn.id]}
+								<button class="btn btn-ghost btn-xs" type="button" aria-pressed={selected === live.turn.id} onclick={() => (selected = live.turn.id)}>
+									{t('agents-test-show-debug')}
+								</button>
 							{/if}
-						{:else}
-							<div class="chat-bubble whitespace-pre-wrap">{message.text}</div>
-						{/if}
-					</div>
-				{:else}
-					<p class="p-4 text-sm text-base-content/60">{t('agents-test-empty')}</p>
-				{/each}
-				{#if busy}<div class="skeleton h-10 w-2/3"></div>{/if}
-			</div>
-			{#if error}<div class="alert alert-error mx-3 mb-2 text-sm" role="alert"><span>{error}</span></div>{/if}
-			<form class="flex gap-2 border-t border-base-300 p-3" onsubmit={(e) => { e.preventDefault(); void send(); }}>
-				<textarea
-					class="textarea min-h-12 w-full"
-					bind:value={draft}
-					placeholder={t('agents-test-placeholder')}
-					aria-label={t('agents-test-placeholder')}
-					onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
-				></textarea>
-				<button class="btn btn-primary self-end" type="submit" disabled={busy || !draft.trim()}>{t('agents-test-send')}</button>
-			</form>
+						</div>
+					{/if}
+					{#if live.turn.status === 'suspended' && live.suspension}
+						{@const waiting = live.suspension}
+						<SuspensionCard
+							class="col-start-2 mt-1 w-full max-w-md"
+							waiting={waitingFrom(waiting, live.tool_calls, views[live.turn.id]?.handoff ?? null)}
+							lead={t(waitingLead(waiting.kind, 'test'), { tool: waiting.tool ?? '' })}
+							note={waiting.kind === 'human_answer' ? t('agents-test-handoff-inbox-hint') : null}
+							busy={answering === live.turn.id}
+							onanswer={(decision) => answer(live.turn.id, waiting, decision)}
+						/>
+					{/if}
+				{/snippet}
+			</StreamedChat>
 		</div>
 
 		<div class="min-h-0 overflow-y-auto rounded-box border border-base-300 p-3">

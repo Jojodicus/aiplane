@@ -12,6 +12,7 @@
  * its cursor, and `text_delta` is the WHOLE text: replace, don't append.
  * No delete events exist by design.
  */
+import type { SuspensionView } from './suspension.ts';
 
 export interface ToolCall {
 	id: string;
@@ -36,7 +37,7 @@ export interface Turn {
 	reasoning: string | null;
 	reasoning_elapsed_ms: number | null;
 	reasoning_started_at: string | null;
-	status: 'in_progress' | 'completed' | 'cancelled' | 'errored';
+	status: 'in_progress' | 'suspended' | 'completed' | 'cancelled' | 'errored';
 	error_message: string | null;
 	created_at: string;
 	completed_at: string | null;
@@ -66,6 +67,8 @@ export interface TurnWithTools {
 	turn: Turn;
 	tool_calls: ToolCall[];
 	steers: TurnSteer[];
+	/** What the turn waits for, while it is `suspended`. */
+	suspension?: SuspensionView | null;
 }
 
 export interface ChatSession {
@@ -110,6 +113,7 @@ export type ChatEvent =
 			model?: string;
 			duration_ms?: number;
 	  }
+	| ({ type: 'suspended'; turn_id: string } & SuspensionView)
 	| { type: 'steer'; turn_id: string; id: string; text: string; status: SteerStatus }
 	| { type: 'sidebar_changed' }
 	| { type: 'info'; message: string }
@@ -213,6 +217,7 @@ export interface LiveTurn {
 	turn: Turn;
 	tool_calls: ToolCall[];
 	steers: TurnSteer[];
+	suspension: SuspensionView | null;
 }
 
 /**
@@ -275,7 +280,8 @@ function ensureTurn(state: ConversationState, id: string): LiveTurn {
 				completed_at: null
 			},
 			tool_calls: [],
-			steers: []
+			steers: [],
+			suspension: null
 		};
 		state.turns.push(existing);
 	}
@@ -299,7 +305,8 @@ export function applyEvent(state: ConversationState, event: ChatEvent): void {
 			state.turns = event.turns.map((row) => ({
 				turn: row.turn,
 				tool_calls: [...row.tool_calls],
-				steers: [...row.steers]
+				steers: [...row.steers],
+				suspension: row.suspension ?? null
 			}));
 			state.liveTurnId = event.live_turn_id ?? null;
 			state.idle = !event.live_turn_id;
@@ -354,6 +361,17 @@ export function applyEvent(state: ConversationState, event: ChatEvent): void {
 				state.liveTurnId = null;
 				state.idle = true;
 			}
+			return;
+		}
+		case 'suspended': {
+			// The worker is gone, as at a finalize, but the turn is not over: a
+			// decision resumes it and the client attaches again.
+			const { type: _type, turn_id, ...suspension } = event;
+			const live = ensureTurn(state, turn_id);
+			live.turn.status = 'suspended';
+			live.suspension = suspension;
+			if (state.liveTurnId === turn_id) state.liveTurnId = null;
+			state.idle = true;
 			return;
 		}
 		case 'steer': {

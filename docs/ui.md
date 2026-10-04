@@ -106,6 +106,17 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
+### Bounded viewport
+
+A page that is a conversation fills the window instead of scrolling as a
+page: `boundedViewport(url)` (`lib/viewport.ts`, unit-tested) names them —
+the chat and an agent's Try it → Test chat. For those the shell's `main`
+does not scroll and its content is `h-full`; the page hands that height down
+a flex column (`min-h-0 flex-1` at every level), so only the message list
+scrolls and the composer stays in view whatever the header above it takes.
+No page guesses the space above it with a `calc(100dvh - …)`.
+`chat-viewport-layout.test.ts` pins the chain.
+
 The personal pages use one shared `SectionTabs` navigation component with
 path-backed tabs. `/tools` contains built-in tool controls (including location
 sharing), `/tools/integrations` the user's MCP connections, `/tools/skills`
@@ -289,8 +300,8 @@ Invariants worth knowing before you touch either side:
 - **The DB is the replayer.** There is no `Last-Event-ID` replay. A client that reconnects simply re-attaches, and the first `snapshot` — rebuilt from SQLite — subsumes anything missed. The worker runs to completion independently of any HTTP listener and writes its progress to the DB as it goes, so closing a tab mid-stream loses nothing.
 - **Deltas append, unless `full: true`.** `full` marks a cursor reset: the row was rewritten and `text_delta` carries the *whole* text, so the client must replace its buffer rather than append. A client cannot detect a rewrite on its own, which is why the server says so. There are no delete events by design.
 - **Flushes are coalesced** to ≥120 ms per subscriber with a trailing flush, so the final state always lands. Each flush reads one turn, not the conversation.
-- **A suspended turn is answered over JSON, not the stream.** `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` takes `{"decision": "allow_once" | "deny" | "value", "value"?: …, "request_id"?: …}`; owner-only, `202` once the turn's worker runs again, after which the client re-attaches. `409 not_suspended` when the turn is not waiting or `request_id` names an older pause, `400 decision_not_offered` for a decision its `options` lack, `409 turn_in_progress` when no slot is free. A message sent into a paused conversation is queued behind it (`placement: "queued"`), and `…/cancel` on it gives the decision up. The chat page does not render `suspended` yet; a person's paused run (a scheduled action or a webhook) is answered from the [inbox](#inbox), which calls this same resume.
-- **The stream ends at `turn_finalized` / `suspended` / `idle`.** The server closes there, so `chat.svelte.ts` closes the `EventSource` too (on the first and last; until it knows `suspended`, a paused turn costs it one reconnect, which answers `snapshot` + `idle`) — letting it auto-reconnect would loop snapshot/idle forever on a quiet session. After a submit (or any suspected change) `attach()` reopens, and the fresh snapshot is the replay.
+- **A suspended turn is answered over JSON, not the stream.** `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` takes `{"decision": "allow_once" | "deny" | "value", "value"?: …, "request_id"?: …}`; owner-only, `202` once the turn's worker runs again, after which the client re-attaches. `409 not_suspended` when the turn is not waiting or `request_id` names an older pause, `400 decision_not_offered` for a decision its `options` lack, `409 turn_in_progress` when no slot is free. A message sent into a paused conversation is refused with `409 decision_pending`, and `…/cancel` on it gives the decision up; the chat page keeps the draft in its composer but will not send it meanwhile, and says why (`pausedTurn`, `chat-composer-paused`). The chat page draws a paused turn as the [suspension card](#suspension-card), led by `chat-waiting-*` and showing the waiting call's arguments from the transcript; only the owner gets its buttons. A person's paused run (a scheduled action or a webhook) is answered from the [inbox](#inbox), which calls this same resume.
+- **The stream ends at `turn_finalized` / `suspended` / `idle`.** The server closes there, so `chat.svelte.ts` closes the `EventSource` too, and fires `onTurnFinalized` on `turn_finalized` and `suspended` alike (the turn stopped running) — letting it auto-reconnect would loop snapshot/idle forever on a quiet session. `applyEvent` folds `suspended` into the turn (`status: suspended`, `suspension`), as a snapshot's row carries it. After a submit (or any suspected change) `attach()` reopens, and the fresh snapshot is the replay.
 - **An interrupted worker leaves a terminal turn.** The shared worker harness catches driver and tool panics, records the assistant turn and any still-running tool calls as `errored`, and broadcasts `Finalized`; its caller then releases the worker slot. On attach, if the owner has no live worker, the events handler also errors any already-present `in_progress` assistant turns before sending the snapshot. It targets only turn IDs read before rechecking the worker registry, so a newly starting turn cannot be mistaken for an orphan. Viewers of a shared conversation never perform this recovery because they cannot see the owner's worker in their own registry lookup.
 - **Every scheduled or webhook run links its chat and ends terminal.** A run's history row gets its `session_id` the moment the chat is opened (webhooks at `record_run_start`, schedules via `attach_run_session`, which also moves the action's `last_session_id` so a reusing schedule keeps its thread); closing a run with no session never erases that link. The scheduler wraps each run in a panic guard, so the row is always closed through `record`. A process that dies mid-run leaves rows pending; `sweep_interrupted_runs` closes them at startup as `error` — before the scheduler's first tick and before the server accepts webhook fires, so nothing live can be caught by it — and corrects the list row when the orphan was the newest run. The runs lists join `chat_sessions` and report `chat_deleted`; list rows get `last_chat_deleted`, and the SPA shows "chat deleted" instead of linking to a 404.
 - **A reusing schedule or webhook can continue in any of its owner's chats.** Reuse always meant "append to `last_session_id`"; the form's *Continue in* picker (`LinkedChatPicker`) sets that pointer directly through `linked_session_id` on create/update — an id links that chat, `""` lets the next run open a fresh one, an absent field leaves it alone (a run may have moved it since the form opened). The server accepts only the caller's own chat, and only with `reuse_conversation` on. The picker starts on `last_session_id` even before reuse is switched on, because that is where a reusing run would continue; a deleted one reads as "a new chat", which is what the next run does.
@@ -579,32 +590,54 @@ are in `web/src/lib/components/agents/`.
   `ensureShape` gives every container a home and `cleanSpec` drops blanks
   before a save (`when` and `schema` are treated as opaque). Both clone through
   JSON because `structuredClone` refuses a Svelte proxy.
-- **Test chat** (`TestChat`, `DebugPanel`). Sends to `POST
-  /api/v0/agents/{id}/test-turn`, which runs the **saved draft**, so an unsaved
-  buffer is flagged with a Save button. Replies are plain (the turn is
-  synchronous); clicking a reply shows its debug: slots with value and
-  provenance, each by its label from the spec (`slotLabel`; the hand-off and
-  identity slots by catalog name) with the id in small print, each route's
-  gate with what keeps it closed (`gateHint`: the unmet condition in catalog
-  words with the slot's label, the server's message only for a condition
-  without a slot), a strict scope's
-  topic-guard verdict, the routing decision, sub-agent calls with outcome, and
-  tool-call decisions. "New conversation"
-  drops the `session_id`.
-- **A paused test turn.** A reply with `status: suspended` shows what it
-  waits for (`suspensionLabel` per kind, the tool's message, the deadline)
-  with a password field for a `value` and Approve once / Deny buttons, as its
-  `options` allow. The answer goes to `POST
-  /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume`, and its
-  reply replaces the paused one, since the same turn continued. In a test
-  conversation the resume answers with a fresh debug view too, so a verifier's
-  slot or a gate the decision opened shows on the reply. In a test
-  conversation the manager may answer a `secure_input` too. A hand-off to a
-  person (`human_answer`) shows its context under the question — the
-  visitor's last message and what the agent collected, by slot label — and a
-  line saying that in a live conversation it lands in the Inbox of the
-  agent's managers and responders. The card sits in the bubble's column of
-  the daisyUI `chat` grid (`col-start-2`).
+- **Test chat** (`TestChat`, `DebugPanel`). A streamed conversation like
+  any other: `POST /api/v0/agents/{id}/test/messages` (`sendTestMessage`)
+  runs the **saved draft** in the background, so an unsaved buffer is
+  flagged with a Save button, and a `ConversationController` opened on
+  `GET …/test/{session}/events` (`createConversationController(id,
+  eventsUrl)`) folds the frames, exactly as the chat page does. The
+  transcript and composer are `StreamedChat` (below). Whenever no turn runs,
+  each answer that stopped and has no debug view yet (`turnsToRead`) gets one
+  from `GET …/test/{session}/turns/{turn}/debug` (`testTurnView`) — a pause
+  just answered only once the stream shows it past that request
+  (`settleAnswered`), and a `409 turn_in_progress` is read again when the
+  turn settles rather than shown (`readFailure`) — and a fresh attach follows, so an answer the output filter rewrote shows as a
+  visitor would get it. "Show what happened" under an answer shows its
+  debug: slots with value and provenance, each by its label from the spec
+  (`slotLabel`; the hand-off and identity slots by catalog name) with the id
+  in small print, each route's gate with what keeps it closed (`gateHint`:
+  the unmet condition in catalog words with the slot's label, the server's
+  message only for a condition without a slot), a strict scope's topic-guard
+  verdict, the routing decision, sub-agent calls with outcome, and tool-call
+  decisions; the newest answer's is shown otherwise. Slots and gates are the
+  conversation's as they are when the view is read. "New conversation"
+  forgets the conversation.
+- **It fills the window.** Try it → Test chat is a
+  [bounded viewport](#bounded-viewport) like the chat: the agent page passes
+  the height down a flex column (`AgentShell` → the tab's content →
+  `TestChat` → the chat and "Behind the reply" grid), the transcript scrolls,
+  and the composer stays in view at every zoom and in every language; no
+  offset is guessed (`chat-viewport-layout.test.ts`).
+- **A paused test turn.** An answer whose turn is `suspended` shows the
+  [suspension card](#suspension-card) under it, led by what it waits for
+  (`waitingLead(kind, 'test')`), with the call's arguments from the
+  transcript. The answer goes to `POST
+  /api/v0/agents/{id}/conversations/{session}/turns/{turn}/resume` (`202`);
+  the chat attaches again and the same turn continues on the stream, and its
+  debug view is read anew once it stops, so a verifier's slot or a gate the
+  decision opened shows. In a test conversation the manager may answer a
+  `secure_input` too. A hand-off to a person (`human_answer`) shows its
+  context as the inbox would (the debug view's `handoff`), and a line saying
+  that in a live conversation it lands in the Inbox of the agent's managers
+  and responders. The card sits in the bubble's column of the daisyUI `chat`
+  grid (`col-start-2`).
+- **`StreamedChat`** (`components/chat/`) is the compact conversation the
+  test chat and the [agent architect](#agent-architect) share: the turns of a
+  controller as chat bubbles (tool calls, markdown, the working spinner, the
+  error), following the end with `chat-autoscroll`'s rules while the reader
+  is there, and the composer (Enter sends, Shift+Enter breaks the line). What
+  differs comes in as snippets: the architect's Undo row and dictation, the
+  test chat's status line, debug button and suspension card.
 - **Embed keys.** The Sharing panel's *Embed keys* card lists the agent's keys
   (name, origins, who created them, revoked or not) from `GET
   /api/v0/agents/{id}/embed-keys`, revokes one, and creates one from a name
@@ -612,9 +645,8 @@ are in `web/src/lib/components/agents/`.
   response, so the card shows the ready-to-paste `<script>` tag
   (`embedSnippet`, pointing at this gateway's `/embed.js`) once, right then.
   The widget itself is [`embed.md`](embed.md).
-- **Not built yet.** A `state` or `gate` SSE event so the debug view could
-  stream, and conversation history for test sessions (they are stored with
-  `agent_version = 0`).
+- **Not built yet.** Conversation history for test sessions (they are
+  stored with `agent_version = 0`).
 
 ### Agent setup
 
@@ -765,9 +797,10 @@ while it is open.
   action, which plans that agent.
 - **The conversation** is the person's chat (`POST /api/v0/agent-architect`
   opens their newest one about the agent, *New conversation* a fresh one)
-  and streams through the same `createConversationController` as `/chat`.
-  User turns are `chat-end` bubbles, the architect's answers Markdown, and
-  every tool call shows in `ToolCalls` with its input and output.
+  and streams through the same `createConversationController` as `/chat`,
+  drawn by `StreamedChat` (shared with the test chat). User turns are
+  `chat-end` bubbles, the architect's answers Markdown, and every tool call
+  shows in `ToolCalls` with its input and output.
 - **Undo and links** (`lib/architect.ts`, unit-tested): a completed
   `update_agent_draft` offers *Undo*, which restores the revision it kept
   (`agentsApi.restoreDraft`; the server also revokes the grants that change
@@ -791,13 +824,12 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
-- **An item** shows the agent (or the run's title), its kind and deadline,
-  and what the person needs to decide: a handoff's question, the visitor's
-  last message, the slots and, when the route hands it over, the transcript;
-  an approval's tool and its arguments, pretty-printed. The buttons follow
-  the item's `options`: Approve once / Deny, or an answer field with Send /
-  Decline. A manager's item links to the agent, an owner's to the chat; a
-  responder's links nowhere, since they may open nothing else.
+- **An item** (`{…, question?, call?, detail?, context?}`: `detail` is an
+  approval's `message`, such as `schedule_action`'s preview) is a
+  [suspension card](#suspension-card) under a heading with
+  the agent (or the run's title), its kind and when it was asked. A
+  manager's item links to the agent, an owner's to the chat; a responder's
+  links nowhere, since they may open nothing else.
 - **`?item=<id>`**, the link every notification carries, scrolls to and
   highlights that item.
 - **Live.** `web/src/lib/inbox.svelte.ts` keeps one `EventSource` per tab on
@@ -818,6 +850,33 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
   whether the message carries details, and its language). A `read` share sees
   both read-only.
 
+
+### Suspension card
+
+`SuspensionCard.svelte` (`web/src/lib/components/`) is the one card for
+whatever a paused turn waits for, wherever it is answered: the inbox, the
+agent builder's test chat and a person's own chat. Its pure half is
+`web/src/lib/suspension.ts` (unit-tested in `suspension.test.ts`).
+
+- **What it shows.** A hand-off's question, the visitor's last message, the
+  slots by their labels (`slotLine`: the `label` the server copies from
+  `state.<slot>.description` when the hand-off is stored, the hand-off and
+  identity slots by catalog name, else the key; a value the model may not see
+  as who vouched for it), the transcript when the route hands it over; an
+  approval's tool and its arguments, pretty-printed, and what the call would
+  do when the tool says so (the request's `message`, e.g. `schedule_action`'s
+  preview); the minutes left.
+- **What it offers** is exactly the request's `options` (`decisionButtons`):
+  Approve once and Deny for an approval, an answer field with its submit
+  button and Decline for a value. A request offering nothing (a visitor
+  waiting for staff) shows no button at all. A `secure_input` value is typed
+  into a password field, a staff answer to a hand-off into a text area
+  (`answerField`); an empty answer is refused in place.
+- **Where it differs** is passed in, never decided inside: a `lead` line
+  (`waitingLead`: the chat's `chat-waiting-*`, the test chat's
+  `agents-test-waiting-*`), a `note`, a heading snippet (the inbox's), the
+  answer callback, and the error to show.
+- **Strings** are `suspension-*` in `suspension.ftl`.
 ## Reactive state
 
 Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as factories rather than classes — `$state` in a module closure is the documented universal-reactivity pattern, and the returned object's methods close over it directly.

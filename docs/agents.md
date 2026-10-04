@@ -510,21 +510,38 @@ ungranted reference says which grant to make, for example `POST
 The builder UI (`/agents`, [`ui.md`](ui.md#agent-builder)) and the internal
 test chat behind it.
 
-- **`POST /api/v0/agents/{id}/test-turn`** (`write` share) `{message,
-  session_id?}`. It runs one message against the agent's **draft** through the
-  ordinary run path (`agents::run::run_turn_with`), as the agent's principal:
-  its grants, gates, binds and budgets apply and its tools really run. No
-  `session_id` starts a conversation; one continues it. The turn is synchronous
-  (the request returns when the turn ends; no SSE yet). Answer:
-  `{session_id, turn_id, status, answer, error, draft_version: 0, debug}`.
-  A turn that paused also carries `suspension`
-  ([agent-run suspend](#what-agent-run-suspend-built)).
-  Failures: `404 unknown_session`, `422 agent_not_runnable` (bad spec),
-  `503 agent_no_model` (the spec names no model and the gateway has no default
-  chat model), `422 agent_model_not_granted` (the agent holds no grant on the
-  model it runs on).
-- **`debug`** is for managers only and is built from the stored state and the
-  turn's `agent_audit` rows, never from anything a visitor can reach:
+- **`POST /api/v0/agents/{id}/test/messages`** (`write` share) `{message,
+  session_id?}`. It opens one message against the agent's **draft**, claims
+  the conversation as the public endpoint does (`agents::embed::claim`) and
+  answers `202 {session_id, turn_id, draft_version: 0}` at once; the turn runs
+  in the background (`run::draft::start_draft_turn`, then
+  `embed::spawn_guarded` with `TurnWork::Draft`) through the ordinary run path,
+  as the agent's principal: its grants, gates, binds and budgets apply and its
+  tools really run. No `session_id` starts a conversation; one continues it.
+  Failures, all before anything runs: `404 unknown_session`, `409
+  decision_pending` (the conversation waits for a decision), `409
+  turn_in_progress` (a turn is running in it), `422 agent_not_runnable` (bad
+  spec), `503 agent_no_model` (the spec names no model and the gateway has no
+  default chat model), `422 agent_model_not_granted` (the agent holds no grant
+  on the model it runs on).
+- **`GET /api/v0/agents/{id}/test/{session}/events`** (`write` share) is the
+  test conversation's `chat_json` stream, exactly a person's chat's
+  (`chat::json_api::{live_stream, quiet_stream}`): a `snapshot`, then the
+  running turn's deltas, tool calls and `turn_finalized` — or `suspended` when
+  it pauses — or `idle`. Only a test conversation (version 0) of this agent
+  streams here; any other id is `404`.
+- **`GET /api/v0/agents/{id}/test/{session}/turns/{turn}/debug`** (`write`
+  share) is that turn's `{turn_id, draft_version, debug, handoff}`, read once
+  the turn has settled: it waits up to 15 s for the conversation's claim to
+  drop (the output filter rules after the row is final), else `409
+  turn_in_progress`. `handoff` is what the turn hands to a person while it
+  waits on one (the pause's `run_context.handoff`), else `null`. The test
+  chat reads it whenever a turn stops running.
+- **`debug`** is for managers only and is built from the conversation's state
+  now and the turn's `agent_audit` rows (`run::draft::collect_turn_debug`:
+  the rows written from the turn's start until the next answer's, a pause and
+  its resume included), never from anything a visitor can reach, and never
+  stored anywhere else:
   - `slots`: per declared slot `{slot, status: set|missing|invalid, value,
     provenance, set_at, set_by, reason?}`. Unlike the model's view, `value` is
     shown for verifier and host slots too.
@@ -539,9 +556,9 @@ test chat behind it.
 - **How the draft is run.** `RunProfile::load_from(state, id, SpecSource,
   role, options)` takes the spec explicitly: `Live`, `Pinned(version)` or
   `Draft(spec)`. `load` and `load_version` are the first two, and only
-  `agents::run::draft::run_draft_turn`, called by the test-turn handler,
-  passes `Draft`. It opens the session itself and then uses the same
-  `drive_opened` as a visitor's turn, so nothing about what "live" means is
+  `agents::run::draft` (the test chat, the architect's `run_test_turn`, an
+  evaluation) passes `Draft`. It opens the session itself and then uses the
+  same `drive_opened` as a visitor's turn, so nothing about what "live" means is
   overridden and no other path can reach a draft. The draft is recorded as
   version `0` (`DRAFT_VERSION`): a test session is never continued as a
   visitor's (`MissingVersion`), nor a visitor's as a test (`unknown_session`).
@@ -1239,10 +1256,10 @@ agent runs pause and resume durably, sub-agent runs included.
   (or admin). Answers approvals and human answers in any of the agent's
   conversations; a `secure_input` only in a test conversation (version 0),
   where the manager plays the visitor (`403 decision_for_visitor` otherwise).
-  Synchronous like the test chat: `200 {session_id, turn_id, status, answer,
-  error, suspension}` once the resumed turn ended or paused again. It holds
-  the conversation's claim meanwhile, so the visitor's stream
-  shows the turn running. This is the backend #96's inbox calls.
+  `202 {turn_id}` once the turn runs again, in the background under the
+  conversation's claim, so the visitor's stream (or the test chat's) shows
+  it running. It is the same path as #96's inbox answer
+  (`json_inbox::resume_as_staff`).
 - **What a visitor sees.** A suspended turn keeps `suspension` in the
   snapshot and `GET /api/v0/embed/session`, as
   `SuspensionView::for_participant`: `{request_id, kind, message?, options,
@@ -1255,9 +1272,8 @@ agent runs pause and resume durably, sub-agent runs included.
   turn and answers `202 {turn_id: null, user_turn_id, placement: "queued"}`
   (`"started"` otherwise); a second one is `409 turn_in_progress`. The snapshot
   lists it in `waiting_turn_ids`. Once the resumed turn is terminal,
-  `run_claimed` runs it as the next turn. The synchronous entry points
-  (`run_turn`, the test chat) refuse instead: `AgentRunError::DecisionPending`,
-  `409 decision_pending`.
+  `run_claimed` runs it as the next turn. `run_turn` and the test chat refuse
+  instead: `AgentRunError::DecisionPending`, `409 decision_pending`.
 - **Expiry.** `run_sessions::expired_run_suspensions` lists the conversations' own
   rows (principal-owned, no `parent_turn_id`) past their deadline;
   `agents::resume::resume_expired`, called by the existing 30-second sweeper,
@@ -1323,7 +1339,8 @@ runs. Migration `0077_agent_builder.sql`.
   a handoff stored in the pause's `run_context` (`{handoff: {route, question,
   visitor_message, slots, lang, inbox, notify, transcript?}}`).
   `SuspendRequest` gained `context` for this. `slots` is the model's view
-  (a value only where the model wrote it, `set_by` otherwise), so a
+  (a value only where the model wrote it, `set_by` otherwise, and the slot's
+  `label` from its `description` when it has one), so a
   verifier's value never reaches the inbox; the transcript (the last 20 turns,
   each cut to 2000 characters) goes along only with `transcript: true`. The
   handoff is audited as `human_handoff` with the run chain (#100's analytics
@@ -2220,8 +2237,8 @@ version and judged on more than the final answer.
   case_name, problems}]` with the failed checks in words; with no cases or no
   matching run it is empty. Rolling back (`/live`) is not guarded: it publishes
   nothing new.
-- **Deviations.** A run is synchronous, like the test chat: the request returns
-  when the suite is done. A case cannot write state before the first message.
+- **Deviations.** A run is synchronous: the request returns when the suite is
+  done. A case cannot write state before the first message.
   The judge's call writes no usage row.
 - **Tests.** `crates/aiplane/tests/it/agent_evaluation.rs` runs a passing
   suite, a failing gate and route expectation, a trusted write with a bound
@@ -3307,7 +3324,7 @@ code. Each checks `can_manage_agents` again when it runs.
 | `propose_setup(agent_id, scenario, template?)` | the #117 proposal; writes nothing | `suggest_for` (as `…/assist/suggest`: its rate, usage row and `assist_suggested` event) |
 | `create_agent_draft(display, id?, description?)` | a new agent, unpublished; the id is derived from the name like the create dialog's `agentIdFromName`; its `main.model` is left unset, so it runs on the gateway's default chat model, which is granted (capped) when the person may grant it; the answer names it as `model` | `create_agent` (as `POST /api/v0/agents`) |
 | `update_agent_draft(agent_id, changes)` | changes the draft step by step | `assist::apply_changes`, then `add_capped_grant` per needed grant, then `save_draft` |
-| `run_test_turn(agent_id, message, conversation_id?)` | one test-chat turn of the draft | `draft_test_turn` (as `…/test-turn`) |
+| `run_test_turn(agent_id, message, conversation_id?)` | one test-chat turn of the draft, run to its end inside the architect's turn | `draft_test_turn` (`run_draft_turn`, then the turn's debug view as `…/test/{session}/turns/{turn}/debug` gives it) |
 
 There is **no publish tool**: the prompt tells the model to send the person
 to the setup page (`setup_url`), where Publish stays a click. An agent may

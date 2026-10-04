@@ -468,23 +468,21 @@ there:
 - **Nowhere to put the output.** `upload_attachment`, `generate_image`,
   `export_document` — they attach something to a turn that doesn't exist on
   `/v1`.
-- **Nobody to ask.** `ask_user` needs a human watching the stream, and so do
-  `schedule_action` and `delete_scheduled_action`, which require an `ask_user`
-  confirmation before writing. That confirmation exists because a scheduled
-  action later runs **as the user**, unattended, until removed — persistence is
-  what makes prompt injection there worth a human "yes", where an ordinary tool
-  call isn't. A useful consequence: a scheduled run cannot create further
-  scheduled actions, because the headless worker has a session but no watcher,
-  so the confirmation goes unanswered and the write is refused.
+- **Nobody to ask.** `ask_user` needs a human watching the stream, and
+  `schedule_action` and `delete_scheduled_action` need a person's approval
+  before writing. That approval exists because a scheduled action later runs
+  **as the user**, unattended, until removed — persistence is what makes
+  prompt injection there worth a human "yes", where an ordinary tool call
+  isn't. It is the durable pause of the next section, so a scheduled run that
+  calls them waits for its owner in the inbox rather than writing anything.
 
 The inverse case is worth stating too, since it is the easy mistake: a tool
 whose *optional* argument needs a session does **not** belong here.
 `render_typst` renders inline `source` anywhere and only needs a session for its
 `document_id` path; marking it chat-only would remove a working capability from
 `/v1` to protect an argument a proxy caller has no use for. Reusable pattern:
-`crate::ask_user::confirm` gives any tool the card + rendezvous, and returns
-`Confirmation::NoAnswer` off the chat path so the caller decides what "no human
-here" means for its own operation.
+a tool that needs a person's yes wraps itself in `AskFirst`, or, when it must
+check its arguments before asking, calls `ask_first::approval` itself.
 
 ## The tool-call loop
 
@@ -793,9 +791,12 @@ call only while the turn lives in memory; this pause is durable.
 - **Restart.** Nothing is held in memory: the startup sweep leaves suspended
   turns and their waiting call alone, and the resume runs on whichever
   process gets it.
-- **Holding the conversation.** A suspended turn holds its conversation as a
-  running worker does: a new message is queued behind it and starts once the
-  turn finishes; `…/cancel` gives the decision up (`cancelled`).
+- **Holding the conversation.** A suspended turn holds its conversation: a
+  new message is refused with `409 decision_pending`
+  (`agents::run::refuse_if_waiting`, the rule agent runs and the test chat
+  follow too), since it would run before the paused call, in a context the
+  decision was not asked about; `…/cancel` gives the decision up. The public
+  embed endpoint alone queues one visitor message behind the decision.
 
 `AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) is the first
 consumer: it keeps the wrapped tool's id and schema, pauses every call for an
@@ -804,7 +805,14 @@ pausing is impossible. Nothing in the shipped registry is wrapped; an agent's
 spec wraps its own tools with `tool_resources.<tool>.permission: always_ask`,
 and a tool whose `Tool::changes_state()` is true (an MCP tool marked
 destructive and not read-only) asks by default
-([`agents.md`](agents.md#what-96-built)). Scheduled and webhook runs pause
+([`agents.md`](agents.md#what-96-built)). A person's connector tool in `ask`
+mode is wrapped in chat ([`connectors.md`](connectors.md#tool-modes-always-ask-off)).
+`schedule_action` and `delete_scheduled_action` check their arguments first
+and then ask the same way, through `ask_first::approval` (the protocol
+`AskFirst` runs on), with a preview of what they would do as the request's
+`message`. Every approval in the product is this one durable pause; `ask_user`
+and browser control keep `FeedbackHub` because they are answered within the
+live turn, whose sandbox and browser leases a pause would end. Scheduled and webhook runs pause
 like a chat since #96, and their owner answers from the inbox.
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which
