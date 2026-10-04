@@ -1320,10 +1320,15 @@ async fn a_model_grant_routes_only_through_the_pools_its_manager_could_use() {
     );
 
     let (status, body) = fx.grant(&fx.admin, &id, "model", "model-a").await;
+    assert_eq!(status, StatusCode::OK, "held already: {body}");
     assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "a regrant replaces the pools: {body}"
+        body["widened"], true,
+        "an admin's regrant reaches every pool"
+    );
+    let (status, body) = fx.grant(&fx.manager, &id, "model", "model-a").await;
+    assert_eq!(
+        (status, body["widened"].clone()),
+        (StatusCode::OK, json!(false))
     );
     assert!(
         reaches(&fx, &id, "vip").await && reaches(&fx, &id, "pool").await,

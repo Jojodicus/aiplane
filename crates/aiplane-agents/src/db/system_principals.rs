@@ -8,6 +8,8 @@
 //! `docs/agents.md` §1 for why principals are a separate table from users.
 
 use jiff::Timestamp;
+use std::collections::BTreeSet;
+
 use serde_json::json;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
@@ -259,7 +261,7 @@ pub async fn grants(pool: &Pool, principal_id: &str) -> Result<Vec<GrantRow>, Db
 }
 
 /// Add one grant, not narrowed to pools. `Ok(false)` when it was already
-/// held — nothing changes and nothing is audited.
+/// held and nothing changed — nothing is audited then.
 pub async fn add_grant(
     pool: &Pool,
     principal_id: &str,
@@ -267,13 +269,29 @@ pub async fn add_grant(
     reference: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
-    add_scoped_grant(pool, principal_id, kind, reference, None, actor_id).await
+    Ok(
+        add_scoped_grant(pool, principal_id, kind, reference, None, actor_id).await?
+            != GrantChange::Unchanged,
+    )
+}
+
+/// What granting did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantChange {
+    /// The principal did not hold it.
+    Added,
+    /// It held a `model` grant through fewer pools; it now reaches the
+    /// union of both.
+    Widened,
+    /// It held it already, reaching at least as far.
+    Unchanged,
 }
 
 /// Add one grant; a `model` grant routes only through `pools` (`None`:
-/// every pool serving it). Granting it again replaces its pools. `Ok(false)`
-/// when it was already held exactly so — nothing changes and nothing is
-/// audited.
+/// every pool serving it). Granting it again never narrows it: the pools
+/// become the union of what it held and `pools` (`None` wins), so taking a
+/// pool away is a revoke and a new grant. The grant keeps its first
+/// `granted_by`; a widening is audited as a `grant_added` with `widened`.
 pub async fn add_scoped_grant(
     pool: &Pool,
     principal_id: &str,
@@ -281,32 +299,77 @@ pub async fn add_scoped_grant(
     reference: &str,
     pools: Option<&[String]>,
     actor_id: &str,
-) -> Result<bool, DbError> {
-    let pools = pools.map(|p| json!(p).to_string());
+) -> Result<GrantChange, DbError> {
     let mut tx = WriteTx::begin(pool).await?;
-    let changed = sqlx::query(
-        "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at, pools)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(principal_id, kind, ref) DO UPDATE
-            SET pools = excluded.pools, granted_by = excluded.granted_by,
-                granted_at = excluded.granted_at
-          WHERE principal_grants.pools IS NOT excluded.pools",
+    let held: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT pools FROM principal_grants WHERE principal_id = ? AND kind = ? AND ref = ?",
     )
     .bind(principal_id)
     .bind(kind.as_str())
     .bind(reference)
-    .bind(actor_id)
-    .bind(Timestamp::now().to_string())
-    .bind(&pools)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if changed == 0 {
-        return Ok(false);
+    .fetch_optional(&mut *tx)
+    .await?;
+    let wanted: Option<BTreeSet<String>> = pools.map(|p| p.iter().cloned().collect());
+    let change = match &held {
+        None => GrantChange::Added,
+        Some(None) => GrantChange::Unchanged,
+        Some(Some(text)) => {
+            let have: BTreeSet<String> =
+                serde_json::from_str(text).map_err(|e| DbError::Decode {
+                    column: "pools",
+                    source: anyhow::Error::from(e),
+                })?;
+            match &wanted {
+                None => GrantChange::Widened,
+                Some(w) if w.is_subset(&have) => GrantChange::Unchanged,
+                Some(_) => GrantChange::Widened,
+            }
+        }
+    };
+    let merged: Option<BTreeSet<String>> = match (&held, wanted) {
+        (Some(Some(text)), Some(mut w)) => {
+            w.extend(serde_json::from_str::<BTreeSet<String>>(text).unwrap_or_default());
+            Some(w)
+        }
+        (None, w) => w,
+        _ => None,
+    };
+    let merged_text = merged.as_ref().map(|m| json!(m).to_string());
+    match change {
+        GrantChange::Unchanged => return Ok(change),
+        GrantChange::Added => {
+            sqlx::query(
+                "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at, pools)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(principal_id)
+            .bind(kind.as_str())
+            .bind(reference)
+            .bind(actor_id)
+            .bind(Timestamp::now().to_string())
+            .bind(&merged_text)
+            .execute(&mut *tx)
+            .await?;
+        }
+        GrantChange::Widened => {
+            sqlx::query(
+                "UPDATE principal_grants SET pools = ?
+                  WHERE principal_id = ? AND kind = ? AND ref = ?",
+            )
+            .bind(&merged_text)
+            .bind(principal_id)
+            .bind(kind.as_str())
+            .bind(reference)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
     let mut detail = json!({ "kind": kind.as_str(), "ref": reference });
-    if let Some(pools) = &pools {
-        detail["pools"] = serde_json::from_str(pools).unwrap_or_default();
+    if kind == GrantKind::Model {
+        detail["pools"] = json!(merged);
+    }
+    if change == GrantChange::Widened {
+        detail["widened"] = json!(true);
     }
     agent_audit::append(
         &mut tx,
@@ -314,7 +377,7 @@ pub async fn add_scoped_grant(
     )
     .await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(change)
 }
 
 /// Remove one grant. `Ok(false)` when it was not held.
@@ -572,61 +635,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_model_grant_keeps_its_pools_and_a_regrant_replaces_them() {
+    async fn a_regrant_never_narrows_a_model_grant() {
         let pool = pool().await;
         let p = principal(&pool, "ci").await;
-        let open = ["open".to_string()];
-        assert!(
-            add_scoped_grant(
-                &pool,
-                &p.id,
-                GrantKind::Model,
-                "gpt-4o",
-                Some(&open),
-                "alice"
-            )
-            .await
-            .unwrap()
-        );
-        assert!(
-            !add_scoped_grant(&pool, &p.id, GrantKind::Model, "gpt-4o", Some(&open), "bob")
-                .await
-                .unwrap(),
-            "the same grant again changes nothing"
-        );
-        let loaded = load_active(&pool, &p.id).await.unwrap().unwrap();
+        let pools = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let grant = |by: &'static str, on: Option<Vec<String>>| {
+            let (pool, id) = (pool.clone(), p.id.clone());
+            async move {
+                add_scoped_grant(&pool, &id, GrantKind::Model, "gpt-4o", on.as_deref(), by)
+                    .await
+                    .unwrap()
+            }
+        };
+        let held = || {
+            let (pool, id) = (pool.clone(), p.id.clone());
+            async move { grants(&pool, &id).await.unwrap()[0].clone() }
+        };
+
         assert_eq!(
-            loaded
-                .grants
-                .model_pools("gpt-4o")
-                .unwrap()
-                .iter()
-                .collect::<Vec<_>>(),
-            ["open"]
-        );
-        let both = ["open".to_string(), "vip".to_string()];
-        assert!(
-            add_scoped_grant(
-                &pool,
-                &p.id,
-                GrantKind::Model,
-                "gpt-4o",
-                Some(&both),
-                "root"
-            )
-            .await
-            .unwrap()
+            grant("alice", Some(pools(&["open"]))).await,
+            GrantChange::Added
         );
         assert_eq!(
-            grants(&pool, &p.id).await.unwrap()[0].pools,
-            Some(both.to_vec())
+            grant("bob", Some(pools(&["open"]))).await,
+            GrantChange::Unchanged
         );
-        add_scoped_grant(&pool, &p.id, GrantKind::Model, "gpt-4o", None, "root")
-            .await
-            .unwrap();
+        assert_eq!(
+            grant("bob", Some(pools(&["vip"]))).await,
+            GrantChange::Widened
+        );
+        let row = held().await;
+        assert_eq!(row.pools, Some(pools(&["open", "vip"])), "the union");
+        assert_eq!(row.granted_by, "alice", "the first grantor stays");
         let loaded = load_active(&pool, &p.id).await.unwrap().unwrap();
-        assert!(loaded.grants.has(GrantKind::Model, "gpt-4o"));
-        assert_eq!(loaded.grants.model_pools("gpt-4o"), None, "every pool");
+        assert_eq!(loaded.grants.model_pools("gpt-4o").unwrap().len(), 2);
+
+        assert_eq!(grant("root", None).await, GrantChange::Widened);
+        assert_eq!(
+            held().await.pools,
+            None,
+            "an admin's grant reaches every pool"
+        );
+        assert_eq!(
+            grant("carol", Some(pools(&["open"]))).await,
+            GrantChange::Unchanged,
+            "a manager's regrant does not narrow an admin's"
+        );
+        assert_eq!(held().await.pools, None);
+        let widened = agent_audit::for_principal(&pool, &p.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "grant_added")
+            .count();
+        assert_eq!(widened, 3, "added, widened, widened");
     }
 
     #[tokio::test]

@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 use super::json_agents::guard_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_agents::db::agents::{self as agents_db, Access};
+use aiplane_agents::db::system_principals::GrantChange;
 use aiplane_agents::db::{agent_audit, system_principals as sp_db};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::users;
@@ -365,7 +366,9 @@ fn kind_label(kind: GrantKind) -> &'static str {
 }
 
 /// POST /api/v0/system-principals/{id}/grants — add one grant, capped at
-/// what the caller holds right now.
+/// what the caller holds right now: `{kind, ref, added, widened}`. `201`
+/// when it is new; `200` otherwise, with `widened` true when a `model` grant
+/// now reaches more pools (a regrant never narrows one).
 pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
     let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
@@ -380,30 +383,35 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let added = match add_capped_grant(&state, &manager, &p.id, kind, reference).await {
-        Ok(added) => added,
+    let change = match add_capped_grant(&state, &manager, &p.id, kind, reference).await {
+        Ok(change) => change,
         Err(resp) => return resp,
     };
+    let added = change == GrantChange::Added;
     json_ok(
         if added {
             StatusCode::CREATED
         } else {
             StatusCode::OK
         },
-        json!({ "kind": kind.as_str(), "ref": reference, "added": added }),
+        json!({
+            "kind": kind.as_str(),
+            "ref": reference,
+            "added": added,
+            "widened": change == GrantChange::Widened,
+        }),
     )
 }
 
 /// Grant `kind` `reference` to principal `principal_id` (whose access the
 /// caller already checked), capped at what `manager` holds right now.
-/// Whether the grant is new.
 pub(crate) async fn add_capped_grant(
     state: &RamaState,
     manager: &users::User,
     principal_id: &str,
     kind: GrantKind,
     reference: &str,
-) -> Result<bool, Response> {
+) -> Result<GrantChange, Response> {
     if !manager_holds(state, manager, kind, reference).await? {
         return Err(json_error(
             StatusCode::FORBIDDEN,
