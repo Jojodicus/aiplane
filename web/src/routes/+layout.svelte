@@ -228,7 +228,7 @@
 		<main class="relative flex min-h-dvh items-center justify-center px-6 pb-8 pt-24"><div class="w-full">{@render children()}</div></main>
 	</div>
 {:else}
-<div class="flex h-dvh overflow-hidden bg-base-100 text-base-content">
+<div class="flex h-dvh overflow-clip bg-base-100 text-base-content">
 	<!-- Mobile backdrop -->
 	{#if sidebar.open}
 		<button
