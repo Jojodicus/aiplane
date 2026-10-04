@@ -33,6 +33,17 @@ use super::config::{
 };
 use super::profile::{BackendProfile, Detected};
 
+/// One model a caller may use, with what a person choosing it needs to know:
+/// which kind of endpoint serves it, where its data goes, and — for an alias —
+/// the real model it is configured and metered as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub id: String,
+    pub kind: PoolKind,
+    pub compliance: Compliance,
+    pub alias_of: Option<String>,
+}
+
 /// A configured alias and its current state, for the read-only admin view.
 #[derive(Debug, Clone)]
 pub struct AliasStatus {
@@ -1828,6 +1839,59 @@ impl UpstreamRegistry {
             && self.data().pools.values().any(|p| {
                 !Self::is_internal_kind(p.kind) && access.allows(p) && p.knows_model(model)
             })
+    }
+
+    /// Every model [`Self::all_models_for`] lists, each with its kind, its
+    /// compliance flags (merged most-restrictively, as in
+    /// [`Self::models_with_compliance_for_kind_for`]) and, for an alias, the
+    /// real id it resolves to (a real id wins over an alias of the same
+    /// spelling, as in [`Self::models_with_alias_target`]). An id served by
+    /// pools of several kinds takes the first kind in [`PoolKind::ALL`].
+    /// Backs the token editor, where a person picks models for an API client.
+    pub fn model_catalog_for(&self, access: &PoolAccess) -> Vec<CatalogModel> {
+        let d = self.data();
+        let mut catalog: HashMap<String, CatalogModel> = HashMap::new();
+        let mut real_ids: HashSet<String> = HashSet::new();
+        for kind in PoolKind::ALL
+            .into_iter()
+            .filter(|k| !Self::is_internal_kind(*k))
+        {
+            for pool in d
+                .pools
+                .values()
+                .filter(|p| p.kind == kind && access.allows(p))
+            {
+                for backend in &pool.backends {
+                    let real = backend.models_snapshot();
+                    for id in backend.listed_models() {
+                        if !access.allows_model(&id) {
+                            continue;
+                        }
+                        let entry = catalog.entry(id.clone()).or_insert_with(|| CatalogModel {
+                            id: id.clone(),
+                            kind,
+                            compliance: Compliance::default(),
+                            alias_of: None,
+                        });
+                        entry.compliance.gdpr &= pool.compliance.gdpr;
+                        entry.compliance.nda &= pool.compliance.nda;
+                        if real.contains(&id) {
+                            real_ids.insert(id);
+                        } else if entry.alias_of.is_none() {
+                            entry.alias_of = backend.resolve(&id);
+                        }
+                    }
+                }
+            }
+        }
+        for id in &real_ids {
+            if let Some(entry) = catalog.get_mut(id) {
+                entry.alias_of = None;
+            }
+        }
+        let mut out: Vec<CatalogModel> = catalog.into_values().collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
     }
 
     /// Sorted list of `(model_id, merged_compliance)` for every model served
@@ -3982,6 +4046,98 @@ mod tests {
         );
         // …and a pool with no compliance block stays all-clear.
         assert!(map["qwen-3"].is_all_clear());
+    }
+
+    #[test]
+    fn the_model_catalog_names_kind_compliance_and_alias_target_of_every_usable_model() {
+        let reg = build(vec![
+            (
+                "cloud",
+                pool_config_with_compliance(
+                    PoolKind::Chat,
+                    Compliance {
+                        gdpr: false,
+                        nda: true,
+                    },
+                    vec![backend_alias("cloud", targets(&[("smart", "kimi")]))],
+                ),
+            ),
+            (
+                "embed",
+                pool_config(
+                    PoolKind::Embedding,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("embed", 16)],
+                ),
+            ),
+            (
+                "ocr",
+                pool_config(
+                    PoolKind::Ocr,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("ocr", 16)],
+                ),
+            ),
+        ]);
+        seed_models(&reg, "cloud", 0, &["kimi"]);
+        seed_models(&reg, "embed", 0, &["bge"]);
+        seed_models(&reg, "ocr", 0, &["paddle"]);
+
+        let catalog = reg.model_catalog_for(&PoolAccess::all());
+
+        let cloud_flags = Compliance {
+            gdpr: false,
+            nda: true,
+        };
+        assert_eq!(
+            catalog,
+            vec![
+                CatalogModel {
+                    id: "bge".into(),
+                    kind: PoolKind::Embedding,
+                    compliance: Compliance::default(),
+                    alias_of: None,
+                },
+                CatalogModel {
+                    id: "kimi".into(),
+                    kind: PoolKind::Chat,
+                    compliance: cloud_flags,
+                    alias_of: None,
+                },
+                CatalogModel {
+                    id: "smart".into(),
+                    kind: PoolKind::Chat,
+                    compliance: cloud_flags,
+                    alias_of: Some("kimi".into()),
+                },
+            ],
+            "internal kinds (OCR) stay out, as they do in /v1/models"
+        );
+    }
+
+    #[test]
+    fn the_model_catalog_lists_only_what_the_caller_may_use() {
+        let reg = build(vec![(
+            "chat",
+            pool_config(
+                PoolKind::Chat,
+                PickerStrategy::RoundRobin,
+                vec![backend("a", 16)],
+            ),
+        )]);
+        seed_models(&reg, "chat", 0, &["allowed-model", "denied-model"]);
+        let restricted = PoolAccess {
+            allowed_models: Some(Arc::new(HashSet::from(["allowed-model".to_string()]))),
+            ..PoolAccess::all()
+        };
+
+        let ids: Vec<String> = reg
+            .model_catalog_for(&restricted)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
+
+        assert_eq!(ids, reg.all_models_for(&restricted));
     }
 
     #[test]

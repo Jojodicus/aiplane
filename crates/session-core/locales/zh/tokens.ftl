@@ -22,7 +22,6 @@ tokens-revoke-button = 吊销
 tokens-row-meta = 创建于 { $created } · 最近使用 { $last_used } · 过期于 { $expires }
 tokens-last-used-never = 从未使用
 
-tokens-tool-use-aria = 工具使用
 tokens-tool-use-label = 工具使用
 
 tokens-mcp-allow-description = 需要批准的连接器工具无法通过 API 请求确认；启用后将不经询问直接运行它们。
@@ -33,9 +32,6 @@ tokens-copy-aria = 复制令牌
 tokens-minted-name = 名称：{ $name }
 
 tokens-account-user-id-label = 用户 ID
-
-tokens-mcp-ask-enabled-toast = 已为此令牌启用通过 API 使用“ask”模式的 MCP 工具。
-tokens-mcp-ask-disabled-toast = 已为此令牌禁用通过 API 使用“ask”模式的 MCP 工具。
 
 # Web Push "turn complete" opt-in card (rendered by `render_push_card`; wired
 # client-side by `ui/ts/push.ts`). Device-local notification settings.
@@ -48,11 +44,9 @@ tokens-push-error = 无法更改通知设置。
 
 # 每个令牌的用量、模型白名单与配额（/tokens）。
 tokens-usage-line = 本月：{ $requests } 次请求 · { $tokens } tokens · { $cost }
-tokens-models-summary-all = 模型：全部
 tokens-models-summary-restricted = 模型：已选 { $count } 个
 tokens-models-help = 关闭时，此令牌跟随你自己的访问权限，包括以后新增的模型。开启时，它只能使用你勾选的模型——之后新增的模型在你于此处勾选之前都会被拒绝。
 tokens-models-restrict-label = 将此令牌限制为特定模型
-tokens-models-save = 保存模型
 tokens-models-saved-toast = 令牌已限制为 { $count } 个模型。
 tokens-models-cleared-toast = 令牌可使用你的全部模型。
 tokens-limits-add = 添加配额
@@ -69,7 +63,6 @@ tokens-tool-use-description = 允许此令牌调用网关工具（网络搜索�
 tokens-capabilities-summary = 能力
 tokens-panel-close = 关闭
 tokens-edit-button = 编辑
-tokens-mcp-allow-aria = 允许通过 API 使用“ask”模式的 MCP 工具
 tokens-mcp-allow-label = 允许通过 API 使用“ask”模式的 MCP 工具
 tokens-account-heading = 账户
 tokens-signed-in-as = 已登录为 { $email }
@@ -83,11 +76,8 @@ tokens-push-off = 此设备已关闭通知。
 tokens-push-denied = 此浏览器已阻止通知。请在浏览器设置中允许以启用。
 tokens-push-unsupported = 此浏览器不支持通知。
 tokens-models-none-picked = 请至少勾选一个模型，或关闭该限制。
-tokens-limits-summary-none = 配额：无
-tokens-limits-summary-some = 配额：{ $count } 条规则
 tokens-limits-help = 仅针对此令牌的上限。你自己的预算仍然有效，因此这只会收紧该令牌的用量，绝不会放宽。
 tokens-limits-remove = 移除
-tokens-limits-removed-toast = 令牌配额已移除。
 tokens-limits-admin-badge = 由管理员设置
 tokens-models-admin-set = 运营方还将此令牌限制为：{ $models }。你的选择只能在此基础上进一步收紧，无法放宽。
 
@@ -118,3 +108,53 @@ tokens-guides-model-note = 需要模型 ID？可在聊天模型选择器中查�
 notifications-loading = 正在加载通知设置…
 notifications-unavailable = 此网关目前无法使用通知。请让管理员检查推送设置。
 notifications-admin-settings-link = 打开推送设置
+tokens-tile-models = 模型
+tokens-tile-tools = 工具
+tokens-tile-budget = 预算
+tokens-save = 保存
+tokens-menu-aria = 令牌操作
+tokens-expires-today = 今天到期
+tokens-expires-soon = { $days } 天后到期
+tokens-models-tile-all = 全部 { $count } 个模型 — 跟随你的访问权限
+tokens-models-tile-some = { $total } 个模型中的 { $count } 个
+tokens-models-tile-compliant = 全部符合 GDPR 且受 NDA 保护
+tokens-models-tile-noncompliant = { $count } 个模型不受 GDPR 或 NDA 保护
+tokens-models-tile-admin = 运维人员允许其中 { $count } 个
+tokens-models-max-price = 最高每百万输出 token { $price }
+tokens-models-noncompliant-warning = 这里有 { $count } 个模型不符合 GDPR 或不受 NDA 保护。不要通过此令牌发送个人数据或机密材料。
+tokens-models-search = 搜索模型
+tokens-models-filter-gdpr = 符合 GDPR
+tokens-models-filter-nda = 受 NDA 保护
+tokens-models-filter-free = 免费
+tokens-models-select-compliant = 选择所有 GDPR + NDA 模型
+tokens-models-select-none = 清除选择
+tokens-models-empty = 没有匹配的模型。
+tokens-models-alias = { $target } 的别名
+tokens-models-gdpr-ok = 符合 GDPR：个人数据受保护。
+tokens-models-nda-ok = 受保密协议保护。
+tokens-models-price-free = 免费
+tokens-models-price-tokens = 每百万 输入 { $input } / 输出 { $output }
+tokens-models-price-per-images = 每张图片 { $price }
+tokens-models-price-per-characters = 每字符 { $price }
+tokens-models-price-per-seconds = 每秒 { $price }
+tokens-models-kind-chat = 对话
+tokens-models-kind-transcription = 语音转文字
+tokens-models-kind-speech = 文字转语音
+tokens-models-kind-embedding = 嵌入
+tokens-models-kind-image = 图像
+tokens-models-kind-system_one = System One
+tokens-tools-tile-on = 已允许
+tokens-tools-tile-off = 关闭
+tokens-tools-tile-pinned = { $count } 个始终开启
+tokens-tools-tile-mcp-allowed = “Ask” MCP 工具无需确认即运行
+tokens-tools-tile-mcp-blocked = “Ask” MCP 工具已阻止
+tokens-tools-capabilities-help = 此令牌可使用的工具和技能。
+tokens-tools-saved-toast = 令牌工具已保存。
+tokens-budget-tile-none = 没有单独限额
+tokens-budget-tile-more = 另有 { $count } 个
+tokens-budget-owner-applies = 你自己的预算同样适用
+tokens-budget-token-heading = 此令牌
+tokens-budget-owner-heading = 同样适用：你自己的预算
+tokens-budget-owner-none = 你没有预算限额。
+tokens-budget-dimension = 限制内容
+tokens-budget-window = 周期

@@ -1,4 +1,6 @@
 import type { ChatCapability } from './api';
+import type { TokenModel } from './token-models';
+import type { UsageLimit } from './usage-types';
 
 export interface TokenQuota {
 	id: string;
@@ -28,13 +30,15 @@ export interface ManagedToken {
 	admin_models: string[] | null;
 	mcp_allow: boolean;
 	quotas: TokenQuota[];
+	quota_status: UsageLimit[];
 	usage: TokenUsage | null;
 }
 
 export interface TokenManagementDetails {
 	tokens: ManagedToken[];
 	capabilities: Omit<ChatCapability, 'state'>[];
-	models: string[];
+	models: TokenModel[];
+	owner_limits: UsageLimit[];
 	usage_enabled: boolean;
 	currency: string;
 	push_enabled: boolean;
@@ -58,4 +62,32 @@ export function tokenDate(timestamp: string, timezone: string): string {
 	}).formatToParts(date);
 	const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? '';
 	return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whole days left before the token expires (0 = today), `'expired'` once it
+ *  has, or `null` while expiry is more than `warnDays` away — far enough that
+ *  the card needs no warning. */
+export function daysUntilExpiry(expiresAt: string, now: number, warnDays = 14): number | 'expired' | null {
+	const left = Date.parse(expiresAt) - now;
+	if (Number.isNaN(left) || left > warnDays * DAY_MS) return null;
+	if (left <= 0) return 'expired';
+	return Math.floor(left / DAY_MS);
+}
+
+export type NewQuota = Pick<TokenQuota, 'dimension' | 'window' | 'value'>;
+
+/** What saving the budget dialog sends: the owner's rules it dropped and the
+ *  rules it added. An admin's rule is never the owner's to remove. */
+export function quotaChanges(saved: TokenQuota[], kept: string[], added: NewQuota[]): { remove: string[]; add: NewQuota[] } {
+	return {
+		remove: saved.filter((quota) => quota.managed_by === 'owner' && !kept.includes(quota.id)).map((quota) => quota.id),
+		add: added
+	};
+}
+
+/** The spend recorded against a rule, matched by what the rule limits. */
+export function quotaUsed(quota: Pick<TokenQuota, 'model' | 'dimension' | 'window'>, status: UsageLimit[]): number | null {
+	return status.find((entry) => entry.model === quota.model && entry.dimension === quota.dimension && entry.window === quota.window)?.used ?? null;
 }
