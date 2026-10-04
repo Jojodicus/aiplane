@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
-	import type { Spec } from '$lib/agents';
+	import { grantable, type Spec } from '$lib/agents';
 	import {
 		IDENTITY_METHODS,
 		identityLabels,
@@ -32,11 +32,12 @@
 	);
 
 	const blockers = $derived(topicsNeedingIdentity(spec));
-	const connectors = $derived(ws.resources?.connectors ?? []);
-	const lookupTools = $derived([
-		...(ws.resources?.tools ?? []).map((x) => ({ id: x.id, name: x.name })),
-		...connectors.flatMap((c) => c.tools.map((id) => ({ id, name: `${c.name}: ${id.split('__').pop()}` })))
-	]);
+	const connectors = $derived(grantable(ws.resources, 'connector').map((c) => ({ key: c.grant.refs[0], name: c.title, tools: c.tools })));
+	const lookupTools = $derived(
+		[...grantable(ws.resources, 'tool'), ...grantable(ws.resources, 'connector')].flatMap((item) =>
+			item.tools.map((id) => ({ id, name: item.tools.length > 1 ? `${item.title}: ${id}` : item.title }))
+		)
+	);
 
 	let generated = $state(false);
 

@@ -4,14 +4,14 @@ import test from 'node:test';
 import type { Ability } from './agent-setup.ts';
 import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from './ability-list.ts';
 
-const card = (ref: string, over: Partial<Ability> = {}): Ability => ({
+const card = (ref: string, { name, description, ...over }: Partial<Ability> & { name?: string; description?: string } = {}): Ability => ({
 	kind: 'tool',
 	ref,
-	name: ref,
-	description: null,
+	refs: [ref],
 	tools: [ref],
 	on: false,
 	holdable: true,
+	item: { key: ref, kind: 'tool', title: name ?? ref, description: description ?? '', group: 'g', order: 0, icon: null, grant: { kind: 'tool', refs: [ref] }, tools: [ref], editable: false, config_url: null },
 	...over
 });
 const refs = (list: Ability[]) => list.map((c) => c.ref);

@@ -18,14 +18,22 @@
 //! `defaults` names the gateway's default model of each kind (Models &
 //! routing → Default models): what an agent's unset model key runs on.
 //! Whether the caller may grant it is whether `models` lists it.
+//!
+//! `items` are the tools, connectors, skills and knowledge bases, each the
+//! row the chat picker shows for it (`tool_toggles::CapabilityEntry`, so the
+//! title and description are the resource's own), with the grant it takes,
+//! the tool ids it puts into the spec, and its edit page when the caller may
+//! maintain it there.
 
 use std::sync::Arc;
 
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
+use super::tool_toggles::{CapabilityEntry, entries_for_tools, sort_entries};
 use super::{internal, json_ok};
 use aiplane_core::server::db::users::User;
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
@@ -34,31 +42,166 @@ use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::assist::Ability;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::model_choices::{self, ModelChoice, gateway_default};
+use aiplane_runtime::server::tools::catalog;
 
 const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
 
-/// The registry tools (MCP tools aside: those come with their connector) a
-/// manager in groups `role_ids` holds and may therefore grant.
-pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Ability> {
+/// One resource the agent setup offers: the row the chat picker shows for
+/// it, plus what switching it on grants and puts into the spec, and where
+/// the viewer maintains it when they may.
+#[derive(Serialize)]
+pub(super) struct GrantableItem {
+    #[serde(flatten)]
+    pub entry: CapabilityEntry,
+    pub grant: GrantRefs,
+    /// The tool ids switching it on puts into the spec's `main.tools`.
+    pub tools: Vec<String>,
+    pub editable: bool,
+    pub config_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct GrantRefs {
+    pub kind: &'static str,
+    pub refs: Vec<String>,
+}
+
+impl GrantableItem {
+    fn new(entry: CapabilityEntry, kind: &'static str, refs: Vec<String>) -> Self {
+        Self {
+            entry,
+            grant: GrantRefs { kind, refs },
+            tools: Vec::new(),
+            editable: false,
+            config_url: None,
+        }
+    }
+
+    fn edited_at(mut self, url: Option<String>) -> Self {
+        self.editable = url.is_some();
+        self.config_url = url;
+        self
+    }
+}
+
+/// The registry tool ids (MCP tools aside: those come with their connector)
+/// a manager in groups `role_ids` holds and may therefore grant.
+fn grantable_tool_ids(state: &RamaState, role_ids: &[String]) -> Vec<String> {
     let grantable = state.grantable_tool_ids();
     let mut held = state.rbac.allowed_tools(role_ids, &state.tools());
     state.expand_comfyui_tools(&mut held, role_ids);
-    let tool_ids: Vec<String> = held
-        .into_iter()
+    held.into_iter()
         .filter(|id| !id.starts_with(MCP_TOOL_PREFIX) && grantable.contains(id))
-        .collect();
-    let summaries = state.tools().summaries_for(&tool_ids);
-    tool_ids
+        .collect()
+}
+
+/// The tools a manager in groups `role_ids` may grant, one row per catalog
+/// entry, granting every tool id the entry stands for.
+fn tool_items(state: &RamaState, role_ids: &[String]) -> Vec<GrantableItem> {
+    let held = grantable_tool_ids(state, role_ids);
+    entries_for_tools(state, &held)
         .into_iter()
-        .map(|id| {
-            let known = summaries.iter().find(|s| s.id == id);
-            Ability {
-                name: known.map_or_else(|| id.clone(), |s| s.name.clone()),
-                description: known.map(|s| s.description.clone()),
-                id,
-            }
+        .map(|entry| {
+            let refs: Vec<String> = held
+                .iter()
+                .filter(|id| catalog::entry_key_for(id) == entry.key)
+                .cloned()
+                .collect();
+            let mut item = GrantableItem::new(CapabilityEntry::tool(entry), "tool", refs.clone())
+                .edited_at(Some("/tools".into()));
+            item.tools = refs;
+            item
         })
         .collect()
+}
+
+/// The tools a manager in groups `role_ids` may grant, by tool id, each
+/// named as its catalog entry names it.
+pub(super) fn grantable_tools(state: &RamaState, role_ids: &[String]) -> Vec<Ability> {
+    tool_items(state, role_ids)
+        .into_iter()
+        .flat_map(|item| {
+            let entry = item.entry;
+            item.grant.refs.into_iter().map(move |id| Ability {
+                id,
+                name: entry.title.clone(),
+                description: Some(entry.description.clone()).filter(|d| !d.is_empty()),
+            })
+        })
+        .collect()
+}
+
+/// Everything `user` holds and may grant an agent — tools, connectors,
+/// skills and knowledge bases — as rows built like the chat picker's.
+pub(super) async fn grantable_items(
+    state: &RamaState,
+    user: &User,
+) -> Result<Vec<GrantableItem>, Response> {
+    let role_ids = state.rbac.role_ids_for(&user.roles);
+    let is_admin = state.rbac.is_admin(&role_ids);
+    let admin_page = |url: String| is_admin.then_some(url);
+    let mut items = tool_items(state, &role_ids);
+
+    let grantable = state.grantable_tool_ids();
+    let mcp_grant = state.mcp_grant_for(&user.roles);
+    for connector in mcp_catalog::list_enabled(&state.db)
+        .await
+        .map_err(internal)?
+    {
+        let offered = connector.has_shared_identity()
+            && if connector.is_agent() {
+                connector.grantable_by(&role_ids, is_admin)
+            } else {
+                let key = format!("{MCP_TOOL_PREFIX}{}", connector.key);
+                connector.allows(&role_ids, is_admin) && mcp_grant.allows(&key, &key)
+            };
+        if !offered {
+            continue;
+        }
+        let prefix = format!("{MCP_TOOL_PREFIX}{}__", connector.key);
+        let key = connector.key.clone();
+        let mut item = GrantableItem::new(
+            CapabilityEntry::connector(connector),
+            "connector",
+            vec![key.clone()],
+        )
+        .edited_at(admin_page(format!("/admin/connectors/{key}/edit")));
+        item.tools = grantable
+            .iter()
+            .filter(|id| id.starts_with(&prefix))
+            .cloned()
+            .collect();
+        items.push(item);
+    }
+
+    if let Some(store) = state.skills() {
+        let registry = store.current();
+        for name in state.rbac.allowed_skills(&role_ids, &registry) {
+            let Some(skill) = registry.get(&name) else {
+                continue;
+            };
+            let entry = CapabilityEntry::skill(name.clone(), Some(skill));
+            items.push(
+                GrantableItem::new(entry, "skill", vec![name])
+                    .edited_at(admin_page("/admin/skills".into())),
+            );
+        }
+    }
+
+    for collection in grantable_collections(state, &role_ids).await? {
+        let id = collection.id.to_string();
+        let url = admin_page(format!("/rag/{id}/edit"));
+        items.push(
+            GrantableItem::new(
+                CapabilityEntry::collection(collection),
+                "rag_collection",
+                vec![id],
+            )
+            .edited_at(url),
+        );
+    }
+    sort_entries(&mut items, |item| &item.entry);
+    Ok(items)
 }
 
 /// The knowledge bases (RAG collections) a manager in groups `role_ids` may
@@ -112,8 +255,6 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
 /// What `user` holds and may grant, as `GET /api/v0/agent-resources`
 /// answers it.
 pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Value, Response> {
-    let role_ids = state.rbac.role_ids_for(&user.roles);
-    let is_admin = state.rbac.is_admin(&role_ids);
     let mut models = serde_json::Map::new();
     for (key, kind) in [
         ("chat", PoolKind::Chat),
@@ -128,50 +269,7 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
         models.insert(key.into(), Value::Array(listed));
     }
 
-    let grantable = state.grantable_tool_ids();
-    let tools: Vec<_> = grantable_tools(state, &role_ids)
-        .into_iter()
-        .map(|t| json!({ "id": t.id, "name": t.name, "description": t.description }))
-        .collect();
-
-    let connectors = mcp_catalog::list_enabled(&state.db)
-        .await
-        .map_err(internal)?;
-    let mcp_grant = state.mcp_grant_for(&user.roles);
-    let connectors: Vec<_> = connectors
-        .into_iter()
-        .filter(|c| {
-            c.has_shared_identity()
-                && if c.is_agent() {
-                    c.grantable_by(&role_ids, is_admin)
-                } else {
-                    let key = format!("{MCP_TOOL_PREFIX}{}", c.key);
-                    c.allows(&role_ids, is_admin) && mcp_grant.allows(&key, &key)
-                }
-        })
-        .map(|c| {
-            let prefix = format!("{MCP_TOOL_PREFIX}{}__", c.key);
-            let tools: Vec<&String> = grantable
-                .iter()
-                .filter(|id| id.starts_with(&prefix))
-                .collect();
-            json!({ "key": c.key, "name": c.name, "tools": tools })
-        })
-        .collect();
-
-    let skills: Vec<String> = state.skills().map_or_else(Vec::new, |store| {
-        let registry = store.current();
-        let mut names = state.rbac.allowed_skills(&role_ids, &registry);
-        names.retain(|n| registry.names().any(|known| known == n));
-        names.sort();
-        names
-    });
-
-    let rag_collections: Vec<_> = grantable_collections(state, &role_ids)
-        .await?
-        .into_iter()
-        .map(|c| json!({ "id": c.id, "name": c.name }))
-        .collect();
+    let items = grantable_items(state, user).await?;
 
     let defaults = json!({
         "chat": gateway_default(state, Feature::Chat).await,
@@ -182,9 +280,6 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
     Ok(json!({
         "models": models,
         "defaults": defaults,
-        "tools": tools,
-        "connectors": connectors,
-        "skills": skills,
-        "rag_collections": rag_collections,
+        "items": items,
     }))
 }

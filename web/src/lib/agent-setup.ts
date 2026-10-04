@@ -16,7 +16,7 @@
  * structured system prompt it ends up in (`docs/agents.md` "What #115
  * built"). Text a person reads comes from the catalogs.
  */
-import type { AgentError, AgentResources, Grant, ModelDefaults, ModelKind, Spec, SpecIssue } from './agents.ts';
+import { grantable, type AgentError, type AgentResources, type Grant, type GrantableItem, type GrantableKind, type ModelDefaults, type ModelKind, type Spec, type SpecIssue } from './agents.ts';
 import { modelSelectOptions } from './model-option.ts';
 import type { SearchOption } from './searchable-select.ts';
 import templates from './agent-templates.json' with { type: 'json' };
@@ -248,73 +248,114 @@ export const RAG_LIST = 'rag_list_collections';
 const MCP_PREFIX = 'mcp__';
 const connectorPrefix = (key: string) => `${MCP_PREFIX}${key}__`;
 
+/**
+ * One row of the abilities step. `item` is what the picker shows: the
+ * server's row for the resource (its own title and description), or, for
+ * what the agent has but the manager does not hold, its reference alone.
+ */
 export interface Ability {
-	/** `tool` / `connector` / `skill`: the grant kind; `rag_collection` for knowledge. */
-	kind: 'rag_collection' | 'tool' | 'connector' | 'skill';
+	/** The grant kind. */
+	kind: GrantableKind;
+	/** The tool's catalog key, the connector key, the skill name or the collection id. */
 	ref: string;
-	name: string;
-	description: string | null;
-	/** Tools a connector brings, by id. */
+	/** What switching it on grants: one reference, or every tool id of a catalog entry. */
+	refs: string[];
+	/** Tool ids it puts into `main.tools`. */
 	tools: string[];
 	on: boolean;
 	/** The manager holds it and can therefore grant or revoke it. */
 	holdable: boolean;
+	item: GrantableItem;
 }
+
+/** The group the abilities step lists what it cannot offer under. */
+export const LOCKED_GROUP = 'locked';
 
 const tools = (spec: Spec): string[] => (Array.isArray(spec.main?.tools) ? spec.main.tools : []);
 const skills = (spec: Spec): string[] => (Array.isArray(spec.main?.skills) ? spec.main.skills : []);
 
+function lockedItem(kind: GrantableKind, ref: string, toolIds: string[]): GrantableItem {
+	return {
+		key: ref,
+		kind: kind === 'connector' ? 'tool' : kind,
+		title: ref,
+		description: '',
+		group: LOCKED_GROUP,
+		order: Number.MAX_SAFE_INTEGER,
+		icon: null,
+		grant: { kind, refs: [ref] },
+		tools: toolIds,
+		editable: false,
+		config_url: null
+	};
+}
+
+const offeredAbility = (item: GrantableItem, on: boolean): Ability => ({
+	kind: item.grant.kind,
+	ref: item.grant.kind === 'tool' ? item.key : item.grant.refs[0],
+	refs: item.grant.refs,
+	tools: item.tools,
+	on,
+	holdable: true,
+	item
+});
+
+const lockedAbility = (kind: GrantableKind, ref: string, toolIds: string[]): Ability => ({
+	kind,
+	ref,
+	refs: [ref],
+	tools: toolIds,
+	on: true,
+	holdable: false,
+	item: lockedItem(kind, ref, toolIds)
+});
+
 /**
- * Every card the abilities step shows: what the manager could grant, plus
- * whatever the agent already has that they could not (shown, not offered).
- * Knowledge is on when its collection is granted; the rest when the spec
- * uses it.
+ * Every row the abilities step shows, in the server's order: what the
+ * manager could grant, then whatever the agent already has that they could
+ * not (shown, not offered). Knowledge is on when its collection is granted;
+ * the rest when the spec uses it. Knowledge search itself is no row: it
+ * comes with a knowledge base.
  */
 export function abilities(spec: Spec, grants: Grant[], resources: AgentResources | null): Ability[] {
 	const granted = (kind: string) => grants.filter((g) => g.kind === kind).map((g) => g.ref);
 	const used = tools(spec);
 	const out: Ability[] = [];
+	const locked: Ability[] = [];
 
-	const collections = resources?.rag_collections ?? [];
-	for (const c of collections) {
-		out.push({ kind: 'rag_collection', ref: String(c.id), name: c.name, description: null, tools: [], on: granted('rag_collection').includes(String(c.id)), holdable: true });
+	for (const item of grantable(resources, 'rag_collection')) {
+		out.push(offeredAbility(item, granted('rag_collection').includes(item.grant.refs[0])));
 	}
 	for (const ref of granted('rag_collection')) {
-		if (!collections.some((c) => String(c.id) === ref)) {
-			out.push({ kind: 'rag_collection', ref, name: ref, description: null, tools: [], on: true, holdable: false });
-		}
+		if (!grantable(resources, 'rag_collection').some((c) => c.grant.refs.includes(ref))) locked.push(lockedAbility('rag_collection', ref, []));
 	}
 
-	const offered = (resources?.tools ?? []).filter((x) => x.id !== RAG_SEARCH && x.id !== RAG_LIST);
-	for (const tool of offered) {
-		out.push({ kind: 'tool', ref: tool.id, name: tool.name, description: tool.description, tools: [tool.id], on: used.includes(tool.id), holdable: true });
-	}
+	const offered = grantable(resources, 'tool').filter((item) => !item.tools.some((id) => id === RAG_SEARCH || id === RAG_LIST));
+	for (const item of offered) out.push(offeredAbility(item, item.tools.some((id) => used.includes(id))));
 	for (const id of used) {
-		if (id.startsWith(MCP_PREFIX) || id === RAG_SEARCH || id === RAG_LIST || offered.some((x) => x.id === id)) continue;
-		out.push({ kind: 'tool', ref: id, name: id, description: null, tools: [id], on: true, holdable: false });
+		if (id.startsWith(MCP_PREFIX) || id === RAG_SEARCH || id === RAG_LIST || offered.some((item) => item.tools.includes(id))) continue;
+		locked.push(lockedAbility('tool', id, [id]));
 	}
 
-	const connectors = resources?.connectors ?? [];
+	const connectors = grantable(resources, 'connector');
 	const connectorOn = (key: string) => used.some((id) => id.startsWith(connectorPrefix(key)));
-	for (const c of connectors) {
-		out.push({ kind: 'connector', ref: c.key, name: c.name, description: null, tools: c.tools, on: connectorOn(c.key), holdable: true });
-	}
+	for (const item of connectors) out.push(offeredAbility(item, connectorOn(item.grant.refs[0])));
 	const otherKeys = new Set(
 		used
 			.filter((id) => id.startsWith(MCP_PREFIX))
 			.map((id) => id.slice(MCP_PREFIX.length).split('__')[0])
-			.filter((key) => !connectors.some((c) => c.key === key))
+			.filter((key) => !connectors.some((c) => c.grant.refs.includes(key)))
 	);
-	for (const key of otherKeys) {
-		out.push({ kind: 'connector', ref: key, name: key, description: null, tools: used.filter((id) => id.startsWith(connectorPrefix(key))), on: true, holdable: false });
+	for (const key of otherKeys) locked.push(lockedAbility('connector', key, used.filter((id) => id.startsWith(connectorPrefix(key)))));
+
+	const held = grantable(resources, 'skill');
+	for (const item of held) out.push(offeredAbility(item, skills(spec).includes(item.grant.refs[0])));
+	for (const name of skills(spec)) {
+		if (!held.some((item) => item.grant.refs.includes(name))) locked.push(lockedAbility('skill', name, []));
 	}
 
-	const held = resources?.skills ?? [];
-	for (const name of held) out.push({ kind: 'skill', ref: name, name, description: null, tools: [], on: skills(spec).includes(name), holdable: true });
-	for (const name of skills(spec)) {
-		if (!held.includes(name)) out.push({ kind: 'skill', ref: name, name, description: null, tools: [], on: true, holdable: false });
-	}
-	return out;
+	const position = (a: Ability) => (resources?.items ?? []).indexOf(a.item);
+	return [...out.sort((a, b) => position(a) - position(b)), ...locked];
 }
 
 function dropTool(spec: Spec, id: string): void {
@@ -340,8 +381,10 @@ export function setAbility(spec: Spec, ability: Pick<Ability, 'kind' | 'ref' | '
 		return;
 	}
 	if (ability.kind === 'tool') {
-		if (on) addTool(spec, ability.ref);
-		else dropTool(spec, ability.ref);
+		for (const id of ability.tools) {
+			if (on) addTool(spec, id);
+			else dropTool(spec, id);
+		}
 	}
 }
 
@@ -1140,7 +1183,7 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 			return tr(s.strict ? 'agents-setup-sum-scope-strict' : 'agents-setup-sum-scope-soft', { topics: s.topics.join(', ') });
 		}
 		case 'abilities': {
-			const on = abilities(spec, ctx.grants, ctx.resources).filter((c) => c.on).map((c) => c.name);
+			const on = abilities(spec, ctx.grants, ctx.resources).filter((c) => c.on).map((c) => c.item.title);
 			return on.length ? on.join(' · ') : tr('agents-setup-sum-abilities-none');
 		}
 		case 'slots': {

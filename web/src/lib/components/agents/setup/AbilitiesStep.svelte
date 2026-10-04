@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import type { Spec } from '$lib/agents';
+	import { grantable, type Spec } from '$lib/agents';
 	import { RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
 	import { abilityTitle, filterAbilities, orderAbilities, plainText, visibleAbilities } from '$lib/ability-list';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
@@ -29,7 +29,7 @@
 	const matching = $derived(filterAbilities(ordered, query));
 	const shown = $derived(visibleAbilities(matching, suggestedIds, showAll || query.trim() !== ''));
 	const hidden = $derived(matching.length - shown.length);
-	const offers = (id: string) => !!ws.resources?.tools.some((x) => x.id === id);
+	const offers = (id: string) => grantable(ws.resources, 'tool').some((x) => x.grant.refs.includes(id));
 
 	let error = $state<string | null>(null);
 	let kept = $state<string[]>([]);
@@ -37,10 +37,10 @@
 	const cardId = (c: Ability) => `${c.kind}:${c.ref}`;
 
 	function description(c: Ability): string | null {
-		if (c.kind === 'rag_collection') return t('agents-setup-knowledge-desc', { name: c.name });
-		if (c.kind === 'connector') return t('agents-setup-connector-desc', { name: c.name, count: c.tools.length });
-		if (c.kind === 'skill') return t('agents-setup-skill-desc', { name: c.name });
-		return c.description ? firstSentence(plainText(c.description)) : null;
+		if (c.kind === 'rag_collection') return t('agents-setup-knowledge-desc', { name: c.item.title });
+		if (c.kind === 'connector') return t('agents-setup-connector-desc', { name: c.item.title, count: c.tools.length });
+		if (c.kind === 'skill') return t('agents-setup-skill-desc', { name: c.item.title });
+		return c.item.description ? firstSentence(plainText(c.item.description)) : null;
 	}
 	/** A tool's description is written for the model and can run to a paragraph; the card shows its first sentence. */
 	function firstSentence(text: string): string {
@@ -53,7 +53,7 @@
 	function collectionNames(): string[] {
 		return ws.grants
 			.filter((g) => g.kind === 'rag_collection')
-			.map((g) => ws.resources?.rag_collections.find((c) => String(c.id) === g.ref)?.name ?? g.ref);
+			.map((g) => grantable(ws.resources, 'rag_collection').find((c) => c.grant.refs.includes(g.ref))?.title ?? g.ref);
 	}
 
 	const suggestedKnowledge = $derived(ws.suggestion?.steps.knowledge ?? []);
@@ -105,11 +105,11 @@
 			return;
 		}
 		if (on) {
-			ws.stageGrant(c.kind, c.ref);
+			for (const ref of c.refs) ws.stageGrant(c.kind, ref);
 			setAbility(spec, c, true);
 		} else {
 			setAbility(spec, c, false);
-			if (ws.stageRevoke(c.kind, c.ref)) kept = [...kept, cardId(c)];
+			if (c.refs.map((ref) => ws.stageRevoke(c.kind, ref)).some(Boolean)) kept = [...kept, cardId(c)];
 		}
 	}
 </script>

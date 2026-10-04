@@ -15,7 +15,9 @@ import {
 	agentsApi,
 	cleanSpec,
 	ensureShape,
+	grantable,
 	liveIssues,
+	toolTitle,
 	type AgentDetail,
 	type AgentError,
 	type AgentResources,
@@ -72,14 +74,13 @@ export class AgentWorkspace {
 	readonly staleRefusal = $derived(this.issues.length > 0 && this.shownIssues.length === 0);
 	readonly granted = $derived.by((): Granted => {
 		const grants = this.detail?.grants ?? [];
-		const toolName = (tid: string) => this.resources?.tools.find((x) => x.id === tid)?.name ?? tid;
 		const connectorTools = grants
 			.filter((g) => g.kind === 'connector')
-			.flatMap((g) => this.resources?.connectors.find((c) => c.key === g.ref)?.tools ?? []);
+			.flatMap((g) => grantable(this.resources, 'connector').find((c) => c.grant.refs.includes(g.ref))?.tools ?? []);
 		return {
 			models: grants.filter((g) => g.kind === 'model').map((g) => g.ref),
 			defaults: this.resources?.defaults ?? null,
-			tools: [...grants.filter((g) => g.kind === 'tool').map((g) => g.ref), ...connectorTools].map((tid) => ({ id: tid, name: toolName(tid) })),
+			tools: [...grants.filter((g) => g.kind === 'tool').map((g) => g.ref), ...connectorTools].map((tid) => ({ id: tid, name: toolTitle(this.resources, tid) })),
 			skills: grants.filter((g) => g.kind === 'skill').map((g) => g.ref)
 		};
 	});

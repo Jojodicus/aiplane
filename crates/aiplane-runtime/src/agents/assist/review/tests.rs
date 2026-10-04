@@ -298,8 +298,8 @@ fn knowledge_is_offered_by_knowledge_base_never_as_the_search_tools() {
             .iter()
             .map(|a| (a.id.as_str(), a.name.as_str()))
             .collect::<Vec<_>>(),
-        [("search_web", "Search web")],
-        "a tool without a title of its own is named the way its card is"
+        [("search_web", "search_web")],
+        "a tool is named as the candidates name it, never made up from its id"
     );
     assert_eq!(
         s.knowledge

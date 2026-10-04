@@ -1,6 +1,6 @@
 import { humanize, type Ability } from './agent-setup.ts';
 
-export const abilityTitle = (c: Ability) => (c.kind === 'tool' && c.name === c.ref ? humanize(c.name) : c.name);
+export const abilityTitle = (c: Ability) => (c.kind === 'tool' && c.item.title === c.ref ? humanize(c.ref) : c.item.title);
 
 export const plainText = (text: string) => text.replaceAll('`', '');
 
@@ -13,7 +13,7 @@ export function orderAbilities(list: Ability[], suggested: string[]): Ability[] 
 export function filterAbilities(list: Ability[], query: string): Ability[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return list;
-	return list.filter((c) => `${abilityTitle(c)} ${c.description ?? ''}`.toLowerCase().includes(q));
+	return list.filter((c) => `${abilityTitle(c)} ${c.item.description}`.toLowerCase().includes(q));
 }
 
 /**

@@ -602,15 +602,16 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .filter_map(|m| m["id"].as_str())
         .collect();
     assert_eq!(models, ["guard-model", "main-model", "tech-model"]);
-    let tools: Vec<&str> = body["tools"]
+    let grants: Vec<&Value> = body["items"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|t| t["id"].as_str())
+        .map(|i| &i["grant"])
         .collect();
-    assert_eq!(tools, ["get_current_timestamp"]);
-    assert!(body["connectors"].as_array().unwrap().is_empty());
-    assert!(body["skills"].as_array().unwrap().is_empty());
+    assert_eq!(
+        grants,
+        [&json!({ "kind": "tool", "refs": ["get_current_timestamp"] })]
+    );
 
     let (status, _) = fx
         .send(&fx.plain, Method::GET, "/api/v0/agent-resources", None)

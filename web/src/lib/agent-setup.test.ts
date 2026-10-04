@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
-import { cleanSpec, ensureShape, type AgentResources, type Grant, type Spec } from './agents.ts';
+import { cleanSpec, ensureShape, type AgentResources, type Grant, type GrantableItem, type GrantableKind, type Spec } from './agents.ts';
 import {
 	SLOT_KINDS,
 	TEMPLATES,
@@ -425,16 +425,30 @@ test('a specialist’s route values come from trusted slots or the confirmed ide
 	assert.deepEqual(deriveBind(null, spec), { bind: {}, missing: [] });
 });
 
+const item = (kind: GrantableKind, key: string, title: string, refs: string[], tools: string[], description = ''): GrantableItem => ({
+	key,
+	kind: kind === 'connector' ? 'tool' : kind,
+	title,
+	description,
+	group: kind,
+	order: 0,
+	icon: null,
+	grant: { kind, refs },
+	tools,
+	editable: false,
+	config_url: null
+});
 const resources: AgentResources = {
 	models: { chat: [{ id: 'mid', gdpr: true, nda: true }], transcription: [], speech: [] },
-	tools: [
-		{ id: 'search_web', name: 'Web search', description: 'Searches the web' },
-		{ id: 'rag_search', name: 'Knowledge search', description: null },
-		{ id: 'rag_list_collections', name: 'List collections', description: null }
-	],
-	connectors: [{ key: 'jira', name: 'Jira', tools: ['mcp__jira__create', 'mcp__jira__get'] }],
-	skills: ['brand-voice'],
-	rag_collections: [{ id: 7, name: 'croit docs' }]
+	items: [
+		item('rag_collection', '7', 'croit docs', ['7'], []),
+		item('tool', 'search_web', 'Web search', ['search_web'], ['search_web'], 'Searches the web'),
+		item('tool', 'memory', 'Memory', ['remember', 'recall'], ['remember', 'recall']),
+		item('tool', 'rag_search', 'Knowledge search', ['rag_search'], ['rag_search']),
+		item('tool', 'rag_list_collections', 'List collections', ['rag_list_collections'], ['rag_list_collections']),
+		item('connector', 'mcp__jira', 'Jira', ['jira'], ['mcp__jira__create', 'mcp__jira__get']),
+		item('skill', 'brand-voice', 'Brand voice', ['brand-voice'], [])
+	]
 };
 const grant = (kind: Grant['kind'], ref: string): Grant => ({ kind, ref, granted_by: 'admin', granted_at: '' });
 
@@ -444,14 +458,29 @@ test('ability cards: what the manager may grant, and what the agent has that the
 	const view = cards.map((c) => `${c.kind}:${c.ref}:${c.on ? 'on' : 'off'}:${c.holdable ? 'mine' : 'locked'}`);
 	assert.deepEqual(view, [
 		'rag_collection:7:on:mine',
-		'rag_collection:9:on:locked',
 		'tool:search_web:on:mine',
-		'tool:netcheck:on:locked',
+		'tool:memory:off:mine',
 		'connector:jira:off:mine',
-		'connector:erp:on:locked',
 		'skill:brand-voice:off:mine',
+		'rag_collection:9:on:locked',
+		'tool:netcheck:on:locked',
+		'connector:erp:on:locked',
 		'skill:secret-skill:on:locked'
 	]);
+	const title = (ref: string) => cards.find((c) => c.ref === ref)?.item;
+	assert.equal(title('jira')?.title, 'Jira', 'the server names what the manager holds');
+	assert.deepEqual([title('netcheck')?.title, title('netcheck')?.description, title('netcheck')?.editable], ['netcheck', '', false], 'what they do not hold: its reference alone');
+});
+
+test('a catalog entry standing for several tools switches all of them', () => {
+	const spec: Spec = ensureShape({});
+	const memory = abilities(spec, [], resources).find((c) => c.ref === 'memory')!;
+	assert.deepEqual(memory.refs, ['remember', 'recall']);
+	setAbility(spec, memory, true);
+	assert.deepEqual(spec.main.tools, ['remember', 'recall']);
+	assert.ok(abilities(spec, [], resources).find((c) => c.ref === 'memory')?.on);
+	setAbility(spec, memory, false);
+	assert.deepEqual(spec.main.tools, []);
 });
 
 test('switching abilities edits the spec, and knowledge binds a single collection', () => {

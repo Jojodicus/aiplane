@@ -13,7 +13,7 @@ import type { ActivityPage, Verification } from './agent-activity.ts';
 import type { InboxContext } from './inbox.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
-import { ApiError, request } from './api.ts';
+import { ApiError, request, type CapabilityItem } from './api.ts';
 import type { ChatModelOption } from './model-option.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
@@ -128,12 +128,31 @@ export interface AgentVersion {
 export interface AgentResources {
 	/** The models of each kind the manager may use and so grant, by the name the chat picker shows; the gateway default first. */
 	models?: Record<ModelKind, ChatModelOption[]>;
-	tools: { id: string; name: string; description: string | null }[];
-	connectors: { key: string; name: string; tools: string[] }[];
-	skills: string[];
-	rag_collections: { id: number; name: string }[];
+	/** The tools, connectors, skills and knowledge bases the manager may grant, as the chat picker shows them. */
+	items: GrantableItem[];
 	/** The gateway's default model of each kind: what a spec key left unset runs on. */
 	defaults?: ModelDefaults;
+}
+
+export type GrantableKind = 'tool' | 'connector' | 'skill' | 'rag_collection';
+
+/** A resource the manager may give an agent: its capability row, the grant it takes and the tool ids it adds to `main.tools`. */
+export interface GrantableItem extends CapabilityItem {
+	kind: 'tool' | 'skill' | 'rag_collection';
+	grant: { kind: GrantableKind; refs: string[] };
+	tools: string[];
+	editable: boolean;
+	config_url: string | null;
+}
+
+/** The items granted by `kind`. */
+export function grantable(resources: AgentResources | null | undefined, kind: GrantableKind): GrantableItem[] {
+	return (resources?.items ?? []).filter((item) => item.grant.kind === kind);
+}
+
+/** A tool id as its catalog entry names it; the id itself when the manager holds no such tool. */
+export function toolTitle(resources: AgentResources | null | undefined, id: string): string {
+	return grantable(resources, 'tool').find((item) => item.grant.refs.includes(id))?.title ?? id;
 }
 
 export type ModelKind = 'chat' | 'transcription' | 'speech';
