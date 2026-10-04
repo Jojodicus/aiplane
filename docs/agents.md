@@ -157,8 +157,7 @@ What each grant kind unlocks, and what it does not, is the table in
 - **Grants are not versioned.** They belong to the principal, not to a spec
   version. A live spec that names a tool whose grant was revoked hits default
   deny at run time: the tool is not offered and a call to it is refused as
-  `not_granted`. The spec key `on_tool_unavailable` (`reject` | `skip`) is
-  validated and typed, but no run code reads it.
+  `not_granted`.
 - **Who manages a principal.** An agent's principal: whoever holds a share on
   the agent ([Shares](#shares)). Any other principal: its creator
   (`created_by`) and admins; another manager gets 404. Issuing a token takes

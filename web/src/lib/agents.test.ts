@@ -114,8 +114,7 @@ test('cleaning drops blanks but keeps what the validator must see', () => {
 		state: { a: { type: '', set_by: [] }, b: { type: 'string', description: '' } },
 		routes: { r: { when: { all: [] }, agent: 'x', task: '', bind: {} } },
 		finish: { schema: { type: 'object', required: [] } },
-		publish: { origins: [], idle_ttl: '' },
-		on_tool_unavailable: ''
+		publish: { origins: [], idle_ttl: '' }
 	});
 	assert.deepEqual(cleaned, {
 		main: {

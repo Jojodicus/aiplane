@@ -743,7 +743,6 @@ const SPEC_KEYS: &[&str] = &[
     "router",
     "routes",
     "finish",
-    "on_tool_unavailable",
     "publish",
     "tool_resources",
     "bind",

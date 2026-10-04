@@ -67,7 +67,6 @@ pub struct AgentSpec {
     #[serde(default)]
     pub routes: BTreeMap<String, Route>,
     pub finish: Option<Finish>,
-    pub on_tool_unavailable: Option<OnToolUnavailable>,
     #[serde(default)]
     pub publish: Publish,
 }
@@ -677,13 +676,6 @@ pub struct LoopBudget {
 #[serde(deny_unknown_fields)]
 pub struct Finish {
     pub schema: Value,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OnToolUnavailable {
-    Reject,
-    Skip,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

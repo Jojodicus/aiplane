@@ -92,15 +92,6 @@
 		{/each}
 	</section>
 
-	<section class="space-y-2">
-		<h4 class="font-semibold">{t('agents-on-unavailable')}</h4>
-		<select class="select w-72" value={spec.on_tool_unavailable ?? ''} onchange={(e) => (spec.on_tool_unavailable = e.currentTarget.value)} aria-label={t('agents-on-unavailable')}>
-			<option value="">{t('agents-on-unavailable-default')}</option>
-			<option value="reject">{t('agents-on-unavailable-reject')}</option>
-			<option value="skip">{t('agents-on-unavailable-skip')}</option>
-		</select>
-		<FieldIssues {issues} path="on_tool_unavailable" />
-	</section>
 
 	<section class="space-y-3">
 		<h4 class="font-semibold">{t('agents-publish')}</h4>

@@ -52,7 +52,6 @@ routes:
   # further targets: a2a (agent-a2a.md), loop (agent-runs.md → Loop routes)
 finish: { schema: { type: object, required: [answer], properties: {
             answer: { type: string }, facts: { type: array, items: { type: string } } } } }
-on_tool_unavailable: reject             # reject | skip; validated, not read at run time
 publish:
   origins: ["https://www.example.com"]
   idle_ttl: 30m
@@ -198,8 +197,8 @@ Runtime code never reads the spec's JSON. It reads `AgentSpec`
 part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
 `permission` and `approval_timeout`, and `budget`), `state` slots,
 `verifiers` (tagged by `kind`), `router`, `routes` (each with exactly one
-`RouteTarget`: `agent`, `human`, `a2a` or `loop`), `finish`,
-`on_tool_unavailable` and `publish`.
+`RouteTarget`: `agent`, `human`, `a2a` or `loop`), `finish` and
+`publish`.
 
 - **Validation and typing are two steps over one JSON.** `spec::check` runs
   the path-reporting walk; only when it found nothing does it deserialize the

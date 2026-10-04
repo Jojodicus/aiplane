@@ -24,7 +24,7 @@
 		{ id: 'main', title: 'agents-section-main', hint: 'agents-section-main-hint', n: count('main') },
 		{ id: 'state', title: 'agents-section-state', hint: 'agents-section-state-hint', n: count('state') },
 		{ id: 'routes', title: 'agents-section-routes', hint: 'agents-section-routes-hint', n: count('routes', 'router') },
-		{ id: 'settings', title: 'agents-section-settings', hint: 'agents-section-settings-hint', n: count('profile', 'verifiers', 'finish', 'on_tool_unavailable', 'publish') }
+		{ id: 'settings', title: 'agents-section-settings', hint: 'agents-section-settings-hint', n: count('profile', 'verifiers', 'finish', 'publish') }
 	]);
 </script>
 

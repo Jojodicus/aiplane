@@ -125,7 +125,6 @@ const TOP_KEYS: &[&str] = &[
     "router",
     "routes",
     "finish",
-    "on_tool_unavailable",
     "publish",
 ];
 const PROFILE_KEYS: &[&str] = &["display", "avatar", "color"];
@@ -188,7 +187,6 @@ const HUMAN_KEYS: &[&str] = &["notify", "inbox", "timeout", "transcript"];
 /// the agent's Slack and Discord channels.
 pub const NOTIFY_CHANNELS: &[&str] = &["push", "slack", "discord"];
 const FINISH_KEYS: &[&str] = &["schema"];
-const ON_TOOL_UNAVAILABLE: &[&str] = &["reject", "skip"];
 const PUBLISH_KEYS: &[&str] = &[
     "origins",
     "idle_ttl",
@@ -697,9 +695,6 @@ impl<'a> Check<'a> {
         }
         if let Some(v) = top.get("finish") {
             self.finish(v);
-        }
-        if let Some(v) = top.get("on_tool_unavailable") {
-            self.one_of(v, "on_tool_unavailable", ON_TOOL_UNAVAILABLE);
         }
         if let Some(v) = top.get("publish") {
             self.publish(v);
@@ -1921,7 +1916,6 @@ mod tests {
             },
             "finish": { "schema": { "type": "object", "required": ["answer"],
                 "properties": { "answer": { "type": "string" } } } },
-            "on_tool_unavailable": "reject",
             "publish": {
                 "origins": ["https://www.example.com", "http://localhost:5173"],
                 "idle_ttl": "30m",
@@ -2944,13 +2938,25 @@ mod tests {
         assert!(audit(json!({ "audit_retention_days": 3650 })).is_empty());
     }
 
+    /// Nothing at run time read it, so it is not part of the spec: a spec
+    /// naming it is told the key is unknown.
+    #[test]
+    fn on_tool_unavailable_is_not_a_spec_key() {
+        let issues = check(json!({ "on_tool_unavailable": "reject" }), Stage::Draft);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("unknown key `on_tool_unavailable`")),
+            "{issues:?}"
+        );
+    }
+
     #[test]
     fn budgets_finish_schemas_and_publish_settings_are_checked() {
         let issues = check(
             json!({
                 "main": { "budget": { "rounds": 0, "seconds": -1, "tokens": "many" } },
                 "finish": { "schema": { "type": "object", "oneOf": [] } },
-                "on_tool_unavailable": "retry",
                 "publish": {
                     "origins": ["https://example.com/", "example.com", "https://ok.example:8443"],
                     "idle_ttl": "30",
@@ -2970,7 +2976,6 @@ mod tests {
                 "main.budget.tokens",
                 "router.model",
                 "finish.schema",
-                "on_tool_unavailable",
                 "publish.origins[0]",
                 "publish.origins[1]",
                 "publish.idle_ttl",
