@@ -27,7 +27,7 @@ use aiplane_core::server::upstreams::{self, PoolKind};
 use aiplane_runtime::rama_server::state::RamaState;
 use session_core::i18n::{Lang, t};
 
-use super::{bad_request, internal, json_error, json_ok, raw_path_segment};
+use super::{bad_request, internal, json_error, json_error_with, json_ok, raw_path_segment};
 
 // ---------------------------------------------------------------------------
 // Groups
@@ -1161,6 +1161,7 @@ pub struct SettingsSaveBody {
 /// (config snapshot + session policy), and track restart-pending fields.
 pub async fn settings_save(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
+    let lang = session_core::i18n::Lang::from_request(req.headers());
     let (_, body) = req.into_parts();
     let bytes = match session_core::chrome::read_body_to_bytes(body).await {
         Ok(b) => b,
@@ -1176,6 +1177,7 @@ pub async fn settings_save(State(state): State<Arc<RamaState>>, req: Request) ->
 
     let mut pairs: Vec<(String, String)> = Vec::new();
     let mut restart_fields: Vec<String> = Vec::new();
+    let mut issues: Vec<serde_json::Value> = Vec::new();
     for field in section.fields {
         let Some(submitted) = parsed.values.get(field.key) else {
             // Bool: absence is false; every other kind: absence = leave
@@ -1208,11 +1210,27 @@ pub async fn settings_save(State(state): State<Arc<RamaState>>, req: Request) ->
                     serde_json::to_string(&items).unwrap_or_else(|_| "[]".into()),
                 ));
             }
-            _ => pairs.push((field.key.to_owned(), submitted)),
+            _ => match field.check(&submitted) {
+                Ok(value) => pairs.push((field.key.to_owned(), value)),
+                Err(invalid) => issues.push(serde_json::json!({
+                    "path": field.key,
+                    "message": session_core::i18n::t(lang, invalid.message_key()),
+                })),
+            },
         }
         if field.restart && parsed.values.contains_key(field.key) {
             restart_fields.push(field.key.to_owned());
         }
+    }
+    // All or nothing: storing the valid half would leave the section in a
+    // state the operator never submitted.
+    if !issues.is_empty() {
+        return json_error_with(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_settings",
+            &session_core::i18n::t(lang, "settings-invalid"),
+            serde_json::Map::from_iter([("issues".to_string(), serde_json::json!(issues))]),
+        );
     }
 
     if let Err(err) = settings::store(&state.db, &state.crypto, &pairs).await {

@@ -258,3 +258,11 @@ settings-model-automatic = Automatic — use the first available model
 settings-model-none-configured = No model of this kind is configured yet. Add a pool under Models & routing and it will appear here.
 settings-model-unavailable = { $model } (configured, but not currently available)
 settings-restart-pending-heading = Restart pending
+
+# A refused settings save: the summary, and the line under each field the
+# server could not use (FieldSpec::check).
+settings-invalid = Nothing was saved: correct the marked fields and save again.
+settings-invalid-whole-number = Enter a whole number.
+settings-invalid-negative = Enter a number of 0 or more.
+settings-invalid-number = Enter a number, such as 0.7.
+settings-invalid-choice = Choose one of the offered options.

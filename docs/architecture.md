@@ -284,7 +284,13 @@ variable to read its key from.
 
 `Config` survives as the in-memory runtime shape — `settings::apply` writes the
 stored rows over its defaults on boot, so the hundred call sites that say
-`state.config().chat.ocr.dpi` never had to change. What is left outside the
+`state.config().chat.ocr.dpi` never had to change. Those typed reads fall
+back to the default on a stored value they cannot use, so a save checks first:
+`FieldSpec::check` accepts exactly what they use (a whole number of 0 or more,
+a finite number with either decimal separator, one of a choice's options), and
+`POST /api/v0/admin/settings` refuses a section with any unusable field
+(`422 invalid_settings`, one translated `issues` entry per field) without
+storing any of it. What is left outside the
 database is what has to be resolved *before* it can be opened:
 `$AIPLANE_SESSION_KEY`, `$AIPLANE_DB_PATH`, `$AIPLANE_DATA_DIR`,
 `$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`,

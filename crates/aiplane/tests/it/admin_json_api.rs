@@ -2256,3 +2256,101 @@ async fn memories_list_reports_whether_preferences_reach_the_assistant() {
         "memory switched off keeps preferences out of the context: {off}"
     );
 }
+
+/// A typed setting the gateway could not use is refused with a line per
+/// field, and nothing of the section is stored; a usable one saves as before.
+#[tokio::test]
+async fn settings_save_refuses_values_the_typed_reads_would_replace() {
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    let shown = |listed: &serde_json::Value, key: &str| {
+        listed["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section["fields"].as_array().unwrap())
+            .find(|field| field["key"] == key)
+            .map(|field| field["value"].clone())
+            .unwrap()
+    };
+    let list = || req(Method::GET, "/api/v0/admin/settings", &cookie, None);
+    let save = |section: &str, values: &str| {
+        req(
+            Method::POST,
+            "/api/v0/admin/settings",
+            &cookie,
+            Some(format!(r#"{{"section":"{section}","values":{values}}}"#)),
+        )
+    };
+    let before: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+
+    let resp = app
+        .serve(save(
+            "chat.ocr",
+            r#"{"chat.ocr.dpi":"abc","chat.ocr.max_pages":"-3","chat.ocr.timeout_secs":"90"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let refused: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+    assert_eq!(refused["error"]["code"], "invalid_settings");
+    let issues: std::collections::BTreeMap<&str, &str> = refused["error"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| {
+            (
+                issue["path"].as_str().unwrap(),
+                issue["message"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        issues.keys().copied().collect::<Vec<_>>(),
+        ["chat.ocr.dpi", "chat.ocr.max_pages"],
+        "{refused}"
+    );
+    assert!(issues["chat.ocr.dpi"].contains("whole number"), "{refused}");
+    assert!(
+        issues["chat.ocr.max_pages"].contains("0 or more"),
+        "{refused}"
+    );
+
+    let resp = app
+        .serve(save("feedback", r#"{"feedback.provider":"bitbucket"}"#))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let resp = app
+        .serve(save(
+            "chat.compaction",
+            r#"{"chat.compaction.trigger_ratio":"high"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let after: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+    for key in [
+        "chat.ocr.dpi",
+        "chat.ocr.timeout_secs",
+        "feedback.provider",
+        "chat.compaction.trigger_ratio",
+    ] {
+        assert_eq!(shown(&after, key), shown(&before, key), "{key} kept");
+    }
+
+    let resp = app
+        .serve(save(
+            "chat.compaction",
+            r#"{"chat.compaction.trigger_ratio":"0,6"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
+    let saved: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+    assert_eq!(shown(&saved, "chat.compaction.trigger_ratio"), "0.6");
+}
