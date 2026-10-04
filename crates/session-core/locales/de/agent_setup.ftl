@@ -34,10 +34,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Themenbereich mit { $count } Themen, streng durchgesetzt
 }
 agents-setup-preview = So sieht es auf Ihrer Website aus
-agents-setup-preview-greeting = Hallo! Ich bin { $name }. Wie kann ich Ihnen helfen?
 agents-setup-preview-offtopic = Wie funktioniert ein Dieselmotor?
 agents-setup-preview-free = Ohne strenge Durchsetzung entscheidet das Modell selbst und antwortet oft trotzdem.
-agents-setup-preview-placeholder = Nachricht …
 agents-setup-modal-note = Änderungen landen im Entwurf.
 agents-setup-apply = Übernehmen
 agents-setup-assistant = Assistent

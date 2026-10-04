@@ -54,6 +54,12 @@
 
 	onMount(() => model.rules.forEach((_, i) => void derive(i)));
 
+	/** A target agent not shared with the viewer, by its id: they may not read its name. */
+	function unlisted(rule: Rule): string | null {
+		const target = rule.target;
+		if (target.kind !== 'agent' || !target.id) return null;
+		return ws.agents.some((a) => a.id === target.id) ? null : target.id;
+	}
 	const targetValue = (rule: Rule) => (rule.target.kind === 'human' ? 'human' : `agent:${rule.target.id}`);
 	function setTarget(i: number, value: string) {
 		model.rules[i].target = value === 'human' ? { kind: 'human' } : { kind: 'agent', id: value.slice(6) };
@@ -116,6 +122,7 @@
 							<option value="agent:{agent.id}">{t('agents-setup-rule-agent', { name: agent.display || agent.name })}</option>
 						{/each}
 						{#if rule.target.kind === 'agent' && !rule.target.id}<option value="agent:" disabled>{t('agents-pick')}</option>{/if}
+						{#if unlisted(rule)}<option value={targetValue(rule)}>{t('agents-setup-rule-agent', { name: unlisted(rule) ?? '' })}</option>{/if}
 					</select>
 					<button class="btn btn-ghost btn-sm ml-auto" type="button" aria-label={t('agents-remove')} onclick={() => remove(i)}>✕</button>
 				</div>

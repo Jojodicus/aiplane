@@ -31,10 +31,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] 包含 { $count } 个主题的列表，严格执行
 }
 agents-setup-preview = 在你网站上的样子
-agents-setup-preview-greeting = 你好！我是 { $name }。有什么可以帮你？
 agents-setup-preview-offtopic = 柴油发动机是怎么工作的？
 agents-setup-preview-free = 不严格执行时，由模型自行判断，往往仍会作答。
-agents-setup-preview-placeholder = 消息 …
 agents-setup-modal-note = 更改会保存到草稿。
 agents-setup-apply = 应用
 agents-setup-assistant = 助手

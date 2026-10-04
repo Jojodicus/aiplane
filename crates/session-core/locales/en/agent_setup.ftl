@@ -33,10 +33,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Topic list with { $count } topics, strictly enforced
 }
 agents-setup-preview = How it looks on your website
-agents-setup-preview-greeting = Hello! I am { $name }. How can I help you?
 agents-setup-preview-offtopic = How does a diesel engine work?
 agents-setup-preview-free = Without strict enforcement the model decides for itself, and often answers anyway.
-agents-setup-preview-placeholder = Message …
 agents-setup-modal-note = Changes go into the draft.
 agents-setup-apply = Apply
 agents-setup-assistant = Assistant

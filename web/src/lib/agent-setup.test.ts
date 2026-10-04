@@ -632,6 +632,7 @@ test('each section sums itself up in one line', () => {
 	assert.equal(summary('slots', spec, ctx), '«agents-tpl-slot-name», «agents-tpl-slot-email»');
 	assert.equal(summary('identity', spec, ctx), 'agents-setup-identity-email_code');
 	assert.equal(summary('routes', spec, ctx), 'Invoices → Billing · agents-setup-sum-routes-other(agents-setup-rule-person)');
+	assert.equal(summary('routes', spec, { ...ctx, agents: [] }), 'Invoices → b1 · agents-setup-sum-routes-other(agents-setup-rule-person)', 'an agent not shared with the viewer: its id');
 	assert.equal(summary('site', spec, ctx), 'agents-setup-sum-site-none');
 });
 

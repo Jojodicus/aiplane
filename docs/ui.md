@@ -624,6 +624,17 @@ that every step round-trips through the advanced editor's
 `ensureShape`/`cleanSpec`); the components are in
 `web/src/lib/components/agents/setup/`.
 
+**Nothing about an existing resource is made up.** A model, voice,
+connector, skill, knowledge base, tool or agent is shown by its own data —
+the title and description its source keeps (the `items` and `models` of
+`GET /api/v0/agent-resources`, the agents list), or its reference as it is
+when the viewer cannot read more (an agent not shared with them, a grant they
+do not hold). There are no stand-in descriptions, no ids made readable on the
+client and no placeholder names; a missing description is fixed at the
+resource (e.g. `/rag/<id>/edit`), which the abilities step links to for who
+may edit it. Labels and instructions about the setup itself are ordinary
+catalog strings.
+
 - **One buffer for every page.** `routes/agents/[id]/+layout.svelte` mounts
   `AgentShell`, which creates the `AgentWorkspace`
   (`lib/agent-workspace.svelte.ts`: detail, versions, resources, the spec

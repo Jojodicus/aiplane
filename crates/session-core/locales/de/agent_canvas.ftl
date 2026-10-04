@@ -11,7 +11,6 @@ agents-canvas-kind-route = Route
 agents-canvas-target-agent = Unteragent
 agents-canvas-target-human = Mensch
 agents-canvas-target-other = Ziel { $kind }
-agents-canvas-model-default = Standardmodell
 agents-canvas-tools = Tools: { $count }
 agents-canvas-skills = Skills: { $count }
 agents-canvas-slots = Slots: { $count }

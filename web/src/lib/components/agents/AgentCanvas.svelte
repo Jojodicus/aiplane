@@ -178,7 +178,7 @@
 						<span class="truncate font-semibold {node.kind === 'route' ? 'font-mono' : ''}">{title(node)}</span>
 
 						{#if node.kind === 'main'}
-							<span class="truncate font-mono text-xs">{main.model || t('agents-canvas-model-default')}</span>
+							<span class="truncate font-mono text-xs">{main.model || (granted.defaults?.chat ? t('agents-setup-model-default', { model: granted.defaults.chat }) : t('agents-setup-sum-model-none'))}</span>
 							<span class="flex flex-wrap gap-1 text-xs">
 								<span class="badge badge-ghost badge-sm">{t('agents-canvas-tools', { count: main.tools })}</span>
 								<span class="badge badge-ghost badge-sm">{t('agents-canvas-skills', { count: main.skills })}</span>

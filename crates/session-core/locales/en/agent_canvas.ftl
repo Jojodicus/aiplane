@@ -11,7 +11,6 @@ agents-canvas-kind-route = Route
 agents-canvas-target-agent = Sub-agent
 agents-canvas-target-human = Human
 agents-canvas-target-other = { $kind } target
-agents-canvas-model-default = Default model
 agents-canvas-tools = Tools: { $count }
 agents-canvas-skills = Skills: { $count }
 agents-canvas-slots = Slots: { $count }

@@ -34,10 +34,8 @@ agents-setup-check-scope-strict = { $count ->
    *[other] Liste de { $count } sujets, appliquée strictement
 }
 agents-setup-preview = Aperçu sur votre site web
-agents-setup-preview-greeting = Bonjour ! Je suis { $name }. Comment puis-je vous aider ?
 agents-setup-preview-offtopic = Comment fonctionne un moteur diesel ?
 agents-setup-preview-free = Sans application stricte, le modèle décide lui-même et répond souvent malgré tout.
-agents-setup-preview-placeholder = Message …
 agents-setup-modal-note = Les modifications vont dans le brouillon.
 agents-setup-apply = Appliquer
 agents-setup-assistant = Assistant

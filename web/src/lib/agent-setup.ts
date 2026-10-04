@@ -1193,7 +1193,7 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 				if (r.target.kind === 'human') return person;
 				const id = r.target.id;
 				const agent = ctx.agents.find((a) => a.id === id);
-				return agent ? agent.display || agent.name : tr('agents-pick');
+				return agent ? agent.display || agent.name : id || tr('agents-pick');
 			};
 			const parts = h.rules.map((r) => `${r.topic} → ${target(r)}`);
 			if (h.fallback) parts.push(tr('agents-setup-sum-routes-other', { target: person }));
