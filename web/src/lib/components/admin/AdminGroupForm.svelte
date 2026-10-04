@@ -10,6 +10,7 @@
 		description: string;
 		is_admin: boolean;
 		is_default: boolean;
+		can_manage_agents: boolean;
 		oidc_values: string[];
 		tools: string[];
 		skills: string[];
@@ -45,6 +46,7 @@
 	let description = $state(untrack(() => group?.description ?? ''));
 	let isAdmin = $state(untrack(() => group?.is_admin ?? false));
 	let isDefault = $state(untrack(() => group?.is_default ?? false));
+	let canManageAgents = $state(untrack(() => group?.can_manage_agents ?? false));
 	let oidcValues = $state(untrack(() => group?.oidc_values.join(', ') ?? seedOidcValue));
 	let tools = $state(untrack(() => normalizeSelection(group?.tools ?? [])));
 	let skills = $state(untrack(() => normalizeSelection(group?.skills ?? [])));
@@ -113,6 +115,7 @@
 				description,
 				is_admin: isAdmin,
 				is_default: isDefault,
+				can_manage_agents: canManageAgents,
 				oidc_values: splitList(oidcValues),
 				tools,
 				skills
@@ -122,6 +125,7 @@
 				description = '';
 				isAdmin = false;
 				isDefault = false;
+				canManageAgents = false;
 				oidcValues = '';
 				tools = [];
 				skills = [];
@@ -152,7 +156,17 @@
 			<div class="flex flex-wrap gap-4">
 				<label class="label cursor-pointer justify-start gap-2"><input type="checkbox" class="checkbox checkbox-sm" bind:checked={isAdmin} /><span>{t('groups-field-admin')}</span></label>
 				<label class="label cursor-pointer justify-start gap-2"><input type="checkbox" class="checkbox checkbox-sm" bind:checked={isDefault} /><span>{t('groups-field-default')}</span></label>
+				<label class="label cursor-pointer justify-start gap-2" title={t('groups-field-manage-agents-help')}>
+					<!-- Admin implies the permission, so an admin group shows it held rather than offering a switch that changes nothing. -->
+					{#if isAdmin}
+						<input type="checkbox" class="checkbox checkbox-sm" checked disabled />
+					{:else}
+						<input type="checkbox" class="checkbox checkbox-sm" bind:checked={canManageAgents} />
+					{/if}
+					<span>{t('groups-field-manage-agents')}</span>
+				</label>
 			</div>
+			<span class="-mt-2 text-xs text-base-content/60">{t('groups-field-manage-agents-help')}</span>
 			<label class="flex flex-col gap-1">
 				<span class="label-text text-xs">{t('groups-field-oidc')}</span>
 				<input class="input w-full" bind:value={oidcValues} list="group-oidc-values" placeholder={t('groups-oidc-values-placeholder')} />

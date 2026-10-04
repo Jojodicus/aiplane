@@ -1488,6 +1488,8 @@ export const fr: Catalog = {
  "groups-field-admin": "Admin (donne accès à /admin)",
  "groups-field-default": "Par défaut (s'applique à chaque utilisateur connecté)",
  "groups-field-description": "Description",
+ "groups-field-manage-agents": "Gestion des agents",
+ "groups-field-manage-agents-help": "Les membres peuvent créer des agents et consulter ou modifier les agents partagés avec eux. Les administrateurs l'ont déjà.",
  "groups-field-name": "Nom",
  "groups-field-oidc": "Valeurs de groupe OIDC",
  "groups-field-oidc-help": "Valeurs de claims brutes de votre IdP, séparées par des virgules (p. ex. GUID d'objet Entra, DN LDAP ou simples noms de groupes). Chacune place un utilisateur dans ce groupe. Les valeurs vues lors d'une connexion sont suggérées à la saisie.",

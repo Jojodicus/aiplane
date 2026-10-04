@@ -1488,6 +1488,8 @@ export const es: Catalog = {
  "groups-field-admin": "Admin (concede acceso a /admin)",
  "groups-field-default": "Predeterminado (se aplica a todos los usuarios autenticados)",
  "groups-field-description": "Descripción",
+ "groups-field-manage-agents": "Gestión de agentes",
+ "groups-field-manage-agents-help": "Los miembros pueden crear agentes y ver o editar los agentes compartidos con ellos. Los administradores ya lo tienen.",
  "groups-field-name": "Nombre",
  "groups-field-oidc": "Valores de grupo de OIDC",
  "groups-field-oidc-help": "Valores de claims sin procesar de tu IdP, separados por comas (p. ej. GUID de objeto de Entra, DN de LDAP o simples nombres de grupo). Cualquiera de ellos incluye a un usuario en este grupo. Los valores vistos en un inicio de sesión se sugieren al escribir.",

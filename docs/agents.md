@@ -136,7 +136,9 @@ foreign keys off (seven tables cascade from `chat_sessions`).
 - **`can_manage_agents`** works like `is_admin` on a gateway group: a column,
   checked by `Resolver::can_manage_agents(role_ids)`. `is_admin` implies it.
   `GET /api/v0/me` reports it, and the SPA shows the Agents section only
-  when it is true.
+  when it is true. Operators set it per group with the *Agent manager* switch
+  on `/admin/groups` (`PUT /api/v0/admin/groups`, `can_manage_agents`; a body
+  that omits the field leaves it unchanged). An admin group shows it held.
 
 ### Grants
 

@@ -134,19 +134,27 @@ test("groups keep the complete inline create and grant-editing workflow", async 
     await page.getByRole("option", { name: "search_web", exact: true }).click();
     await page.getByRole("option", { name: "fetch_url", exact: true }).click();
     await page.keyboard.press("Escape");
+    await create.getByLabel("Agent manager", { exact: true }).check();
     const created = page.waitForResponse((response) => response.url().endsWith("/api/v0/admin/groups") && response.request().method() === "PUT");
     await create.getByRole("button", { name: "Save", exact: true }).click();
-    assert.equal((await created).status(), 200);
+    const createdResponse = await created;
+    assert.equal(createdResponse.status(), 200);
+    assert.equal(createdResponse.request().postDataJSON().can_manage_agents, true);
 
     const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "parity-audit", exact: true }) });
     const oidcValues = card.locator('input[list="group-oidc-values"]');
     await oidcValues.waitFor();
     assert.equal(await oidcValues.inputValue(), "qa-admins, qa-team");
     assert.equal(await card.getByLabel("Name", { exact: true }).isEditable(), false);
+    const agentManager = card.getByLabel("Agent manager", { exact: true });
+    assert.equal(await agentManager.isChecked(), true);
     await card.getByLabel("Description", { exact: true }).fill("Updated browser-test group");
+    await agentManager.uncheck();
     const updated = page.waitForResponse((response) => response.url().endsWith("/api/v0/admin/groups") && response.request().method() === "PUT");
     await card.getByRole("button", { name: "Save", exact: true }).click();
-    assert.equal((await updated).status(), 200);
+    const updatedResponse = await updated;
+    assert.equal(updatedResponse.status(), 200);
+    assert.equal(updatedResponse.request().postDataJSON().can_manage_agents, false);
 
     page.once("dialog", (dialog) => dialog.accept());
     const deleted = page.waitForResponse((response) => response.url().includes("/api/v0/admin/groups/parity-audit") && response.request().method() === "DELETE");

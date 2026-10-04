@@ -443,6 +443,53 @@ async fn backend_connection_test_uses_unsaved_fields_and_discovers_models() {
     );
 }
 
+/// The group form's agent-manager switch: the save body sets it, clears it,
+/// and a body that omits it (the grant matrices) leaves it as it was.
+#[tokio::test]
+async fn groups_save_sets_clears_and_preserves_agent_management() {
+    let (state, cookie) = setup().await;
+    let app = common::app((*state).clone());
+    let save = |extra: &str| {
+        Some(format!(
+            r#"{{"name":"builders","description":"","is_admin":false,"is_default":false,"oidc_values":[],"tools":[],"skills":[]{extra}}}"#
+        ))
+    };
+    let held = |raw: &str| {
+        let listed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        listed["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "builders")
+            .map(|g| g["can_manage_agents"].clone())
+            .unwrap()
+    };
+
+    for (extra, expected) in [
+        (r#","can_manage_agents":true"#, true),
+        ("", true),
+        (r#","can_manage_agents":false"#, false),
+    ] {
+        let resp = app
+            .serve(req(
+                Method::PUT,
+                "/api/v0/admin/groups",
+                &cookie,
+                save(extra),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
+        let raw = body(
+            app.serve(req(Method::GET, "/api/v0/admin/groups", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(held(&raw), expected, "after saving with `{extra}`: {raw}");
+    }
+}
+
 /// Groups round-trip: save → list reflects it → delete → gone.
 #[tokio::test]
 async fn groups_round_trip() {
