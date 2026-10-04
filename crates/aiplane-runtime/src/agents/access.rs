@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Who may act on an agent (`docs/agents.md` §2): the one rule behind the
+//! Who may act on an agent (`docs/agents.md` → "Agent definition"): the one rule behind the
 //! `/api/v0/agents` routes, the inbox's standing and the `a2a_caller` grant.
 //!
 //! An admin holds `write` on every agent without a share, so an agent whose

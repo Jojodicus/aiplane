@@ -3,7 +3,7 @@
 
 //! Run one turn of an agent conversation as the agent's principal, on its
 //! live version. The Rust entry point the internal test chat and the public
-//! endpoint put HTTP in front of (`docs/agents.md` "What #90 built", "What #91 built").
+//! endpoint put HTTP in front of (`docs/agent-builder.md` → "Test chat", `docs/agent-visitors.md`).
 
 use std::sync::Arc;
 
@@ -50,7 +50,7 @@ pub struct AgentReply {
 /// Refuse a new message into a conversation that waits for a decision: it
 /// would run before the paused call, in a context the decision was not asked
 /// about. The test chat and a person's own chat refuse; the public endpoint
-/// queues one message behind the decision instead (`docs/agents.md`).
+/// queues one message behind the decision instead (`docs/agent-hil.md`).
 pub async fn refuse_if_waiting(state: &RamaState, session_id: &str) -> Result<(), AgentRunError> {
     match chat::suspended_turn_in_session(&state.db, session_id)
         .await

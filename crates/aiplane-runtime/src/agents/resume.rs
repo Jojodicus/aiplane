@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Resuming a suspended agent run (`docs/agents.md` "Suspend and resume").
+//! Resuming a suspended agent run (`docs/agent-hil.md` → "Suspend and resume").
 //!
 //! An agent conversation pauses at its main turn. When the pause is inside
 //! a sub-agent run, every turn between the conversation and that run is

@@ -19,7 +19,7 @@
 //! to be told to set. Same token, same lookup, same 401.
 //!
 //! The prefix picks the table: `gwk_` is a person's token (`tokens`), `gws_` a
-//! system principal's (`system_tokens`, `docs/agents.md` §1). Neither lookup
+//! system principal's (`system_tokens`, `docs/agents.md` → "Principals"). Neither lookup
 //! ever sees the other kind.
 
 use rama::http::header::{AUTHORIZATION, HeaderValue};

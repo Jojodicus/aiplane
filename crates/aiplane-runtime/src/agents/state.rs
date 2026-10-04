@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Typed conversation state (`docs/agents.md` §3 "State", "What #85 built").
+//! Typed conversation state (`docs/agent-spec.md` → "State").
 //!
 //! A spec's `state` declares slots, each with a type, constraints and the
 //! writers allowed to set it (`set_by`). This module gives those declarations

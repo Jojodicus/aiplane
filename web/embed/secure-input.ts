@@ -1,7 +1,7 @@
 /**
  * The secure field a verifier asks the visitor to type a code into.
  *
- * A `secure_input` pause (`docs/agents.md` "What #95 built") is answered with
+ * A `secure_input` pause (`docs/agent-visitors.md` → "Identity verifiers") is answered with
  * `POST /api/v0/embed/resume`, never as a chat message: the code goes to the
  * verifier and nowhere else — not into the transcript, the model or a log.
  * The field is masked, offers the browser's one-time-code autofill, and is

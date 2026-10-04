@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! System principals and `gws_` tokens, end to end
-//! (`docs/agents.md` §1, "Principals").
+//! (`docs/agents.md` → "Principals").
 //!
 //! The fixture is deliberately generous to *people*: a default group grants
 //! tools, skills and both MCP connectors to everyone, a global connector is

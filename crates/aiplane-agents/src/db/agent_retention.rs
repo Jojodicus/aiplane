@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Deleting an agent's conversations once its retention period has passed
-//! (`docs/agents.md` §5, "What #92 built").
+//! (`docs/agent-visitors.md` → "Retention").
 //!
 //! A conversation is a root `chat_sessions` row the agent's principal owns
 //! (`parent_turn_id IS NULL`). It goes together with every sub-agent run it

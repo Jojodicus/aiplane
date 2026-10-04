@@ -71,10 +71,10 @@ still monotonic, still collision-free against every real release.
 Case 4 is deliberate. A build that cannot see the tags is a misconfigured
 build, and a made-up number would mislabel an image that nobody can later trace
 back. There is no `Cargo.toml` fallback for the same reason: it would have to be
-bumped by hand, and when it drifted it would fail silently instead of loudly.
+bumped by hand, and when it drifted it would fail silently rather than loudly.
 
 > **CI requirement:** the `version` job checks out with `fetch-depth: 0`. Without
-> it, `git describe` sees nothing and the pipeline fails instead of shipping a
+> it, `git describe` sees nothing and the pipeline fails rather than shipping a
 > wrong number.
 >
 > **Caller requirement:** in a `set -e` shell, assign and then export
@@ -106,7 +106,7 @@ all stamped with the same number:
 A **tag** build makes one more thing: a [GitHub Release][gh-releases] entry,
 written by the `github release` job once every publishing job above it has
 succeeded. That ordering is the point — the Releases page is what a human reads
-instead of checking GHCR by hand, so it must never be able to name a build
+rather than checking GHCR by hand, so it must never be able to name a build
 whose images did not actually ship. The entry is a face on the tag, nothing
 more: its notes are the commit range since the previous release, nothing reads
 it, and deleting it would not un-publish a single image.

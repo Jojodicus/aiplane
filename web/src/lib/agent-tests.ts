@@ -1,5 +1,5 @@
 /**
- * The pure half of the agent Tests tab (`docs/agents.md`, "What #99 built"):
+ * The pure half of the agent Tests tab (`docs/agent-builder.md` → "Evaluation"):
  * the wire shapes of `/api/v0/agents/{id}/tests` and `/test-runs`, and the
  * form model that turns a stored case (script plus expectations) into
  * editable fields and back. No framework imports, so `node --test` covers it.

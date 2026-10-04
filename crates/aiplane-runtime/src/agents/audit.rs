@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! The runtime's door to the activity log (`aiplane_agents::db::agent_audit`,
-//! `docs/agents.md` → "What #111 built"). Every run event goes through
+//! `docs/agent-activity-log.md`). Every run event goes through
 //! [`record_event`]: one event, written synchronously in its own write
 //! transaction before the run moves on, so the log's order is the run's order
 //! and nothing waits in memory to be lost.

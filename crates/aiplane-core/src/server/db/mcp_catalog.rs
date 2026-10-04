@@ -57,7 +57,7 @@ pub enum Scope {
     /// secret lives on the connector row (`client_secret_ct`).
     Global,
     /// One shared connection like `Global`, but invisible to every person:
-    /// only system principals granted it can use it (`docs/agents.md` §1).
+    /// only system principals granted it can use it (`docs/agents.md` → "Principals").
     /// This is how an owner wires their own ERP or ticket system into an
     /// agent without exposing it to employees. `allowed_groups` here decides
     /// who may *grant* it, never who may use it.

@@ -141,7 +141,7 @@ mod tests {
     ///
     /// Finite on purpose: were `read_capped` to lose its cap, a truly endless
     /// peer would have the test buffer until the machine runs out of memory
-    /// (docs/dev-workflow.md → "Size-probe tests"); this one makes it fail
+    /// (docs/dev-workflow.md → "Size-probe tests: finite inputs only"); this one makes it fail
     /// with an `Ok` of 8 MiB instead.
     async fn endless_chunked_peer() -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

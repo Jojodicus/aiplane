@@ -10,7 +10,7 @@
 //! - [`server::state`] / [`rama_server::state`] — `AppState` and the `RamaState`
 //!   that wraps it. This is the layer that ties the whole world together, which
 //!   is why it sits above both `aiplane-core` and `aiplane-features`.
-//! - [`agents`] — the agent spec layout and its validator (`docs/agents.md`).
+//! - [`agents`] — the agent spec layout and its validator (`docs/agent-spec.md`).
 //! - [`agent_run`] — one agent run as a single value, and who a turn acts as.
 //! - [`budget`] — what one run may spend: rounds, seconds, tokens.
 //! - [`finish`] — the completion contract a non-interactive run ends by.

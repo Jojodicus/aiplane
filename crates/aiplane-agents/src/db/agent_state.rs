@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Rows of `agent_state`: the typed slots of one agent conversation
-//! (`migrations/0077_agent_builder.sql`, `docs/agents.md` §3 "State").
+//! (`migrations/0077_agent_builder.sql`, `docs/agent-spec.md` → "State").
 //!
 //! Storage only. Nothing here knows a slot's type or who may write it; that is
 //! `aiplane-runtime::agents::state`, which is the one caller. Writing through

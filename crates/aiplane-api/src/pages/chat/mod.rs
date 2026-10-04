@@ -864,7 +864,7 @@ async fn spawn_assistant_worker(
             suspendable: true,
         },
     );
-    // An architect conversation (docs/agents.md "What #118 built") runs as
+    // An architect conversation (docs/agent-builder.md → "Agent architect") runs as
     // the architect persona: its prompt and its tools instead of the
     // person's chat tools.
     let persona = crate::pages::architect::persona_for(state, user, session_id).await;

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Whether a person holds what a system principal's grant hands out
-//! (`docs/agents.md` §1, `docs/auth.md` → "System principal tokens").
+//! (`docs/agents.md` → "Principals", `docs/auth.md` → "System principals and `gws_` tokens").
 //!
 //! One rule, used twice: a manager may grant only what they hold
 //! (`aiplane-api`'s `json_principals`, at grant and token-issue time), and a
@@ -292,7 +292,7 @@ pub const TOUCH_EVERY: Duration = Duration::from_secs(60);
 const CAPS_PRUNE_AT: usize = 4096;
 
 /// What [`capped_to_minter`] decided per system token, and when each token's
-/// last use was written (`docs/auth.md` → "System principal tokens").
+/// last use was written (`docs/auth.md` → "System principals and `gws_` tokens").
 #[derive(Default)]
 pub struct GrantCaps {
     capped: Mutex<CappedTokens>,

@@ -54,7 +54,7 @@ Consequences worth knowing:
 - A cache hit costs one indexed `SELECT`, emits **no** usage row (nothing was
   called), and survives a gateway restart.
 - A **failed** row is kept — the operator needs the reason — but reads as a
-  miss, so a transient backend failure retries on the next turn instead of
+  miss, so a transient backend failure retries on the next turn rather than
   poisoning the document forever.
 - Operational settings (`max_concurrency`, `timeout_secs`, `max_bytes`) are
   *not* in the key: they don't change the recognised text.

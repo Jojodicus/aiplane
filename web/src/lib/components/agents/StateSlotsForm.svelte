@@ -4,7 +4,7 @@
 	import FieldIssues from './FieldIssues.svelte';
 
 	/**
-	 * The conversation's typed state (`docs/agents.md` §3). `set_by` is the
+	 * The conversation's typed state (`docs/agent-spec.md` → "State"). `set_by` is the
 	 * trust boundary: only slots the model may write get a `set_<slot>` tool,
 	 * and a gate can demand a slot a verifier wrote.
 	 */

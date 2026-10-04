@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Bound arguments and task templates (`docs/agents.md` §2, trust rules 2
+//! Bound arguments and task templates (`docs/agent-runs.md` → "Bound arguments", trust rules 2
 //! and 3).
 //!
 //! A bound argument is filled in by the gateway: it is removed from the

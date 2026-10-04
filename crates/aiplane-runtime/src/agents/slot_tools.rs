@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The generated `set_<slot>(value)` tools (`docs/agents.md` §3 "Synthetic
-//! tools").
+//! The generated `set_<slot>(value)` tools (`docs/agent-runs.md` → "Synthetic tools").
 //!
 //! One tool per slot whose `set_by` lists `llm`, and none for any other: a
 //! verifier-only slot has no tool to call, so no argument the model invents

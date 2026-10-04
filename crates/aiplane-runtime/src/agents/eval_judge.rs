@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The model that judges a case's rubric (`docs/agents.md` "What #99 built"):
+//! The model that judges a case's rubric (`docs/agent-builder.md` → "Evaluation"):
 //! one side call ([`side_call::ask_json`]) on the agent's main model, as the
 //! agent's principal, so the model grant and the agent's budget apply and the
 //! call is a usage row of the agent's.

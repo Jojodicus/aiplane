@@ -5,8 +5,7 @@
 //!
 //! Whatever `RUST_LOG` says, `rmcp::service` stays at `debug`: at `trace` it
 //! dumps every outgoing MCP request with its arguments, and a verifier's
-//! `check_code` carries the code a visitor typed (`docs/agents.md` "What #95
-//! built"). A target directive is more specific than a bare level, so this
+//! `check_code` carries the code a visitor typed (`docs/agent-visitors.md` → "Identity verifiers"). A target directive is more specific than a bare level, so this
 //! caps `RUST_LOG=trace` and `RUST_LOG=rmcp=trace` alike.
 
 use tracing_subscriber::EnvFilter;

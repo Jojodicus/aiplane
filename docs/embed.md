@@ -3,7 +3,7 @@
 A published agent can be put on any website with one script tag. This page is
 for the person who owns that website. The design behind it (visitor sessions,
 why a token in `sessionStorage` and not cookies) is
-[`agents.md` §5](agents.md#5-visitor-sessions-and-embedding).
+[`agent-visitors.md`](agent-visitors.md).
 
 ## The snippet
 
@@ -82,7 +82,7 @@ conversation's transcript ever contains it. Cancel declines the request.
 If your site already knows who the visitor is, it can say so with a short-lived
 JSON Web Token it signs, and the agent's `host_jwt` verifier fills its slots
 from the token's claims — no code to type. Configure the verifier in the
-agent's spec ([`agents.md`](agents.md#what-95-built)): the algorithm (HS256
+agent's spec ([`agent-visitors.md`](agent-visitors.md#identity-verifiers)): the algorithm (HS256
 with a shared secret, or RS256/ES256 with your public key or a JWKS address),
 the `issuer` and `audience` your tokens carry, and which claim fills which
 slot.
@@ -171,7 +171,7 @@ channel, and never what the visitor wrote.
 
 If nobody answers in time (30 minutes unless the route sets `timeout`), the
 visitor is told so in their language and the conversation goes on. See
-[`agents.md`](agents.md#what-96-built) for the spec keys.
+[`agent-hil.md`](agent-hil.md) for the spec keys.
 
 ## Content Security Policy
 

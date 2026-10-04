@@ -2,8 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/a2a/agents/{id}` — an agent served to other agent platforms over A2A
-//! (Agent2Agent protocol v1.0, JSON-RPC binding; `docs/agents.md` "What
-//! #102 built").
+//! (Agent2Agent protocol v1.0, JSON-RPC binding; `docs/agent-a2a.md` → "Serving an agent over A2A").
 //!
 //! - `GET …/agent-card.json` is the agent card, public, and only for an
 //!   enabled agent whose live version sets `publish.a2a.enabled: true`.

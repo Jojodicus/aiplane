@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `agent_notify_channels`: the Slack and Discord incoming webhooks an agent's
-//! waiting turns are announced on (`docs/agents.md` "What #96 built").
+//! waiting turns are announced on (`docs/agent-hil.md`).
 //!
 //! An incoming-webhook URL is a credential — whoever has it can post into the
 //! channel — so it is sealed at rest and never read back out through the API.

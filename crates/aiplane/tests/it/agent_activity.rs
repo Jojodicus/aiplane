@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `GET /api/v0/agents/{id}/activity`, `…/activity/export` and
-//! `…/activity/verify` (`docs/agents.md` → "What #111 built"): the
+//! `…/activity/verify` (`docs/agent-activity-log.md`): the
 //! activity log page by page with its filters, the JSONL export, the chain
 //! check, and who may read it — admins and `read` or `write` share holders,
 //! never a responder (a `respond` share).

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Slack and Discord incoming webhooks: the outbound half of an agent's
-//! notification channels (`docs/agents.md` "What #96 built").
+//! notification channels (`docs/agent-hil.md`).
 //!
 //! A notice is a headline, one line about what waits, an optional detail and
 //! a link into the inbox. Everything a visitor or the model wrote is optional

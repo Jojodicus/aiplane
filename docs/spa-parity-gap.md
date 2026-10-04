@@ -16,7 +16,7 @@ shape; it looks for `` t(`prefix-${…}`) `` and `format!("prefix-{…}")`.
 
 ## What was removed, and why it matters
 
-Issue #22 replaced the server-rendered UI with the SvelteKit SPA. It
+The SvelteKit SPA replaced the server-rendered UI. It
 reimplemented every screen, but not everything on them, and the leftover
 strings were the evidence: **951 of 1768 keys (54%) had no consumer.**
 

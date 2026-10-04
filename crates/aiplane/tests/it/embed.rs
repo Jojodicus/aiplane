@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The public agent endpoint end to end (`docs/agents.md` "What #91 built"):
+//! The public agent endpoint end to end (`docs/agent-visitors.md`):
 //! embed keys managed under `/api/v0/agents/{id}/embed-keys`, and anonymous
 //! visitors on `/api/v0/embed/*` with a `gwv_` token, an origin allowlist,
 //! a sliding idle TTL and buffered answers.
@@ -33,14 +33,13 @@ const OTHER_SITE: &str = "https://evil.example";
 const ANSWER: &str = "Hello visitor, how can I help?";
 const PARTIAL: &str = "Let me check the ord";
 
-// Visitor limits, owner budget and retention (`docs/agents.md` "What #92 built").
+// Visitor limits, owner budget and retention (`docs/agent-visitors.md` → "Rates").
 mod limits;
 // The body cap on the public embed routes.
 mod body_cap;
 // Suspended agent runs: secure input, approvals, resume.
 mod suspend;
-// Human in the loop: the inbox, responders, channels (`docs/agents.md` "What #96
-// built").
+// Human in the loop: the inbox, responders, channels (`docs/agent-hil.md`).
 mod hil;
 // Identity verifiers: a one-time code through the agent's connector, a
 // website's signed identity token.
@@ -49,7 +48,7 @@ mod verifiers;
 mod voice;
 
 /// Stands in for the agent turn runner, which the router
-/// (`docs/agents.md` "What #87/#88 built") builds on the real driver. The endpoint's contract with it is only "drive
+/// (`docs/agent-runs.md` → "The router") builds on the real driver. The endpoint's contract with it is only "drive
 /// the opened assistant turn to a terminal status", so this double writes a
 /// partial answer, optionally waits for the test to let it go, then
 /// completes the turn — enough to observe buffering, the in-progress guard

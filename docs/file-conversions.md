@@ -143,4 +143,4 @@ Ordered by how much they bite.
   (to see) or `(txt)` (to read).**
 - **"Accurate, no content loss" from an arbitrary uploaded deck into our
   template is not currently guaranteed** — set that expectation, or build the
-  structural mapper in gap #1.
+  structural mapper in gap 1.

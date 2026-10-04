@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! The typed agent spec: what runtime code reads instead of walking the JSON
-//! (`docs/agents.md` §2 → "The typed spec").
+//! (`docs/agent-spec.md` → "The typed spec").
 //!
 //! [`super::check`] builds it once a spec passed the path-reporting walk, and
 //! [`crate::agents::spec_cache::CompiledSpec`] holds it for every reader of a

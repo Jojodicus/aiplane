@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! A route to an external A2A agent (`docs/agents.md` "What #101 built"), end to end: the main agent on a
+//! A route to an external A2A agent (`docs/agent-a2a.md` → "External agents as route targets"), end to end: the main agent on a
 //! wiremock model, the remote agent as a wiremock A2A peer, real SQLite.
 //!
 //! The peer is a test double on purpose: an A2A agent is an external

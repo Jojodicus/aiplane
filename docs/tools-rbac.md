@@ -83,7 +83,7 @@ dependency doesn't change the trait signature:
 - **Agent run** — `agent: Option<Arc<AgentRun>>`, the one value an agent run
   carries (its principal, call chain, finish contract, budget and injection
   scan) when the call is part of one (`ctx.agent_active()`, `ctx.chain()`);
-  `None` everywhere else. See [`agents.md`](agents.md#the-call-chain).
+  `None` everywhere else. See [`agent-runs.md`](agent-runs.md#the-call-chain).
 - **Storage** — `db` (the SQLite pool), `s3` (chat attachments; `None` without
   `[chat.s3]`), `crypto` (the at-rest key, for tools that read a sealed
   operator setting).
@@ -107,7 +107,7 @@ dependency doesn't change the trait signature:
   the chat driver once per turn. `enable_tools` refuses keys outside it; `None`
   (the `/v1` paths, tests) means nothing granted.
 - **The current model** — `model`, when the path resolved one. Carried so a
-  tool that creates work to be *run later* can inherit it instead of guessing a
+  tool that creates work to be *run later* can inherit it rather than guessing a
   pool id: `schedule_action` gives the action it writes the same model the user
   is talking to.
 
@@ -183,7 +183,7 @@ per-request tools on top: a user's connected MCP connectors
 `SlotTools` (`aiplane-runtime::agents::slot_tools`) is a third source: the
 generated `set_<slot>` tools of one agent's state, one per slot the model may
 write. They exist only for an agent run and need no grant
-([`agents.md`](agents.md#what-85-built)).
+([`agent-spec.md`](agent-spec.md#state)).
 
 `RunToolSource` (`aiplane-runtime::agents::profile`) is how an agent run sees
 all of them. It wraps the turn's grant-narrowed source and adds the run's
@@ -199,7 +199,7 @@ passed. A tool that declares a *subject parameter* (one another tool binds from
 state or a route) without binding it is withheld: not offered, and refused if
 called. Without an agent run the source passes `inner` through unchanged. The run offers only the spec's `main.tools` that the
 principal is also granted, plus the synthetic ones
-([`agents.md`](agents.md#what-8788-built)).
+([`agent-runs.md`](agent-runs.md#the-router)).
 
 ## Lazy tool disclosure (`enable_tools`)
 
@@ -276,7 +276,7 @@ their roles**, and grants come from several sources that are unioned:
 - **Groups** — `/admin/groups` maps OIDC claim values onto gateway groups with
   their own tool and skill grants. Pools, RAG collections, and MCP connectors
   restrict access by group, and those saves reject a group name that matches no
-  group: stored verbatim it would hide the resource from everyone instead of
+  group: stored verbatim it would hide the resource from everyone rather than
   reserving it for someone.
 
 Grants are matched **exactly**. There is no glob syntax, so `some*` is looked up
@@ -397,7 +397,7 @@ down.
 
 ### System principals
 
-A `gws_` token resolves to a **system principal** (`docs/agents.md` §1), and
+A `gws_` token resolves to a **system principal** ([`agents.md`](agents.md#principals)), and
 none of the above applies to it. It holds exactly the rows in
 `principal_grants`, one resource each:
 
@@ -408,7 +408,8 @@ none of the above applies to it. It holds exactly the rows in
 | `skill` | that global skill | anyone's private skills |
 | `rag_collection` | that collection, by id | collections with empty `allowed_groups` ("open to everyone" means everyone *person*) |
 | `model` | that model, by the name the chat picker shows: a model id, a backend alias (and what it resolves to), or an automatic-route alias (which also reaches the route's candidates, fallback and selector) — only through the pools the grant records: every pool of the model's kind the granting manager could use, every serving pool for an admin's grant; a regrant only widens them, and a non-admin's token narrows them to its minter's pools. The caller must name a granted name itself: a granted alias authorises its target only when the gateway resolves the alias ([`agents.md`](agents.md#models)) | any other model, open pools included; a pool the granting manager could not use; `is_admin` bypass. No grant, no model |
-| `a2a_caller` | calling that agent (ref: its id) over A2A, `/a2a/agents/{id}` ([`agents.md`](agents.md#what-102-built)) | anything of the agent's own: the task runs as the agent's principal, with the agent's grants, never the caller's |
+| `a2a_caller` | calling that agent (ref: its id) over A2A, `/a2a/agents/{id}` ([`agent-a2a.md`](agent-a2a.md#serving-an-agent-over-a2a)) | anything of the agent's own: the task runs as the agent's principal, with the agent's grants, never the caller's |
+| `a2a_agent` | handing a route's task to that external A2A agent (ref: its agent card URL); only an admin can grant it ([`agent-a2a.md`](agent-a2a.md#external-agents-as-route-targets)) | any other card URL, or an endpoint or token URL outside the card URL's origin |
 
 The principal-aware entry points on `AppState` are
 `allowed_tools_for_principal`, `allowed_skills_for_principal`,
@@ -423,7 +424,7 @@ The same holds for a headless run as a principal (`headless::drive` with
 registered tool outside them is answered with a `not granted` refusal instead
 of the chat path's auto-enable. Inside an agent run every call's decision is
 also written to `agent_audit` with the call chain
-([`agents.md`](agents.md#the-call-chain)).
+([`agent-runs.md`](agent-runs.md#the-call-chain)).
 
 **Who may grant.** Users whose groups have `can_manage_agents` (admin implies
 it), through `/api/v0/system-principals/*`. A grant is refused unless the
@@ -443,7 +444,7 @@ On `POST /v1/chat/completions` and `/v1/messages`:
 1. Compute the caller's allowed set (roles → ids → resolvable in the
    `ToolSource`).
 2. Drop anything `requires_chat_session` — the proxy paths have no chat turn,
-   so advertising those would hand the model a guaranteed error instead of a
+   so advertising those would hand the model a guaranteed error rather than a
    completion. It is a single source of truth precisely so the advertise filter
    can't drift from the runtime gate; it has drifted before.
 3. Apply the token's capability states to built-in tools, MCP connector families,
@@ -560,7 +561,7 @@ client tool in one turn.
   `request_human`) one at a time, then the `Terminal` one (`finish`), which
   the driver only lets run as the round's sole call. Only `RunToolSource`
   returns anything but `Concurrent`. Results keep call order whatever order the calls ran in
-  ([`agents.md`](agents.md#synthetic-tools)).
+  ([`agent-runs.md`](agent-runs.md#synthetic-tools)).
 - **Tool-result context budget** — once cumulative `role:"tool"` content passes
   128 KB (`/v1` loop) or the turn's allowance derived from the model's context
   window (chat driver), older large results are replaced by re-callable stubs
@@ -577,8 +578,7 @@ client tool in one turn.
 
 Every chat-driver run carries an `aiplane_runtime::budget::Budget { rounds,
 seconds, tokens }`. A chat turn derives it from the conversation's effort level
-(`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit),
-so interactive behaviour is unchanged. An agent run may carry one
+(`Budget::from_effort`: the `Effort::max_rounds` cap, no time or token limit). An agent run may carry one
 (`AgentRun::with_budget`); `Budget::new` clamps its rounds to `1..=HARD_ROUND_CAP`.
 `seconds` and `tokens` are optional (`None` = unlimited). An agent run takes
 its budget from `main.budget` in its spec (rounds default to the `standard`
@@ -619,8 +619,7 @@ An agent run carries an `InjectionScan { policy }`
 main agent and sub-agent alike, so a sub-agent's `finish` result reaches the
 main agent screened like any other tool result. The
 default is `Off`, which skips scanning entirely, so the result reaches the model
-byte for byte as before. The `/v1` loops pass `Off` until they have a per-run
-setting of their own.
+byte for byte. The `/v1` loops pass `Off`.
 
 | Policy | What the model sees for a result with a hit |
 |---|---|
@@ -648,11 +647,9 @@ produce false positives in text that *discusses* injection; each pattern has a
 test, and so do clean code, JSON, prose and a German letter. Add a pattern with
 a failing fixture first, and a clean fixture if it is broad.
 
-**No model-based layer.** An `InjectionClassifier` seam for a second, model-based
-opinion existed without any implementation and was removed (#120). A model check
-on what a visitor may ask is the agent's topic guard (`agents::topic_guard`, a
-side call); one on tool results would be built on `server::side_call` the same
-way.
+**No model-based layer.** The scan is the regex set alone; no model judges a
+tool result. A model check on what a visitor may ask is the agent's topic guard
+(`agents::topic_guard`, a side call).
 
 **Recording.** Every hit logs a `warn` (tool, principal, policy, signals). When
 the acting principal is a system principal it also writes an `agent_audit` row of
@@ -671,7 +668,8 @@ exactly one of two ways: a schema-valid `finish(result)` call
 agent run (`AgentRun::with_contract`; `RunProfile` gives one to every routed
 sub-agent), and `headless::drive` returns the outcome. Runs without a
 contract — every chat turn, every scheduled action and webhook, every `/v1`
-request — are unchanged, and no `finish` tool is offered to them.
+request — end when a round comes back without tool calls, and no `finish`
+tool is offered to them.
 
 `finish` is a real tool: `finish::FinishTool`, owned by the run's `AgentRun`
 and offered through `RunToolSource` in the `ToolPhase::Terminal` phase. It is
@@ -752,7 +750,7 @@ is used.
 
 A tool that needs a decision from outside the model returns
 `aiplane_runtime::suspend::tool_suspend(SuspendRequest { kind, message,
-timeout_secs, on_timeout })` instead of a result — an envelope with one
+timeout_secs, on_timeout })` rather than a result — an envelope with one
 sentinel key, the same mechanism as `tool_content_parts`. `FeedbackHub` parks a
 call only while the turn lives in memory; this pause is durable.
 
@@ -798,14 +796,14 @@ call only while the turn lives in memory; this pause is durable.
   decision was not asked about; `…/cancel` gives the decision up. The public
   embed endpoint alone queues one visitor message behind the decision.
 
-`AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) is the first
-consumer: it keeps the wrapped tool's id and schema, pauses every call for an
+`AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) wraps a tool
+in an approval: it keeps the wrapped tool's id and schema, pauses every call for an
 `approval`, runs the tool only on `Decided(AllowOnce)`, and refuses where
 pausing is impossible. Nothing in the shipped registry is wrapped; an agent's
 spec wraps its own tools with `tool_resources.<tool>.permission: always_ask`,
 and a tool whose `Tool::changes_state()` is true (an MCP tool marked
 destructive and not read-only) asks by default
-([`agents.md`](agents.md#what-96-built)). A person's connector tool in `ask`
+([`agent-hil.md`](agent-hil.md)). A person's connector tool in `ask`
 mode is wrapped in chat ([`connectors.md`](connectors.md#tool-modes-always-ask-off)).
 `schedule_action` and `delete_scheduled_action` check their arguments first
 and then ask the same way, through `ask_first::approval` (the protocol
@@ -813,11 +811,11 @@ and then ask the same way, through `ask_first::approval` (the protocol
 `message`. Every approval in the product is this one durable pause; `ask_user`
 and browser control keep `FeedbackHub` because they are answered within the
 live turn, whose sandbox and browser leases a pause would end. Scheduled and webhook runs pause
-like a chat since #96, and their owner answers from the inbox.
+like a chat, and their owner answers from the inbox.
 
 The row has a `child_turn` column for a pause inside a sub-agent run, which
 suspends every ancestor turn and resumes innermost first
-([`agents.md`](agents.md#what-agent-run-suspend-built)). `forward_request`
+([`agent-hil.md`](agent-hil.md#suspend-and-resume)). `forward_request`
 sets it: a paused sub-agent run pauses its caller on the same request, and
 one decision resumes the child first, then each caller with the child's
 result (`ResumeFrom.child_result`). Agent runs pause and resume through

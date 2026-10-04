@@ -8,7 +8,7 @@
 //! `allowed_groups` meaning "everyone", per-user MCP connections, memory,
 //! personal skills — are all reached through [`Principal::User`]; a
 //! [`Principal::System`] carries only its [`GrantSet`], and every check made
-//! for it is "is this exact resource granted". See `docs/agents.md` §1.
+//! for it is "is this exact resource granted". See `docs/agents.md` → "Principals".
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -44,10 +44,9 @@ pub enum GrantKind {
     /// model id, a backend alias or an automatic-route alias.
     Model,
     /// An agent id (`system_principals.id`) this principal may call over
-    /// A2A (`docs/agents.md` "What #102 built"). It grants nothing else.
+    /// A2A (`docs/agent-a2a.md` → "Serving an agent over A2A"). It grants nothing else.
     A2aCaller,
-    /// An external A2A agent, by its agent card URL (`docs/agents.md`
-    /// "What #101 built").
+    /// An external A2A agent, by its agent card URL (`docs/agent-a2a.md` → "External agents as route targets").
     A2aAgent,
 }
 

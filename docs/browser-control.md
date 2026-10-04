@@ -168,7 +168,7 @@ is the honest signal that something else is driving.
 | `hover` | no | pointer onto an element — the only way to reach a menu that opens on hover |
 | `drag` | yes | press, several intermediate moves, release; a single jump is ignored by most drag code |
 | `type_text` | yes | clicks the field, then `Input.insertText` (so frameworks see `beforeinput`/`input`), `replace` and `submit` |
-| `press_key` | yes | real key events with `ctrl`/`shift`/`alt`/`meta`; a modifier other than shift suppresses text, so `ctrl+a` selects instead of typing "a" |
+| `press_key` | yes | real key events with `ctrl`/`shift`/`alt`/`meta`; a modifier other than shift suppresses text, so `ctrl+a` selects rather than typing "a" |
 | `scroll` | no | a real wheel event — scroll-jacking pages and infinite lists listen for the wheel, not for a position that changed by itself. With `ref`, scrolls that element into view |
 | `screenshot` | no | `Page.captureScreenshot`, works on a tab that is not in front. One of: the viewport (default), `full_page`, one element by `ref` (with an 8px margin), or a `region` `{x, y, width, height}` in document CSS pixels. Either edge is capped at 8000 CSS px before downscaling to 1400 px. The result carries the `clip` it covered, so a spot in the image maps back to page coordinates. **Only the model sees it** — see [Showing the user](#showing-the-user) |
 | `set_viewport` | no | resize, or emulate a phone: touch events, mobile user agent and a 3× pixel ratio together, because metrics alone leave a server-side responsive site sending the desktop page |

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The `verifiers` part of the spec validator (`docs/agents.md` "What #95
-//! built"). Three kinds:
+//! The `verifiers` part of the spec validator (`docs/agent-visitors.md` → "Identity verifiers"). Three kinds:
 //!
 //! - `mcp_code`: a one-time code the agent's own connector sends and checks;
 //!   the gateway counts attempts, expiry and sends.

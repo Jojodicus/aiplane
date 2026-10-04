@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The topic guard of a strict `scope` (`docs/agents.md` → "What #115
-//! built"): before the main model sees a visitor's message, a small model
+//! The topic guard of a strict `scope` (`docs/agent-runs.md` → "Topic guard"): before the main model sees a visitor's message, a small model
 //! judges it in or out of the agent's topics. Out of scope, the owner's
 //! `refusal` is the turn's answer and the main model is never called.
 //!

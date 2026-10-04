@@ -6,7 +6,7 @@
 
 	/**
 	 * One node of a route's gate: `all` / `any` / `not` over children, or a
-	 * leaf that checks one slot (`docs/agents.md` §4). Gates are decided in
+	 * leaf that checks one slot (`docs/agent-spec.md` → "Gates"). Gates are decided in
 	 * code, so this editor only composes the tree; the server type-checks it
 	 * against the slots and its issues land on the node by path.
 	 */

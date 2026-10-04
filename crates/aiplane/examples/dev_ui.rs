@@ -995,8 +995,7 @@ async fn mount_agent_model(chat_mock: &MockServer) {
         .await;
 }
 
-/// The agent architect's scripted model (`docs/agents.md` "What #118
-/// built"), for requests that offer `update_agent_draft`. Per turn: create a
+/// The agent architect's scripted model (`docs/agent-builder.md` → "Agent architect"), for requests that offer `update_agent_draft`. Per turn: create a
 /// draft named "Harald" when the conversation plans no agent yet, then set
 /// its task and topics, then (when the person said "test") try it, and say
 /// what it did.

@@ -180,7 +180,7 @@ For every page:
       access groups, operational/provenance badges, setup gating, restore,
       enable/disable, deletion, and the per-connector audit page are restored.
       Provider-aware OAuth guidance again covers Google Workspace DCR, Google,
-      GitHub, Slack, and custom providers instead of collapsing them into a
+      GitHub, Slack, and custom providers rather than collapsing them into a
       generic redirect notice.
       Shared form/card components, all six catalogs, domain and route tests, a
       complete 390 px CRUD/audit workflow, all 57 browser checks, and a
@@ -217,7 +217,7 @@ For every page:
 - [x] `/login` — production and local were compared in Chrome. The standalone
       card, explicit OIDC action, safe deep-link forwarding, language control,
       source offer, browser title, and 390 px containment are restored; a
-      signed-out SPA route now stops here instead of immediately leaving for
+      signed-out SPA route now stops here rather than immediately leaving for
       the provider.
 - [x] `/setup` — production and local were compared in Chrome. The standalone
       two-step provider/admin wizard, redirect-URI guidance, typed fields,

@@ -16,7 +16,7 @@
 //!
 //! A tool in `ask` mode is offered in chat behind [`AskFirst`]: each call
 //! pauses the turn until the person approves it, through the same durable
-//! suspension every approval uses (`docs/agents.md` "Suspend and resume").
+//! suspension every approval uses (`docs/agent-hil.md` → "Suspend and resume").
 //! Over `/v1` nobody can answer a pause, so there the token's policy decides
 //! instead: a token allowed `ask` tools runs them unasked, any other never
 //! sees them.

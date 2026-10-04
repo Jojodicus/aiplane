@@ -1421,7 +1421,7 @@ async fn without_patterns_the_answer_is_unchanged() {
 /// Every model call a visitor conversation causes is a usage row charged to
 /// the main agent (`agent_id`), the main rounds, the classifier's pick and
 /// the sub-agent's rounds alike, while `user_id` still names the principal
-/// that made the call. That is what the owner's budget sums (`docs/agents.md` "What #92 built").
+/// that made the call. That is what the owner's budget sums (`docs/agent-visitors.md` → "Owner budget").
 #[tokio::test]
 async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
     let main = llm(vec![

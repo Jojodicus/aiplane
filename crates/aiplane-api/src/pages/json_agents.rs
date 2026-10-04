@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents` — agent definitions: drafts, immutable versions with a
-//! live pointer, and shares (`docs/agents.md` §2).
+//! live pointer, and shares (`docs/agents.md` → "Agent definition").
 //!
 //! Every route needs the agent-management permission, and every route on one
 //! agent also needs a share on it: `read` to see it, `write` to change it.
@@ -15,7 +15,7 @@
 //! share, so an agent whose last writer left can always be recovered.
 //!
 //! The agent's grants are its principal's, managed through
-//! `/api/v0/system-principals/{id}/grants` with the grant-time cap (`docs/agents.md` §1);
+//! `/api/v0/system-principals/{id}/grants` with the grant-time cap (`docs/agents.md` → "Principals");
 //! those routes check the share here too ([`guard_principal`]).
 
 use std::collections::HashMap;

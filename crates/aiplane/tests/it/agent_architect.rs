@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The agent architect end to end (`docs/agents.md` "What #118 built"): a
+//! The agent architect end to end (`docs/agent-builder.md` → "Agent architect"): a
 //! person's chat that runs as the architect persona, driven by a scripted
 //! model through the real router, worker and database.
 //!

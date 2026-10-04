@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Identity verifiers (`docs/agents.md` "What #95 built").
+//! Identity verifiers (`docs/agent-visitors.md` → "Identity verifiers").
 //!
 //! A verifier is the only thing besides the host that may write a slot the
 //! model cannot: it writes through [`write_trusted`](super::state::write_trusted) as

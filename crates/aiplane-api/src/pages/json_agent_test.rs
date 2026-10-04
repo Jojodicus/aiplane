@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The internal test chat (`docs/agents.md` "What #90 built"): a manager talks
+//! The internal test chat (`docs/agent-builder.md` → "Test chat"): a manager talks
 //! to the agent's **draft** in a conversation that streams like any other,
 //! and reads per turn what a visitor never sees — slot values and
 //! provenance, each route's gate, the routing decision, sub-agent calls and

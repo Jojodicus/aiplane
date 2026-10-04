@@ -2,8 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `agent_architect_sessions`: which of a person's chats run as the agent
-//! architect, and which agent each one plans (`docs/agents.md` "What #118
-//! built"). The conversation itself is an ordinary chat of the person's.
+//! architect, and which agent each one plans (`docs/agent-builder.md` → "Agent architect"). The conversation itself is an ordinary chat of the person's.
 
 use jiff::Timestamp;
 use sqlx::Row;

@@ -4,7 +4,7 @@
 //! From the model's proposal to what the assistant offers: every piece
 //! mapped to the spec fragment it stands for and checked with
 //! [`spec::validate`] on the draft as it would be after the pieces before it
-//! (`docs/agents.md` → "What #117 built"). A piece that would add a problem
+//! (`docs/agent-builder.md` → "Prompt assistant"). A piece that would add a problem
 //! to the draft, or that names something this manager may not grant, is
 //! dropped with the reason in words. Nothing here writes anything.
 
@@ -229,8 +229,7 @@ struct SetupHandoff {
 }
 
 /// An architect's changes applied to `base`: the draft to save, the grants
-/// it needs, and what was applied or left out (`docs/agents.md` "What #118
-/// built").
+/// it needs, and what was applied or left out (`docs/agent-builder.md` → "Agent architect").
 #[derive(Debug, Clone)]
 pub struct Applied {
     pub suggestion: Suggestion,

@@ -7,7 +7,7 @@
 //! [`TurnPolicy`] for the leading system message, the round's tool offer, the
 //! pools, budget and injection scan, and how the turn ends, and never asks
 //! whether it is running an agent. See docs/architecture.md
-//! (`openai_driver/turn_policy.rs`) and docs/agents.md → "`RunProfile`".
+//! (`openai_driver/turn_policy.rs`) and docs/agent-runs.md → "Entry points".
 //!
 //! An enum rather than a trait object: the set is closed (a turn acts for a
 //! person or is an agent's run, exactly as [`crate::agent_run::Actor`] says),

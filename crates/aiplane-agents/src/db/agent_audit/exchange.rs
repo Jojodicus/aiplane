@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! How the log keeps a model exchange's request small, and gives the whole
-//! request back (`docs/agents.md` → "What #111 built", "Storage").
+//! request back (`docs/agent-activity-log.md`, "Storage").
 //!
 //! **Deltas**, because a round's request repeats the whole conversation so
 //! far. The stored format, which every signed event already holds and so

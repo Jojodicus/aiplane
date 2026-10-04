@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Leaving a public agent running safely (`docs/agents.md` §5, "What #92
-//! built"): per-visitor and per-IP rate limits, the owner's
+//! Leaving a public agent running safely (`docs/agent-visitors.md` → "Rates"): per-visitor and per-IP rate limits, the owner's
 //! monthly budget, and the retention sweep, on the embed fixture.
 
 use std::time::Duration;

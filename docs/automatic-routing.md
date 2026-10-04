@@ -61,7 +61,7 @@ Automatic routes cannot target other automatic routes.
   cache is scoped to the authenticated user or API token as well as the session,
   and is bounded to protect the gateway from attacker-controlled session ids.
 - When no candidates or the configured fallback are currently eligible, the
-  request returns a retryable `503` instead of bypassing policy.
+  request returns a retryable `503` rather than bypassing policy.
 - A static alias that can resolve to different real model ids is not eligible.
   This prevents capability checks for one model from being followed by dispatch
   to another.

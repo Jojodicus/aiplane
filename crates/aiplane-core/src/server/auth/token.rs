@@ -17,11 +17,11 @@ pub const TOKEN_PREFIX: &str = "gwk_";
 /// prefix so the two namespaces can't be confused. The `gwh_<64 hex>` string
 /// is the credential in a webhook's trigger URL; only its hash is persisted.
 pub const WEBHOOK_PREFIX: &str = "gwh_";
-/// System-principal tokens (`docs/agents.md` §1). A separate prefix from
+/// System-principal tokens (`docs/agents.md` → "Principals"). A separate prefix from
 /// user tokens so `require_bearer` can route by it: a `gws_` bearer is only
 /// ever looked up in `system_tokens`, a `gwk_` one only in `tokens`.
 pub const SYSTEM_TOKEN_PREFIX: &str = "gws_";
-/// Agent embed keys (`docs/agents.md` §5). Public by design — the key ships
+/// Agent embed keys (`docs/agent-visitors.md`). Public by design — the key ships
 /// in the embedding site's page source — but hashed at rest like the rest.
 pub const EMBED_KEY_PREFIX: &str = "gwe_";
 /// Visitor tokens: one anonymous visitor conversation, held in the host

@@ -6,9 +6,9 @@
 	/**
 	 * Everything outside the conversation itself: profile, the `finish`
 	 * contract, what happens when a granted tool disappears, and the publish
-	 * settings that govern embedding (`docs/agents.md` §5).
+	 * settings that govern embedding (`docs/agent-visitors.md`).
 	 *
-	 * `finish.schema` is a JSON-Schema subset (`docs/agents.md` §4), edited as
+	 * `finish.schema` is a JSON-Schema subset (`docs/agent-spec.md` → "Gates"), edited as
 	 * JSON: an unsupported keyword is a save error, so a form over the subset
 	 * would only restate the validator.
 	 */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The `RunProfile` of an agent run (`docs/agents.md` §3): everything that
+//! The `RunProfile` of an agent run (`docs/agent-runs.md`): everything that
 //! makes a headless turn the run of one agent's live version.
 //!
 //! - **System message**: the owner's brief in sections — `## Role` (the

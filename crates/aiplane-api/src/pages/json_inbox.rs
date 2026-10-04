@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Human in the loop over HTTP (`docs/agents.md` "What #96 built").
+//! Human in the loop over HTTP (`docs/agent-hil.md`).
 //!
 //! - `/api/v0/agents/inbox` — what waits for the signed-in person: an agent's
 //!   approvals and handoffs when they hold access to it (an admin, a share

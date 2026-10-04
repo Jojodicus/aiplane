@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Rows the identity verifiers keep (`migrations/0077_agent_builder.sql`,
-//! `docs/agents.md` "What #95 built").
+//! `docs/agent-visitors.md` → "Identity verifiers").
 //!
 //! Storage only: the outstanding code of a verifier in a conversation (never
 //! the code itself, which the customer's connector owns), the counters its

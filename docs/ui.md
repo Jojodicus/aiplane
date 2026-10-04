@@ -34,7 +34,7 @@ What it does, and why:
 
 ### The first-run gate
 
-`rama_server::first_run` redirects the whole surface to the setup wizard until setup completes. Because the wizard *is* the SPA now, `serves_before_setup` allowlists the SPA's static shell — `/_app/*`, `/assets/*`, `/icons/*`, `favicon.*`, `manifest.webmanifest`, `sw.js`, `robots.txt`, `pcm-recorder.js` — plus `/setup*` and `/auth/callback`. Gating a JavaScript module request would 303 it to an HTML page and leave the wizard blank. Those files are unauthenticated static bytes; the SPA's own API calls self-protect with 401/403.
+`rama_server::first_run` redirects the whole surface to the setup wizard until setup completes. Because the wizard *is* the SPA, `serves_before_setup` allowlists the SPA's static shell — `/_app/*`, `/assets/*`, `/icons/*`, `favicon.*`, `manifest.webmanifest`, `sw.js`, `robots.txt`, `pcm-recorder.js` — plus `/setup*` and `/auth/callback`. Gating a JavaScript module request would 303 it to an HTML page and leave the wizard blank. Those files are unauthenticated static bytes; the SPA's own API calls self-protect with 401/403.
 
 ## Layout of `web/`
 
@@ -108,7 +108,7 @@ both regions; the document itself must not become the chat scroll container.
 
 ### Bounded viewport
 
-A page that is a conversation fills the window instead of scrolling as a
+A page that is a conversation fills the window rather than scrolling as a
 page: `boundedViewport(url)` (`lib/viewport.ts`, unit-tested) names them —
 the chat and an agent's Try it → Test chat. For those the shell's `main`
 does not scroll and its content is `h-full`; the page hands that height down
@@ -141,7 +141,7 @@ inside the Groups tab. `/admin/settings` stays a separate sidebar page.
 
 The Notifications tab shows device controls when Web Push initialized. If the
 feature is configured but its sender failed to initialize, the tab shows an
-unavailable message and an admin link to operator settings instead of an empty
+unavailable message and an admin link to operator settings rather than an empty
 page.
 
 Within `/settings/tokens`, `?tab=tokens` manages tokens and `?tab=guides`
@@ -303,9 +303,9 @@ Invariants worth knowing before you touch either side:
 - **A suspended turn is answered over JSON, not the stream.** `POST /api/v0/chat/sessions/{id}/turns/{turn_id}/resume` takes `{"decision": "allow_once" | "deny" | "value", "value"?: …, "request_id"?: …}`; owner-only, `202` once the turn's worker runs again, after which the client re-attaches. `409 not_suspended` when the turn is not waiting or `request_id` names an older pause, `400 decision_not_offered` for a decision its `options` lack, `409 turn_in_progress` when no slot is free. A message sent into a paused conversation is refused with `409 decision_pending`, and `…/cancel` on it gives the decision up; the chat page keeps the draft in its composer but will not send it meanwhile, and says why (`pausedTurn`, `chat-composer-paused`). The chat page draws a paused turn as the [suspension card](#suspension-card), led by `chat-waiting-*` and showing the waiting call's arguments from the transcript; only the owner gets its buttons. A person's paused run (a scheduled action or a webhook) is answered from the [inbox](#inbox), which calls this same resume.
 - **The stream ends at `turn_finalized` / `suspended` / `idle`.** The server closes there, so `chat.svelte.ts` closes the `EventSource` too, and fires `onTurnFinalized` on `turn_finalized` and `suspended` alike (the turn stopped running) — letting it auto-reconnect would loop snapshot/idle forever on a quiet session. `applyEvent` folds `suspended` into the turn (`status: suspended`, `suspension`), as a snapshot's row carries it. After a submit (or any suspected change) `attach()` reopens, and the fresh snapshot is the replay.
 - **An interrupted worker leaves a terminal turn.** The shared worker harness catches driver and tool panics, records the assistant turn and any still-running tool calls as `errored`, and broadcasts `Finalized`; its caller then releases the worker slot. On attach, if the owner has no live worker, the events handler also errors any already-present `in_progress` assistant turns before sending the snapshot. It targets only turn IDs read before rechecking the worker registry, so a newly starting turn cannot be mistaken for an orphan. Viewers of a shared conversation never perform this recovery because they cannot see the owner's worker in their own registry lookup.
-- **Every scheduled or webhook run links its chat and ends terminal.** A run's history row gets its `session_id` the moment the chat is opened (webhooks at `record_run_start`, schedules via `attach_run_session`, which also moves the action's `last_session_id` so a reusing schedule keeps its thread); closing a run with no session never erases that link. The scheduler wraps each run in a panic guard, so the row is always closed through `record`. A process that dies mid-run leaves rows pending; `sweep_interrupted_runs` closes them at startup as `error` — before the scheduler's first tick and before the server accepts webhook fires, so nothing live can be caught by it — and corrects the list row when the orphan was the newest run. The runs lists join `chat_sessions` and report `chat_deleted`; list rows get `last_chat_deleted`, and the SPA shows "chat deleted" instead of linking to a 404.
+- **Every scheduled or webhook run links its chat and ends terminal.** A run's history row gets its `session_id` the moment the chat is opened (webhooks at `record_run_start`, schedules via `attach_run_session`, which also moves the action's `last_session_id` so a reusing schedule keeps its thread); closing a run with no session never erases that link. The scheduler wraps each run in a panic guard, so the row is always closed through `record`. A process that dies mid-run leaves rows pending; `sweep_interrupted_runs` closes them at startup as `error` — before the scheduler's first tick and before the server accepts webhook fires, so nothing live can be caught by it — and corrects the list row when the orphan was the newest run. The runs lists join `chat_sessions` and report `chat_deleted`; list rows get `last_chat_deleted`, and the SPA shows "chat deleted" rather than linking to a 404.
 - **A reusing schedule or webhook can continue in any of its owner's chats.** Reuse always meant "append to `last_session_id`"; the form's *Continue in* picker (`LinkedChatPicker`) sets that pointer directly through `linked_session_id` on create/update — an id links that chat, `""` lets the next run open a fresh one, an absent field leaves it alone (a run may have moved it since the form opened). The server accepts only the caller's own chat, and only with `reuse_conversation` on. The picker starts on `last_session_id` even before reuse is switched on, because that is where a reusing run would continue; a deleted one reads as "a new chat", which is what the next run does.
-- **The public embed stream speaks the same frames, buffered.** `GET /api/v0/embed/events` (visitor token, read with `fetch` streaming) sends `snapshot`, then either `idle` or — once the running turn is terminal — its whole answer as one `turn_delta` with `full: true` and `turn_finalized`. When the conversation waits for a decision, or the running turn pauses, the stream ends with `suspended` (the visitor view above) instead. A request staff answer has empty `options`: the widget shows that it waits and re-attaches every 10 s until the answer arrives. The visitor answers a `secure_input` with `POST /api/v0/embed/resume {request_id, decision, value?}` (the widget's masked code field) and re-attaches. A host page's signed identity token goes to `POST /api/v0/embed/identity {token}`. A message sent meanwhile is queued (`placement: "queued"`) and shows in the snapshot's `waiting_turn_ids`. Tool calls, reasoning and unfinished answers are stripped from what a visitor receives. See [`agents.md`](agents.md#what-91-built) and [agent-run suspend](agents.md#what-agent-run-suspend-built).
+- **The public embed stream speaks the same frames, buffered.** `GET /api/v0/embed/events` (visitor token, read with `fetch` streaming) sends `snapshot`, then either `idle` or — once the running turn is terminal — its whole answer as one `turn_delta` with `full: true` and `turn_finalized`. When the conversation waits for a decision, or the running turn pauses, the stream ends with `suspended` (the visitor view above) instead. A request staff answer has empty `options`: the widget shows that it waits and re-attaches every 10 s until the answer arrives. The visitor answers a `secure_input` with `POST /api/v0/embed/resume {request_id, decision, value?}` (the widget's masked code field) and re-attaches. A host page's signed identity token goes to `POST /api/v0/embed/identity {token}`. A message sent meanwhile is queued (`placement: "queued"`) and shows in the snapshot's `waiting_turn_ids`. Tool calls, reasoning and unfinished answers are stripped from what a visitor receives. See [`agent-visitors.md`](agent-visitors.md) and [agent-run suspend](agent-hil.md#suspend-and-resume).
 - **Markdown is the wire format.** The server sends text; the client renders it (`marked` → `DOMPurify` → `{@html}`). Model output is untrusted input like any other, so the sanitise step is not optional.
 
 The rest of the conversation surface is ordinary JSON. `GET /api/v0/chat/landing`
@@ -397,7 +397,7 @@ waits. Retry and edit still refuse with `409` — regeneration rewrites history 
 running turn is reading, so there is nothing sensible to queue.
 
 It is also where **agent conversations' turns** run (`agents::embed::claim`,
-see [agents.md](agents.md#what-91-built)), keyed by the principal
+see [agent-visitors.md](agent-visitors.md)), keyed by the principal
 that owns the conversation and uncapped per principal — one agent answers many
 visitors at once. So "is a turn running", cancel and shutdown's
 `cancel_all`/drain cover every turn from one place. Two registry operations
@@ -469,7 +469,7 @@ built-in default.
 `/agents` (sidebar: Workspace → Agents) is visible only when `GET /api/v0/me`
 reports `can_manage_agents`; everything behind it is the `/api/v0/agents/*`,
 `/api/v0/system-principals/*` and `/api/v0/agent-resources` surface described
-in [`agents.md`](agents.md#what-84-built). The data layer and the pure helpers
+in [`agents.md`](agents.md#agent-definition). The data layer and the pure helpers
 are `web/src/lib/agents.ts` (unit-tested in `agents.test.ts`); the components
 are in `web/src/lib/components/agents/`.
 
@@ -536,7 +536,7 @@ are in `web/src/lib/components/agents/`.
     (`grant_exceeds_manager`, unknown resource) is shown verbatim.
   - *Test chat*: see below.
   - *Tests*: stored test cases and suite runs (`TestsPanel`, see
-    [`agents.md`](agents.md#what-99-built)). A case form edits the conversation
+    [`agent-builder.md`](agent-builder.md#evaluation)). A case form edits the conversation
     script (visitor messages, and trusted slot writes as `host` or
     `verifier:<id>` between them) and the deterministic expectations (last turn
     finished, output-filter outcome, route chosen or none, gates with the slots
@@ -555,7 +555,7 @@ are in `web/src/lib/components/agents/`.
     snapshot with its JSON, and "make live" (rollback).
   - *Analytics*: what the agent did over the last 7, 30 or 90 days, for all
     versions or one (`GET /api/v0/agents/{id}/analytics`, see
-    [`agents.md`](agents.md#what-100-built)). `AnalyticsPanel` shows stat tiles
+    [`agent-activity-log.md`](agent-activity-log.md#analytics)). `AnalyticsPanel` shows stat tiles
     (conversations, messages, sub-agent runs, gate refusals, output-filter
     blocks, limit refusals, human handoffs, model calls, tokens, cost when
     priced), a per-day bar chart with a metric switch, and breakdown tables
@@ -565,7 +565,7 @@ are in `web/src/lib/components/agents/`.
     Its pure half, `web/src/lib/agent-analytics.ts`, is unit-tested. Route,
     slot and reason names are shown as the identifiers they are.
   - *Activity*: the agent's activity log (`GET /api/v0/agents/{id}/activity`,
-    see [`agents.md`](agents.md#what-111-built)). `ActivityPanel` lists every
+    see [`agent-activity-log.md`](agent-activity-log.md)). `ActivityPanel` lists every
     conversation's events newest first, or one conversation oldest first,
     grouped by turn (a sub-agent's run is its own group, badged
     *sub-agent*); each event is a daisyUI `collapse` whose title is the kind
@@ -645,12 +645,12 @@ are in `web/src/lib/components/agents/`.
   response, so the card shows the ready-to-paste `<script>` tag
   (`embedSnippet`, pointing at this gateway's `/embed.js`) once, right then.
   The widget itself is [`embed.md`](embed.md).
-- **Not built yet.** Conversation history for test sessions (they are
-  stored with `agent_version = 0`).
+- **Test conversations have no history list.** They are stored with
+  `agent_version = 0` and swept by retention like any other.
 
 ### Agent setup
 
-The way a manager who is not technical sets an agent up (#116). It edits the
+The way a manager who is not technical sets an agent up. It edits the
 same spec as the advanced editor and never shows it: every step reads its
 plain-language model out of the spec and writes it back. The pure half is
 `web/src/lib/agent-setup.ts` (unit-tested in `agent-setup.test.ts`, including
@@ -705,13 +705,13 @@ catalog strings.
   |---|---|---|
   | Start | Template cards (Website FAQ, Customer support with identity check, Qualify leads, Internal helper, Start blank) and a scenario field with *Suggest a setup* (below) | the template's spec (`agent-templates.json`, texts from the catalog), keeping the name and the model already chosen; asks before replacing a set-up agent |
   | Task & tone | name, what the agent does, tone chips, answer language, free text, *Model* | `profile.display`, `main.instructions.orchestration`; `main.instructions.response` as one fixed English line per chip and language (`TONE_LINES`) plus the free text, so lines no chip stands for survive; `main.model` (unset = the gateway default) |
-  | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope` (#115); an empty scope is removed, `classifier_model` kept |
+  | Topics | topic chips, the answer for other topics, *Enforce strictly* | `scope`; an empty scope is removed, `classifier_model` kept |
   | Knowledge & abilities | the chat picker's `CapabilityBrowser` over the `items` of `GET /api/v0/agent-resources` (knowledge bases, tools, connectors, skills with their own titles and descriptions, linked to their edit pages for who may edit them), an on/off toggle each; switched-on and AI-suggested rows first; what the agent holds but the manager does not is listed by its reference under "Granted by someone else" | grants (below; every tool id of a catalog entry) and `main.tools`, `main.skills`; one collection binds `rag_search.collection` as a constant, several add `rag_list_collections` |
   | Information to collect | label + friendly kind (text, longer text, e-mail, phone, customer number, order number, date, number, whole number, yes/no, choice) | `state.<key>` with `SLOT_SHAPES[kind]`, `set_by: [llm]`, the label as `description` (a slot without one is shown by its key as it is), the row's position as `order` (the server hands object keys back sorted, so the list order lives there); a new row's key follows its label (`identFrom`); a slot of any other shape shows as "advanced" and is kept |
   | Identity check | four `ChoiceCard`s: none, code by e-mail, signed in on your website, customer number + name | `verifiers.identity` (`mcp_code` with a connector, `host_jwt` HS256 with issuer, audience and a generated secret, `lookup` with a tool) and `state.verified` (`subject`, `set_by` the verifier or `host`), plus the slots it reads; switching method moves the hand-off gates' `provenance` along; *none* is refused while a hand-off needs a confirmed identity |
   | Hand-offs | sentences: "When it is about [topic] and [always / all details are collected / the identity is confirmed / both], hand over to [a person / Specialist: X]", plus "Otherwise … [hand over to a person / end politely]"; the topic field grows with its text | one route per rule: `when: {all: [{slot: topic, eq}, {slot: request, set: true}, ({slot: <detail>, set: true} per slot of the details step; a route whose `set` leaves name only some of the details is not a rule but a kept route), ({slot: verified, provenance})]}` — saving the details step, or the identity step adding the slots it reads, regates a rule that waits for them (`withDetails`) — `agent` + `task: "Request about {topic}: {request}"` + `bind` derived from the specialist's live spec (`deriveBind`), or `human: {}`; the fallback is route `fallback` on `request` set; `state.topic` (enum of the topics) and `state.request`; `router.order` rules, other routes, fallback. Routes of any other shape are kept and counted. With a hand-off to a person, *Announce a hand-off to a person* offers what exists — push when the gateway sends it (`GET /api/v0/push/config`), Slack / Discord once the agent has a channel of that service (the agent's `ChannelsPanel`, embedded below it, adds and removes channels through the same routes as the inbox settings) — and writes it as each person route's own `human.notify` (`Rule.notify`, `Handoffs.fallbackNotify`): one choice for all of them while they agree (`sharedNotify` / `notifyEverywhere`), one per route once they differ, so no route is rewritten unasked; everything on is written as no list, which the run reads as every channel (`notifyOn` / `setNotify`) |
   | Website | the websites (one per line), a widget sketch, *Create embed code*; voice in and out with their models, and the voice picked from the speech model's own `voices` (`speechVoices`) | `publish.origins` (each reduced to its origin); the key itself is created through the embed-keys API and shown once; `publish.voice` |
-  | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` (#99) |
+  | Check & test | every section's summary, the checklist, the proposed test conversations with *Save as test*, a link to *Try it* | a saved test goes through `POST …/tests` |
 
 - **Grants follow the cards, on save.** Switching a card on, choosing a model
   or picking the identity check's system *stages* the grant it needs
@@ -748,7 +748,7 @@ catalog strings.
   `ModelPicker` over `models.transcription` / `models.speech`
   (`publish.voice.transcription_model` / `speech_model`). Switching a
   direction on starts it on *Default* and stages the default's grant. A
-  direction the manager may grant no model for shows why instead of a switch.
+  direction the manager may grant no model for shows why rather than a switch.
 - **Errors.** `setupErrorMessage` (`agent-setup.ts`) turns a failed call into a
   catalog message — the assistant unavailable (404/405/501/503), its model
   failing (502), a network failure, a rate refusal with its `Retry-After` — and
@@ -759,8 +759,8 @@ catalog strings.
   `agent-templates.json`, which `tests/it/agent_test_chat.rs` creates in every
   language to prove each is a valid draft). What the model reads — tone and
   language lines, the hand-off task, the descriptions of `topic` and
-  `request` — is English, like the structured system prompt (#115).
-- **The prompt assistant** (#117, [`agents.md`](agents.md#what-117-built)).
+  `request` — is English, like the agent's system message.
+- **The prompt assistant** ([`agent-builder.md`](agent-builder.md#prompt-assistant)).
   *Suggest a setup* sends the scenario, the chosen template and the current
   buffer to `POST …/assist/suggest`; the proposal is kept on the workspace
   (`ws.suggestion`), and with the scenario and the parts already handled in
@@ -781,12 +781,12 @@ catalog strings.
   step with its reason. The task, the tone and the answer for other topics
   each have *Improve* (`ImproveText`, `…/assist/improve`): the proposed text
   before / after with the reason, applied only on *Apply*.
-- **The agent architect** (#118): see below.
+- **The agent architect**: see below.
 
 ### Agent architect
 
 A conversation that plans an agent with the person and writes the draft
-([`agents.md`](agents.md#what-118-built)). `ArchitectModal`
+([`agent-builder.md`](agent-builder.md#agent-architect)). `ArchitectModal`
 (`lib/components/agents/`) is a centred `Modal` (`lg`, the body about
 70 dvh high; never a side drawer) holding `ArchitectChat`, which mounts only
 while it is open.
@@ -808,7 +808,7 @@ while it is open.
   call naming a setup page offers *Open setup*. After every finished turn
   (and an undo) the host reloads: the list its agents, the overview the
   workspace with `refresh(ws.dirty)`, which keeps an unsaved edit of the
-  person's buffer instead of overwriting it.
+  person's buffer rather than overwriting it.
 - **Voice** is the composer's dictation: `DictationButton` with the first
   transcription model (`/api/v0/transcription_models`), the transcript
   appended to the text field. It shows only when a transcription model is
@@ -821,7 +821,7 @@ while it is open.
 waits for them: an agent's approvals and handoffs when they are an admin, a
 manager with a `read` or `write` share, or hold a `respond` share (the
 agent's responders), and their own paused scheduled or webhook runs. It is the `/api/v0/agents/inbox` surface of
-[`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
+[`agent-hil.md`](agent-hil.md); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
 - **The sidebar entry** appears only where something can arrive
@@ -852,7 +852,7 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
   with `SearchableSelect` in server-search mode (`onsearch`: the component
   shows the caller's results unfiltered) from
   `GET /api/v0/agents/{id}/share-subjects?q=` — a few matches from two
-  characters on, never the roster ([`agents.md`](agents.md) §2 Shares). A
+  characters on, never the roster ([`agents.md`](agents.md#shares)). A
   subject that may not hold `read` or `write` is refused by the server, and
   its message is shown. Below it, *Notification channels* (Slack or
   Discord incoming webhooks; the URL is write-only, the list shows its host,
@@ -897,7 +897,7 @@ Shared state lives in `.svelte.ts` modules exporting `$state` objects, built as 
 
 ## Theming
 
-`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. They are one design in two lightnesses, taken from the agent-setup mockup (#113):
+`web/src/app.css` registers Croit `light` and `dark` daisyUI themes with the built-in palettes switched off. They are one design in two lightnesses, taken from the agent-setup mockup:
 
 | Token | Dark (default) | Light | Used for |
 |---|---|---|---|

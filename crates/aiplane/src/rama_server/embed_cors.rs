@@ -16,7 +16,7 @@ use rama::http::{Body, Method, Request, Response, StatusCode, header};
 use rama::{Layer, Service};
 
 /// [`Layer`] for CORS on the public agent endpoint, `/api/v0/embed/*`
-/// (`docs/agents.md` §5). Every other `/api/v0` route stays same-origin.
+/// (`docs/agent-visitors.md`). Every other `/api/v0` route stays same-origin.
 ///
 /// Unlike `/v1`, the origin is never reflected blindly: it must be listed by
 /// a live embed key of an enabled agent. A preflight carries neither the key

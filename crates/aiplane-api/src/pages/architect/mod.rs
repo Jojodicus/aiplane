@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The agent architect (`docs/agents.md` "What #118 built"): a chat of the
+//! The agent architect (`docs/agent-builder.md` → "Agent architect"): a chat of the
 //! signed-in person's that runs as a built-in persona, plans an agent with
 //! them and writes the draft through the same paths the setup UI uses.
 //!

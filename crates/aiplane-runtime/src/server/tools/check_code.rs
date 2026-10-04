@@ -3,7 +3,7 @@
 
 //! Test fixture: a tool that asks the one chatting for a code through a
 //! `secure_input` suspension and says whether it matched, the way a verifier
-//! (`docs/agents.md` "What #95 built") will. It never repeats the code, so the tests can show the code
+//! (`docs/agent-visitors.md` → "Identity verifiers") will. It never repeats the code, so the tests can show the code
 //! reaching the tool and nothing else.
 
 use std::time::Duration;

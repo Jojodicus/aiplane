@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The `publish.a2a` part of the spec validator (`docs/agents.md` "What #102
-//! built"): the opt-in to serve the agent over A2A, and the skills its agent
+//! The `publish.a2a` part of the spec validator (`docs/agent-a2a.md` → "Serving an agent over A2A"): the opt-in to serve the agent over A2A, and the skills its agent
 //! card advertises. Without `skills` the card derives them from the agent's
 //! description and its described routes ([`crate::agents::a2a::skills`]).
 

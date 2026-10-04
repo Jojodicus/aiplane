@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The prompt assistant (`docs/agents.md` → "What #117 built"): from a
+//! The prompt assistant (`docs/agent-builder.md` → "Prompt assistant"): from a
 //! manager's scenario, one model call proposes a value for every setup step
 //! of an agent plus test cases; another improves one text.
 //!

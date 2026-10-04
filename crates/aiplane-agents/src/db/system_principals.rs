@@ -5,7 +5,7 @@
 //!
 //! Every write that changes what a principal can do or authenticate with
 //! records an [`agent_audit`] row in the same transaction. See
-//! `docs/agents.md` §1 for why principals are a separate table from users.
+//! `docs/agents.md` → "Principals" for why principals are a separate table from users.
 
 use jiff::Timestamp;
 use std::collections::BTreeSet;

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `GET /api/v0/agents/{id}/analytics` against seeded rows
-//! (`docs/agents.md` "What #100 built"): every number is computed by hand from the fixture
+//! (`docs/agent-activity-log.md` → "Analytics"): every number is computed by hand from the fixture
 //! below, builder test conversations and another agent's rows are present in
 //! the database and must not move any of them, and nothing a visitor said
 //! comes back.

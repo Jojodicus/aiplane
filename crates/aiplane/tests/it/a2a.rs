@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Agents served over A2A (`docs/agents.md` "What #102 built"):
+//! Agents served over A2A (`docs/agent-a2a.md` → "Serving an agent over A2A"):
 //! the agent card of an opted-in agent, and its JSON-RPC endpoint
 //! (`SendMessage`, `SendStreamingMessage`, `GetTask`, `CancelTask`) for a
 //! caller holding a `gws_` token whose principal is granted `a2a_caller` on
