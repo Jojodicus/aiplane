@@ -213,7 +213,7 @@ constraint is why a handful of test-support helpers (`ToolContext::for_test`,
 ### `crates/aiplane-api`
 The `/api/v0` JSON handlers the SPA calls. `pages/mod.rs` carries the
 shared helpers every handler uses — `require_session_json` / `require_admin_json`
-(the 401/403 gates) and `json_ok` / `json_error` / `json_error_with` (the response envelope, the last with extra fields such as a validator's `issues`) — and
+(the 401/403 gates), `json_ok` (a success body of any serializable wire type) and `json_error` / `json_error_with` (the refusal, always `shared::api::ErrorEnvelope`, the last with extra fields such as a validator's `issues`; the gateway crate's handlers build theirs with the same `json_error`) — and
 re-exports the handlers the router mounts.
 `chat/` is a directory module for the multi-conversation chat (`json_api.rs` for
 the endpoints and the event stream, `title.rs` for auto-titling); `json_admin.rs`,
@@ -236,6 +236,7 @@ The binary and its routing glue — deliberately thin:
 - `oidc_handlers.rs` — `/auth/{login,callback,logout}`, backed by a `pending_logins` row keyed by the OIDC `state` parameter.
 - `rag_api.rs`, `sandbox_api.rs`, `comfyui_api.rs`, `setup_api.rs` — the remaining JSON surfaces. (`setup_api.rs` lives here rather than in `aiplane-api` so the first-run wizard's API survived the removal of the page stack.)
 - `spa.rs` — serves the built SvelteKit SPA from `AIPLANE_STATIC_DIR`: content-type map, cache policy, traversal guard, and the `index.html` history fallback. Its `GET /` + `GET /{*name}` catch-all is registered **last**, because rama matches in registration order.
+- `openapi/` — `GET /openapi.json`: the routes scanned out of `router.rs`, each described by its declaration (credential, request, responses, errors) with schemas derived from the handlers' wire types. See [`ui.md`](ui.md#the-json-api-and-its-contract).
 - `first_run.rs` — the layer that redirects everything to `/setup` until setup completes, with an allowlist for the SPA's static shell.
 - `body_limit.rs` — the request body cap every route sits behind. The layer reads the body itself (a declared length over the cap is refused before anything is read; otherwise reading stops as the running total passes it) and hands the handler buffered bytes, so no handler can drain an unbounded body: 1 MiB by default, 64 MiB on the large-body routes (`/v1/*`, `/api/v0/chat/*`, transcription, feedback, skill uploads), `413 payload_too_large` past it — in the Anthropic envelope (`request_too_large`) on `/v1/messages` and `/v1/messages/count_tokens`, like every other error there. `/hooks`, `/a2a` and `/api/v0/embed` read through their own tighter caps and are passed through. The cap is not matched on the path: `router.rs` registers each group of routes under its own endpoint layer, `.with_endpoint_layer(endpoint(BodyLimitLayer::DEFAULT | UPLOAD | ANTHROPIC_UPLOAD | HANDLER_CAPPED))`, so a route takes the cap of the group it is written in; a route added under `HANDLER_CAPPED` must cap its own read, and the architecture test reads that group out of the router and checks its handlers.
 
@@ -284,7 +285,13 @@ variable to read its key from.
 
 `Config` survives as the in-memory runtime shape — `settings::apply` writes the
 stored rows over its defaults on boot, so the hundred call sites that say
-`state.config().chat.ocr.dpi` never had to change. What is left outside the
+`state.config().chat.ocr.dpi` never had to change. Those typed reads fall
+back to the default on a stored value they cannot use, so a save checks first:
+`FieldSpec::check` accepts exactly what they use (a whole number of 0 or more,
+a finite number with either decimal separator, one of a choice's options), and
+`POST /api/v0/admin/settings` refuses a section with any unusable field
+(`422 invalid_settings`, one translated `issues` entry per field) without
+storing any of it. What is left outside the
 database is what has to be resolved *before* it can be opened:
 `$AIPLANE_SESSION_KEY`, `$AIPLANE_DB_PATH`, `$AIPLANE_DATA_DIR`,
 `$AIPLANE_PUBLIC_URL`, `$AIPLANE_BOOTSTRAP_ADMIN_GROUPS`,

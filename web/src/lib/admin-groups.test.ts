@@ -18,6 +18,7 @@ function group(name: string, tools: string[], skills: string[] = [], oidc: strin
 		description: '',
 		is_admin: false,
 		is_default: false,
+		can_manage_agents: false,
 		oidc_values: oidc,
 		tools,
 		skills

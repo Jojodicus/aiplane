@@ -22,7 +22,7 @@ use aiplane_runtime::rama_server::state::RamaState;
 pub(crate) async fn model_catalog(
     state: &RamaState,
     access: &PoolAccess,
-) -> Result<Vec<serde_json::Value>, DbError> {
+) -> Result<Vec<CatalogModelView>, DbError> {
     let prices = model_defaults::all_prices(&state.db).await?;
     Ok(state
         .upstreams
@@ -30,33 +30,67 @@ pub(crate) async fn model_catalog(
         .into_iter()
         .map(|model| {
             let price = prices.get(model.alias_of.as_deref().unwrap_or(&model.id));
-            serde_json::json!({
-                "id": model.id,
-                "kind": model.kind.as_str(),
-                "gdpr": model.compliance.gdpr,
-                "nda": model.compliance.nda,
-                "alias_of": model.alias_of,
-                "price": price.map(|price| serde_json::json!({
-                    "input": price.input_price,
-                    "output": price.output_price,
-                    "unit": price.pricing_unit.as_str(),
-                })),
-            })
+            CatalogModelView {
+                kind: model.kind.as_str(),
+                gdpr: model.compliance.gdpr,
+                nda: model.compliance.nda,
+                price: price.map(|price| ModelPriceView {
+                    input: price.input_price,
+                    output: price.output_price,
+                    unit: price.pricing_unit.as_str(),
+                }),
+                id: model.id,
+                alias_of: model.alias_of,
+            }
         })
         .collect())
 }
 
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CatalogModelView {
+    pub id: String,
+    pub kind: &'static str,
+    /// Whether the model's backend is flagged GDPR-compliant.
+    pub gdpr: bool,
+    /// Whether the model's backend is flagged as covered by an NDA.
+    pub nda: bool,
+    /// The model an alias resolves to; `null` for a real model.
+    pub alias_of: Option<String>,
+    pub price: Option<ModelPriceView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ModelPriceView {
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    pub unit: &'static str,
+}
+
 /// One in-force limit with what has been spent against it, as `/usage` and
 /// the token editor both draw it.
-pub fn limit_status_json(status: &LimitStatus) -> serde_json::Value {
-    serde_json::json!({
-        "model": status.model,
-        "dimension": status.dimension.as_str(),
-        "window": status.window.as_str(),
-        "limit": status.limit,
-        "used": status.used,
-        "refreshes_at": status.refreshes_at.to_string(),
-    })
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct LimitStatusView {
+    /// The model the limit covers; `null` for all metered models together.
+    pub model: Option<String>,
+    pub dimension: &'static str,
+    pub window: &'static str,
+    pub limit: f64,
+    pub used: f64,
+    /// When the window next advances.
+    pub refreshes_at: String,
+}
+
+impl From<&LimitStatus> for LimitStatusView {
+    fn from(status: &LimitStatus) -> Self {
+        Self {
+            model: status.model.clone(),
+            dimension: status.dimension.as_str(),
+            window: status.window.as_str(),
+            limit: status.limit,
+            used: status.used,
+            refreshes_at: status.refreshes_at.to_string(),
+        }
+    }
 }
 
 pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -135,33 +169,36 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         let token_quotas = quotas.remove(&token.id).unwrap_or_default();
         let quota_status = state.enforcer.token_statuses(&token.id).await;
         let usage = usage_by_token.get(&token.id);
-        token_details.push(serde_json::json!({
-            "id": token.id,
-            "name": token.name,
-            "created_at": token.created_at,
-            "last_used_at": token.last_used_at,
-            "expires_at": token.expires_at,
-            "revoked": token.revoked_at.is_some(),
-            "tools_enabled": token.tools_enabled,
-            "tool_states": tool_states,
-            "owner_models": lists.owner,
-            "admin_models": lists.admin,
-            "mcp_allow": mcp_allow,
-            "quotas": token_quotas.into_iter().map(|rule| serde_json::json!({
-                "id": rule.id,
-                "model": rule.model,
-                "dimension": rule.dimension.as_str(),
-                "window": rule.window.as_str(),
-                "value": rule.value,
-                "managed_by": rule.managed_by.as_str(),
-            })).collect::<Vec<_>>(),
-            "quota_status": quota_status.iter().map(limit_status_json).collect::<Vec<_>>(),
-            "usage": usage.map(|row| serde_json::json!({
-                "requests": row.requests,
-                "tokens": row.total_tokens,
-                "cost": row.cost,
-            })),
-        }));
+        token_details.push(TokenDetail {
+            id: token.id,
+            name: token.name,
+            created_at: token.created_at,
+            last_used_at: token.last_used_at,
+            expires_at: token.expires_at,
+            revoked: token.revoked_at.is_some(),
+            tools_enabled: token.tools_enabled,
+            tool_states,
+            owner_models: lists.owner,
+            admin_models: lists.admin,
+            mcp_allow,
+            quotas: token_quotas
+                .into_iter()
+                .map(|rule| TokenQuota {
+                    id: rule.id,
+                    model: rule.model,
+                    dimension: rule.dimension.as_str(),
+                    window: rule.window.as_str(),
+                    value: rule.value,
+                    managed_by: rule.managed_by.as_str(),
+                })
+                .collect(),
+            quota_status: quota_status.iter().map(LimitStatusView::from).collect(),
+            usage: usage.map(|row| TokenUsage {
+                requests: row.requests,
+                tokens: row.total_tokens,
+                cost: row.cost,
+            }),
+        });
     }
     let role_ids = state.rbac.role_ids_for(&user.roles);
     let models = match model_catalog(&state, &state.pool_access_for(&user.roles)).await {
@@ -171,21 +208,90 @@ pub async fn details(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     let owner_limits = state.enforcer.statuses(&user.id, &role_ids).await;
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "tokens": token_details,
-            "capabilities": capabilities,
-            "models": models,
-            "owner_limits": owner_limits.iter().map(limit_status_json).collect::<Vec<_>>(),
-            "usage_enabled": state.usage.is_enabled(),
-        "currency": state.config().usage.currency,
-        "push_enabled": state.push.is_some(),
-        "timezone": timezone,
-        "account": {
-                "email": user.email,
-                "user_id": user.id,
-                "oidc_roles": user.roles,
-                "rbac_roles": role_ids,
+        TokenDetails {
+            tokens: token_details,
+            capabilities,
+            models,
+            owner_limits: owner_limits.iter().map(LimitStatusView::from).collect(),
+            usage_enabled: state.usage.is_enabled(),
+            currency: state.config().usage.currency.clone(),
+            push_enabled: state.push.is_some(),
+            timezone: timezone.to_string(),
+            account: AccountView {
+                email: user.email,
+                user_id: user.id,
+                oidc_roles: user.roles,
+                rbac_roles: role_ids,
             },
-        }),
+        },
     )
+}
+
+/// What `GET /api/v0/tokens/details` answers: the caller's tokens with
+/// everything the token editor shows, and the option sets it picks from.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TokenDetails {
+    pub tokens: Vec<TokenDetail>,
+    /// The capabilities a token can switch on, off or to automatic.
+    pub capabilities: Vec<super::tool_toggles::CapabilityEntry>,
+    pub models: Vec<CatalogModelView>,
+    /// The limits in force on the caller themselves.
+    pub owner_limits: Vec<LimitStatusView>,
+    pub usage_enabled: bool,
+    pub currency: String,
+    pub push_enabled: bool,
+    pub timezone: String,
+    pub account: AccountView,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TokenDetail {
+    pub id: String,
+    pub name: String,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
+    pub expires_at: Timestamp,
+    pub revoked: bool,
+    pub tools_enabled: bool,
+    /// Capability key → `on`, `off` or `auto`, for the keys set explicitly.
+    pub tool_states: HashMap<String, &'static str>,
+    /// The owner's model allowlist; `null` allows every model.
+    pub owner_models: Option<Vec<String>>,
+    /// An admin's model allowlist; `null` allows every model.
+    pub admin_models: Option<Vec<String>>,
+    /// Whether MCP tools that ask first may run over the API with this token.
+    pub mcp_allow: bool,
+    pub quotas: Vec<TokenQuota>,
+    pub quota_status: Vec<LimitStatusView>,
+    /// This month's usage; `null` when usage metering is off or the token
+    /// has none.
+    pub usage: Option<TokenUsage>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TokenQuota {
+    pub id: String,
+    pub model: Option<String>,
+    pub dimension: &'static str,
+    pub window: &'static str,
+    pub value: f64,
+    /// Who set the rule, and so who may change it.
+    pub managed_by: &'static str,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TokenUsage {
+    pub requests: i64,
+    pub tokens: i64,
+    pub cost: f64,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AccountView {
+    pub email: String,
+    pub user_id: String,
+    /// The OIDC group claim values.
+    pub oidc_roles: Vec<String>,
+    /// The RBAC roles those resolve to.
+    pub rbac_roles: Vec<String>,
 }

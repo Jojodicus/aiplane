@@ -8,6 +8,7 @@ rag-empty-list = 尚无集合。请在上方创建一个。
 
 # Toasts — collection CRUD
 rag-toast-indexing-queued = `{ $name }` @ `{ $ref }` 的索引任务已排队。
+rag-toast-source-indexing-queued = `{ $name }` 的索引任务已排队。
 rag-toast-created-aggregate = 已创建 `{ $name }`（聚合）。请在下方添加源仓库以进行索引。
 rag-toast-collection-saved = 已保存 `{ $name }`。
 rag-toast-vanished = 保存后集合消失了。

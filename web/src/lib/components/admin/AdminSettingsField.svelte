@@ -5,7 +5,7 @@
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
 	import { modelSelectOptions } from '$lib/model-option';
 
-	let { field, draft, onchange, onclear }: { field: AdminSettingsField; draft: string; onchange: (key: string, value: string) => void; onclear: (key: string) => Promise<void> } = $props();
+	let { field, draft, error, onchange, onclear }: { field: AdminSettingsField; draft: string; error?: string; onchange: (key: string, value: string) => void; onclear: (key: string) => Promise<void> } = $props();
 	let labelKey = $derived(settingsCatalogKey('settings-f-', field.key));
 	let helpKey = $derived(`${labelKey}-help`);
 	let label = $derived(t(labelKey) === labelKey ? (field.key.split('.').pop() ?? field.key) : t(labelKey));
@@ -35,7 +35,7 @@
 	{:else if field.kind === 'secret'}
 		<div class="flex items-center gap-2"><input id={field.key} class="input w-full" type="password" value={draft} placeholder={field.secret_set ? t('settings-secret-set') : t('settings-secret-unset')} autocomplete="new-password" oninput={(event) => onchange(field.key, (event.currentTarget as HTMLInputElement).value)} />{#if field.secret_set}<button type="button" class="btn btn-ghost" onclick={() => onclear(field.key)}>{t('settings-secret-clear')}</button>{/if}</div>
 	{:else if field.kind === 'choice'}
-		<select id={field.key} class="select w-full" value={draft} onchange={(event) => onchange(field.key, (event.currentTarget as HTMLSelectElement).value)}>
+		<select id={field.key} class="select w-full" class:select-error={error} aria-invalid={error ? true : undefined} value={draft} onchange={(event) => onchange(field.key, (event.currentTarget as HTMLSelectElement).value)}>
 			{#each field.choices as choice (choice)}
 				<option value={choice}>{t(`${labelKey}-opt-${choice}`) === `${labelKey}-opt-${choice}` ? choice : t(`${labelKey}-opt-${choice}`)}</option>
 			{/each}
@@ -44,8 +44,9 @@
 		{#if field.models.length === 0 && draft === ''}<p class="m-0 text-sm italic text-base-content/60">{t('settings-model-none-configured')}</p>
 		{:else}<SearchableSelect id={field.key} options={modelOptions} value={draft} onchange={(value) => onchange(field.key, value)} ariaLabel={label} class="w-full" />{/if}
 	{:else}
-		<input id={field.key} class="input w-full" type={field.kind === 'int' || field.kind === 'float' ? 'number' : 'text'} step={field.kind === 'float' ? 'any' : undefined} value={draft} oninput={(event) => onchange(field.key, (event.currentTarget as HTMLInputElement).value)} />
+		<input id={field.key} class="input w-full" class:input-error={error} aria-invalid={error ? true : undefined} type={field.kind === 'int' || field.kind === 'float' ? 'number' : 'text'} step={field.kind === 'float' ? 'any' : undefined} value={draft} oninput={(event) => onchange(field.key, (event.currentTarget as HTMLInputElement).value)} />
 	{/if}
+	{#if error}<p class="m-0 text-xs text-error" role="alert">{error}</p>{/if}
 	{#if missingCompliance.length > 0}<div class="alert alert-warning alert-soft py-2 text-xs" role="alert">{t('settings-content-guard-model-warning', { requirements: missingCompliance.join(', ') })}</div>{/if}
 	<p class="m-0 break-all text-xs text-base-content/60"><code class="text-base-content/45">{field.key}</code>{#if help} · {help}{/if}</p>
 </div>

@@ -13,6 +13,7 @@ use rama::http::{Request, Response, StatusCode};
 
 use aiplane_core::server::auth::token as auth_token;
 use aiplane_core::server::db;
+use aiplane_runtime::openai_driver;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::scheduled::{self, cron::Cron};
 use aiplane_runtime::server::webhooks;
@@ -22,29 +23,66 @@ use super::{bad_request, internal, json_error, json_ok};
 // ---------------------------------------------------------------------------
 // Memories
 
-/// GET /api/v0/memories — the caller's structured memories.
+/// GET /api/v0/memories — the caller's structured memories, and whether
+/// their preferences reach the assistant's standing context.
 pub async fn memories_list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, user) = require_session_json!(state, req);
+    let in_context = openai_driver::preferences_in_context(&state, &user.roles, &user.id).await;
     match db::user_memories::list_for_user(&state.db, &user.id, 500).await {
         Ok(rows) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "memories": rows.iter().map(memory_json).collect::<Vec<_>>() }),
+            MemoryList {
+                memories: rows.iter().map(memory_json).collect(),
+                preferences: PreferenceContext {
+                    in_context,
+                    max_count: openai_driver::PREFERENCE_FETCH_LIMIT,
+                    char_budget: openai_driver::PREFERENCE_CHAR_BUDGET,
+                },
+            },
         ),
         Err(err) => internal(err),
     }
 }
 
-fn memory_json(m: &db::user_memories::Memory) -> serde_json::Value {
-    serde_json::json!({
-        "id": m.id,
-        "kind": m.kind.as_str(),
-        "content": m.content,
-        "created_at": m.created_at.to_string(),
-    })
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MemoryList {
+    pub memories: Vec<MemoryView>,
+    pub preferences: PreferenceContext,
 }
 
-#[derive(serde::Deserialize)]
+/// Whether the caller's preferences ride in the standing context, and the
+/// limits the chat driver applies when they do.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PreferenceContext {
+    /// `recall` is granted and memory switched on.
+    pub in_context: bool,
+    /// The newest this many preferences are considered.
+    pub max_count: i64,
+    /// Rendered until about this many characters; the newest always is.
+    pub char_budget: usize,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MemoryView {
+    pub id: String,
+    /// `preference`, `project` or `fact`.
+    pub kind: &'static str,
+    pub content: String,
+    pub created_at: String,
+}
+
+fn memory_json(m: &db::user_memories::Memory) -> MemoryView {
+    MemoryView {
+        id: m.id.clone(),
+        kind: m.kind.as_str(),
+        content: m.content.clone(),
+        created_at: m.created_at.to_string(),
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct MemoryBody {
+    /// `preference`, `project` or `fact`.
     pub kind: String,
     pub content: String,
 }
@@ -138,25 +176,105 @@ pub async fn memories_delete(
 
 /// Stamp `last_chat_deleted` on each row, so a list row can say its chat is
 /// gone instead of linking into a 404. One query for the whole list.
-async fn flag_deleted_last_chats(
+///
+/// Each row is its `last_session_id` and the `last_chat_deleted` flag to set.
+async fn flag_deleted_last_chats<'a>(
     db: &db::Pool,
-    rows: &mut [serde_json::Value],
+    rows: impl IntoIterator<Item = (Option<&'a str>, &'a mut Option<bool>)>,
 ) -> Result<(), db::DbError> {
-    let ids: Vec<&str> = rows
-        .iter()
-        .filter_map(|row| row["last_session_id"].as_str())
-        .collect();
+    let rows: Vec<_> = rows.into_iter().collect();
+    let ids: Vec<&str> = rows.iter().filter_map(|(id, _)| *id).collect();
     let existing = session_core::db::existing_session_ids(db, &ids).await?;
-    for row in rows.iter_mut() {
-        let deleted = row["last_session_id"]
-            .as_str()
-            .is_some_and(|id| !existing.contains(id));
-        row["last_chat_deleted"] = serde_json::Value::Bool(deleted);
+    for (id, flag) in rows {
+        *flag = Some(id.is_some_and(|id| !existing.contains(id)));
     }
     Ok(())
 }
 
-fn action_json(a: &scheduled::ScheduledAction) -> serde_json::Value {
+/// One scheduled action as the list, create, update and runs routes return it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ActionView {
+    pub run_count: i64,
+    pub chat_count: i64,
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub model: String,
+    /// 5-field cron expression.
+    pub cron: String,
+    /// The cron expression in words.
+    pub schedule_summary: String,
+    /// IANA timezone the cron expression is evaluated in.
+    pub timezone: String,
+    pub tools_enabled: bool,
+    pub reuse_conversation: bool,
+    pub reuse_rounds: i64,
+    pub enabled: bool,
+    pub next_run_at: Option<String>,
+    pub last_run_at: Option<String>,
+    pub last_session_id: Option<String>,
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    /// Whether `last_session_id` names a chat that has since been deleted.
+    /// Present on the list and update responses only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_chat_deleted: Option<bool>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ModelOption {
+    pub id: String,
+    /// The model's backend keeps data within GDPR safeguards.
+    pub gdpr: bool,
+    /// The model's backend is covered by a confidentiality agreement.
+    pub nda: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ScheduledList {
+    pub actions: Vec<ActionView>,
+    /// The chat models an action can run on.
+    pub models: Vec<ModelOption>,
+    /// The caller's timezone, `UTC` when unset.
+    pub default_timezone: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ScheduledRuns {
+    pub action: ActionView,
+    /// The newest 50 runs.
+    pub runs: Vec<ScheduledRunView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ScheduledRunView {
+    pub id: String,
+    pub fired_at: String,
+    pub status: Option<String>,
+    pub session_id: Option<String>,
+    pub chat_deleted: bool,
+    pub error: Option<String>,
+}
+
+/// An update's answer: the saved row, or `{"ok": true}` when it could not be
+/// read back.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+#[schemars(rename = "Updated{T}")]
+pub enum Updated<T> {
+    Row(Box<T>),
+    Acknowledged(super::Done),
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CronPreview {
+    /// The cron expression in words.
+    pub summary: String,
+    /// The next three fire times.
+    pub upcoming: Vec<String>,
+}
+
+fn action_json(a: &scheduled::ScheduledAction) -> ActionView {
     action_json_with_counts(a, (0, 0))
 }
 
@@ -168,43 +286,42 @@ fn action_json(a: &scheduled::ScheduledAction) -> serde_json::Value {
 fn action_json_with_counts(
     a: &scheduled::ScheduledAction,
     (run_count, chat_count): (i64, i64),
-) -> serde_json::Value {
+) -> ActionView {
     let schedule_summary = Cron::parse(&a.cron)
         .map(|cron| cron.describe())
         .unwrap_or_else(|_| format!("cron: {}", a.cron));
-    serde_json::json!({
-        "run_count": run_count,
-        "chat_count": chat_count,
-        "id": a.id,
-        "name": a.name,
-        "prompt": a.prompt,
-        "model": a.model,
-        "cron": a.cron,
-        "schedule_summary": schedule_summary,
-        "timezone": a.timezone,
-        "tools_enabled": a.tools_enabled,
-        "reuse_conversation": a.reuse_conversation,
-        "reuse_rounds": a.reuse_rounds,
-        "enabled": a.enabled,
-        "next_run_at": a.next_run_at.map(|t| t.to_string()),
-        "last_run_at": a.last_run_at.map(|t| t.to_string()),
-        "last_session_id": a.last_session_id,
-        "last_status": a.last_status,
-        "last_error": a.last_error,
-    })
+    ActionView {
+        run_count,
+        chat_count,
+        id: a.id.clone(),
+        name: a.name.clone(),
+        prompt: a.prompt.clone(),
+        model: a.model.clone(),
+        cron: a.cron.clone(),
+        schedule_summary,
+        timezone: a.timezone.clone(),
+        tools_enabled: a.tools_enabled,
+        reuse_conversation: a.reuse_conversation,
+        reuse_rounds: a.reuse_rounds,
+        enabled: a.enabled,
+        next_run_at: a.next_run_at.map(|t| t.to_string()),
+        last_run_at: a.last_run_at.map(|t| t.to_string()),
+        last_session_id: a.last_session_id.clone(),
+        last_status: a.last_status.clone(),
+        last_error: a.last_error.clone(),
+        last_chat_deleted: None,
+    }
 }
 
-fn chat_model_options(state: &RamaState) -> Vec<serde_json::Value> {
+fn chat_model_options(state: &RamaState) -> Vec<ModelOption> {
     state
         .upstreams
         .models_with_compliance_for_kind(aiplane_core::server::upstreams::PoolKind::Chat)
         .into_iter()
-        .map(|(id, compliance)| {
-            serde_json::json!({
-                "id": id,
-                "gdpr": compliance.gdpr,
-                "nda": compliance.nda,
-            })
+        .map(|(id, compliance)| ModelOption {
+            id,
+            gdpr: compliance.gdpr,
+            nda: compliance.nda,
         })
         .collect()
 }
@@ -225,16 +342,23 @@ pub async fn scheduled_list(State(state): State<Arc<RamaState>>, req: Request) -
         .iter()
         .map(|a| action_json_with_counts(a, counts.get(&a.id).copied().unwrap_or((0, 0))))
         .collect();
-    if let Err(err) = flag_deleted_last_chats(&state.db, &mut actions).await {
+    if let Err(err) = flag_deleted_last_chats(
+        &state.db,
+        actions
+            .iter_mut()
+            .map(|a| (a.last_session_id.as_deref(), &mut a.last_chat_deleted)),
+    )
+    .await
+    {
         return internal(err);
     }
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "actions": actions,
-            "models": chat_model_options(&state),
-            "default_timezone": user.timezone.as_deref().unwrap_or("UTC"),
-        }),
+        ScheduledList {
+            actions,
+            models: chat_model_options(&state),
+            default_timezone: user.timezone.as_deref().unwrap_or("UTC").to_string(),
+        },
     )
 }
 
@@ -258,27 +382,27 @@ pub async fn scheduled_runs(
     match scheduled::list_runs(&state.db, &action.id, 50).await {
         Ok(runs) => json_ok(
             StatusCode::OK,
-            serde_json::json!({
-                "action": action_json(&action),
-                "runs": runs.iter().map(scheduled_run_json).collect::<Vec<_>>(),
-            }),
+            ScheduledRuns {
+                action: action_json(&action),
+                runs: runs.iter().map(scheduled_run_json).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
 }
 
-fn scheduled_run_json(r: &scheduled::ScheduledRun) -> serde_json::Value {
-    serde_json::json!({
-        "id": r.id,
-        "fired_at": r.fired_at.to_string(),
-        "status": r.status,
-        "session_id": r.session_id,
-        "chat_deleted": r.chat_deleted,
-        "error": r.error,
-    })
+fn scheduled_run_json(r: &scheduled::ScheduledRun) -> ScheduledRunView {
+    ScheduledRunView {
+        id: r.id.clone(),
+        fired_at: r.fired_at.to_string(),
+        status: r.status.clone(),
+        session_id: r.session_id.clone(),
+        chat_deleted: r.chat_deleted,
+        error: r.error.clone(),
+    }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ScheduledBody {
     pub name: String,
     pub prompt: String,
@@ -495,14 +619,21 @@ pub async fn scheduled_update(
                         .ok()
                         .and_then(|counts| counts.get(&a.id).copied())
                         .unwrap_or((0, 0));
-                    let mut row = [action_json_with_counts(&a, counts)];
-                    if let Err(err) = flag_deleted_last_chats(&state.db, &mut row).await {
+                    let mut row = action_json_with_counts(&a, counts);
+                    if let Err(err) = flag_deleted_last_chats(
+                        &state.db,
+                        [(row.last_session_id.as_deref(), &mut row.last_chat_deleted)],
+                    )
+                    .await
+                    {
                         return internal(err);
                     }
-                    let [row] = row;
-                    json_ok(StatusCode::OK, row)
+                    json_ok(StatusCode::OK, Updated::Row(Box::new(row)))
                 }
-                None => json_ok(StatusCode::OK, serde_json::json!({ "ok": true })),
+                None => json_ok(
+                    StatusCode::OK,
+                    Updated::<ActionView>::Acknowledged(super::Done::OK),
+                ),
             }
         }
         Ok(false) => json_error(StatusCode::NOT_FOUND, "not_found", "no such action"),
@@ -510,7 +641,7 @@ pub async fn scheduled_update(
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct EnabledBody {
     pub enabled: bool,
 }
@@ -550,7 +681,9 @@ pub async fn scheduled_toggle(
     match scheduled::set_enabled(&state.db, &user.id, &id, parsed.enabled, next).await {
         Ok(true) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "enabled": parsed.enabled }),
+            EnabledBody {
+                enabled: parsed.enabled,
+            },
         ),
         Ok(false) => json_error(StatusCode::NOT_FOUND, "not_found", "no such action"),
         Err(err) => internal(err),
@@ -574,7 +707,7 @@ pub async fn scheduled_delete(
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct CronPreviewBody {
     pub cron: String,
     #[serde(default)]
@@ -610,20 +743,96 @@ pub async fn scheduled_preview(State(state): State<Arc<RamaState>>, req: Request
     };
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "summary": cron.describe(),
-            "upcoming": cron.upcoming(jiff::Timestamp::now(), &tz, 3)
+        CronPreview {
+            summary: cron.describe(),
+            upcoming: cron
+                .upcoming(jiff::Timestamp::now(), &tz, 3)
                 .iter()
                 .map(|t| t.to_string())
-                .collect::<Vec<_>>(),
-        }),
+                .collect(),
+        },
     )
 }
 
 // ---------------------------------------------------------------------------
 // Webhooks
 
-fn webhook_json(w: &webhooks::Webhook) -> serde_json::Value {
+/// One webhook as the list, create and update routes return it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookView {
+    pub run_count: i64,
+    pub chat_count: i64,
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub model: String,
+    pub tools_enabled: bool,
+    /// The trigger waits for the run and answers with its output.
+    pub synchronous: bool,
+    pub reuse_conversation: bool,
+    pub reuse_rounds: i64,
+    pub enabled: bool,
+    pub last_fired_at: Option<String>,
+    pub last_status: Option<String>,
+    pub last_session_id: Option<String>,
+    pub last_error: Option<String>,
+    /// A fire's payload is stored and can be rerun.
+    pub has_payload: bool,
+    /// Whether `last_session_id` names a chat that has since been deleted.
+    /// Present on the list response only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_chat_deleted: Option<bool>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookList {
+    pub webhooks: Vec<WebhookView>,
+    /// The chat models a webhook can run on.
+    pub models: Vec<ModelOption>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookCreated {
+    pub webhook: WebhookView,
+    /// The trigger secret (`gwh_…`), shown this once.
+    pub secret: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookSecret {
+    /// The new trigger secret (`gwh_…`), shown this once.
+    pub secret: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookRuns {
+    /// The newest 50 runs.
+    pub runs: Vec<WebhookRunView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WebhookRunView {
+    pub id: String,
+    pub status: Option<String>,
+    pub error: Option<String>,
+    pub fired_at: String,
+    /// What fired the run, e.g. a live trigger or `rerun`.
+    pub source: String,
+    pub session_id: Option<String>,
+    pub chat_deleted: bool,
+    pub prompt: String,
+    /// The raw request body the run processed.
+    pub payload: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RerunOutcome {
+    /// The conversation the rerun ran in. A run that failed is a 502
+    /// `run_failed` naming it instead.
+    pub session_id: String,
+}
+
+fn webhook_json(w: &webhooks::Webhook) -> WebhookView {
     webhook_json_with_counts(w, (0, 0))
 }
 
@@ -633,25 +842,26 @@ fn webhook_json(w: &webhooks::Webhook) -> serde_json::Value {
 fn webhook_json_with_counts(
     w: &webhooks::Webhook,
     (run_count, chat_count): (i64, i64),
-) -> serde_json::Value {
-    serde_json::json!({
-        "run_count": run_count,
-        "chat_count": chat_count,
-        "id": w.id,
-        "name": w.name,
-        "prompt": w.prompt,
-        "model": w.model,
-        "tools_enabled": w.tools_enabled,
-        "synchronous": w.synchronous,
-        "reuse_conversation": w.reuse_conversation,
-        "reuse_rounds": w.reuse_rounds,
-        "enabled": w.enabled,
-        "last_fired_at": w.last_fired_at.map(|t| t.to_string()),
-        "last_status": w.last_status,
-        "last_session_id": w.last_session_id,
-        "last_error": w.last_error,
-        "has_payload": w.last_payload.is_some(),
-    })
+) -> WebhookView {
+    WebhookView {
+        run_count,
+        chat_count,
+        id: w.id.clone(),
+        name: w.name.clone(),
+        prompt: w.prompt.clone(),
+        model: w.model.clone(),
+        tools_enabled: w.tools_enabled,
+        synchronous: w.synchronous,
+        reuse_conversation: w.reuse_conversation,
+        reuse_rounds: w.reuse_rounds,
+        enabled: w.enabled,
+        last_fired_at: w.last_fired_at.map(|t| t.to_string()),
+        last_status: w.last_status.clone(),
+        last_session_id: w.last_session_id.clone(),
+        last_error: w.last_error.clone(),
+        has_payload: w.last_payload.is_some(),
+        last_chat_deleted: None,
+    }
 }
 
 /// GET /api/v0/webhooks — the caller's webhooks.
@@ -670,19 +880,26 @@ pub async fn webhooks_list(State(state): State<Arc<RamaState>>, req: Request) ->
         .iter()
         .map(|w| webhook_json_with_counts(w, counts.get(&w.id).copied().unwrap_or((0, 0))))
         .collect();
-    if let Err(err) = flag_deleted_last_chats(&state.db, &mut hooks).await {
+    if let Err(err) = flag_deleted_last_chats(
+        &state.db,
+        hooks
+            .iter_mut()
+            .map(|w| (w.last_session_id.as_deref(), &mut w.last_chat_deleted)),
+    )
+    .await
+    {
         return internal(err);
     }
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "webhooks": hooks,
-            "models": chat_model_options(&state),
-        }),
+        WebhookList {
+            webhooks: hooks,
+            models: chat_model_options(&state),
+        },
     )
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct WebhookBody {
     pub name: String,
     pub prompt: String,
@@ -772,7 +989,10 @@ pub async fn webhooks_create(State(state): State<Arc<RamaState>>, req: Request) 
     }
     json_ok(
         StatusCode::CREATED,
-        serde_json::json!({ "webhook": webhook_json(&w), "secret": secret }),
+        WebhookCreated {
+            webhook: webhook_json(&w),
+            secret,
+        },
     )
 }
 
@@ -825,8 +1045,11 @@ pub async fn webhooks_update(
             }
             let w = webhooks::get(&state.db, &user.id, &id).await.ok().flatten();
             match w {
-                Some(w) => json_ok(StatusCode::OK, webhook_json(&w)),
-                None => json_ok(StatusCode::OK, serde_json::json!({ "ok": true })),
+                Some(w) => json_ok(StatusCode::OK, Updated::Row(Box::new(webhook_json(&w)))),
+                None => json_ok(
+                    StatusCode::OK,
+                    Updated::<WebhookView>::Acknowledged(super::Done::OK),
+                ),
             }
         }
         Ok(false) => json_error(StatusCode::NOT_FOUND, "not_found", "no such webhook"),
@@ -853,7 +1076,9 @@ pub async fn webhooks_toggle(
     match webhooks::set_enabled(&state.db, &user.id, &id, parsed.enabled).await {
         Ok(true) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "enabled": parsed.enabled }),
+            EnabledBody {
+                enabled: parsed.enabled,
+            },
         ),
         Ok(false) => json_error(StatusCode::NOT_FOUND, "not_found", "no such webhook"),
         Err(err) => internal(err),
@@ -870,7 +1095,7 @@ pub async fn webhooks_rotate(
     let (_session, user) = require_session_json!(state, req);
     let (secret, hash) = auth_token::mint_webhook();
     match webhooks::rotate_secret(&state.db, &user.id, &id, &hash).await {
-        Ok(true) => json_ok(StatusCode::OK, serde_json::json!({ "secret": secret })),
+        Ok(true) => json_ok(StatusCode::OK, WebhookSecret { secret }),
         Ok(false) => json_error(StatusCode::NOT_FOUND, "not_found", "no such webhook"),
         Err(err) => internal(err),
     }
@@ -914,27 +1139,29 @@ pub async fn webhooks_runs(
     match webhooks::list_runs(&state.db, &hook.id, 50).await {
         Ok(runs) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "runs": runs.iter().map(run_json).collect::<Vec<_>>() }),
+            WebhookRuns {
+                runs: runs.iter().map(run_json).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
 }
 
-fn run_json(r: &webhooks::WebhookRun) -> serde_json::Value {
-    serde_json::json!({
-        "id": r.id,
-        "status": r.status,
-        "error": r.error,
-        "fired_at": r.fired_at.to_string(),
-        "source": r.source,
-        "session_id": r.session_id,
-        "chat_deleted": r.chat_deleted,
-        "prompt": r.prompt,
-        "payload": r.payload,
-    })
+fn run_json(r: &webhooks::WebhookRun) -> WebhookRunView {
+    WebhookRunView {
+        id: r.id.clone(),
+        status: r.status.clone(),
+        error: r.error.clone(),
+        fired_at: r.fired_at.to_string(),
+        source: r.source.clone(),
+        session_id: r.session_id.clone(),
+        chat_deleted: r.chat_deleted,
+        prompt: r.prompt.clone(),
+        payload: r.payload.clone(),
+    }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct RerunBody {
     /// The prompt to run the payload through — the point of a rerun is
     /// usually to try a *different* one against the same input.
@@ -980,15 +1207,19 @@ pub async fn webhooks_rerun(
     };
     // A named run replays that run's payload; otherwise the latest one.
     let payload = match &parsed.run {
-        Some(run_id) => webhooks::get_run(&state.db, &hook.id, run_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|r| r.payload),
+        Some(run_id) => match webhooks::get_run(&state.db, &hook.id, run_id).await {
+            Ok(Some(run)) => Some(run.payload),
+            Ok(None) => return json_error(StatusCode::NOT_FOUND, "not_found", "no such run"),
+            Err(err) => return internal(err),
+        },
         None => hook.last_payload.clone(),
     };
     let Some(payload) = payload else {
-        return bad_request("this webhook has no stored payload to replay");
+        return json_error(
+            StatusCode::CONFLICT,
+            "no_payload",
+            "this webhook has no stored payload to replay; it needs to be called once first",
+        );
     };
 
     // Same framing as a live fire — the replayed payload stays an untrusted
@@ -1054,8 +1285,18 @@ pub async fn webhooks_rerun(
         error.as_deref(),
     )
     .await;
-    json_ok(
-        StatusCode::OK,
-        serde_json::json!({ "session_id": session_id, "status": status, "error": error }),
-    )
+    // A run that did not finish is a failed upstream, as on a live fire; the
+    // chat it opened is named so the caller can look at what happened.
+    if status != "ok" {
+        return super::json_error_with(
+            StatusCode::BAD_GATEWAY,
+            "run_failed",
+            error.as_deref().unwrap_or("the run failed"),
+            serde_json::Map::from_iter([
+                ("session_id".to_string(), serde_json::json!(session_id)),
+                ("status".to_string(), serde_json::json!(status)),
+            ]),
+        );
+    }
+    json_ok(StatusCode::OK, RerunOutcome { session_id })
 }

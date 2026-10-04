@@ -24,14 +24,15 @@ use super::{internal, json_error, json_ok};
 use aiplane_agents::db::agents::{Access, AgentRow};
 use aiplane_core::server::db::users::User;
 use aiplane_runtime::agents::assist::{
-    Asker, AssistError, Candidates, ImproveField, Knowledge, ReviewContext, SuggestRequest, Target,
+    Asker, AssistError, Candidates, ImproveField, Knowledge, ReviewContext, SuggestRequest,
+    Suggested, Target,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 
 /// A request body: a scenario, a draft and a little JSON around them.
 const MAX_BODY_BYTES: usize = 512 * 1024;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SuggestBody {
     pub scenario: String,
@@ -45,7 +46,7 @@ pub struct SuggestBody {
     pub model: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImproveBody {
     pub field: ImproveField,
@@ -129,7 +130,7 @@ pub(super) async fn suggest_for(
     user: &User,
     agent: &AgentRow,
     body: SuggestBody,
-) -> Result<Value, Response> {
+) -> Result<Suggested, Response> {
     let id = &agent.principal.id;
     let base = body
         .current_draft
@@ -155,11 +156,7 @@ pub(super) async fn suggest_for(
         base: &base,
         model: body.model.as_deref(),
     };
-    asker
-        .suggest(request, &ctx)
-        .await
-        .map(|suggested| serde_json::to_value(suggested).unwrap_or_default())
-        .map_err(refused)
+    asker.suggest(request, &ctx).await.map_err(refused)
 }
 
 /// POST /api/v0/agents/{id}/assist/improve — `{field: task|tone|refusal,
@@ -180,10 +177,7 @@ pub async fn improve(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         .improve(body.field, &body.text, body.model.as_deref(), &draft)
         .await
     {
-        Ok(improved) => json_ok(
-            StatusCode::OK,
-            serde_json::to_value(improved).unwrap_or_default(),
-        ),
+        Ok(improved) => json_ok(StatusCode::OK, improved),
         Err(err) => refused(err),
     }
 }

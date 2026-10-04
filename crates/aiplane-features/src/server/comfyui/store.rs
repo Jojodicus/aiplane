@@ -75,14 +75,14 @@ pub struct ComfyuiStore {
 /// Summary of one reload — surfaces what landed, what was skipped, and
 /// what broke. Surfaced to the admin UI verbatim so an operator sees the
 /// effect of a hot-reload without grepping logs.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ReloadReport {
     pub loaded: Vec<String>,
     pub skipped: Vec<ReloadSkip>,
     pub total: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ReloadSkip {
     pub source: String,
     pub reason: String,

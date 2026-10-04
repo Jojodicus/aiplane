@@ -127,22 +127,46 @@ impl Refusal {
                 "per_secs": r.per.as_secs(),
                 "retry_after_secs": r.retry_after_secs,
             }),
-            Refusal::Budget(b) => budget_detail(b),
+            Refusal::Budget(b) => json!(BudgetBreach::of(b)),
         }
     }
 }
 
+/// Who set a budget line: the agent's own spec, or the operator.
+fn set_by(subject: SubjectType) -> &'static str {
+    if subject == SubjectType::AgentSpec {
+        "agent"
+    } else {
+        "operator"
+    }
+}
+
 /// The budget breach as the owner reads it.
-pub fn budget_detail(b: &LimitExceeded) -> Value {
-    json!({
-        "limit": "budget",
-        "set_by": if b.subject == SubjectType::AgentSpec { "agent" } else { "operator" },
-        "dimension": b.dimension.as_str(),
-        "window": b.window.as_str(),
-        "max": b.limit,
-        "used": b.used,
-        "retry_after_secs": b.retry_after_secs,
-    })
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct BudgetBreach {
+    /// Always `budget`.
+    pub limit: &'static str,
+    /// `agent` (the spec's own budget) or `operator`.
+    pub set_by: &'static str,
+    pub dimension: &'static str,
+    pub window: &'static str,
+    pub max: f64,
+    pub used: f64,
+    pub retry_after_secs: i64,
+}
+
+impl BudgetBreach {
+    pub fn of(b: &LimitExceeded) -> Self {
+        Self {
+            limit: "budget",
+            set_by: set_by(b.subject),
+            dimension: b.dimension.as_str(),
+            window: b.window.as_str(),
+            max: b.limit,
+            used: b.used,
+            retry_after_secs: b.retry_after_secs,
+        }
+    }
 }
 
 /// Gate one visitor request to `agent_id` on the agent's live
@@ -426,26 +450,27 @@ pub async fn limits_view(
     agent_id: &str,
     live: Option<&AgentSpec>,
     now: Timestamp,
-) -> Value {
+) -> LimitsView {
     let spec = live.unwrap_or(AgentSpec::empty());
     let rates = spec.publish.visitor_rates();
-    let rate = |r: Rate| json!({ "max": r.max, "per_secs": r.per.as_secs() });
+    let rate = |r: Rate| RateView {
+        max: r.max,
+        per_secs: r.per.as_secs(),
+    };
     let statuses = state
         .enforcer
         .agent_statuses(agent_id, &owner_budget(spec), now)
         .await;
-    let budget: Vec<Value> = statuses
+    let budget = statuses
         .iter()
-        .map(|s| {
-            json!({
-                "set_by": if s.source == SubjectType::AgentSpec { "agent" } else { "operator" },
-                "dimension": s.dimension.as_str(),
-                "window": s.window.as_str(),
-                "max": s.limit,
-                "used": s.used,
-                "exceeded": s.exceeded(),
-                "refreshes_at": s.refreshes_at,
-            })
+        .map(|s| BudgetLine {
+            set_by: set_by(s.source),
+            dimension: s.dimension.as_str(),
+            window: s.window.as_str(),
+            max: s.limit,
+            used: s.used,
+            exceeded: s.exceeded(),
+            refreshes_at: s.refreshes_at,
         })
         .collect();
     let exhausted = state
@@ -453,14 +478,59 @@ pub async fn limits_view(
         .check_agent(agent_id, &owner_budget(spec), now)
         .await
         .err();
-    json!({
-        "rate_limits": { "visitor": rate(rates.visitor), "ip": rate(rates.ip) },
-        "retention_days": spec.publish.retention_days(),
-        "audit_retention_days": spec.publish.audit_retention_days(),
-        "budget": budget,
-        "available": exhausted.is_none(),
-        "unavailable_reason": exhausted.as_ref().map(budget_detail),
-    })
+    LimitsView {
+        rate_limits: RateLimitsView {
+            visitor: rate(rates.visitor),
+            ip: rate(rates.ip),
+        },
+        retention_days: spec.publish.retention_days(),
+        audit_retention_days: spec.publish.audit_retention_days(),
+        budget,
+        available: exhausted.is_none(),
+        unavailable_reason: exhausted.as_ref().map(BudgetBreach::of),
+    }
+}
+
+/// An agent's limits as its managers see them: the live version's visitor
+/// rates and retention, and its budget with what has been spent against it.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[schemars(rename = "AgentLimitsView")]
+pub struct LimitsView {
+    pub rate_limits: RateLimitsView,
+    pub retention_days: i64,
+    pub audit_retention_days: i64,
+    pub budget: Vec<BudgetLine>,
+    /// False while a budget is spent; `unavailable_reason` says which.
+    pub available: bool,
+    pub unavailable_reason: Option<BudgetBreach>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct RateLimitsView {
+    /// Per visitor.
+    pub visitor: RateView,
+    /// Per client IP.
+    pub ip: RateView,
+}
+
+/// At most `max` requests per `per_secs` seconds.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct RateView {
+    pub max: u32,
+    pub per_secs: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct BudgetLine {
+    /// `agent` (the spec's own budget) or `operator`.
+    pub set_by: &'static str,
+    pub dimension: &'static str,
+    pub window: &'static str,
+    pub max: f64,
+    pub used: f64,
+    pub exceeded: bool,
+    /// When the sliding window next advances.
+    pub refreshes_at: Timestamp,
 }
 
 /// Runs one opened turn of an agent conversation as the agent's principal.

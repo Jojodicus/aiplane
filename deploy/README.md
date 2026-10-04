@@ -34,7 +34,7 @@ SQLite DB (also the session store) lives in a named volume. Real secret files
 
 ```bash
 # from the repo root
-printf 'AIPLANE_SESSION_KEY=%s\n' "$(openssl rand -hex 32)" > deploy/gateway.env
+printf 'AIPLANE_SESSION_KEY=%s\n' "$(openssl rand -hex 32)" > deploy/aiplane.env
 docker compose -f deploy/compose.example.yml up -d aiplane
 ```
 
@@ -47,13 +47,15 @@ Generate `AIPLANE_SESSION_KEY` once and keep it for the life of the deployment.
 It signs sessions *and* derives the key that seals every secret in the database,
 so back it up together with the volume. AIplane refuses to boot without it.
 
-Optional extras:
+Optional extras each sit behind a compose profile, and a profile's
+prerequisites are checked only when it is enabled — the start above needs
+nothing but `aiplane.env`:
 
 ```bash
 cp deploy/quadlet/google-workspace-mcp.example.env deploy/google-workspace-mcp.env
 $EDITOR deploy/google-workspace-mcp.env
-docker compose -f deploy/compose.example.yml up -d                 # gateway + workspace MCP
-docker compose -f deploy/compose.example.yml --profile sandbox up -d  # + sandbox runner + egress
+docker compose -f deploy/compose.example.yml --profile google-workspace up -d  # + workspace MCP
+docker compose -f deploy/compose.example.yml --profile sandbox up -d           # + sandbox runner + egress
 OCR_VLLM_BASE_URL=http://host.docker.internal:8000/v1 \
   docker compose -f deploy/compose.example.yml --profile ocr up -d  # + PDF OCR sidecar
 ```
@@ -83,7 +85,7 @@ files above live there regardless of your shell's CWD.
 browser and a native gateway both reach the MCP at `http://localhost:8000`):
 
 ```bash
-docker compose -f deploy/compose.example.yml up google-workspace-mcp
+docker compose -f deploy/compose.example.yml --profile google-workspace up google-workspace-mcp
 ```
 
 ## Quick start — Kubernetes (Helm)

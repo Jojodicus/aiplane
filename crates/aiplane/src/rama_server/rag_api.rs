@@ -17,7 +17,6 @@ use rama::http::service::web::extract::{Path, State};
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use aiplane_core::rama_server::session::Session;
 use aiplane_core::server::db::rag as rag_db;
@@ -26,8 +25,8 @@ use aiplane_core::server::db::users;
 use aiplane_runtime::rama_server::state::RamaState;
 
 /// Wire shape returned from every list / get / update response.
-#[derive(Serialize)]
-struct CollectionView {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct CollectionView {
     id: i64,
     name: String,
     description: Option<String>,
@@ -122,8 +121,8 @@ async fn collection_view(
     Ok(CollectionView::from_collection(collection, search_ref))
 }
 
-#[derive(Deserialize)]
-struct CreateRequest {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct CreateRequest {
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -184,8 +183,8 @@ fn default_search_mode() -> String {
     "versioned".into()
 }
 
-#[derive(Deserialize, Default)]
-struct UpdateRequest {
+#[derive(Deserialize, Default, schemars::JsonSchema)]
+pub(crate) struct UpdateRequest {
     #[serde(default)]
     description: Option<Option<String>>,
     #[serde(default)]
@@ -255,7 +254,12 @@ pub async fn list_collections(State(state): State<Arc<RamaState>>, req: Request)
             }
         }
     }
-    json_ok(&json!({ "data": view }))
+    json_ok(&CollectionList { data: view })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct CollectionList {
+    data: Vec<CollectionView>,
 }
 
 pub async fn get_collection(
@@ -370,10 +374,11 @@ pub async fn create_collection(State(state): State<Arc<RamaState>>, req: Request
         // of a vague 500.
         Err(err) => {
             if is_unique_violation(&err) {
-                return invalid_request(&format!(
-                    "a collection named `{}` already exists",
-                    new.name
-                ));
+                return error_envelope(
+                    StatusCode::CONFLICT,
+                    "name_exists",
+                    &format!("a collection named `{}` already exists", new.name),
+                );
             }
             tracing::warn!(error = %err, "creating rag collection");
             internal_error("creating collection failed")
@@ -554,7 +559,7 @@ async fn requeue_unified_if_aggregate(state: &RamaState, collection_id: i64) {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct AddRefsRequest {
     /// One or more sources. Each entry is a URL plus an optional ref; an
     /// entry without one inherits the collection's `git_ref`, which is what
@@ -562,7 +567,7 @@ pub struct AddRefsRequest {
     pub sources: Vec<AddRefEntry>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct AddRefEntry {
     #[serde(default)]
     pub url: String,
@@ -640,7 +645,11 @@ pub async fn add_refs(
         match rag_db::add_ref(&state.db, id, git_ref, stored_url, is_primary).await {
             Ok(r) => {
                 let _ = requeue_ref(&state, r.id).await;
-                added.push(json!({ "id": r.id, "git_url": r.git_url, "git_ref": r.git_ref }));
+                added.push(AddedRef {
+                    id: r.id,
+                    git_url: r.git_url,
+                    git_ref: r.git_ref,
+                });
             }
             Err(_) => skipped += 1,
         }
@@ -648,7 +657,28 @@ pub async fn add_refs(
     if !added.is_empty() {
         requeue_unified_if_aggregate(&state, id).await;
     }
-    json_ok(&json!({ "added": added, "skipped": skipped }))
+    json_ok(&AddedRefs { added, skipped })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct AddedRefs {
+    added: Vec<AddedRef>,
+    /// Entries not added, such as a url+ref already present.
+    skipped: usize,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct AddedRef {
+    id: i64,
+    git_url: Option<String>,
+    git_ref: String,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct PrimarySet {
+    /// The ref that is now primary.
+    primary: i64,
+    collection: i64,
 }
 
 /// POST /api/v0/rag/collections/{id}/refs/{ref_id}/primary — make one ref the
@@ -672,7 +702,10 @@ pub async fn set_primary_ref(
         }
     }
     match rag_db::set_primary(&state.db, ref_id).await {
-        Ok(()) => json_ok(&json!({ "primary": ref_id, "collection": id })),
+        Ok(()) => json_ok(&PrimarySet {
+            primary: ref_id,
+            collection: id,
+        }),
         Err(err) => {
             tracing::warn!(error = %err, ref_id, "setting primary ref");
             internal_error("setting the primary ref failed")
@@ -680,7 +713,7 @@ pub async fn set_primary_ref(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProfileRequest {
     pub name: String,
     #[serde(default)]
@@ -745,6 +778,24 @@ impl ProfileRequest {
     }
 }
 
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProfileSaved {
+    name: String,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProfileUpdated {
+    name: String,
+    /// The collections using this profile, which must re-index before they
+    /// answer with the new fields.
+    reindex_required_by: Vec<String>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct Deleted {
+    deleted: bool,
+}
+
 /// POST /api/v0/rag/profiles — create an extraction profile.
 pub async fn create_profile(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     if let Err(resp) = require_admin(&state, &req).await {
@@ -759,10 +810,14 @@ pub async fn create_profile(State(state): State<Arc<RamaState>>, req: Request) -
         Err(msg) => return invalid_request(&msg),
     };
     if let Ok(Some(_)) = rag_documents::find_profile_by_name(&state.db, &input.name).await {
-        return invalid_request(&format!("a profile named `{}` already exists", input.name));
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "name_exists",
+            &format!("a profile named `{}` already exists", input.name),
+        );
     }
     match rag_documents::create_profile(&state.db, &input).await {
-        Ok(_) => json_ok(&json!({ "name": input.name })),
+        Ok(_) => json_ok(&ProfileSaved { name: input.name }),
         Err(err) => {
             tracing::warn!(error = %err, "creating extraction profile");
             internal_error("creating the profile failed")
@@ -807,7 +862,10 @@ pub async fn update_profile(
     let affected = rag_documents::collections_using_profile(&state.db, existing.id)
         .await
         .unwrap_or_default();
-    json_ok(&json!({ "name": input.name, "reindex_required_by": affected }))
+    json_ok(&ProfileUpdated {
+        name: input.name,
+        reindex_required_by: affected,
+    })
 }
 
 /// DELETE /api/v0/rag/profiles/{name} — remove a profile.
@@ -832,19 +890,27 @@ pub async fn delete_profile(
         }
     };
     if existing.builtin {
-        return invalid_request("a built-in profile cannot be deleted");
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "profile_builtin",
+            "a built-in profile cannot be deleted",
+        );
     }
     let users = rag_documents::collections_using_profile(&state.db, existing.id)
         .await
         .unwrap_or_default();
     if !users.is_empty() {
-        return invalid_request(&format!(
-            "still used by: {} — point them at another profile first",
-            users.join(", ")
-        ));
+        return error_envelope(
+            StatusCode::CONFLICT,
+            "profile_in_use",
+            &format!(
+                "still used by: {} — point them at another profile first",
+                users.join(", ")
+            ),
+        );
     }
     match rag_documents::delete_profile(&state.db, existing.id).await {
-        Ok(true) => json_ok(&json!({ "deleted": true })),
+        Ok(true) => json_ok(&Deleted { deleted: true }),
         Ok(false) => not_found("no such profile"),
         Err(err) => {
             tracing::warn!(error = %err, "deleting extraction profile");
@@ -853,7 +919,7 @@ pub async fn delete_profile(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct TestSourceRequest {
     pub source_kind: String,
     #[serde(default)]
@@ -961,19 +1027,31 @@ pub async fn test_source(State(state): State<Arc<RamaState>>, req: Request) -> R
         Err(err) => return invalid_request(&err.to_string()),
     };
     match provider.probe().await {
-        Ok(report) => json_ok(&json!({
-            "ok": true,
-            "account": report.account,
-            "root_entries": report.root_entries,
-            "server": report.server,
-        })),
-        // A failed probe is the endpoint working: the operator asked whether
-        // this source is reachable and the answer is no, with the reason.
-        Err(err) => json_ok(&json!({
-            "ok": false,
-            "error": err.to_string(),
-        })),
+        Ok(report) => json_ok(&SourceProbe {
+            account: report.account,
+            root_entries: report.root_entries,
+            server: report.server,
+        }),
+        // The source is a backend the gateway relies on, so a probe it does
+        // not answer is a failed upstream, with the reason in the message.
+        Err(err) => error_envelope(
+            StatusCode::BAD_GATEWAY,
+            "source_unreachable",
+            &err.to_string(),
+        ),
     }
+}
+
+/// What probing a source that answered found. One that did not is a 502
+/// `source_unreachable`.
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct SourceProbe {
+    /// The account the credentials resolve to, when the provider says.
+    account: Option<String>,
+    /// How many entries sit directly under the configured root.
+    root_entries: usize,
+    /// The server's product and version, when it says.
+    server: Option<String>,
 }
 
 /// GET /api/v0/rag/providers — the source kinds this gateway can index, and
@@ -986,28 +1064,26 @@ pub async fn list_providers(State(state): State<Arc<RamaState>>, req: Request) -
     if let Err(resp) = require_admin(&state, &req).await {
         return resp;
     }
-    use aiplane_features::server::rag::source::FieldKind;
-    let mut providers = vec![json!({
-        "kind": "git",
-        "label": "Git repository",
-        "description": "Clones a repository and indexes its files.",
-        "auth": {"kind": "fields"},
-        "fields": [],
-    })];
+    use aiplane_features::server::rag::source::{AuthKind, FieldKind};
+    let mut providers = vec![ProviderView {
+        kind: "git",
+        label: "Git repository",
+        description: "Clones a repository and indexes its files.",
+        auth: ProviderAuth::Fields,
+        fields: Vec::new(),
+    }];
     providers.extend(source_registry(&state).factories().iter().map(|f| {
-        let fields: Vec<serde_json::Value> = f
+        let fields = f
             .config_fields()
             .iter()
-            .map(|field| {
-                json!({
-                    "key": field.key,
-                    "label": field.label,
-                    "help": field.help,
-                    "required": field.required,
-                    "kind": field.kind.as_str(),
-                    "secret": field.kind == FieldKind::Secret,
-                    "default": field.default,
-                })
+            .map(|field| ProviderField {
+                key: field.key,
+                label: field.label,
+                help: field.help,
+                required: field.required,
+                kind: field.kind.as_str(),
+                secret: field.kind == FieldKind::Secret,
+                default: field.default,
             })
             .collect();
         // How the provider is authorised, so a client can tell "fill in these
@@ -1015,20 +1091,19 @@ pub async fn list_providers(State(state): State<Arc<RamaState>>, req: Request) -
         // human through a browser". Without this a caller cannot explain why
         // its freshly created collection is not indexing.
         let auth = match f.auth() {
-            aiplane_features::server::rag::source::AuthKind::Fields => json!({"kind": "fields"}),
-            aiplane_features::server::rag::source::AuthKind::OAuth2 { scopes, .. } => json!({
-                "kind": "oauth2",
-                "scopes": scopes,
-                "connect_path": "/rag/{collection_id}/connect",
-            }),
+            AuthKind::Fields => ProviderAuth::Fields,
+            AuthKind::OAuth2 { scopes, .. } => ProviderAuth::OAuth2 {
+                scopes: scopes.to_vec(),
+                connect_path: "/rag/{collection_id}/connect",
+            },
         };
-        json!({
-            "kind": f.kind(),
-            "label": f.label(),
-            "description": f.description(),
-            "auth": auth,
-            "fields": fields,
-        })
+        ProviderView {
+            kind: f.kind(),
+            label: f.label(),
+            description: f.description(),
+            auth,
+            fields,
+        }
     }));
     let mut embedding_models = state
         .upstreams
@@ -1040,16 +1115,67 @@ pub async fn list_providers(State(state): State<Arc<RamaState>>, req: Request) -
     )
     .await
     .filter(|model| embedding_models.contains(model));
-    json_ok(&json!({
-        "data": providers,
-        "embedding_models": embedding_models,
-        "default_embedding": default_embedding,
+    json_ok(&ProvidersView {
+        data: providers,
+        embedding_models,
+        default_embedding,
         // The collection editor's access picker renders from this; a group
         // name only restricts anything when it matches a group exactly.
-        "groups": aiplane_core::server::db::gateway_groups::list_group_names(&state.db)
+        groups: aiplane_core::server::db::gateway_groups::list_group_names(&state.db)
             .await
             .unwrap_or_default(),
-    }))
+    })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProvidersView {
+    data: Vec<ProviderView>,
+    /// The models the embedding pools serve.
+    embedding_models: Vec<String>,
+    /// The embedding feature default, when one of `embedding_models` is set.
+    default_embedding: Option<String>,
+    /// Every gateway group name, for a collection's `allowed_groups`.
+    groups: Vec<String>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProviderView {
+    /// The `source_kind` a collection names.
+    kind: &'static str,
+    label: &'static str,
+    description: &'static str,
+    auth: ProviderAuth,
+    /// The settings `source_config` takes.
+    fields: Vec<ProviderField>,
+}
+
+/// How a provider is authorised.
+#[derive(Serialize, schemars::JsonSchema)]
+#[serde(tag = "kind")]
+pub(crate) enum ProviderAuth {
+    /// The settings in `fields` are all it needs.
+    #[serde(rename = "fields")]
+    Fields,
+    /// After saving, a person consents in a browser at `connect_path`.
+    #[serde(rename = "oauth2")]
+    OAuth2 {
+        scopes: Vec<&'static str>,
+        connect_path: &'static str,
+    },
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProviderField {
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+    required: bool,
+    /// `text`, `secret`, `url` or `bool`.
+    kind: &'static str,
+    /// Stored sealed and never returned.
+    secret: bool,
+    /// Prefilled when nothing is entered.
+    default: Option<&'static str>,
 }
 
 /// GET /api/v0/rag/profiles — the extraction profiles this gateway knows,
@@ -1069,29 +1195,37 @@ pub async fn list_profiles(State(state): State<Arc<RamaState>>, req: Request) ->
             return internal_error("listing profiles failed");
         }
     };
-    let data: Vec<serde_json::Value> = profiles
-        .iter()
-        .map(|p| {
-            json!({
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "prompt": p.prompt,
-                "version": p.version,
-                "builtin": p.builtin,
-                "fields": p.fields.iter().map(|f| json!({
-                    "key": f.key,
-                    "label": f.label,
-                    "type": f.field_type,
-                    "description": f.description,
-                    "values": f.values,
-                    "filterable": f.filterable,
-                    "sortable": f.sortable,
-                })).collect::<Vec<_>>(),
-            })
+    let data = profiles
+        .into_iter()
+        .map(|p| ProfileView {
+            id: p.id,
+            name: p.name,
+            description: p.description,
+            prompt: p.prompt,
+            version: p.version,
+            builtin: p.builtin,
+            fields: p.fields,
         })
         .collect();
-    json_ok(&json!({ "data": data }))
+    json_ok(&ProfileList { data })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProfileList {
+    data: Vec<ProfileView>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct ProfileView {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    prompt: String,
+    /// Bumped on every edit; extractions made under another version are not served.
+    version: i64,
+    /// Shipped with the gateway; editable but not deletable.
+    builtin: bool,
+    fields: Vec<rag_documents::ProfileField>,
 }
 
 /// True when `err` is a SQLite UNIQUE-constraint violation; reaches
@@ -1391,7 +1525,7 @@ pub async fn delete_collection(
                     indexer.drop_ref_storage(r.id, &r.data_uuid);
                 }
             }
-            json_ok(&json!({ "deleted": true }))
+            json_ok(&Deleted { deleted: true })
         }
         Ok(false) => not_found(&format!("no collection with id {id}")),
         Err(err) => {
@@ -1512,26 +1646,14 @@ fn internal_error(message: &str) -> Response {
     error_envelope(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
 }
 fn error_envelope(status: StatusCode, code: &str, message: &str) -> Response {
-    let body = json!({
-        "error": {
-            "message": message,
-            "type": code,
-            "code": code,
-        }
-    });
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        body.to_string(),
-    )
-        .into_response()
+    aiplane_api::pages::json_error(status, code, message)
 }
 
 // ---------------------------------------------------------------------------
 // Refs + sync tokens (the SPA's collection browser)
 
-#[derive(Serialize)]
-struct RefView {
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct RefView {
     id: i64,
     collection_id: i64,
     git_ref: String,
@@ -1554,6 +1676,14 @@ pub async fn list_refs(
 ) -> Response {
     if let Err(resp) = require_admin(&state, &req).await {
         return resp;
+    }
+    match rag_db::find_collection_by_id(&state.db, id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(&format!("no collection with id {id}")),
+        Err(err) => {
+            tracing::warn!(error = %err, %id, "listing rag refs: collection lookup");
+            return internal_error("listing refs failed");
+        }
     }
     let refs = match rag_db::list_refs(&state.db, id).await {
         Ok(r) => r,
@@ -1583,10 +1713,15 @@ pub async fn list_refs(
             document_count: documents,
         });
     }
-    json_ok(&json!({ "data": views }))
+    json_ok(&RefList { data: views })
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct RefList {
+    data: Vec<RefView>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct UpdateRefRequest {
     #[serde(default, deserialize_with = "deserialize_option_option")]
     pub git_url: Option<Option<String>>,
@@ -1632,12 +1767,20 @@ pub async fn update_ref(
         tracing::warn!(error = %err, ref_id, "queueing updated rag ref");
         return internal_error("the ref was saved but queueing its rebuild failed");
     }
-    json_ok(&json!({
-        "id": ref_id,
-        "collection_id": id,
-        "git_url": git_url,
-        "git_ref": git_ref,
-    }))
+    json_ok(&RefUpdated {
+        id: ref_id,
+        collection_id: id,
+        git_url,
+        git_ref: git_ref.to_string(),
+    })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct RefUpdated {
+    id: i64,
+    collection_id: i64,
+    git_url: Option<String>,
+    git_ref: String,
 }
 
 /// GET /api/v0/rag/collections/{id}/refs/{ref_id}/log — newest indexing
@@ -1665,23 +1808,40 @@ pub async fn ref_log(
             return internal_error("reading the index log failed");
         }
     };
-    let data: Vec<_> = entries
+    let data = entries
         .into_iter()
-        .map(|entry| {
-            json!({
-                "id": entry.id,
-                "created_at": entry.created_at.to_string(),
-                "level": entry.level.as_str(),
-                "phase": entry.phase,
-                "message": entry.message,
-                "commit_sha": entry.commit_sha,
-                "files": entry.files,
-                "chunks": entry.chunks,
-                "duration_ms": entry.duration_ms,
-            })
+        .map(|entry| LogEntryView {
+            id: entry.id,
+            created_at: entry.created_at.to_string(),
+            level: entry.level.as_str(),
+            phase: entry.phase,
+            message: entry.message,
+            commit_sha: entry.commit_sha,
+            files: entry.files,
+            chunks: entry.chunks,
+            duration_ms: entry.duration_ms,
         })
         .collect();
-    json_ok(&json!({ "data": data }))
+    json_ok(&LogList { data })
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct LogList {
+    data: Vec<LogEntryView>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct LogEntryView {
+    id: i64,
+    created_at: String,
+    level: &'static str,
+    /// The build phase: `queued`, `cloning`, `indexing`, `ready` or `error`.
+    phase: String,
+    message: String,
+    commit_sha: Option<String>,
+    files: Option<i64>,
+    chunks: Option<i64>,
+    duration_ms: Option<i64>,
 }
 
 /// DELETE /api/v0/rag/collections/{id}/refs/{ref_id} — remove one source
@@ -1692,6 +1852,13 @@ pub struct RagRefPath {
     pub ref_id: i64,
 }
 
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct RefDeleted {
+    /// The removed ref's id.
+    deleted: i64,
+    collection: i64,
+}
+
 pub async fn delete_ref(
     State(state): State<Arc<RamaState>>,
     Path(RagRefPath { id, ref_id }): Path<RagRefPath>,
@@ -1699,6 +1866,16 @@ pub async fn delete_ref(
 ) -> Response {
     if let Err(resp) = require_admin(&state, &req).await {
         return resp;
+    }
+    // Scope the ref to the collection in the path, like the other ref routes:
+    // an id from another collection must not be deleted through this one.
+    match rag_db::find_ref_by_id(&state.db, ref_id).await {
+        Ok(Some(r)) if r.collection_id == id => {}
+        Ok(_) => return not_found(&format!("no ref {ref_id} in collection {id}")),
+        Err(err) => {
+            tracing::warn!(error = %err, ref_id, "delete: ref lookup");
+            return internal_error("ref lookup failed");
+        }
     }
     match rag_db::delete_ref(&state.db, ref_id).await {
         Ok(Some(data_uuid)) => {
@@ -1715,7 +1892,10 @@ pub async fn delete_ref(
                 let _ = tokio::fs::remove_dir_all(rag.data_dir.join(data_uuid)).await;
             }
             requeue_unified_if_aggregate(&state, id).await;
-            json_ok(&json!({ "deleted": ref_id, "collection": id }))
+            json_ok(&RefDeleted {
+                deleted: ref_id,
+                collection: id,
+            })
         }
         Ok(None) => not_found(&format!("no ref {ref_id}")),
         Err(err) => {
@@ -1764,12 +1944,34 @@ pub async fn rebuild_ref(
         source
     };
     match request_full_rebuild(&state, target.id).await {
-        Ok(()) => json_ok(&json!({ "requested": target.id })),
+        Ok(()) => json_ok(&RebuildRequested {
+            requested: target.id,
+        }),
         Err(err) => {
             tracing::warn!(error = %err, ref_id = target.id, "requesting rag rebuild");
             internal_error("requesting the rebuild failed")
         }
     }
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct RebuildRequested {
+    /// The ref queued for a full rebuild: the one named, or an aggregate
+    /// collection's primary ref.
+    requested: i64,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct SyncToken {
+    /// Shown once; only its hash is stored.
+    token: String,
+    /// The trigger path, `/hooks/rag/{token}`.
+    url_hint: String,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub(crate) struct Cleared {
+    cleared: bool,
 }
 
 /// POST /api/v0/rag/collections/{id}/sync-token — mint (rotate) the
@@ -1783,7 +1985,11 @@ pub async fn rotate_sync_token(
         return resp;
     }
     match rag_db::rotate_sync_token(&state.db, id).await {
-        Ok(token) => json_ok(&json!({ "token": token, "url_hint": format!("/hooks/rag/{token}") })),
+        Ok(Some(token)) => json_ok(&SyncToken {
+            url_hint: format!("/hooks/rag/{token}"),
+            token,
+        }),
+        Ok(None) => not_found(&format!("no collection with id {id}")),
         Err(err) => {
             tracing::warn!(error = %err, %id, "rotating rag sync token");
             internal_error("rotating the token failed")
@@ -1801,7 +2007,8 @@ pub async fn clear_sync_token(
         return resp;
     }
     match rag_db::clear_sync_token(&state.db, id).await {
-        Ok(()) => json_ok(&json!({ "cleared": true })),
+        Ok(true) => json_ok(&Cleared { cleared: true }),
+        Ok(false) => not_found(&format!("no collection with id {id}")),
         Err(err) => {
             tracing::warn!(error = %err, %id, "clearing rag sync token");
             internal_error("clearing the token failed")

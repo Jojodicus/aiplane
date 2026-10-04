@@ -595,12 +595,13 @@ pub async fn all(pool: &Pool) -> Result<Vec<ModelDefaults>, DbError> {
     rows.iter().map(map_row).collect()
 }
 
-pub async fn delete(pool: &Pool, model_name: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM model_defaults WHERE model_name = ?")
+/// `false` when the model had no stored row.
+pub async fn delete(pool: &Pool, model_name: &str) -> Result<bool, DbError> {
+    let deleted = sqlx::query("DELETE FROM model_defaults WHERE model_name = ?")
         .bind(model_name)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(deleted.rows_affected() > 0)
 }
 
 #[cfg(test)]
@@ -640,11 +641,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_is_idempotent_on_missing_row() {
+    async fn delete_reports_whether_a_row_was_there() {
         let pool = fresh().await;
-        delete(&pool, "never-existed").await.unwrap();
+        assert!(!delete(&pool, "never-existed").await.unwrap());
         upsert(&pool, "m", "x = 1").await.unwrap();
-        delete(&pool, "m").await.unwrap();
+        assert!(delete(&pool, "m").await.unwrap());
         assert!(get(&pool, "m").await.unwrap().is_none());
     }
 

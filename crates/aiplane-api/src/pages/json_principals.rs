@@ -27,7 +27,6 @@ use jiff::Timestamp;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
-use serde_json::{Value, json};
 
 use super::json_agents::guard_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
@@ -67,43 +66,152 @@ macro_rules! require_agent_manager {
     };
 }
 
-fn principal_json(p: &sp_db::PrincipalRow) -> Value {
-    json!({
-        "id": p.id,
-        "name": p.name,
-        "display": p.display,
-        "description": p.description,
-        "created_by": p.created_by,
-        "created_at": p.created_at,
-        "disabled_at": p.disabled_at,
-    })
+/// A system principal as the API shows it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalView {
+    pub id: String,
+    pub name: String,
+    pub display: String,
+    pub description: String,
+    pub created_by: String,
+    pub created_at: Timestamp,
+    pub disabled_at: Option<Timestamp>,
 }
 
-/// One grant as the API shows it; `pools` (a `model` grant's pools, `null`
-/// for every pool) only where it applies.
-pub(super) fn grant_json(g: &sp_db::GrantRow) -> Value {
-    let mut out = json!({
-        "kind": g.kind.as_str(),
-        "ref": g.reference,
-        "granted_by": g.granted_by,
-        "granted_at": g.granted_at,
-    });
-    if g.kind == GrantKind::Model {
-        out["pools"] = json!(g.pools);
+impl PrincipalView {
+    fn of(p: &sp_db::PrincipalRow) -> Self {
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            display: p.display.clone(),
+            description: p.description.clone(),
+            created_by: p.created_by.clone(),
+            created_at: p.created_at,
+            disabled_at: p.disabled_at,
+        }
     }
-    out
 }
 
-fn token_json(t: &sp_db::SystemToken) -> Value {
-    json!({
-        "id": t.id,
-        "name": t.name,
-        "created_by": t.created_by,
-        "created_at": t.created_at,
-        "last_used_at": t.last_used_at,
-        "expires_at": t.expires_at,
-        "revoked": t.revoked_at.is_some(),
-    })
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalWithGrants {
+    #[serde(flatten)]
+    pub principal: PrincipalView,
+    pub grants: Vec<GrantView>,
+}
+
+/// One grant as the API shows it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct GrantView {
+    /// `tool`, `connector`, `skill`, `rag_collection`, `model`, `a2a_caller`
+    /// or `a2a_agent`.
+    pub kind: &'static str,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub granted_by: String,
+    pub granted_at: Timestamp,
+    /// A `model` grant's pools, `null` for every pool serving it; absent on
+    /// every other kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pools: Option<Option<Vec<String>>>,
+}
+
+impl GrantView {
+    pub(super) fn of(g: &sp_db::GrantRow) -> Self {
+        Self {
+            kind: g.kind.as_str(),
+            reference: g.reference.clone(),
+            granted_by: g.granted_by.clone(),
+            granted_at: g.granted_at,
+            pools: (g.kind == GrantKind::Model).then(|| g.pools.clone()),
+        }
+    }
+}
+
+/// A `gws_` token without its secret.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SystemTokenView {
+    pub id: String,
+    pub name: String,
+    pub created_by: String,
+    pub created_at: Timestamp,
+    pub last_used_at: Option<Timestamp>,
+    pub expires_at: Timestamp,
+    pub revoked: bool,
+}
+
+impl SystemTokenView {
+    fn of(t: &sp_db::SystemToken) -> Self {
+        Self {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            created_by: t.created_by.clone(),
+            created_at: t.created_at,
+            last_used_at: t.last_used_at,
+            expires_at: t.expires_at,
+            revoked: t.revoked_at.is_some(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalList {
+    pub principals: Vec<PrincipalWithGrants>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CreatedPrincipal {
+    pub principal: PrincipalWithGrants,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalDetailReply {
+    pub principal: PrincipalDetail,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalDetail {
+    #[serde(flatten)]
+    pub principal: PrincipalView,
+    pub grants: Vec<GrantView>,
+    pub tokens: Vec<SystemTokenView>,
+    /// Newest first.
+    pub audit: Vec<PrincipalAuditEntry>,
+}
+
+/// One management or run event on the principal.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct PrincipalAuditEntry {
+    pub kind: String,
+    pub actor_id: Option<String>,
+    /// The run's call chain on a run event; `null` on a management event.
+    pub chain: Option<serde_json::Value>,
+    /// The event's own fields, which differ by `kind`.
+    pub detail: serde_json::Value,
+    pub created_at: Timestamp,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DisabledPrincipal {
+    pub principal: PrincipalView,
+}
+
+/// What a grant request changed.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct GrantOutcome {
+    pub kind: &'static str,
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// The grant is new.
+    pub added: bool,
+    /// A `model` grant now reaches more pools.
+    pub widened: bool,
+}
+
+/// A newly issued token. `plaintext` is shown here and nowhere else, ever.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IssuedSystemToken {
+    pub token: SystemTokenView,
+    pub plaintext: String,
 }
 
 /// The principal named by the path segment `from_end` back, or the 404 —
@@ -146,14 +254,16 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
             Ok(g) => g,
             Err(err) => return internal(err),
         };
-        let mut v = principal_json(p);
-        v["grants"] = grants.iter().map(grant_json).collect();
-        out.push(v);
+        out.push(PrincipalWithGrants {
+            principal: PrincipalView::of(p),
+            grants: grants.iter().map(GrantView::of).collect(),
+        });
     }
-    json_ok(StatusCode::OK, json!({ "principals": out }))
+    json_ok(StatusCode::OK, PrincipalList { principals: out })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "PrincipalCreateBody")]
 pub struct CreateBody {
     pub name: String,
     #[serde(default)]
@@ -190,11 +300,15 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     )
     .await;
     match created {
-        Ok(Some(p)) => {
-            let mut v = principal_json(&p);
-            v["grants"] = json!([]);
-            json_ok(StatusCode::CREATED, json!({ "principal": v }))
-        }
+        Ok(Some(p)) => json_ok(
+            StatusCode::CREATED,
+            CreatedPrincipal {
+                principal: PrincipalWithGrants {
+                    principal: PrincipalView::of(&p),
+                    grants: Vec::new(),
+                },
+            },
+        ),
         Ok(None) => json_error(
             StatusCode::CONFLICT,
             "conflict",
@@ -220,22 +334,27 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(v) => v,
         Err(err) => return internal(err),
     };
-    let mut v = principal_json(&p);
-    v["grants"] = grants.iter().map(grant_json).collect();
-    v["tokens"] = tokens.iter().map(token_json).collect();
-    v["audit"] = audit
-        .iter()
-        .map(|e| {
-            json!({
-                "kind": e.kind,
-                "actor_id": e.actor_id,
-                "chain": e.chain,
-                "detail": e.detail,
-                "created_at": e.created_at,
-            })
+    let audit = audit
+        .into_iter()
+        .map(|e| PrincipalAuditEntry {
+            kind: e.kind,
+            actor_id: e.actor_id,
+            chain: e.chain,
+            detail: e.detail,
+            created_at: e.created_at,
         })
         .collect();
-    json_ok(StatusCode::OK, json!({ "principal": v }))
+    json_ok(
+        StatusCode::OK,
+        PrincipalDetailReply {
+            principal: PrincipalDetail {
+                principal: PrincipalView::of(&p),
+                grants: grants.iter().map(GrantView::of).collect(),
+                tokens: tokens.iter().map(SystemTokenView::of).collect(),
+                audit,
+            },
+        },
+    )
 }
 
 /// POST /api/v0/system-principals/{id}/disable — disables it and revokes
@@ -251,14 +370,21 @@ pub async fn disable(State(state): State<Arc<RamaState>>, req: Request) -> Respo
         return internal(err);
     }
     match sp_db::get(&state.db, &p.id).await {
-        Ok(Some(p)) => json_ok(StatusCode::OK, json!({ "principal": principal_json(&p) })),
+        Ok(Some(p)) => json_ok(
+            StatusCode::OK,
+            DisabledPrincipal {
+                principal: PrincipalView::of(&p),
+            },
+        ),
         Ok(None) => not_found("the principal was removed while it was being disabled"),
         Err(err) => internal(err),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct GrantBody {
+    /// `tool`, `connector`, `skill`, `rag_collection`, `model`, `a2a_caller`
+    /// or `a2a_agent`.
     pub kind: String,
     #[serde(rename = "ref")]
     pub reference: String,
@@ -394,12 +520,12 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         } else {
             StatusCode::OK
         },
-        json!({
-            "kind": kind.as_str(),
-            "ref": reference,
-            "added": added,
-            "widened": change == GrantChange::Widened,
-        }),
+        GrantOutcome {
+            kind: kind.as_str(),
+            reference: reference.to_string(),
+            added,
+            widened: change == GrantChange::Widened,
+        },
     )
 }
 
@@ -469,7 +595,7 @@ pub async fn revoke_grant(State(state): State<Arc<RamaState>>, req: Request) -> 
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct TokenBody {
     pub name: String,
     #[serde(default)]
@@ -515,7 +641,10 @@ pub async fn issue_token(State(state): State<Arc<RamaState>>, req: Request) -> R
     match sp_db::insert_token(&state.db, &p.id, name, &hash, expires_at, &manager.id).await {
         Ok(t) => json_ok(
             StatusCode::CREATED,
-            json!({ "token": token_json(&t), "plaintext": plaintext }),
+            IssuedSystemToken {
+                token: SystemTokenView::of(&t),
+                plaintext,
+            },
         ),
         Err(err) => internal(err),
     }

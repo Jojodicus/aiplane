@@ -50,10 +50,31 @@
 	]);
 </script>
 
-<header class="mb-4 flex min-w-0 items-center gap-2 border-b border-base-300 pb-3">
+<header class="mb-4 flex min-w-0 flex-wrap items-center gap-2 border-b border-base-300 pb-3">
 	<h1 class="hidden min-w-0 flex-1 truncate text-lg font-semibold sm:block">
 		{title?.trim() || t('chat-render-new-conversation-fallback')}
 	</h1>
+	{#if isOwner}
+		<div class="order-last flex w-full min-w-0 items-center gap-2 sm:order-none sm:w-auto">
+			{#if models.length > 0}
+				<label class="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none">
+					<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4M8 4v4m8 2v4m-4 2v4" /></svg>
+					<SearchableSelect options={modelOptions} bind:value={model} ariaLabel={t('chat-render-model-aria')} size="sm" class="w-full sm:w-64" />
+				</label>
+			{:else}
+				<input class="input input-sm w-full sm:w-56" placeholder={t('chat-render-model-placeholder')} aria-label={t('chat-render-model-aria')} bind:value={model} />
+			{/if}
+			{#if transcriptionModels.length > 0}
+				<label class="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none">
+					<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v3M8 22h8" /></svg>
+					<SearchableSelect options={transcriptionOptions} bind:value={transcriptionModel} ariaLabel={t('chat-render-voice-model-aria')} size="sm" class="w-full sm:w-64" />
+				</label>
+			{/if}
+			{#if speechAvailable && speechVoices.length >= 2}
+				<SearchableSelect options={speechOptions} bind:value={speechVoice} ariaLabel={t('chat-render-tts-voice-aria')} size="sm" class="min-w-0 flex-1 sm:w-44 sm:flex-none" onchange={() => onspeechvoice()} />
+			{/if}
+		</div>
+	{/if}
 	<div class="ml-auto flex min-w-0 items-center gap-2">
 		<div class="dropdown dropdown-end">
 			<button
@@ -73,25 +94,6 @@
 		</div>
 
 		{#if isOwner}
-			<div class="hidden min-w-0 items-center gap-2 sm:flex">
-				{#if models.length > 0}
-					<label class="flex min-w-0 items-center gap-1.5">
-						<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4M8 4v4m8 2v4m-4 2v4" /></svg>
-						<SearchableSelect options={modelOptions} bind:value={model} ariaLabel={t('chat-render-model-aria')} size="sm" class="w-64" />
-					</label>
-				{:else}
-					<input class="input input-sm w-56" placeholder={t('chat-render-model-placeholder')} aria-label={t('chat-render-model-aria')} bind:value={model} />
-				{/if}
-				{#if transcriptionModels.length > 0}
-					<label class="flex min-w-0 items-center gap-1.5">
-						<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v3M8 22h8" /></svg>
-						<SearchableSelect options={transcriptionOptions} bind:value={transcriptionModel} ariaLabel={t('chat-render-voice-model-aria')} size="sm" class="w-64" />
-					</label>
-				{/if}
-				{#if speechAvailable && speechVoices.length >= 2}
-					<SearchableSelect options={speechOptions} bind:value={speechVoice} ariaLabel={t('chat-render-tts-voice-aria')} size="sm" class="w-44" onchange={() => onspeechvoice()} />
-				{/if}
-			</div>
 			{#if hasCanvas}<button class="btn btn-ghost btn-sm" onclick={oncanvas} aria-label={t('chat-render-canvas-toggle-title')} title={t('chat-render-canvas-toggle-title')}><span aria-hidden="true">▣</span><span class="hidden sm:inline">{t('chat-render-canvas-toggle-label')}</span></button>{/if}
 			<button class="btn btn-ghost btn-sm" onclick={onshare} title={t('chat-render-share-tooltip')}>
 				{shared ? t('chat-render-share-label-on') : t('chat-render-share-label-off')}

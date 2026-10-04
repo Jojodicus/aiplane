@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { adminJson, adminPost, adminPut } from '$lib/admin-client';
+	import { ApiError, request } from '$lib/api';
 	import type { AdminModelsData } from '$lib/admin-models';
 	import type { AdminSettingsData, AdminSettingsSection as AdminSettingsSectionData } from '$lib/admin-settings';
 	import { fieldDraft, selectedSettingsCategory } from '$lib/admin-settings';
@@ -14,6 +15,7 @@
 	let drafts = $state<Record<string, Record<string, string>>>({});
 	let saving = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	let fieldErrors = $state<Record<string, string>>({});
 	let notice = $state<string | null>(null);
 	let search = $state<AdminModelsData['search'] | null>(null);
 	let selected = $derived(selectedSettingsCategory(page.url.search));
@@ -42,13 +44,27 @@
 
 	function change(section: string, key: string, value: string) {
 		drafts[section][key] = value;
+		delete fieldErrors[key];
 	}
 
 	async function save(section: AdminSettingsSectionData) {
 		saving = section.name;
 		error = null;
-		try { await adminPost('/api/v0/admin/settings', { section: section.name, values: drafts[section.name] ?? {} }); notice = section.fields.some((field) => field.restart) ? t('settings-saved-restart') : t('settings-saved'); await refresh(); }
-		catch (caught) { error = `${t('settings-save-failed')} ${String(caught)}`; }
+		fieldErrors = {};
+		try {
+			await request('/api/v0/admin/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ section: section.name, values: drafts[section.name] ?? {} }) });
+			notice = section.fields.some((field) => field.restart) ? t('settings-saved-restart') : t('settings-saved');
+			await refresh();
+		} catch (caught) {
+			// A refused save names each field the server could not use; those
+			// show under their fields, and the summary above the page.
+			if (caught instanceof ApiError && caught.issues.length > 0) {
+				fieldErrors = Object.fromEntries(caught.issues.map((issue) => [issue.path, issue.message]));
+				error = caught.serverMessage ?? t('settings-save-failed');
+			} else {
+				error = `${t('settings-save-failed')} ${caught instanceof ApiError ? (caught.serverMessage ?? caught.message) : String(caught)}`;
+			}
+		}
 		finally { saving = null; }
 	}
 
@@ -68,6 +84,6 @@
 	{#if notice}<div class="alert alert-success"><span>{notice}</span></div>{/if}
 	{#if data?.needs_backend}<div class="alert alert-warning"><div class="flex flex-col gap-1"><span class="font-medium">{t('settings-no-backend-heading')}</span><span class="text-sm">{t('settings-no-backend-body')}</span><a class="link link-neutral self-start text-sm" href="/admin/models?tab=upstreams">{t('settings-no-backend-cta')}</a></div></div>{/if}
 	{#if data && data.restart_pending.length > 0}<div class="alert alert-warning"><div class="flex flex-col gap-1"><span class="font-medium">{t('settings-restart-pending-heading')}</span><span class="text-sm">{t('settings-restart-pending-body')}</span><code class="text-xs">{data.restart_pending.join(', ')}</code></div></div>{/if}
-{#if data}<div class="flex flex-col items-start gap-4 sm:flex-row"><AdminSettingsRail sections={data.sections} {selected} /><div class="flex min-w-0 grow flex-col gap-4">{#if selected === 'web-search'}{#if search}{#key `${search.provider}:${search.searxng_url}:${search.brave_key_set}:${search.tavily_key_set}:${search.tavily_enabled}:${search.tavily_active}`}<SearchSettingsCard {search} onsave={saveSearch} />{/key}{/if}{:else}{#each visibleSections as section (section.name)}<AdminSettingsSection {section} drafts={drafts[section.name] ?? {}} onchange={(key, value) => change(section.name, key, value)} onsave={() => save(section)} onclear={clearField} saving={saving === section.name} />{/each}{/if}</div></div>
+{#if data}<div class="flex flex-col items-start gap-4 sm:flex-row"><AdminSettingsRail sections={data.sections} {selected} /><div class="flex min-w-0 grow flex-col gap-4">{#if selected === 'web-search'}{#if search}{#key `${search.provider}:${search.searxng_url}:${search.brave_key_set}:${search.tavily_key_set}:${search.tavily_enabled}:${search.tavily_active}`}<SearchSettingsCard {search} onsave={saveSearch} />{/key}{/if}{:else}{#each visibleSections as section (section.name)}<AdminSettingsSection {section} drafts={drafts[section.name] ?? {}} errors={fieldErrors} onchange={(key, value) => change(section.name, key, value)} onsave={() => save(section)} onclear={clearField} saving={saving === section.name} />{/each}{/if}</div></div>
 	{:else if !error}<div class="flex gap-4"><div class="skeleton h-48 w-52"></div><div class="skeleton h-96 grow"></div></div>{/if}
 </div>

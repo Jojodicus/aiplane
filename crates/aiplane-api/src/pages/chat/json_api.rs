@@ -28,7 +28,6 @@ use std::sync::Arc;
 use rama::http::service::web::extract::{Path, State};
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
-use serde_json::json;
 
 use aiplane_features::server::chat_attachments;
 use aiplane_runtime::rama_server::state::RamaState;
@@ -79,28 +78,52 @@ pub async fn sessions_list(
         let hits = chat::search_sessions(&state.db, &user.id, q.trim(), 50)
             .await
             .unwrap_or_default();
-        return ok_json(
-            StatusCode::OK,
-            json!({
-                "sessions": hits.iter().map(|h| serde_json::json!({
-                    "id": h.session_id,
-                    "title": h.title,
-                    "updated_at": h.updated_at.to_string(),
-                    "pinned": h.pinned,
-                    "snippet": h.snippet,
-                })).collect::<Vec<_>>(),
-            }),
-        );
+        let sessions = hits
+            .into_iter()
+            .map(|h| SessionMatch {
+                id: h.session_id,
+                title: h.title,
+                updated_at: h.updated_at.to_string(),
+                pinned: h.pinned,
+                snippet: h.snippet,
+            })
+            .collect();
+        return ok_json(StatusCode::OK, SessionsList::Found { sessions });
     }
     match chat::list_sessions(&state.db, &user.id).await {
-        Ok(sessions) => ok_json(StatusCode::OK, json!({ "sessions": sessions })),
+        Ok(sessions) => ok_json(StatusCode::OK, SessionsList::Listed { sessions }),
         Err(err) => internal(err),
     }
 }
 
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, schemars::JsonSchema)]
 pub struct SessionsQuery {
+    /// Search the caller's conversations for this text instead of listing them.
     q: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum SessionsList {
+    /// Without `q`: every conversation, pinned first, then most recent.
+    Listed { sessions: Vec<chat::Session> },
+    /// With `q`: title matches first, then content matches.
+    Found { sessions: Vec<SessionMatch> },
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SessionMatch {
+    pub id: String,
+    pub title: Option<String>,
+    pub updated_at: String,
+    pub pinned: bool,
+    /// An HTML-escaped excerpt of the match, the match itself wrapped in `<b>`.
+    pub snippet: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SessionEnvelope {
+    pub session: chat::Session,
 }
 
 /// GET /api/v0/chat/landing — resolve the latest conversation, creating the
@@ -115,14 +138,14 @@ pub async fn session_landing(State(state): State<Arc<RamaState>>, req: Request) 
         },
         Err(err) => return internal(err),
     };
-    ok_json(StatusCode::OK, json!({ "session": session }))
+    ok_json(StatusCode::OK, SessionEnvelope { session })
 }
 
 /// POST /api/v0/chat/sessions — mint an empty conversation.
 pub async fn session_create(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, user) = require_session_json!(state, req);
     match chat::create_session(&state.db, &user.id).await {
-        Ok(session) => ok_json(StatusCode::CREATED, json!({ "session": session })),
+        Ok(session) => ok_json(StatusCode::CREATED, SessionEnvelope { session }),
         Err(err) => internal(err),
     }
 }
@@ -159,31 +182,53 @@ pub async fn session_get(
     {
         Ok(assets) => assets
             .into_iter()
-            .map(|asset| {
-                json!({
-                    "id": asset.id,
-                    "turn_id": asset.turn_id,
-                    "filename": asset.filename,
-                    "mime": asset.mime,
-                    "size": asset.size,
-                    "url": aiplane_features::server::chat_attachments::proxy_url(
-                        &asset.turn_id,
-                        &asset.filename,
-                    ),
-                })
+            .map(|asset| SessionAsset {
+                url: aiplane_features::server::chat_attachments::proxy_url(
+                    &asset.turn_id,
+                    &asset.filename,
+                ),
+                id: asset.id,
+                turn_id: asset.turn_id,
+                filename: asset.filename,
+                mime: asset.mime,
+                size: asset.size,
             })
-            .collect::<Vec<_>>(),
+            .collect(),
         Err(err) => return internal(err),
     };
     ok_json(
         StatusCode::OK,
-        json!({
-            "session": session,
-            "turns": turns,
-            "compacted_up_to_seq": compacted_up_to_seq,
-            "assets": assets,
-        }),
+        SessionDetail {
+            session,
+            turns,
+            compacted_up_to_seq,
+            assets,
+        },
     )
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SessionDetail {
+    pub session: chat::Session,
+    pub turns: Vec<chat::TurnWithTools>,
+    /// The highest turn `seq` a compaction summary replaces when the
+    /// conversation is replayed to the model; `null` when nothing was compacted.
+    pub compacted_up_to_seq: Option<i64>,
+    /// Every file attached to or produced in the conversation.
+    pub assets: Vec<SessionAsset>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SessionAsset {
+    /// `<turn_id>/<filename>`.
+    pub id: String,
+    pub turn_id: String,
+    pub filename: String,
+    pub mime: String,
+    /// Bytes.
+    pub size: u64,
+    /// Where the browser downloads the file.
+    pub url: String,
 }
 
 /// DELETE /api/v0/chat/sessions/{id} — owner-only. Also reclaims the
@@ -242,15 +287,25 @@ pub async fn session_pin(
         Err(resp) => return resp,
     };
     match chat::set_pinned(&state.db, &user.id, &session_id, parsed.pinned).await {
-        Ok(true) => ok_json(StatusCode::OK, json!({ "pinned": parsed.pinned })),
+        Ok(true) => ok_json(
+            StatusCode::OK,
+            Pinned {
+                pinned: parsed.pinned,
+            },
+        ),
         Ok(false) => not_found_conversation(),
         Err(err) => internal(err),
     }
 }
 
-#[derive(Deserialize)]
-struct PinBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct PinBody {
     pinned: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Pinned {
+    pub pinned: bool,
 }
 
 /// POST /api/v0/chat/sessions/{id}/fork — take a readable conversation into
@@ -316,16 +371,47 @@ pub async fn session_fork(
 
     ok_json(
         StatusCode::CREATED,
-        json!({ "id": new_session.id, "title": new_session.title }),
+        Forked {
+            id: new_session.id,
+            title: new_session.title,
+        },
     )
 }
 
-#[derive(Deserialize)]
-struct MessageBody {
+/// The caller's new copy of the conversation.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Forked {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MessageBody {
+    /// The model to answer with, as `GET /api/v0/models` lists it.
     model: String,
     message: String,
+    /// The message was dictated; the answer is read aloud.
     #[serde(default)]
     voice: bool,
+}
+
+/// Where a submitted message went. Only the server knows whether a worker is
+/// running, so it says.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(tag = "placement", rename_all = "snake_case")]
+pub enum Submitted {
+    /// A new turn is running; its reply arrives on `GET …/events`.
+    Started {
+        user_turn_id: String,
+        assistant_turn_id: String,
+    },
+    /// A turn was already running, so the message was added to its prompt.
+    Folded {
+        assistant_turn_id: String,
+        steer_id: String,
+    },
+    /// Every parallel slot is in use; the message starts when one frees up.
+    Queued { user_turn_id: String },
 }
 
 /// POST /api/v0/chat/sessions/{id}/messages — submit a turn as JSON.
@@ -421,30 +507,24 @@ pub async fn message_send(
         // as a message waiting for a slot.
         Ok(SubmitOutcome::Started(submitted)) => ok_json(
             StatusCode::ACCEPTED,
-            json!({
-                "placement": "started",
-                "user_turn_id": submitted.user_turn.id,
-                "assistant_turn_id": submitted.assistant_turn.id,
-            }),
+            Submitted::Started {
+                user_turn_id: submitted.user_turn.id,
+                assistant_turn_id: submitted.assistant_turn.id,
+            },
         ),
         Ok(SubmitOutcome::Folded {
             assistant_turn_id,
             steer_id,
         }) => ok_json(
             StatusCode::ACCEPTED,
-            json!({
-                "placement": "folded",
-                "assistant_turn_id": assistant_turn_id,
-                "steer_id": steer_id,
-            }),
+            Submitted::Folded {
+                assistant_turn_id,
+                steer_id,
+            },
         ),
-        Ok(SubmitOutcome::Queued { user_turn_id }) => ok_json(
-            StatusCode::ACCEPTED,
-            json!({
-                "placement": "queued",
-                "user_turn_id": user_turn_id,
-            }),
-        ),
+        Ok(SubmitOutcome::Queued { user_turn_id }) => {
+            ok_json(StatusCode::ACCEPTED, Submitted::Queued { user_turn_id })
+        }
         Err(err) => submit_refusal(err),
     }
 }
@@ -470,9 +550,18 @@ fn submit_refusal(err: SubmitTurnError) -> Response {
     }
 }
 
-#[derive(Deserialize)]
-struct SteerBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SteerBody {
+    /// At most 4 KiB.
     message: String,
+}
+
+/// The recorded interjection. The model has not necessarily seen it yet.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SteerAccepted {
+    pub id: String,
+    pub turn_id: String,
+    pub status: &'static str,
 }
 
 /// Ceiling on what may be folded into a running turn, in bytes.
@@ -572,11 +661,11 @@ pub async fn session_steer(
 
     ok_json(
         StatusCode::ACCEPTED,
-        json!({
-            "id": steer.id,
-            "turn_id": steer.turn_id,
-            "status": steer.status.as_str(),
-        }),
+        SteerAccepted {
+            id: steer.id,
+            turn_id: steer.turn_id,
+            status: steer.status.as_str(),
+        },
     )
 }
 
@@ -626,9 +715,14 @@ pub async fn steer_discard(
         // Already settled: delivered, re-sent, or discarded in another tab.
         // Nothing to do and nothing to complain about — the caller wanted it
         // gone and it is.
-        Ok(_) => ok_json(StatusCode::OK, json!({ "id": steer.id })),
+        Ok(_) => ok_json(StatusCode::OK, SteerDiscarded { id: steer.id }),
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SteerDiscarded {
+    pub id: String,
 }
 
 /// POST /api/v0/chat/sessions/{id}/cancel — ask the live worker to stop at
@@ -663,12 +757,18 @@ pub async fn session_cancel(
             });
         }
     }
-    ok_json(StatusCode::OK, json!({ "cancelled": cancelled }))
+    ok_json(StatusCode::OK, Cancelled { cancelled })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Cancelled {
+    /// `false` when nothing was running or waiting for a decision.
+    pub cancelled: bool,
 }
 
 /// What a resume carries: the decision's shape, its value when it has one,
 /// and optionally the request it answers.
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ResumeBody {
     pub decision: chat::DecisionKind,
     #[serde(default)]
@@ -739,7 +839,9 @@ pub async fn turn_resume(
     match super::resume_turn(&state, &user, &turn, request_id.as_deref(), decision, ctx).await {
         Ok(()) => ok_json(
             StatusCode::ACCEPTED,
-            json!({ "assistant_turn_id": turn.id }),
+            Resumed {
+                assistant_turn_id: turn.id,
+            },
         ),
         Err(super::ResumeTurnError::Busy) => json_error(
             StatusCode::CONFLICT,
@@ -758,6 +860,11 @@ pub async fn turn_resume(
             ResumeRefused::Storage(err) => internal(err),
         },
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Resumed {
+    pub assistant_turn_id: String,
 }
 
 /// The conversation's waiting user turns, for a snapshot.
@@ -958,7 +1065,7 @@ async fn readable_session(
 /// captures in a non-deterministic order, so any route with two or more
 /// params must map by name — the same reason the legacy handlers use
 /// `TurnPath`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct RetryBody {
     pub model: String,
 }
@@ -1020,10 +1127,16 @@ pub async fn turn_delete(
     match super::truncate_reclaiming(&state, &session_id, target.turn.seq).await {
         Ok(()) => {
             let _ = chat::touch_session(&state.db, &session_id).await;
-            ok_json(StatusCode::OK, json!({ "deleted": turn_id }))
+            ok_json(StatusCode::OK, TurnDeleted { deleted: turn_id })
         }
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TurnDeleted {
+    /// The id of the message taken back.
+    pub deleted: String,
 }
 
 /// POST /api/v0/chat/sessions/{id}/turns/{turn_id}/retry — drop this
@@ -1061,7 +1174,7 @@ pub async fn turn_retry(
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct EditBody {
     pub model: String,
     pub message: String,
@@ -1145,7 +1258,7 @@ async fn start_regeneration_json(
     session_id: &str,
     model: String,
     ctx: super::RequestCtx,
-) -> Result<serde_json::Value, Response> {
+) -> Result<Regenerated, Response> {
     let assistant_turn_id = uuid::Uuid::new_v4().to_string();
     let worker = match state.chats.register(
         &user.id,
@@ -1201,10 +1314,18 @@ async fn start_regeneration_json(
         None,
     )
     .await;
-    Ok(serde_json::json!({
-        "user_turn_id": serde_json::Value::Null,
-        "assistant_turn_id": assistant_turn.id,
-    }))
+    Ok(Regenerated {
+        user_turn_id: (),
+        assistant_turn_id: assistant_turn.id,
+    })
+}
+
+/// The answer being regenerated; it streams on `GET …/events`.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Regenerated {
+    /// Always `null`: a regeneration adds no message.
+    pub user_turn_id: (),
+    pub assistant_turn_id: String,
 }
 
 async fn load_owned_turn(
@@ -1229,7 +1350,7 @@ async fn load_owned_turn(
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ShareBody {
     pub shared: bool,
 }
@@ -1253,13 +1374,20 @@ pub async fn session_share(
     match chat::set_shared(&state.db, &user.id, &session_id, parsed.shared).await {
         Ok(_) => ok_json(
             StatusCode::OK,
-            serde_json::json!({ "shared": parsed.shared }),
+            Shared {
+                shared: parsed.shared,
+            },
         ),
         Err(err) => internal(err),
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Shared {
+    pub shared: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct EffortBody {
     /// fast | standard | deep | max
     pub effort: String,
@@ -1291,10 +1419,7 @@ pub async fn session_effort(
     )
     .await
     {
-        Ok(()) => ok_json(
-            StatusCode::OK,
-            serde_json::json!({ "effort": parsed.effort }),
-        ),
+        Ok(()) => ok_json(StatusCode::OK, parsed),
         Err(err) => internal(err),
     }
 }
@@ -1401,12 +1526,17 @@ pub async fn documents_list(
     match documents::list_for_session(&state.db, &session_id, false).await {
         Ok(docs) => ok_json(
             StatusCode::OK,
-            json!({
-                "documents": docs.iter().map(document_summary).collect::<Vec<_>>(),
-            }),
+            DocumentsList {
+                documents: docs.iter().map(document_summary).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentsList {
+    pub documents: Vec<DocumentSummary>,
 }
 
 /// GET /api/v0/chat/sessions/{id}/documents/{doc_id} — one document with its
@@ -1445,30 +1575,70 @@ pub async fn document_get(
         .unwrap_or_default();
     ok_json(
         StatusCode::OK,
-        json!({
-            "document": document_summary(&doc),
-            "version": {
-                "version": ver.version,
-                "content": ver.content,
-                "summary": ver.summary,
-                "turn_id": ver.turn_id,
-                "author": ver.author.as_str(),
-                "created_at": ver.created_at.to_string(),
+        DocumentDetail {
+            document: document_summary(&doc),
+            version: DocumentVersionView {
+                version: ver.version,
+                author: ver.author.as_str(),
+                created_at: ver.created_at.to_string(),
+                content: ver.content,
+                summary: ver.summary,
+                turn_id: ver.turn_id,
             },
-            "history": history.iter().map(|v| json!({
-                "version": v.version,
-                "summary": v.summary,
-                "created_at": v.created_at.to_string(),
-                "chars": v.chars,
-                "author": v.author.as_str(),
-            })).collect::<Vec<_>>(),
-        }),
+            history: history
+                .iter()
+                .map(|v| DocumentHistoryEntry {
+                    version: v.version,
+                    summary: v.summary.clone(),
+                    created_at: v.created_at.to_string(),
+                    chars: v.chars,
+                    author: v.author.as_str(),
+                })
+                .collect(),
+        },
     )
 }
 
-#[derive(Deserialize)]
-struct DocumentEditBody {
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentDetail {
+    pub document: DocumentSummary,
+    /// The requested revision, or the current one.
+    pub version: DocumentVersionView,
+    /// Every revision, without its content.
+    pub history: Vec<DocumentHistoryEntry>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentVersionView {
+    pub version: i64,
+    pub content: String,
+    pub summary: Option<String>,
+    /// The turn that wrote this revision; `null` for a hand edit.
+    pub turn_id: Option<String>,
+    pub author: &'static str,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentHistoryEntry {
+    pub version: i64,
+    pub summary: Option<String>,
+    pub created_at: String,
+    /// Length of the revision's content.
+    pub chars: i64,
+    pub author: &'static str,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct DocumentEditBody {
     content: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentSaved {
+    pub document: DocumentSummary,
+    /// The content equalled the current revision, so no version was added.
+    pub unchanged: bool,
 }
 
 /// PUT /api/v0/chat/sessions/{id}/documents/{doc_id} — save a hand edit as a
@@ -1552,21 +1722,34 @@ pub async fn document_edit(
         .unwrap_or(doc);
     ok_json(
         StatusCode::OK,
-        json!({ "document": document_summary(&current), "unchanged": unchanged }),
+        DocumentSaved {
+            document: document_summary(&current),
+            unchanged,
+        },
     )
 }
 
-/// The wire shape of a document. Hand-written rather than a `Serialize` derive
-/// on the DB row: the API contract and the table are free to drift.
-fn document_summary(doc: &aiplane_core::server::db::documents::Document) -> serde_json::Value {
-    json!({
-        "id": doc.id,
-        "title": doc.title,
-        "format": doc.format.as_str(),
-        "current_ver": doc.current_ver,
-        "created_at": doc.created_at.to_string(),
-        "updated_at": doc.updated_at.to_string(),
-    })
+/// The wire shape of a document. Its own type rather than a `Serialize`
+/// derive on the DB row: the API contract and the table are free to drift.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DocumentSummary {
+    pub id: String,
+    pub title: String,
+    pub format: &'static str,
+    pub current_ver: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn document_summary(doc: &aiplane_core::server::db::documents::Document) -> DocumentSummary {
+    DocumentSummary {
+        id: doc.id.clone(),
+        title: doc.title.clone(),
+        format: doc.format.as_str(),
+        current_ver: doc.current_ver,
+        created_at: doc.created_at.to_string(),
+        updated_at: doc.updated_at.to_string(),
+    }
 }
 
 /// DELETE /api/v0/chat/sessions/{id}/turns/{turn_id}/attachments/{filename}
@@ -1628,7 +1811,13 @@ pub async fn attachment_remove(State(state): State<Arc<RamaState>>, req: Request
         tracing::warn!(error = %err, %turn_id, %filename, "attachment S3 delete (marker already removed)");
     }
 
-    ok_json(StatusCode::OK, json!({ "removed": filename }))
+    ok_json(StatusCode::OK, AttachmentRemoved { removed: filename })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AttachmentRemoved {
+    /// The removed file's name.
+    pub removed: String,
 }
 
 /// Split `/api/v0/chat/sessions/{id}/turns/{turn_id}/attachments/{filename}`
@@ -1707,17 +1896,25 @@ pub async fn capabilities_list(
         return not_found_conversation();
     }
     let tools = capability_views(&state, &user, &session_id).await;
-    ok_json(StatusCode::OK, serde_json::json!({ "tools": tools }))
+    ok_json(StatusCode::OK, Capabilities { tools })
 }
 
-#[derive(serde::Serialize)]
-struct CapabilityView {
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Capabilities {
+    /// The caller's granted tools and skills with this conversation's overlay.
+    pub tools: Vec<CapabilityView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CapabilityView {
     key: String,
+    /// `skill` or a tool kind.
     kind: &'static str,
     title: String,
     description: String,
     group: String,
     order: u8,
+    /// `on`, `off` or `auto`; a skill is `on` or `auto`.
     state: &'static str,
     can_disable: bool,
     icon: Option<String>,
@@ -1765,10 +1962,12 @@ async fn capability_views(state: &RamaState, user: &User, session_id: &str) -> V
         .collect()
 }
 
-#[derive(serde::Deserialize)]
+/// Also the response: the overlay state as saved.
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct CapabilityBody {
     pub kind: String,
     pub key: String,
+    /// `on`, `off` or `auto`; a skill takes `on` or `auto`.
     pub state: String,
 }
 
@@ -1826,10 +2025,7 @@ pub async fn capabilities_set(
             }
         };
         return match result {
-            Ok(()) => ok_json(
-                StatusCode::OK,
-                json!({ "kind": parsed.kind, "key": parsed.key, "state": parsed.state }),
-            ),
+            Ok(()) => ok_json(StatusCode::OK, parsed),
             Err(err) => internal(err),
         };
     }
@@ -1868,10 +2064,7 @@ pub async fn capabilities_set(
         }
     };
     match result {
-        Ok(()) => ok_json(
-            StatusCode::OK,
-            serde_json::json!({ "kind": parsed.kind, "key": parsed.key, "state": parsed.state }),
-        ),
+        Ok(()) => ok_json(StatusCode::OK, parsed),
         Err(err) => internal(err),
     }
 }
@@ -1879,7 +2072,7 @@ pub async fn capabilities_set(
 // ---------------------------------------------------------------------------
 // Token self-service: model allowlist + quota (owner-side, like /tokens)
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct OwnerModelsBody {
     pub restrict: bool,
     #[serde(default)]
@@ -1922,12 +2115,18 @@ pub async fn owner_token_models(
     match token_models::set_for_token(&state.db, &token_id, &to_store, limits::ManagedBy::Owner)
         .await
     {
-        Ok(()) => ok_json(StatusCode::OK, serde_json::json!({ "models": to_store })),
+        Ok(()) => ok_json(StatusCode::OK, OwnerModels { models: to_store }),
         Err(err) => internal(err),
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct OwnerModels {
+    /// The token's model allowlist; empty means every model the owner may use.
+    pub models: Vec<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct OwnerQuotaBody {
     pub dimension: String,
     pub window: String,
@@ -1979,7 +2178,7 @@ pub async fn owner_token_quota(
     )
     .await
     {
-        Ok(_) => ok_json(StatusCode::OK, serde_json::json!({ "ok": true })),
+        Ok(_) => ok_json(StatusCode::OK, crate::pages::Done::OK),
         Err(err) => internal(err),
     }
 }
@@ -2010,10 +2209,16 @@ pub async fn owner_token_quota_delete(
         }
     }
     match limits::delete_owner_rule(&state.db, &token_id, &rule_id).await {
-        Ok(true) => ok_json(StatusCode::OK, serde_json::json!({ "deleted": true })),
+        Ok(true) => ok_json(StatusCode::OK, QuotaRuleDeleted { deleted: true }),
         Ok(false) => not_found("no such quota rule on this token"),
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct QuotaRuleDeleted {
+    /// Always `true`.
+    pub deleted: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -2022,7 +2227,7 @@ pub struct TokenRulePath {
     pub rule_id: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct McpPolicyBody {
     /// `true` treats an `ask` connector as `always` for calls made with this
     /// token; `false` blocks them with a "needs approval" tool error.
@@ -2063,7 +2268,7 @@ pub async fn owner_token_mcp_policy(
         AskOverApi::Block
     };
     match set_token_policy(&state.db, &token_id, "*", policy).await {
-        Ok(()) => ok_json(StatusCode::OK, serde_json::json!({ "allow": parsed.allow })),
+        Ok(()) => ok_json(StatusCode::OK, parsed),
         Err(err) => {
             tracing::warn!(error = %err, %token_id, "set token mcp policy");
             internal(err)

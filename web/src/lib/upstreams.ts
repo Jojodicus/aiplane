@@ -112,6 +112,36 @@ export interface BackendTestResult {
 	detected_context_window?: number | null;
 }
 
+const BACKEND_TEST_FAILURES = ['auth_failed', 'http_error', 'unreachable', 'timeout', 'base_url_required'] as const;
+
+/**
+ * A failed connection test is a refusal (400/502/504) whose envelope carries
+ * the test's `code` and details; this turns it back into the panel's result.
+ * `null` for any other refusal, which the caller reports as an error.
+ */
+export function backendTestFailure(body: string | undefined): BackendTestResult | null {
+	if (!body) return null;
+	let error: unknown;
+	try {
+		error = (JSON.parse(body) as { error?: unknown }).error;
+	} catch {
+		return null;
+	}
+	if (!error || typeof error !== 'object') return null;
+	const { code, status, url, detail, timeout_seconds, key_source } = error as Record<string, unknown>;
+	if (!BACKEND_TEST_FAILURES.includes(code as (typeof BACKEND_TEST_FAILURES)[number])) return null;
+	return {
+		outcome: 'error',
+		code: code as BackendTestResult['code'],
+		...(typeof status === 'number' ? { status } : {}),
+		...(typeof url === 'string' ? { url } : {}),
+		...(typeof detail === 'string' ? { detail } : {}),
+		...(typeof timeout_seconds === 'number' ? { timeout_seconds } : {}),
+		...(key_source && typeof key_source === 'object' ? { key_source: key_source as BackendTestResult['key_source'] } : {}),
+		models: []
+	};
+}
+
 export interface PendingChange {
 	code: 'pool_added' | 'pool_removed' | 'pool_kind' | 'pool_strategy' | 'backend_joins' | 'backend_leaves' | 'backend_url' | 'backend_limits' | 'backend_health_path';
 	pool?: string;

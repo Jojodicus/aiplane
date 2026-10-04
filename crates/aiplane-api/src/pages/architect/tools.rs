@@ -198,6 +198,7 @@ impl Tool for ArchitectTool {
                 Kind::ReadAgent => read_agent(ctx, parse(args)?).await,
                 Kind::ListGrantable => resources_for(&ctx.state, &ctx.user)
                     .await
+                    .map(|resources| json!(resources))
                     .map_err(Refusal::from),
                 Kind::ProposeSetup => propose(ctx, parse(args)?).await,
                 Kind::CreateAgentDraft => create(ctx, parse(args)?).await,
@@ -312,7 +313,9 @@ async fn propose(ctx: &Ctx, args: ProposeArgs) -> Result<Value, Refusal> {
         current_draft: None,
         model: None,
     };
-    Ok(suggest_for(&ctx.state, &ctx.user, &agent, body).await?)
+    Ok(json!(
+        suggest_for(&ctx.state, &ctx.user, &agent, body).await?
+    ))
 }
 
 #[derive(Deserialize)]
@@ -343,8 +346,8 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<Value, Refusal> {
         },
     )
     .await?;
-    let id = agent["id"].as_str().unwrap_or_default().to_string();
-    let model = grant_default_model(ctx, &id, &display_of(&agent)).await?;
+    let id = agent.agent.id.clone();
+    let model = grant_default_model(ctx, &id, &agent.agent.display).await?;
     let planned = architect_sessions::get(&ctx.state.db, &ctx.session_id)
         .await
         .ok()
@@ -358,14 +361,10 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<Value, Refusal> {
     Ok(json!({
         "agent_id": id,
         "name": name,
-        "display": agent["display"],
+        "display": agent.agent.display,
         "model": model,
         "setup_url": setup_url(&id),
     }))
-}
-
-fn display_of(agent: &Value) -> String {
-    agent["display"].as_str().unwrap_or_default().to_string()
 }
 
 /// Grant a new agent the model it starts on, as in the setup: the gateway's
@@ -502,7 +501,7 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
     }
     Ok(json!({
         "agent_id": id,
-        "revision": saved["revision"],
+        "revision": saved.revision,
         "changed": changed,
         "granted": granted,
         "dropped": dropped,

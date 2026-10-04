@@ -12,6 +12,7 @@ chat-error-db-error = Datenbankfehler
 chat-error-attachments-not-configured = Chat-Anhänge sind nicht konfiguriert
 chat-error-bad-filename = ungültiger Dateiname
 chat-error-attachment-not-found = nicht gefunden
+chat-error-attachment-storage-failed = Der Anhangspeicher hat nicht korrekt geantwortet, daher konnte die Datei nicht abgerufen werden. Versuche es erneut; schlägt es weiter fehl, sollte ein Administrator den Anhangspeicher unter /admin/settings prüfen.
 chat-error-turn-interrupted = Ein interner Fehler hat diese Antwort unterbrochen. Bitte versuche es erneut.
 
 # SPA-only chat chrome (`web/src/routes/chat/*`): the conversation list,

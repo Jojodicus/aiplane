@@ -3,6 +3,7 @@ import assert from 'node:assert';
 
 import {
 	activityCounts,
+	backendTestFailure,
 	backendAssignments,
 	parallelismMismatch,
 	completeAliasLine,
@@ -176,4 +177,23 @@ test('a server that runs fewer requests than we send it is flagged', () => {
 	// A server that did not say is not a mismatch, it is an unknown.
 	assert.equal(parallelismMismatch(null, 16), null);
 	assert.equal(parallelismMismatch(undefined, 16), null);
+});
+
+test('a refused connection test becomes the panel result its code names', () => {
+	const body = JSON.stringify({
+		error: { message: 'x', type: 'auth_failed', code: 'auth_failed', status: 401, key_source: { kind: 'none' } }
+	});
+	assert.deepEqual(backendTestFailure(body), {
+		outcome: 'error',
+		code: 'auth_failed',
+		status: 401,
+		key_source: { kind: 'none' },
+		models: []
+	});
+});
+
+test('a refusal that is not a connection-test outcome is left to the caller', () => {
+	assert.equal(backendTestFailure(JSON.stringify({ error: { message: 'no', code: 'forbidden' } })), null);
+	assert.equal(backendTestFailure('not json'), null);
+	assert.equal(backendTestFailure(undefined), null);
 });

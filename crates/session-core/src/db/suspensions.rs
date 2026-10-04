@@ -13,7 +13,7 @@
 use super::*;
 
 /// What a suspended call is waiting for. Decides which decisions are offered.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SuspensionKind {
     /// Run this call, or not.
@@ -79,7 +79,7 @@ impl SuspensionKind {
 }
 
 /// Who answers a suspension in a conversation the participant does not own.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Answerer {
     /// The one chatting. A secure input is theirs, and goes nowhere but the
@@ -91,7 +91,7 @@ pub enum Answerer {
 }
 
 /// The shape of a decision, without its payload — what a client is offered.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionKind {
     AllowOnce,
@@ -101,7 +101,7 @@ pub enum DecisionKind {
 
 /// Why a call was denied. The model is told which, because "the user said no"
 /// and "nobody answered in time" call for different next steps.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DenyReason {
     User,
@@ -112,7 +112,7 @@ pub enum DenyReason {
 ///
 /// `Debug` never prints a value: a `secure_input` value must not reach a log
 /// line through `{:?}`.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum Decision {
     AllowOnce,
@@ -142,7 +142,9 @@ impl Decision {
 
 /// What an expired suspension resolves to. Deny unless the requesting tool
 /// said otherwise: silence is not consent.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TimeoutFallback {
     #[default]
@@ -181,7 +183,7 @@ impl TimeoutFallback {
 }
 
 /// The tool call a suspended turn is waiting on, as the model issued it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PendingCall {
     pub id: String,
     pub name: String,
@@ -191,7 +193,9 @@ pub struct PendingCall {
 
 /// What the turn had spent when it paused, so a resumed run continues against
 /// the same budget instead of starting a fresh one.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct BudgetUsed {
     pub rounds: u32,
     pub seconds: u64,
@@ -242,7 +246,7 @@ impl TurnSuspension {
 
 /// A suspension as the client sees it, on the turn and in the `suspended`
 /// event.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SuspensionView {
     pub request_id: String,
     pub kind: SuspensionKind,

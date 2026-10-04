@@ -12,6 +12,7 @@ chat-error-db-error = erreur de base de données
 chat-error-attachments-not-configured = les pièces jointes du chat ne sont pas configurées
 chat-error-bad-filename = nom de fichier invalide
 chat-error-attachment-not-found = introuvable
+chat-error-attachment-storage-failed = Le stockage des pièces jointes n'a pas répondu correctement, le fichier n'a donc pas pu être récupéré. Réessayez ; si l'échec persiste, un administrateur doit vérifier le stockage des pièces jointes dans /admin/settings.
 chat-error-turn-interrupted = Une erreur interne a interrompu cette réponse. Veuillez réessayer.
 
 # SPA-only chat chrome (`web/src/routes/chat/*`): the conversation list,

@@ -29,7 +29,7 @@ use jiff::Timestamp;
 use rama::http::service::web::extract::State;
 use rama::http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use session_core::chat_json::{ChatEvent, SseTx, json_stream_response, sse_json};
 use session_core::db::{self as chat, TurnRole, TurnStatus, TurnWithTools};
 use session_core::i18n::{self, Lang, t, t_args};
@@ -52,7 +52,7 @@ use aiplane_runtime::suspend::ResumeRefused;
 use tokio::time::Instant;
 
 mod voice;
-pub use voice::{recorder, speak, transcribe};
+pub use voice::{SpeakBody, Transcript, recorder, speak, transcribe};
 
 /// Longest visitor message accepted, in characters.
 const MAX_MESSAGE_CHARS: usize = 8_000;
@@ -250,17 +250,40 @@ fn refused(refusal: &Refusal, lang: Lang) -> Response {
 /// The agent as the widget shows it: its name, its colour, and which
 /// directions of voice it offers, so the widget draws a microphone and a
 /// speaker only for those.
-fn agent_json(live: &Live) -> Value {
+fn agent_json(live: &Live) -> EmbedAgent {
     let spec = live.spec.agent().unwrap_or(AgentSpec::empty());
     let voice = &spec.publish.voice;
-    json!({
-        "display": live.agent.principal.display,
-        "color": spec.profile.color(),
-        "voice": {
-            "input": voice.input,
-            "output": voice.output,
+    EmbedAgent {
+        display: live.agent.principal.display.clone(),
+        color: spec.profile.color(),
+        voice: EmbedVoice {
+            input: voice.input,
+            output: voice.output,
         },
-    })
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct EmbedAgent {
+    /// The agent's display name.
+    pub display: String,
+    /// The agent's profile colour, when it sets one.
+    pub color: Option<String>,
+    pub voice: EmbedVoice,
+}
+
+/// The directions of voice the conversation's version offers.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct EmbedVoice {
+    /// Recordings can be transcribed (`POST /api/v0/embed/transcribe`).
+    pub input: bool,
+    /// Answers can be spoken (`POST /api/v0/embed/speak`).
+    pub output: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentDescribed {
+    pub agent: EmbedAgent,
 }
 
 /// POST /api/v0/embed/agent — the agent behind an embed key, before any
@@ -284,13 +307,30 @@ pub async fn describe(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     }
     let live = or_return!(live_agent(&state, &key.principal_id, None).await);
     or_return!(check_origin(&key, &live.spec, &headers));
-    json_ok(StatusCode::OK, json!({ "agent": agent_json(&live) }))
+    json_ok(
+        StatusCode::OK,
+        AgentDescribed {
+            agent: agent_json(&live),
+        },
+    )
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "EmbedStartBody")]
 pub struct StartBody {
+    /// The embed key (`gwe_…`) from the widget snippet.
     pub key: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VisitorSessionStarted {
+    /// The visitor token (`gwv_…`) every later call sends as `Authorization: Bearer`.
+    pub token: String,
+    pub expires_at: Timestamp,
+    /// How long the conversation lasts without activity.
+    pub idle_ttl_secs: i64,
+    pub agent: EmbedAgent,
 }
 
 /// POST /api/v0/embed/sessions — start a visitor conversation.
@@ -340,12 +380,12 @@ pub async fn start_session(State(state): State<Arc<RamaState>>, req: Request) ->
     match started {
         Ok(v) => json_ok(
             StatusCode::CREATED,
-            json!({
-                "token": visitor_token,
-                "expires_at": v.expires_at,
-                "idle_ttl_secs": v.idle_ttl.as_secs(),
-                "agent": agent_json(&live),
-            }),
+            VisitorSessionStarted {
+                token: visitor_token,
+                expires_at: v.expires_at,
+                idle_ttl_secs: v.idle_ttl.as_secs(),
+                agent: agent_json(&live),
+            },
         ),
         Err(err) => internal(err),
     }
@@ -450,20 +490,50 @@ pub async fn current_session(State(state): State<Arc<RamaState>>, req: Request) 
     let live_turn_id = live_turn_id(&turns);
     json_ok(
         StatusCode::OK,
-        json!({
-            "expires_at": v.session.expires_at,
-            "idle_ttl_secs": v.session.idle_ttl.as_secs(),
-            "agent": agent_json(&v.live),
-            "live_turn_id": live_turn_id,
-            "turns": turns,
-        }),
+        VisitorConversation {
+            expires_at: v.session.expires_at,
+            idle_ttl_secs: v.session.idle_ttl.as_secs(),
+            agent: agent_json(&v.live),
+            live_turn_id,
+            turns,
+        },
     )
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VisitorConversation {
+    pub expires_at: Timestamp,
+    pub idle_ttl_secs: i64,
+    pub agent: EmbedAgent,
+    /// The answer being written, when one is.
+    pub live_turn_id: Option<String>,
+    /// The exchange as a visitor sees it: no tool calls, reasoning or model.
+    pub turns: Vec<TurnWithTools>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "EmbedMessageBody")]
 pub struct MessageBody {
+    /// At most 8000 characters.
     pub text: String,
+}
+
+/// Where the visitor's message went.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(tag = "placement", rename_all = "snake_case")]
+pub enum VisitorMessageAccepted {
+    /// The answer is being written as `turn_id`.
+    Started {
+        turn_id: String,
+        user_turn_id: String,
+    },
+    /// The conversation waits for a decision; the message runs after it.
+    Queued {
+        /// Always `null`: no answer is being written yet.
+        turn_id: (),
+        user_turn_id: String,
+    },
 }
 
 /// POST /api/v0/embed/messages — the visitor's next message. 202 once its
@@ -560,11 +630,10 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
 
     json_ok(
         StatusCode::ACCEPTED,
-        json!({
-            "turn_id": assistant_turn_id,
-            "user_turn_id": user_turn_id,
-            "placement": "started",
-        }),
+        VisitorMessageAccepted::Started {
+            turn_id: assistant_turn_id,
+            user_turn_id,
+        },
     )
 }
 
@@ -605,7 +674,10 @@ async fn queue_behind_decision(
     }
     json_ok(
         StatusCode::ACCEPTED,
-        json!({ "turn_id": null, "user_turn_id": user_turn_id, "placement": "queued" }),
+        VisitorMessageAccepted::Queued {
+            turn_id: (),
+            user_turn_id,
+        },
     )
 }
 
@@ -632,8 +704,9 @@ fn visitor_resume_refused(err: AgentResumeError, lang: Lang) -> Response {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "EmbedResumeBody")]
 pub struct ResumeBody {
     pub request_id: String,
     pub decision: chat::DecisionKind,
@@ -721,13 +794,25 @@ pub async fn resume(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Err(err) => return visitor_resume_refused(err, lang),
     };
     embed_rt::spawn_guarded(state, runner, hold, TurnWork::Resume(claimed));
-    json_ok(StatusCode::ACCEPTED, json!({ "turn_id": turn_id }))
+    json_ok(StatusCode::ACCEPTED, VisitorTurnResumed { turn_id })
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VisitorTurnResumed {
+    pub turn_id: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityBody {
+    /// A token the embedding website signed for its visitor.
     pub token: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IdentityAccepted {
+    /// The slots the token's claims set; never their values.
+    pub slots: Vec<String>,
 }
 
 /// Longest identity token accepted, in bytes. A signed claim set for one
@@ -760,7 +845,7 @@ pub async fn identity(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     )
     .await;
     match accepted {
-        Ok(slots) => json_ok(StatusCode::OK, json!({ "slots": slots })),
+        Ok(slots) => json_ok(StatusCode::OK, IdentityAccepted { slots }),
         Err(err) => {
             let status = match &err {
                 IdentityError::NotConfigured => StatusCode::UNPROCESSABLE_ENTITY,

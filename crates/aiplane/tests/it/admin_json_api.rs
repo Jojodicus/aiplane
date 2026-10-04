@@ -443,6 +443,53 @@ async fn backend_connection_test_uses_unsaved_fields_and_discovers_models() {
     );
 }
 
+/// The group form's agent-manager switch: the save body sets it, clears it,
+/// and a body that omits it (the grant matrices) leaves it as it was.
+#[tokio::test]
+async fn groups_save_sets_clears_and_preserves_agent_management() {
+    let (state, cookie) = setup().await;
+    let app = common::app((*state).clone());
+    let save = |extra: &str| {
+        Some(format!(
+            r#"{{"name":"builders","description":"","is_admin":false,"is_default":false,"oidc_values":[],"tools":[],"skills":[]{extra}}}"#
+        ))
+    };
+    let held = |raw: &str| {
+        let listed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        listed["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "builders")
+            .map(|g| g["can_manage_agents"].clone())
+            .unwrap()
+    };
+
+    for (extra, expected) in [
+        (r#","can_manage_agents":true"#, true),
+        ("", true),
+        (r#","can_manage_agents":false"#, false),
+    ] {
+        let resp = app
+            .serve(req(
+                Method::PUT,
+                "/api/v0/admin/groups",
+                &cookie,
+                save(extra),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
+        let raw = body(
+            app.serve(req(Method::GET, "/api/v0/admin/groups", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(held(&raw), expected, "after saving with `{extra}`: {raw}");
+    }
+}
+
 /// Groups round-trip: save → list reflects it → delete → gone.
 #[tokio::test]
 async fn groups_round_trip() {
@@ -2129,4 +2176,394 @@ async fn setup_api_state_and_gates() {
         parsed["draft"]["client_secret_set"],
         serde_json::json!(true)
     );
+}
+
+/// The memory page says whether preferences really reach the assistant: the
+/// same `recall` gate the standing context uses, and the limits it applies.
+#[tokio::test]
+async fn memories_list_reports_whether_preferences_reach_the_assistant() {
+    use aiplane_core::server::db::{self, user_tool_prefs};
+    use aiplane_core::server::rbac::Resolver;
+    use aiplane_core::server::rbac::config::{RbacConfig, RoleConfig};
+    use aiplane_runtime::server::AppState;
+    use aiplane_runtime::server::tools::ToolRegistry;
+    use aiplane_tools::memory::{Forget, Recall, Remember, UpdateMemory};
+
+    let pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
+    let upstreams =
+        aiplane_core::server::upstreams::UpstreamRegistry::new(&std::collections::HashMap::new())
+            .unwrap();
+    let tools = std::sync::Arc::new(
+        ToolRegistry::new()
+            .with(Remember)
+            .with(Recall)
+            .with(UpdateMemory)
+            .with(Forget),
+    );
+    let rbac = std::sync::Arc::new(
+        Resolver::build(
+            RbacConfig {
+                default_role: Some("all".into()),
+                mappings: vec![],
+            },
+            vec![RoleConfig {
+                id: "all".into(),
+                admin: false,
+                models: vec![],
+                tools: vec!["*".into()],
+                skills: vec![],
+            }],
+        )
+        .unwrap(),
+    );
+    let app_state = AppState::new(common::test_config(), pool.clone(), upstreams, tools, rbac);
+    let state = aiplane::rama_server::RamaState::new(
+        app_state,
+        aiplane::rama_server::SessionStore::new(pool, common::TEST_SECRET),
+        aiplane_core::server::usage::UsageHandle::disabled(),
+    );
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    let db = state.db.clone();
+    let app = common::app(state);
+
+    let on: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/memories", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(on["preferences"]["in_context"], true, "{on}");
+    assert_eq!(on["preferences"]["max_count"], 50, "{on}");
+    assert_eq!(on["preferences"]["char_budget"], 3000, "{on}");
+
+    user_tool_prefs::set(&db, "alice", "memory", false)
+        .await
+        .unwrap();
+    let off: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/memories", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(
+        off["preferences"]["in_context"], false,
+        "memory switched off keeps preferences out of the context: {off}"
+    );
+}
+
+/// A typed setting the gateway could not use is refused with a line per
+/// field, and nothing of the section is stored; a usable one saves as before.
+#[tokio::test]
+async fn settings_save_refuses_values_the_typed_reads_would_replace() {
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    let shown = |listed: &serde_json::Value, key: &str| {
+        listed["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section["fields"].as_array().unwrap())
+            .find(|field| field["key"] == key)
+            .map(|field| field["value"].clone())
+            .unwrap()
+    };
+    let list = || req(Method::GET, "/api/v0/admin/settings", &cookie, None);
+    let save = |section: &str, values: &str| {
+        req(
+            Method::POST,
+            "/api/v0/admin/settings",
+            &cookie,
+            Some(format!(r#"{{"section":"{section}","values":{values}}}"#)),
+        )
+    };
+    let before: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+
+    let resp = app
+        .serve(save(
+            "chat.ocr",
+            r#"{"chat.ocr.dpi":"abc","chat.ocr.max_pages":"-3","chat.ocr.timeout_secs":"90"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let refused: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+    assert_eq!(refused["error"]["code"], "invalid_settings");
+    let issues: std::collections::BTreeMap<&str, &str> = refused["error"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| {
+            (
+                issue["path"].as_str().unwrap(),
+                issue["message"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        issues.keys().copied().collect::<Vec<_>>(),
+        ["chat.ocr.dpi", "chat.ocr.max_pages"],
+        "{refused}"
+    );
+    assert!(issues["chat.ocr.dpi"].contains("whole number"), "{refused}");
+    assert!(
+        issues["chat.ocr.max_pages"].contains("0 or more"),
+        "{refused}"
+    );
+
+    let resp = app
+        .serve(save("feedback", r#"{"feedback.provider":"bitbucket"}"#))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let resp = app
+        .serve(save(
+            "chat.compaction",
+            r#"{"chat.compaction.trigger_ratio":"high"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let after: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+    for key in [
+        "chat.ocr.dpi",
+        "chat.ocr.timeout_secs",
+        "feedback.provider",
+        "chat.compaction.trigger_ratio",
+    ] {
+        assert_eq!(shown(&after, key), shown(&before, key), "{key} kept");
+    }
+
+    let resp = app
+        .serve(save(
+            "chat.compaction",
+            r#"{"chat.compaction.trigger_ratio":"0,6"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
+    let saved: serde_json::Value =
+        serde_json::from_str(&body(app.serve(list()).await.unwrap()).await).unwrap();
+    assert_eq!(shown(&saved, "chat.compaction.trigger_ratio"), "0.6");
+}
+
+/// A connection test that fails says so in its status, with the shared
+/// envelope carrying the same `code` and details the success body would.
+#[tokio::test]
+async fn backend_connection_test_failures_are_refusals_with_their_status() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/auth/models"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/broken/models"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&upstream)
+        .await;
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    };
+
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    for (base_url, status, code) in [
+        (String::new(), StatusCode::BAD_REQUEST, "base_url_required"),
+        (
+            format!("{}/auth", upstream.uri()),
+            StatusCode::BAD_GATEWAY,
+            "auth_failed",
+        ),
+        (
+            format!("{}/broken", upstream.uri()),
+            StatusCode::BAD_GATEWAY,
+            "http_error",
+        ),
+        (closed, StatusCode::BAD_GATEWAY, "unreachable"),
+    ] {
+        let response = app
+            .serve(req(
+                Method::POST,
+                "/api/v0/admin/backends/test",
+                &cookie,
+                Some(
+                    serde_json::json!({ "name": "probe", "base_url": base_url, "health_path": "/models" })
+                        .to_string(),
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{code}");
+        let refused: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+        assert_eq!(refused["error"]["code"], code, "{refused}");
+        if code == "auth_failed" || code == "http_error" {
+            assert!(refused["error"]["status"].is_u64(), "{refused}");
+            assert_eq!(refused["error"]["key_source"]["kind"], "none", "{refused}");
+        }
+    }
+}
+
+/// Every admin route that names a resource answers 404 in the shared
+/// envelope when there is no such resource, rather than reporting success.
+#[tokio::test]
+async fn admin_routes_answer_404_for_what_does_not_exist() {
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    for (method, path, payload) in [
+        (Method::DELETE, "/api/v0/admin/groups/no-such-group", None),
+        (
+            Method::DELETE,
+            "/api/v0/admin/backends/no-such-backend",
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v0/admin/backends/no-such-backend/enabled",
+            Some(r#"{"enabled":false}"#),
+        ),
+        (Method::DELETE, "/api/v0/admin/pools/no-such-pool", None),
+        (Method::DELETE, "/api/v0/admin/limits/no-such-limit", None),
+        (
+            Method::POST,
+            "/api/v0/admin/limits",
+            Some(
+                r#"{"id":"no-such-limit","subject_type":"user","subject_id":"boss@example.com","dimension":"requests","window":"day","value":100}"#,
+            ),
+        ),
+        (Method::DELETE, "/api/v0/admin/models/no-such-model", None),
+        (
+            Method::DELETE,
+            "/api/v0/admin/automatic-routes/no-such-route",
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v0/admin/connectors/no-such-connector/toggle",
+            Some(r#"{"enabled":false}"#),
+        ),
+        (
+            Method::GET,
+            "/api/v0/admin/connectors/no-such-connector/audit",
+            None,
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/admin/connectors/no-such-connector",
+            None,
+        ),
+    ] {
+        let resp = app
+            .serve(req(
+                method.clone(),
+                path,
+                &cookie,
+                payload.map(str::to_string),
+            ))
+            .await
+            .unwrap();
+        let status = resp.status();
+        let raw = body(resp).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {raw}");
+        let refused: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            refused["error"]["code"], "not_found",
+            "{method} {path}: {raw}"
+        );
+    }
+}
+
+/// A feature that is not set up answers 503, a resource the caller does not
+/// have 404, a precondition that does not hold 409 — each in the envelope.
+#[tokio::test]
+async fn unconfigured_features_and_missing_resources_refuse_by_meaning() {
+    let (state, cookie) = setup().await;
+    let hook = aiplane_runtime::server::webhooks::create(
+        &state.db,
+        aiplane_runtime::server::webhooks::NewWebhook {
+            user_id: "boss".into(),
+            name: "never-called".into(),
+            prompt: "summarise".into(),
+            model: "model-a".into(),
+            tools_enabled: false,
+            synchronous: false,
+            reuse_conversation: false,
+            reuse_rounds: 0,
+            secret_hash: "unused".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let app = router(state);
+    let rerun = |run: Option<&str>| {
+        Some(match run {
+            Some(run) => format!(r#"{{"prompt":"again","run":"{run}"}}"#),
+            None => r#"{"prompt":"again"}"#.to_string(),
+        })
+    };
+    for (method, path, payload, status, code) in [
+        (
+            Method::POST,
+            "/api/v0/comfyui/reload".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "comfyui_not_configured",
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/admin/skills/anything".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+        ),
+        (
+            Method::DELETE,
+            "/api/v0/skills/anything".to_string(),
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+        ),
+        (
+            Method::POST,
+            "/api/v0/integrations/never-connected/disconnect".to_string(),
+            None,
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/webhooks/{}/rerun", hook.id),
+            rerun(Some("no-such-run")),
+            StatusCode::NOT_FOUND,
+            "not_found",
+        ),
+        (
+            Method::POST,
+            format!("/api/v0/webhooks/{}/rerun", hook.id),
+            rerun(None),
+            StatusCode::CONFLICT,
+            "no_payload",
+        ),
+    ] {
+        let resp = app
+            .serve(req(method.clone(), &path, &cookie, payload))
+            .await
+            .unwrap();
+        let got = resp.status();
+        let raw = body(resp).await;
+        assert_eq!(got, status, "{method} {path}: {raw}");
+        let refused: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(refused["error"]["code"], code, "{method} {path}: {raw}");
+    }
 }

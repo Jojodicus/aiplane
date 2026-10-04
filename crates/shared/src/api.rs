@@ -9,7 +9,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct Me {
     pub id: String,
     pub email: String,
@@ -36,7 +36,7 @@ pub struct Me {
     pub can_manage_agents: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TokenSummary {
     pub id: String,
     pub name: String,
@@ -54,7 +54,7 @@ pub struct TokenSummary {
     pub tool_states: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CreateTokenRequest {
     pub name: String,
     /// Token lifetime in days. Falls back to the server's default if missing.
@@ -71,32 +71,31 @@ pub struct CreateTokenRequest {
 /// Set a token's tool configuration wholesale — the master switch plus
 /// the full set of explicit capability states. Replaces any previous per-token
 /// tool prefs. Backs `PUT /api/v0/tokens/{id}/tools`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UpdateTokenToolsRequest {
     pub tools_enabled: bool,
     #[serde(default)]
     pub tool_states: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CreateTokenResponse {
     pub token: TokenSummary,
     /// Plaintext token. Shown to the user **exactly once.**
     pub plaintext: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RevokeResponse {
-    /// True if this call flipped the token from active to revoked. False if
-    /// it was already revoked, never existed, or belongs to a different user.
+    /// Always `true`: a missing or foreign token is a 404, an already revoked
+    /// one a 409.
     pub revoked: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DeleteResponse {
-    /// True if this call hard-deleted the row. False if the token didn't
-    /// exist, didn't belong to the caller, or was still active (active
-    /// tokens must be revoked first — see `tokens::delete_if_revoked`).
+    /// Always `true`: a missing or foreign token is a 404, a still active one
+    /// a 409 (revoke it first).
     pub deleted: bool,
 }
 
@@ -135,7 +134,7 @@ impl ToolDef {
 }
 
 /// What a UI / CLI sees about a single tool registered on the gateway.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ToolSummary {
     pub id: String,
     pub name: String,
@@ -164,15 +163,22 @@ pub struct ChatRequest {
 
 /// The error envelope every gateway endpoint emits when something goes wrong
 /// on the gateway side. Mirrors OpenAI's `{"error": {…}}` shape.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ErrorBody {
+    /// What went wrong and what to do about it, for a person to read.
     pub message: String,
+    /// The machine-readable reason, e.g. `invalid_request`, `not_found`.
     #[serde(rename = "type")]
     pub error_type: String,
+    /// The same value as `type`.
     pub code: String,
+    /// Fields a refusal carries beside the three above, such as a
+    /// validator's `issues`.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }

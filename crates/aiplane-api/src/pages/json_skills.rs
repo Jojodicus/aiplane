@@ -15,22 +15,82 @@ use aiplane_core::server::db;
 use aiplane_core::server::db::user_mcp::ToolMode;
 use aiplane_runtime::rama_server::state::RamaState;
 
-use super::{bad_request, internal, json_error, json_ok, no_content, raw_path_segment};
+use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 
 // ---------------------------------------------------------------------------
 // Skills (user + admin)
 
-fn skill_json(
-    skill: &aiplane_features::server::skills::Skill,
-    body: Option<String>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "name": skill.name,
-        "title": skill.title,
-        "description": skill.description,
-        "files": skill.files(),
-        "body": body,
-    })
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SkillView {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    /// The bundle's files, relative to its root.
+    pub files: Vec<String>,
+    /// The SKILL.md body; `null` on the personal list.
+    pub body: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SkillList {
+    pub skills: Vec<SkillView>,
+    /// Personal skills are enabled on this gateway; when not, `skills` is empty.
+    pub user_skills_enabled: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SkillSource {
+    pub name: String,
+    /// The SKILL.md body, frontmatter stripped.
+    pub body: String,
+    /// The whole SKILL.md.
+    pub manifest: String,
+}
+
+/// The name a skill was installed or saved under.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SkillSaved {
+    pub name: String,
+}
+
+/// Inline authoring: a SKILL.md and the name to store it under.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct InlineSkillBody {
+    /// Empty takes the name from the manifest's frontmatter.
+    name: String,
+    manifest: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AdminSkillView {
+    #[serde(flatten)]
+    pub skill: SkillView,
+    /// The groups granted every skill (`*`).
+    pub all_skills_groups: Vec<String>,
+    /// The groups granted this skill by name.
+    pub granted_groups: Vec<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AdminSkillList {
+    pub skills: Vec<AdminSkillView>,
+    /// A skills directory is configured.
+    pub configured: bool,
+    pub directory_accessible: bool,
+    /// The configured skills directory.
+    pub source: Option<String>,
+    /// Every gateway group a skill can be granted to.
+    pub groups: Vec<String>,
+}
+
+fn skill_json(skill: &aiplane_features::server::skills::Skill, body: Option<String>) -> SkillView {
+    SkillView {
+        name: skill.name.clone(),
+        title: skill.title.clone(),
+        description: skill.description.clone(),
+        files: skill.files(),
+        body,
+    }
 }
 
 fn skill_archive_response(name: &str, skill: &aiplane_features::server::skills::Skill) -> Response {
@@ -66,7 +126,10 @@ pub async fn skills_list(State(state): State<Arc<RamaState>>, req: Request) -> R
         // replaced returned an empty list here for exactly that reason.
         return json_ok(
             StatusCode::OK,
-            serde_json::json!({ "skills": [], "user_skills_enabled": false }),
+            SkillList {
+                skills: Vec::new(),
+                user_skills_enabled: false,
+            },
         );
     };
     let registry = user_store.registry_for(&user.id);
@@ -74,10 +137,13 @@ pub async fn skills_list(State(state): State<Arc<RamaState>>, req: Request) -> R
         .names()
         .filter_map(|n| registry.get(n))
         .map(|s| skill_json(s, None))
-        .collect::<Vec<_>>();
+        .collect();
     json_ok(
         StatusCode::OK,
-        serde_json::json!({ "skills": skills, "user_skills_enabled": true }),
+        SkillList {
+            skills,
+            user_skills_enabled: true,
+        },
     )
 }
 
@@ -104,7 +170,11 @@ pub async fn skill_body(State(state): State<Arc<RamaState>>, req: Request) -> Re
     match (skill.body(), skill.manifest_text()) {
         (Ok(body), Ok(manifest)) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "name": name, "body": body, "manifest": manifest }),
+            SkillSource {
+                name,
+                body,
+                manifest,
+            },
         ),
         (Err(err), _) | (_, Err(err)) => internal(err),
     }
@@ -142,9 +212,9 @@ pub async fn skills_upload(State(state): State<Arc<RamaState>>, req: Request) ->
     let (_session, user) = require_session_json!(state, req);
     let Some(store) = state.user_skills() else {
         return json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "personal skills are not enabled on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+            "personal skills are not enabled on this gateway; an administrator can switch them on under Skills at /admin/settings",
         );
     };
     let content_type = req
@@ -186,17 +256,11 @@ pub async fn skills_upload(State(state): State<Arc<RamaState>>, req: Request) ->
             return bad_request("the archive part is empty");
         }
         return match store.install_archive(&user.id, &data) {
-            Ok(name) => json_ok(StatusCode::CREATED, serde_json::json!({ "name": name })),
+            Ok(name) => json_ok(StatusCode::CREATED, SkillSaved { name }),
             Err(err) => bad_request(err.to_string()),
         };
     }
-    // Inline authoring.
-    #[derive(serde::Deserialize)]
-    struct InlineBody {
-        name: String,
-        manifest: String,
-    }
-    let Ok(parsed) = serde_json::from_slice::<InlineBody>(&bytes) else {
+    let Ok(parsed) = serde_json::from_slice::<InlineSkillBody>(&bytes) else {
         return bad_request("expected multipart file upload or {name, manifest} JSON");
     };
     let target = if parsed.name.trim().is_empty() {
@@ -208,7 +272,7 @@ pub async fn skills_upload(State(state): State<Arc<RamaState>>, req: Request) ->
         parsed.name
     };
     match store.save_manifest(&user.id, &target, &parsed.manifest) {
-        Ok(_) => json_ok(StatusCode::CREATED, serde_json::json!({ "name": target })),
+        Ok(_) => json_ok(StatusCode::CREATED, SkillSaved { name: target }),
         Err(err) => bad_request(err.to_string()),
     }
 }
@@ -223,9 +287,9 @@ pub async fn skills_delete(State(state): State<Arc<RamaState>>, req: Request) ->
     };
     let Some(store) = state.user_skills() else {
         return json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "personal skills are not enabled on this gateway",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "personal_skills_disabled",
+            "personal skills are not enabled on this gateway; an administrator can switch them on under Skills at /admin/settings",
         );
     };
     match store.remove(&user.id, &name) {
@@ -256,12 +320,10 @@ pub async fn admin_skills_list(State(state): State<Arc<RamaState>>, req: Request
             registry
                 .names()
                 .filter_map(|n| registry.get(n))
-                .map(|skill| {
-                    let mut value = skill_json(skill, skill.body().ok());
-                    value["all_skills_groups"] = serde_json::json!(all_skills_groups);
-                    value["granted_groups"] =
-                        serde_json::json!(grant_map.get(&skill.name).cloned().unwrap_or_default());
-                    value
+                .map(|skill| AdminSkillView {
+                    skill: skill_json(skill, skill.body().ok()),
+                    all_skills_groups: all_skills_groups.clone(),
+                    granted_groups: grant_map.get(&skill.name).cloned().unwrap_or_default(),
                 })
                 .collect::<Vec<_>>()
         }
@@ -274,15 +336,15 @@ pub async fn admin_skills_list(State(state): State<Arc<RamaState>>, req: Request
         .map(|skills| skills.dir.display().to_string());
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "skills": skills,
-            "configured": state.skills().is_some(),
-            "directory_accessible": !state.skills_dir_inaccessible(),
-            "source": source,
-            "groups": db::gateway_groups::list_group_names(&state.db)
+        AdminSkillList {
+            skills,
+            configured: state.skills().is_some(),
+            directory_accessible: !state.skills_dir_inaccessible(),
+            source,
+            groups: db::gateway_groups::list_group_names(&state.db)
                 .await
                 .unwrap_or_default(),
-        }),
+        },
     )
 }
 
@@ -294,7 +356,11 @@ pub async fn admin_skill_archive(State(state): State<Arc<RamaState>>, req: Reque
         return bad_request("the URL is missing its skill name");
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let registry = store.current();
     let Some(skill) = registry.get(&name) else {
@@ -308,7 +374,11 @@ pub async fn admin_skill_archive(State(state): State<Arc<RamaState>>, req: Reque
 pub async fn admin_skills_upload(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let (_session, _admin) = require_admin_json!(state, req);
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let content_type = req
         .headers()
@@ -345,7 +415,7 @@ pub async fn admin_skills_upload(State(state): State<Arc<RamaState>>, req: Reque
         return bad_request("the archive part is empty");
     }
     match store.install_archive(&data) {
-        Ok(name) => json_ok(StatusCode::CREATED, serde_json::json!({ "name": name })),
+        Ok(name) => json_ok(StatusCode::CREATED, SkillSaved { name }),
         Err(err) => bad_request(err.to_string()),
     }
 }
@@ -359,7 +429,11 @@ pub async fn admin_skills_delete(State(state): State<Arc<RamaState>>, req: Reque
         return bad_request("the URL is missing its skill name");
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     let _ = db::skill_grants::delete_skill(&state.db, &name).await;
     match store.remove(&name) {
@@ -369,7 +443,9 @@ pub async fn admin_skills_delete(State(state): State<Arc<RamaState>>, req: Reque
     }
 }
 
-#[derive(serde::Deserialize)]
+/// A skill's role grants. The response carries the groups actually stored:
+/// unknown groups and groups already granted every skill are dropped.
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct SkillGrantsBody {
     pub skill: String,
     pub roles: Vec<String>,
@@ -390,7 +466,11 @@ pub async fn admin_skills_grants(State(state): State<Arc<RamaState>>, req: Reque
         Err(err) => return bad_request(format!("parsing the grants body: {err}")),
     };
     let Some(store) = state.skills() else {
-        return internal("the skills directory is not configured");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "skills_not_configured",
+            "the skills directory is not configured; set it under Skills at /admin/settings",
+        );
     };
     if store.current().get(&parsed.skill).is_none() {
         return json_error(StatusCode::NOT_FOUND, "not_found", "no such skill");
@@ -419,7 +499,10 @@ pub async fn admin_skills_grants(State(state): State<Arc<RamaState>>, req: Reque
     state.rbac.set_skill_grant_overlay(grants);
     json_ok(
         StatusCode::OK,
-        serde_json::json!({ "skill": parsed.skill, "roles": roles }),
+        SkillGrantsBody {
+            skill: parsed.skill,
+            roles,
+        },
     )
 }
 
@@ -432,31 +515,29 @@ pub async fn admin_connectors_list(State(state): State<Arc<RamaState>>, req: Req
     let connectors = db::mcp_catalog::list_all(&state.db)
         .await
         .unwrap_or_default();
-    let out: Vec<_> = connectors
+    let out = connectors
         .iter()
-        .map(|c| {
-            serde_json::json!({
-                "key": c.key,
-                "title": c.name,
-                "description": c.description,
-                "icon": c.icon,
-                "category": c.category,
-                "base_url": c.url,
-                "auth_type": c.auth.as_str(),
-                "scope": c.scope.as_str(),
-                "scopes": c.scopes,
-                "enabled": c.enabled,
-                "audit": c.audit,
-                "use_dcr": c.use_dcr,
-                "client_id": c.client_id,
-                "has_secret": c.client_secret_ct.is_some(),
-                "authorize_url": c.authorize_url,
-                "token_url": c.token_url,
-                "registration_url": c.registration_url,
-                "groups": c.allowed_groups,
-                "seeded": c.seeded,
-                "needs_setup": c.needs_setup(),
-            })
+        .map(|c| ConnectorView {
+            key: c.key.clone(),
+            title: c.name.clone(),
+            description: c.description.clone(),
+            icon: c.icon.clone(),
+            category: c.category.clone(),
+            base_url: c.url.clone(),
+            auth_type: c.auth.as_str(),
+            scope: c.scope.as_str(),
+            scopes: c.scopes.clone(),
+            enabled: c.enabled,
+            audit: c.audit,
+            use_dcr: c.use_dcr,
+            client_id: c.client_id.clone(),
+            has_secret: c.client_secret_ct.is_some(),
+            authorize_url: c.authorize_url.clone(),
+            token_url: c.token_url.clone(),
+            registration_url: c.registration_url.clone(),
+            groups: c.allowed_groups.clone(),
+            seeded: c.seeded,
+            needs_setup: c.needs_setup(),
         })
         .collect();
     let groups = db::gateway_groups::list_group_names(&state.db)
@@ -464,15 +545,100 @@ pub async fn admin_connectors_list(State(state): State<Arc<RamaState>>, req: Req
         .unwrap_or_default();
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "connectors": out,
-            "groups": groups,
-            "redirect_uri": format!("{}/integrations/callback", state.public_url()),
-        }),
+        ConnectorList {
+            connectors: out,
+            groups,
+            redirect_uri: format!("{}/integrations/callback", state.public_url()),
+        },
     )
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorList {
+    pub connectors: Vec<ConnectorView>,
+    /// Every gateway group a connector can be restricted to.
+    pub groups: Vec<String>,
+    /// The OAuth redirect URI to register with a provider.
+    pub redirect_uri: String,
+}
+
+/// One MCP catalog entry. The client secret itself is never returned.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorView {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub category: Option<String>,
+    pub base_url: String,
+    /// `oauth2`, `none` or `static_bearer`.
+    pub auth_type: &'static str,
+    /// Whose identity the connection uses: per user, global, or agents only.
+    pub scope: &'static str,
+    pub scopes: Vec<String>,
+    pub enabled: bool,
+    /// Tool calls through this connector are recorded in its audit log.
+    pub audit: bool,
+    /// OAuth dynamic client registration.
+    pub use_dcr: bool,
+    pub client_id: Option<String>,
+    pub has_secret: bool,
+    pub authorize_url: Option<String>,
+    pub token_url: Option<String>,
+    pub registration_url: Option<String>,
+    /// The groups allowed to use it; empty allows everyone.
+    pub groups: Vec<String>,
+    /// A built-in catalog entry.
+    pub seeded: bool,
+    /// Missing a URL or OAuth client before it can be enabled.
+    pub needs_setup: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorKey {
+    pub key: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorToggled {
+    pub key: String,
+    pub enabled: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorAudit {
+    pub connector: ConnectorTitle,
+    /// The newest 200 tool calls.
+    pub events: Vec<ConnectorAuditEvent>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorTitle {
+    pub key: String,
+    /// The connector's name, or its key when it no longer exists.
+    pub title: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorAuditEvent {
+    pub id: String,
+    pub user_id: String,
+    pub user_email: String,
+    pub tool_id: String,
+    pub arguments: Option<String>,
+    pub outcome: String,
+    pub error: Option<String>,
+    pub session_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ConnectorsSeeded {
+    /// How many built-in entries were written.
+    pub seeded: u64,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ConnectorInputBody {
     pub key: String,
     #[serde(default)]
@@ -658,7 +824,7 @@ pub async fn admin_connectors_save(State(state): State<Arc<RamaState>>, req: Req
     };
     state.grant_caps.invalidate();
     match result {
-        Ok(()) => json_ok(StatusCode::OK, serde_json::json!({ "key": parsed.key })),
+        Ok(()) => json_ok(StatusCode::OK, ConnectorKey { key: parsed.key }),
         Err(err) => internal(err),
     }
 }
@@ -692,10 +858,14 @@ pub async fn admin_connectors_toggle(
     let toggled = db::mcp_catalog::set_enabled(&state.db, &key, parsed.enabled).await;
     state.grant_caps.invalidate();
     match toggled {
-        Ok(_) => json_ok(
+        Ok(true) => json_ok(
             StatusCode::OK,
-            serde_json::json!({ "key": key, "enabled": parsed.enabled }),
+            ConnectorToggled {
+                key,
+                enabled: parsed.enabled,
+            },
         ),
+        Ok(false) => not_found(format!("no connector `{key}`")),
         Err(err) => internal(err),
     }
 }
@@ -707,34 +877,42 @@ pub async fn admin_connector_audit(State(state): State<Arc<RamaState>>, req: Req
     let Some(key) = raw_path_segment(&req, 1) else {
         return bad_request("the URL is missing its connector key");
     };
-    let connector = db::mcp_catalog::get(&state.db, &key).await.ok().flatten();
-    let events = db::mcp_audit::recent_for_connector(&state.db, &key, 200)
-        .await
-        .unwrap_or_default()
+    let connector = match db::mcp_catalog::get(&state.db, &key).await {
+        Ok(connector) => connector,
+        Err(err) => return internal(err),
+    };
+    let events = match db::mcp_audit::recent_for_connector(&state.db, &key, 200).await {
+        Ok(events) => events,
+        Err(err) => return internal(err),
+    };
+    // A deleted connector's calls stay readable; a key that never had
+    // either is not a connector.
+    if connector.is_none() && events.is_empty() {
+        return not_found(format!("no connector `{key}`"));
+    }
+    let events = events
         .into_iter()
-        .map(|event| {
-            serde_json::json!({
-                "id": event.id,
-                "user_id": event.user_id,
-                "user_email": event.user_email,
-                "tool_id": event.tool_id,
-                "arguments": event.arguments,
-                "outcome": event.outcome,
-                "error": event.error,
-                "session_id": event.session_id,
-                "created_at": event.created_at.to_string(),
-            })
+        .map(|event| ConnectorAuditEvent {
+            created_at: event.created_at.to_string(),
+            id: event.id,
+            user_id: event.user_id,
+            user_email: event.user_email,
+            tool_id: event.tool_id,
+            arguments: event.arguments,
+            outcome: event.outcome,
+            error: event.error,
+            session_id: event.session_id,
         })
-        .collect::<Vec<_>>();
+        .collect();
+    let title = connector
+        .map(|connector| connector.name)
+        .unwrap_or_else(|| key.clone());
     json_ok(
         StatusCode::OK,
-        serde_json::json!({
-            "connector": {
-                "key": key,
-                "title": connector.as_ref().map(|connector| connector.name.as_str()).unwrap_or(&key),
-            },
-            "events": events,
-        }),
+        ConnectorAudit {
+            connector: ConnectorTitle { key, title },
+            events,
+        },
     )
 }
 
@@ -749,11 +927,17 @@ pub async fn admin_connectors_delete(
     let Some(key) = raw_path_segment(&req, 0) else {
         return bad_request("the URL is missing its connector key");
     };
+    match db::mcp_catalog::get(&state.db, &key).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(format!("no connector `{key}`")),
+        Err(err) => return internal(err),
+    }
     let _ = db::user_mcp::delete_all_for_connector(&state.db, &key).await;
     let deleted = db::mcp_catalog::delete(&state.db, &key).await;
     state.grant_caps.invalidate();
     match deleted {
-        Ok(_) => no_content(),
+        Ok(true) => no_content(),
+        Ok(false) => not_found(format!("no connector `{key}`")),
         Err(err) => internal(err),
     }
 }
@@ -768,7 +952,7 @@ pub async fn admin_connectors_restore_defaults(
     let seeded = db::mcp_catalog::seed_defaults(&state.db).await;
     state.grant_caps.invalidate();
     match seeded {
-        Ok(count) => json_ok(StatusCode::OK, serde_json::json!({ "seeded": count })),
+        Ok(count) => json_ok(StatusCode::OK, ConnectorsSeeded { seeded: count }),
         Err(err) => internal(err),
     }
 }
@@ -810,13 +994,11 @@ pub async fn integrations_list(State(state): State<Arc<RamaState>>, req: Request
                     Some(
                         tools
                             .into_iter()
-                            .map(|tool| {
-                                serde_json::json!({
-                                    "name": tool.remote_name,
-                                    "description": tool.description,
-                                    "read_only": tool.read_only,
-                                    "mode": tool.mode.as_str(),
-                                })
+                            .map(|tool| IntegrationTool {
+                                name: tool.remote_name,
+                                description: tool.description,
+                                read_only: tool.read_only,
+                                mode: tool.mode.as_str(),
                             })
                             .collect::<Vec<_>>(),
                     ),
@@ -827,25 +1009,67 @@ pub async fn integrations_list(State(state): State<Arc<RamaState>>, req: Request
         } else {
             (None, None)
         };
-        out.push(serde_json::json!({
-            "key": c.key,
-            "title": c.name,
-            "description": c.description,
-            "icon": c.icon,
-            "auth_type": c.auth.as_str(),
-            "is_global": c.is_global(),
-            "needs_setup": c.needs_setup(),
-            "connected": connected,
-            "errored": connection.is_some_and(|connection| connection.is_errored()),
-            "needs_reauth": connection.is_some_and(|connection| connection.needs_reauth()),
-            "tools": tools,
-            "tool_error": tool_error,
-        }));
+        out.push(IntegrationView {
+            key: c.key.clone(),
+            title: c.name.clone(),
+            description: c.description.clone(),
+            icon: c.icon.clone(),
+            auth_type: c.auth.as_str(),
+            is_global: c.is_global(),
+            needs_setup: c.needs_setup(),
+            connected,
+            errored: connection.is_some_and(|connection| connection.is_errored()),
+            needs_reauth: connection.is_some_and(|connection| connection.needs_reauth()),
+            tools,
+            tool_error,
+        });
     }
-    json_ok(StatusCode::OK, serde_json::json!({ "connectors": out }))
+    json_ok(StatusCode::OK, IntegrationList { connectors: out })
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IntegrationList {
+    /// The enabled connectors the caller's roles allow.
+    pub connectors: Vec<IntegrationView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IntegrationView {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    /// `oauth2`, `none` or `static_bearer`.
+    pub auth_type: &'static str,
+    /// One shared connection; nobody connects their own.
+    pub is_global: bool,
+    pub needs_setup: bool,
+    /// The caller has a connection.
+    pub connected: bool,
+    pub errored: bool,
+    pub needs_reauth: bool,
+    /// The connector's tools; `null` when not connected or when listing failed.
+    pub tools: Option<Vec<IntegrationTool>>,
+    /// Why listing the tools failed.
+    pub tool_error: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IntegrationTool {
+    pub name: String,
+    pub description: String,
+    pub read_only: bool,
+    /// The caller's policy: `always`, `ask` or `off`.
+    pub mode: &'static str,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct IntegrationConnected {
+    pub key: String,
+    pub connected: bool,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct TokenConnectBody {
     pub token: String,
 }
@@ -937,7 +1161,10 @@ pub async fn integrations_connect_token(
     state.mcp.invalidate(&user.id, &key).await;
     json_ok(
         StatusCode::OK,
-        serde_json::json!({ "key": key, "connected": true }),
+        IntegrationConnected {
+            key,
+            connected: true,
+        },
     )
 }
 
@@ -953,22 +1180,25 @@ pub async fn integrations_disconnect(
         return bad_request("the URL is missing its connector key");
     };
     match db::user_mcp::delete_connection(&state.db, &user.id, &key).await {
-        Ok(_) => {
+        Ok(true) => {
             state.mcp.invalidate(&user.id, &key).await;
             no_content()
         }
+        Ok(false) => not_found(format!("you have no connection to `{key}`")),
         Err(err) => internal(err),
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ToolModeBody {
     pub tool: String,
+    /// `always`, `ask` or `off`.
     pub mode: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct ToolsAllBody {
+    /// `always`, `ask` or `off`.
     pub mode: String,
 }
 
@@ -977,29 +1207,21 @@ async fn integration_for_user(
     key: &str,
     roles: &[String],
 ) -> Result<db::mcp_catalog::Connector, Response> {
-    let Some(connector) = db::mcp_catalog::get(&state.db, key).await.ok().flatten() else {
-        return Err(json_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no such connector",
-        ));
+    let connector = match db::mcp_catalog::get(&state.db, key).await {
+        Ok(connector) => connector,
+        Err(err) => return Err(internal(err)),
     };
-    if !connector.enabled {
-        return Err(json_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no such connector",
-        ));
-    }
+    // Disabled, ungranted and absent all answer alike, so the answer does not
+    // reveal which connectors exist beyond the caller's own.
     let role_ids = state.rbac.role_ids_for(roles);
-    if !connector.allows(&role_ids, state.rbac.is_admin(&role_ids)) {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "your roles do not grant this connector",
-        ));
+    match connector {
+        Some(connector)
+            if connector.enabled && connector.allows(&role_ids, state.rbac.is_admin(&role_ids)) =>
+        {
+            Ok(connector)
+        }
+        _ => Err(not_found("no such connector")),
     }
-    Ok(connector)
 }
 
 async fn integration_body<T: serde::de::DeserializeOwned>(
@@ -1077,7 +1299,15 @@ pub async fn integrations_tools_all(State(state): State<Arc<RamaState>>, req: Re
     };
     let tools = match state.mcp.connector_tool_infos(&user.id, &connector).await {
         Ok(tools) => tools,
-        Err(err) => return internal(err),
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "connector_unreachable",
+                &format!(
+                    "could not list the connector's tools: {err:#}; try again or reconnect it"
+                ),
+            );
+        }
     };
     for tool in tools {
         if let Err(err) =

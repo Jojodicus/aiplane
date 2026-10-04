@@ -9,6 +9,13 @@ export interface Memory {
 	created_at: string;
 }
 
+/** Whether preferences reach the assistant, and the limits that apply when they do. */
+export interface PreferenceContext {
+	in_context: boolean;
+	max_count: number;
+	char_budget: number;
+}
+
 export function groupMemories(memories: Memory[]): Record<MemoryKind, Memory[]> {
 	return {
 		preference: memories.filter((memory) => memory.kind === 'preference'),

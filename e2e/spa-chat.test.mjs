@@ -205,6 +205,34 @@ test("the voice-mode modal opens with its tap-to-talk control", async () => {
     await ctx.close();
 });
 
+test("the chat and voice model selectors stay operable on a phone", async () => {
+    const cookieValue = await devSessionCookie();
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    await ctx.addCookies([{ name: "id", value: cookieValue, url: BASE }]);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/chat`, { waitUntil: "domcontentloaded" });
+    // The drawer holding "new conversation" is closed on a phone; the
+    // conversation /chat lands on is the caller's own, which is what counts.
+    await page.waitForURL((u) => /\/chat\/.+/.test(u.pathname), { timeout: 5000 });
+    await page.locator("textarea").waitFor();
+
+    const chatModel = page.getByRole("combobox", { name: "Chat model", exact: true });
+    const voiceModel = page.getByRole("combobox", { name: "Voice model", exact: true });
+    for (const picker of [chatModel, voiceModel]) {
+        await picker.waitFor({ state: "visible" });
+        const box = await picker.boundingBox();
+        assert.ok(box.x >= 0 && box.x + box.width <= 390, `selector overflows the viewport: ${JSON.stringify(box)}`);
+    }
+    assert.ok(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        "the header must not scroll the page sideways",
+    );
+
+    await chooseSearchable(page, "Chat model", "demo-model-pro");
+    await chatModel.getByText("demo-model-pro", { exact: true }).waitFor();
+    await ctx.close();
+});
+
 test("conversation tools use a responsive full-screen selector", async () => {
     const cookieValue = await devSessionCookie();
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });

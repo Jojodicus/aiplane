@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { adminDelete, adminPost, adminPut } from '$lib/admin-client';
+	import { ApiError, request } from '$lib/api';
 	import { t, n } from '$lib/i18n.svelte';
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { completeAliasLine, parallelismMismatch, parseAliases, splitList, type Backend, type BackendTestResult, type Pool } from '$lib/upstreams';
+	import { backendTestFailure, completeAliasLine, parallelismMismatch, parseAliases, splitList, type Backend, type BackendTestResult, type Pool } from '$lib/upstreams';
 
 	interface Props {
 		backend?: Backend | null;
@@ -120,15 +121,15 @@
 		testing = true;
 		testResult = null;
 		try {
-			testResult = await adminPost<BackendTestResult>('/api/v0/admin/backends/test', {
-				name,
-				base_url: baseUrl,
-				api_key_env: apiKeyEnv,
-				api_key: apiKey,
-				health_path: healthPath
+			testResult = await request<BackendTestResult>('/api/v0/admin/backends/test', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name, base_url: baseUrl, api_key_env: apiKeyEnv, api_key: apiKey, health_path: healthPath })
 			});
 		} catch (err) {
-			error = String(err);
+			const failed = err instanceof ApiError ? backendTestFailure(err.detail) : null;
+			if (failed) testResult = failed;
+			else error = err instanceof ApiError ? (err.serverMessage ?? err.message) : String(err);
 		} finally {
 			testing = false;
 		}

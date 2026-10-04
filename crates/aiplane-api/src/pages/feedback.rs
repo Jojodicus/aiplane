@@ -32,8 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rama::http::service::web::extract::State;
-use rama::http::service::web::response::IntoResponse;
-use rama::http::{Request, Response, StatusCode, header};
+use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 use session_core::chrome::read_body_to_bytes;
@@ -47,24 +46,12 @@ use aiplane_features::server::issue_tracker::{self, IssueInput, TrackerError};
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::side_call::{self, JsonShape, Payer, SideCall, SideCallError};
 
-// ---------------------------------------------------------------------------
-// Small JSON helpers (these endpoints are fetch'd, not Datastar-driven).
-
-fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        value.to_string(),
-    )
-        .into_response()
+fn json_ok(value: impl serde::Serialize) -> Response {
+    super::json_ok(StatusCode::OK, value)
 }
 
-fn json_ok(value: serde_json::Value) -> Response {
-    json_response(StatusCode::OK, value)
-}
-
-fn json_err(status: StatusCode, message: &str) -> Response {
-    json_response(status, json!({ "error": { "message": message } }))
+fn json_err(status: StatusCode, code: &str, message: &str) -> Response {
+    super::json_error(status, code, message)
 }
 
 /// Session gate that returns a 401 JSON envelope (not a redirect) on miss —
@@ -78,12 +65,14 @@ async fn require_session_json(
         Ok(Some(s)) => Ok(s),
         Ok(None) => Err(json_err(
             StatusCode::UNAUTHORIZED,
+            "unauthorized",
             &t(lang, "feedback-err-no-session"),
         )),
         Err(err) => {
             tracing::warn!(error = %err, "feedback: session lookup");
             Err(json_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
                 &t(lang, "feedback-err-session-lookup-failed"),
             ))
         }
@@ -133,13 +122,28 @@ pub async fn feedback_config(State(state): State<Arc<RamaState>>, req: Request) 
         .map(|f| f.provider().as_str())
         .unwrap_or("github");
 
-    json_ok(json!({
-        "enabled": enabled,
-        "voice_enabled": voice_enabled,
-        "voice_model": voice_model,
-        "provider": provider,
-        "max_attachments": MAX_ATTACHMENTS,
-    }))
+    json_ok(FeedbackConfigView {
+        enabled,
+        voice_enabled,
+        voice_model,
+        provider,
+        max_attachments: MAX_ATTACHMENTS,
+    })
+}
+
+/// What the feedback dialog needs to know before it opens.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FeedbackConfigView {
+    /// Whether an issue tracker is configured, so the dialog is offered.
+    pub enabled: bool,
+    /// Whether a spoken note can be turned into the form's fields.
+    pub voice_enabled: bool,
+    /// The transcription model to record against.
+    pub voice_model: Option<String>,
+    /// The tracker reports are filed in: `github` or `gitlab`.
+    pub provider: &'static str,
+    /// How many pasted images one report may carry.
+    pub max_attachments: usize,
 }
 
 /// Resolve a configured model id against the live advertised set: honour the
@@ -154,11 +158,24 @@ fn resolve_model(configured: Option<String>, available: &[String]) -> Option<Str
 // ---------------------------------------------------------------------------
 // POST /feedback/extract — voice transcript → structured fields
 
-#[derive(Deserialize)]
-struct ExtractRequest {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ExtractRequest {
     transcript: String,
+    /// BCP-47 tag of the language the fields are written in.
     #[serde(default)]
     locale: Option<String>,
+}
+
+/// The report fields a spoken note was turned into; a field the note did not
+/// cover is empty.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ExtractedFields {
+    pub title: String,
+    pub description: String,
+    pub business_value: String,
+    pub acceptance_criteria: String,
+    /// `low`, `medium` or `high`.
+    pub priority: &'static str,
 }
 
 pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -173,6 +190,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
         Err(msg) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-body-read",
@@ -186,6 +204,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
         Err(err) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-malformed-json",
@@ -198,6 +217,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
     if transcript.is_empty() {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-empty-transcript"),
         );
     }
@@ -217,6 +237,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
     let Some(model) = model else {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_no_model",
             &t(lang, "feedback-err-no-chat-model"),
         );
     };
@@ -241,6 +262,7 @@ pub async fn feedback_extract(State(state): State<Arc<RamaState>>, req: Request)
             };
             json_err(
                 status,
+                "feedback_model_failed",
                 &t_args(
                     lang,
                     "feedback-err-extraction-failed",
@@ -277,7 +299,7 @@ async fn extract_fields(
     model: &str,
     transcript: &str,
     locale: Option<&str>,
-) -> Result<serde_json::Value, SideCallError> {
+) -> Result<ExtractedFields, SideCallError> {
     let lang_directive = match locale {
         Some(l) if !l.is_empty() => format!(
             "\n\nWrite every field value in the language with BCP-47 tag \"{l}\", \
@@ -333,20 +355,20 @@ async fn extract_fields(
         "high" => "high",
         _ => "medium",
     };
-    Ok(json!({
-        "title": pick("title"),
-        "description": pick("description"),
-        "business_value": pick("business_value"),
-        "acceptance_criteria": pick("acceptance_criteria"),
-        "priority": priority,
-    }))
+    Ok(ExtractedFields {
+        title: pick("title"),
+        description: pick("description"),
+        business_value: pick("business_value"),
+        acceptance_criteria: pick("acceptance_criteria"),
+        priority,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // POST /feedback — file the issue
 
-#[derive(Deserialize)]
-struct SubmitRequest {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SubmitRequest {
     title: String,
     #[serde(default)]
     description: String,
@@ -364,6 +386,7 @@ struct SubmitRequest {
     /// client can't turn one submission into an unbounded upload loop.
     #[serde(default)]
     attachments_base64: Vec<String>,
+    /// Browser and page details, including the console and network logs.
     #[serde(default)]
     system_info: serde_json::Value,
 }
@@ -382,12 +405,14 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     let Some(cfg) = state.config().feedback.clone() else {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         );
     };
     if !cfg.is_configured() {
         return json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         );
     }
@@ -398,6 +423,7 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
         Err(msg) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-body-read",
@@ -411,6 +437,7 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
         Err(err) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
+                "invalid_request",
                 &t_args(
                     lang,
                     "feedback-err-malformed-json",
@@ -424,12 +451,14 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     if title.chars().count() < 4 {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-title-required"),
         );
     }
     if parsed.description.trim().is_empty() {
         return json_err(
             StatusCode::BAD_REQUEST,
+            "invalid_request",
             &t(lang, "feedback-err-description-required"),
         );
     }
@@ -460,23 +489,34 @@ pub async fn feedback_submit(State(state): State<Arc<RamaState>>, req: Request) 
     };
 
     match issue_tracker::create_feedback_issue(&state.http, &cfg, input).await {
-        Ok(result) => json_ok(json!({
-            "ok": true,
-            "number": result.number,
-            "url": result.url,
-        })),
+        Ok(result) => json_ok(FiledIssue {
+            ok: true,
+            number: result.number,
+            url: result.url,
+        }),
         Err(TrackerError::NotConfigured) => json_err(
             StatusCode::SERVICE_UNAVAILABLE,
+            "feedback_not_configured",
             &t(lang, "feedback-err-not-configured"),
         ),
         Err(err) => {
             tracing::warn!(error = %err, "feedback: issue creation failed");
             json_err(
                 StatusCode::BAD_GATEWAY,
+                "feedback_submit_failed",
                 &t(lang, "feedback-err-submit-failed"),
             )
         }
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct FiledIssue {
+    /// Always `true`.
+    pub ok: bool,
+    /// The issue number the tracker shows.
+    pub number: u64,
+    pub url: String,
 }
 
 // ---------------------------------------------------------------------------

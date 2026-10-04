@@ -315,7 +315,7 @@ pub struct AttachmentCopy {
 /// One conversation matching a search query. Returned by
 /// [`search_sessions`] with a highlighted snippet of where the term
 /// matched.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SearchHit {
     /// The conversation's session id.
     pub session_id: String,

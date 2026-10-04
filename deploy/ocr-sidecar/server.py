@@ -288,6 +288,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if not VLLM_BASE_URL:
+        sys.exit(
+            "ocr-sidecar: VLLM_BASE_URL is empty, so there is no OCR model to call. "
+            "Set OCR_VLLM_BASE_URL to the Unlimited-OCR vLLM /v1 URL and start the ocr profile again."
+        )
     host = os.environ.get("OCR_BIND", "0.0.0.0")
     port = int(os.environ.get("OCR_PORT", "9100"))
     ThreadingHTTPServer((host, port), Handler).serve_forever()

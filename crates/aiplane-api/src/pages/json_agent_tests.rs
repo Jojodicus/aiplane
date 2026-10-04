@@ -37,26 +37,48 @@ use aiplane_runtime::rama_server::state::RamaState;
 
 const RUN_LIST_LIMIT: i64 = 50;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CaseDto {
     pub name: String,
+    /// The conversation to play (`docs/agent-builder.md` → "Evaluation").
     pub script: Value,
+    /// What the run must show.
     pub expect: Value,
+    /// A model-judged criterion, reported apart from the checks.
     #[serde(default)]
     pub rubric: Option<String>,
 }
 
-fn case_json(case: &TestCase) -> Value {
-    json!({
-        "id": case.id,
-        "name": case.name,
-        "script": case.script,
-        "expect": case.expect,
-        "rubric": case.rubric,
-        "created_at": case.created_at,
-        "updated_at": case.updated_at,
-    })
+/// A stored test case.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CaseView {
+    pub id: String,
+    pub name: String,
+    pub script: Value,
+    pub expect: Value,
+    pub rubric: Option<String>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+impl CaseView {
+    fn of(case: &TestCase) -> Self {
+        Self {
+            id: case.id.clone(),
+            name: case.name.clone(),
+            script: case.script.clone(),
+            expect: case.expect.clone(),
+            rubric: case.rubric.clone(),
+            created_at: case.created_at,
+            updated_at: case.updated_at,
+        }
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CaseReply {
+    pub case: CaseView,
 }
 
 fn invalid_case(issues: &[EvalIssue]) -> Response {
@@ -108,7 +130,7 @@ fn name_taken(name: &str) -> Response {
 
 /// How many results carry each rubric verdict. Reported apart from the
 /// deterministic counts, which alone decide `green`.
-fn rubric_counts(results: &[CaseResult]) -> Value {
+fn rubric_counts(results: &[CaseResult]) -> RubricCounts {
     let count = |verdict: &str| {
         results
             .iter()
@@ -117,42 +139,102 @@ fn rubric_counts(results: &[CaseResult]) -> Value {
             })
             .count()
     };
-    json!({
-        "passed": count("passed"),
-        "failed": count("failed"),
-        "error": count("error"),
-        "skipped": count("skipped"),
-    })
+    RubricCounts {
+        passed: count("passed"),
+        failed: count("failed"),
+        error: count("error"),
+        skipped: count("skipped"),
+    }
 }
 
-fn run_json(run: &tests_db::TestRun, results: Option<&[CaseResult]>) -> Value {
-    let mut out = json!({
-        "id": run.id,
-        "source": run.source,
-        "version": run.version,
-        "started_by": run.started_by,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-        "passed": run.passed,
-        "failed": run.failed,
-        "green": run.failed == 0 && run.passed > 0,
-    });
-    if let Some(results) = results {
-        out["rubric"] = rubric_counts(results);
-        out["results"] = results
-            .iter()
-            .map(|r| {
-                json!({
-                    "case_id": r.case_id,
-                    "case_name": r.case_name,
-                    "passed": r.passed,
-                    "session_id": r.session_id,
-                    "report": r.report,
-                })
-            })
-            .collect();
+/// How many results carry each rubric verdict.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RubricCounts {
+    pub passed: usize,
+    pub failed: usize,
+    pub error: usize,
+    pub skipped: usize,
+}
+
+/// A stored suite run.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RunView {
+    pub id: String,
+    /// `draft` or `version:N`.
+    pub source: String,
+    pub version: Option<i64>,
+    pub started_by: String,
+    pub started_at: Timestamp,
+    pub finished_at: Timestamp,
+    pub passed: i64,
+    pub failed: i64,
+    /// No case failed and at least one passed.
+    pub green: bool,
+}
+
+fn run_view(run: &tests_db::TestRun) -> RunView {
+    RunView {
+        id: run.id.clone(),
+        source: run.source.clone(),
+        version: run.version,
+        started_by: run.started_by.clone(),
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        passed: run.passed,
+        failed: run.failed,
+        green: run.failed == 0 && run.passed > 0,
     }
-    out
+}
+
+/// A suite run with its per-case results.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RunDetail {
+    #[serde(flatten)]
+    pub run: RunView,
+    pub rubric: RubricCounts,
+    pub results: Vec<CaseResultView>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CaseResultView {
+    pub case_id: String,
+    pub case_name: String,
+    pub passed: bool,
+    pub session_id: Option<String>,
+    /// The case's checks and their outcome, as the evaluation wrote them.
+    pub report: Value,
+}
+
+fn run_detail_view(run: &tests_db::TestRun, results: &[CaseResult]) -> RunDetail {
+    RunDetail {
+        run: run_view(run),
+        rubric: rubric_counts(results),
+        results: results
+            .iter()
+            .map(|r| CaseResultView {
+                case_id: r.case_id.clone(),
+                case_name: r.case_name.clone(),
+                passed: r.passed,
+                session_id: r.session_id.clone(),
+                report: r.report.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// The stored cases and the newest run of the draft.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TestSuite {
+    pub cases: Vec<CaseView>,
+    pub latest_draft_run: Option<RunView>,
+    /// The draft and the suite are unchanged since that run.
+    pub latest_draft_run_current: bool,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RunList {
+    /// Newest first.
+    pub runs: Vec<RunView>,
 }
 
 /// GET /api/v0/agents/{id}/tests — the cases, and the newest run of the
@@ -176,11 +258,11 @@ pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response
     });
     json_ok(
         StatusCode::OK,
-        json!({
-            "cases": cases.iter().map(case_json).collect::<Vec<_>>(),
-            "latest_draft_run": latest.as_ref().map(|r| run_json(r, None)),
-            "latest_draft_run_current": current,
-        }),
+        TestSuite {
+            cases: cases.iter().map(CaseView::of).collect(),
+            latest_draft_run: latest.as_ref().map(run_view),
+            latest_draft_run_current: current,
+        },
     )
 }
 
@@ -203,7 +285,12 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     )
     .await;
     match created {
-        Ok(Some(case)) => json_ok(StatusCode::CREATED, json!({ "case": case_json(&case) })),
+        Ok(Some(case)) => json_ok(
+            StatusCode::CREATED,
+            CaseReply {
+                case: CaseView::of(&case),
+            },
+        ),
         Ok(None) => name_taken(&name),
         Err(e) => internal(e),
     }
@@ -231,7 +318,12 @@ pub async fn update(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     )
     .await;
     match updated {
-        Ok(Some(Some(case))) => json_ok(StatusCode::OK, json!({ "case": case_json(&case) })),
+        Ok(Some(Some(case))) => json_ok(
+            StatusCode::OK,
+            CaseReply {
+                case: CaseView::of(&case),
+            },
+        ),
         Ok(Some(None)) => name_taken(&name),
         Ok(None) => not_found(format!("this agent has no test case `{case_id}`")),
         Err(e) => internal(e),
@@ -252,7 +344,7 @@ pub async fn delete(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunBody {
     /// `draft`, or `version:N` for a published version.
@@ -340,7 +432,7 @@ pub async fn run(State(state): State<Arc<RamaState>>, req: Request) -> Response 
     )
     .await;
     match recorded {
-        Ok(run) => json_ok(StatusCode::CREATED, run_json(&run, Some(&results))),
+        Ok(run) => json_ok(StatusCode::CREATED, run_detail_view(&run, &results)),
         Err(e) => internal(e),
     }
 }
@@ -353,7 +445,9 @@ pub async fn runs(State(state): State<Arc<RamaState>>, req: Request) -> Response
     match tests_db::runs(&state.db, &agent.principal.id, RUN_LIST_LIMIT).await {
         Ok(runs) => json_ok(
             StatusCode::OK,
-            json!({ "runs": runs.iter().map(|r| run_json(r, None)).collect::<Vec<_>>() }),
+            RunList {
+                runs: runs.iter().map(run_view).collect(),
+            },
         ),
         Err(e) => internal(e),
     }
@@ -372,7 +466,7 @@ pub async fn run_detail(State(state): State<Arc<RamaState>>, req: Request) -> Re
         Err(e) => return internal(e),
     };
     match tests_db::results(&state.db, &run.id).await {
-        Ok(results) => json_ok(StatusCode::OK, run_json(&run, Some(&results))),
+        Ok(results) => json_ok(StatusCode::OK, run_detail_view(&run, &results)),
         Err(e) => internal(e),
     }
 }

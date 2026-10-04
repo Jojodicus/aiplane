@@ -75,7 +75,9 @@ pub async fn maybe_replace_image_content(
         _ => return Replaced::unchanged(parts),
     };
 
-    if caps.vision == Some(true) {
+    // Unknown is not "no": only a declared `vision = false` makes the notice
+    // below true, so an undeclared model gets the image as sent.
+    if caps.vision != Some(false) {
         return Replaced::unchanged(parts);
     }
 
@@ -204,4 +206,61 @@ async fn describe_with(
         .and_then(|c| c.as_str())
         .unwrap_or("(no description)");
     Ok(text.to_string())
+}
+
+#[cfg(test)]
+// The client never reaches the network: the registry routes nowhere, so
+// the describe fails before any request. The outbound rule is about
+// production paths.
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    use crate::server::db::model_defaults::{self, ModelCapabilities};
+
+    async fn replace_with(vision: Option<bool>) -> Replaced {
+        let db = crate::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        model_defaults::set_capabilities(
+            &db,
+            "primary",
+            &ModelCapabilities {
+                vision,
+                fallback_vision: Some("describer".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let registry = UpstreamRegistry::new(&std::collections::HashMap::new()).unwrap();
+        let parts = [serde_json::json!({
+            "type": "image_url",
+            "image_url": { "url": "data:image/png;base64,AAAA" },
+        })];
+        maybe_replace_image_content(&parts, "primary", &db, &reqwest::Client::new(), &registry)
+            .await
+    }
+
+    #[tokio::test]
+    async fn unknown_vision_passes_the_image_through_untouched() {
+        let replaced = replace_with(None).await;
+        assert!(
+            replaced.calls.is_empty(),
+            "no fallback call without explicit vision = false"
+        );
+        assert_eq!(replaced.parts[0]["type"], "image_url");
+        assert_eq!(replaced.notification, None);
+    }
+
+    #[tokio::test]
+    async fn declared_vision_passes_the_image_through_untouched() {
+        assert!(replace_with(Some(true)).await.calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_no_vision_asks_the_fallback_model() {
+        let replaced = replace_with(Some(false)).await;
+        assert_eq!(replaced.calls.len(), 1);
+        assert_eq!(replaced.calls[0].model, "describer");
+    }
 }

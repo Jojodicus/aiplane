@@ -19,6 +19,7 @@ aiplane-core = { path = "../aiplane-core" }
 session-core = { path = "../session-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 anyhow = { workspace = true }
 jiff = { workspace = true }
 tracing = { workspace = true }

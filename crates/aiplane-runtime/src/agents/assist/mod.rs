@@ -120,7 +120,9 @@ pub struct Candidates {
     pub models: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ImproveField {
     Task,
@@ -192,7 +194,7 @@ fn rate_window(per: SignedDuration) -> String {
 }
 
 /// A suggestion for agent `agent_id`, as the endpoint returns it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Suggested {
     #[serde(flatten)]
     pub suggestion: Suggestion,
@@ -200,7 +202,7 @@ pub struct Suggested {
     pub usage: Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ImprovedText {
     pub field: ImproveField,
     pub suggestion: String,

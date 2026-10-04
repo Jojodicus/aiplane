@@ -231,10 +231,6 @@ pub(crate) async fn require_session_json(
     }
 }
 
-/// A JSON error response in the `/api/v0` envelope
-/// (`{"error":{"message","type","code"}}`). Mirrors
-/// `aiplane::rama_server::api::error_envelope` — the SPA sees one
-/// contract, so the two must stay in sync.
 /// The admin twin of [`require_session_json`]: session + admin role, with
 /// JSON envelopes (401 / 403) instead of HTML.
 pub(crate) async fn require_admin_json(
@@ -252,17 +248,34 @@ pub(crate) async fn require_admin_json(
     Ok((session, user))
 }
 
-pub(crate) fn json_ok(status: rama::http::StatusCode, body: serde_json::Value) -> Response {
+/// A JSON success response. The body is any serializable wire type; the
+/// type a handler passes is the one `GET /openapi.json` declares for it.
+pub(crate) fn json_ok(status: rama::http::StatusCode, body: impl serde::Serialize) -> Response {
     use rama::http::header;
+    let body = serde_json::to_vec(&body).expect("wire types serialize to JSON");
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
-        .body(body.to_string().into())
+        .body(body.into())
         .expect("static JSON response")
 }
 
-pub(crate) fn json_error(status: rama::http::StatusCode, code: &str, message: &str) -> Response {
+/// A JSON error response in the `/api/v0` envelope, [`shared::api::ErrorEnvelope`]. Every
+/// `/api/v0` refusal goes through here, the gateway crate's handlers included.
+pub fn json_error(status: rama::http::StatusCode, code: &str, message: &str) -> Response {
     json_error_with(status, code, message, serde_json::Map::new())
+}
+
+/// `{"ok": true}`: the request was carried out, and there is nothing more to
+/// say about it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Done {
+    /// Always `true`.
+    pub ok: bool,
+}
+
+impl Done {
+    pub const OK: Self = Self { ok: true };
 }
 
 /// [`json_error`] with fields of its own beside `message`, `type` and `code`
@@ -274,19 +287,17 @@ pub(crate) fn json_error_with(
     message: &str,
     extra: serde_json::Map<String, serde_json::Value>,
 ) -> Response {
-    use rama::http::header;
-    let mut error = serde_json::Map::from_iter([
-        ("message".to_string(), serde_json::json!(message)),
-        ("type".to_string(), serde_json::json!(code)),
-        ("code".to_string(), serde_json::json!(code)),
-    ]);
-    error.extend(extra);
-    let body = serde_json::json!({ "error": error });
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(body.to_string().into())
-        .expect("static JSON response")
+    json_ok(
+        status,
+        shared::api::ErrorEnvelope {
+            error: shared::api::ErrorBody {
+                message: message.to_string(),
+                error_type: code.to_string(),
+                code: code.to_string(),
+                extra,
+            },
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +602,7 @@ pub use rag_oauth::{rag_connect, rag_oauth_callback};
 // GitHub issue (with optional voice-to-fields + a viewport screenshot). The
 // FAB + dialog are static chrome mounted in `layout_authed`; the three JSON
 // endpoints are re-exported for the router.
-mod feedback;
+pub mod feedback;
 pub use feedback::{feedback_config, feedback_extract, feedback_submit};
 
 // `read_body_to_bytes` lives in `session_core::chrome::read_body_to_bytes`.

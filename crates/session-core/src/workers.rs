@@ -62,7 +62,9 @@ pub enum TurnUpdate {
 /// collect the user's answer, POST it to the session API
 /// (`/api/v0/me/ask/feedback/{turn_id}` or `/location/feedback/{turn_id}`),
 /// and the parked tool picks it up.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ToolPrompt {
     /// The assistant turn the prompt belongs to (also the feedback
     /// endpoint's path parameter).
@@ -95,7 +97,9 @@ pub struct ToolPrompt {
 /// drew a row of buttons whose labels were whole sentences, and that same
 /// sentence is what came back to the model as the user's answer. The label is
 /// the answer; the description is context for the human choosing.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct PromptOption {
     /// Short answer text — the button, and what the tool reports as chosen.
     pub label: String,
@@ -116,13 +120,17 @@ pub struct PromptOption {
 /// — and which one the client is looking at decides how much of the content
 /// it is willing to trust. Guessing from the first characters would put that
 /// decision in the hands of whoever wrote the string.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct PromptPreview {
     pub kind: PreviewKind,
     pub content: String,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewKind {
     /// Preformatted text: ASCII diagrams, table sketches, code. Rendered
@@ -132,7 +140,9 @@ pub enum PreviewKind {
     Svg,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPromptKind {
     AskUser,
@@ -141,7 +151,9 @@ pub enum ToolPromptKind {
 }
 
 /// Show or tear down a [`ToolPrompt`] on the structured chat event stream.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ToolPromptEvent {
     Show(ToolPrompt),
@@ -165,7 +177,9 @@ pub enum ToolPromptEvent {
 /// turn can legitimately have two `browser_control` batches in flight. Keyed by
 /// turn alone, the second registration would drop the first — the first call
 /// would report "nothing came back" while its actions were being carried out.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct BrowserRequest {
     pub turn_id: String,
     pub request_id: String,
@@ -178,7 +192,9 @@ pub struct BrowserRequest {
 /// A rectangle of the page in CSS pixels, measured from the top-left of the
 /// document rather than the viewport, so it names the same content wherever
 /// the page happens to be scrolled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct CaptureRegion {
     pub x: u32,
     pub y: u32,
@@ -198,7 +214,9 @@ pub struct CaptureRegion {
 /// or a drag handler needs, and cannot type into an editor that owns its own
 /// input (Docs, CodeMirror). Real input at the browser level is what makes the
 /// difference between "works on a login form" and "works on the web".
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum BrowserAction {
     /// Open a URL in the assistant's working tab (created on first use).
@@ -283,7 +301,17 @@ pub enum BrowserAction {
     ListTabs,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MouseButton {
     #[default]
@@ -292,7 +320,17 @@ pub enum MouseButton {
     Middle,
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollDirection {
     Up,

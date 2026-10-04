@@ -74,6 +74,19 @@ impl Serialize for Provenance {
     }
 }
 
+impl schemars::JsonSchema for Provenance {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Provenance".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "`llm`, `host` or `verifier:<id>`."
+        })
+    }
+}
+
 /// A writer other than the model. There is deliberately no conversion from a
 /// string or from JSON: a verifier or the host-JWT path names itself in code.
 #[derive(Debug, Clone, PartialEq, Eq)]

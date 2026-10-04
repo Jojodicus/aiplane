@@ -371,13 +371,13 @@ pub async fn upsert_checked(
     Ok(outcome)
 }
 
-/// Delete a rule by id. No-op if it's gone.
-pub async fn delete(pool: &Pool, id: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM limits WHERE id = ?")
+/// Delete a rule by id. `false` when there was no such rule.
+pub async fn delete(pool: &Pool, id: &str) -> Result<bool, DbError> {
+    let deleted = sqlx::query("DELETE FROM limits WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(deleted.rows_affected() > 0)
 }
 
 /// The editable coordinates and ceiling of an existing rule.

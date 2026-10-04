@@ -43,7 +43,7 @@ const EVENT_COALESCE: Duration = Duration::from_millis(120);
 /// One JSON event on the wire. Serialized as `{event, data}` by
 /// [`sse_json`]; `event` (the SSE event name) comes from
 /// [`ChatEvent::name`].
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatEvent {
     /// Full session state, sent once on attach. The reconnect replayer.

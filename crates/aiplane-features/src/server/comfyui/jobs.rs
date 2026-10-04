@@ -11,7 +11,7 @@ use sqlx::Row;
 use aiplane_core::server::db::Pool;
 
 /// One job row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ComfyuiJob {
     pub id: i64,
     pub prompt_id: String,

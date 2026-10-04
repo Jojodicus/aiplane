@@ -11,7 +11,7 @@ The whole stack:
 | HTTP server / router | rama 0.3 | `crates/aiplane/src/rama_server/router.rs` |
 | Static SPA hosting | hand-rolled rama handler over `tokio::fs` | `crates/aiplane/src/rama_server/spa.rs` |
 | UI framework | SvelteKit 2 / Svelte 5 (runes), Vite | `web/` |
-| API contract | OpenAPI 3.1, generated from backend route declarations | `GET /openapi.json` |
+| API contract | OpenAPI 3.1, generated from the router and the handlers' wire types | `GET /openapi.json` (`crates/aiplane/src/rama_server/openapi/`) |
 | API client | one `fetch` helper + hand-declared shapes | `web/src/lib/api.ts` |
 | Chat streaming | JSON events over SSE | `crates/session-core/src/chat_json.rs` ↔ `web/src/lib/chat-protocol.ts` |
 | Styling | Tailwind v4 + daisyUI v5 | `web/src/app.css` |
@@ -106,6 +106,11 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
+The conversation header carries the chat model, voice model and spoken-reply
+voice selectors at every width: inline beside the actions from `sm` up, on a
+full-width row of their own beneath them below it. It is one set of controls,
+not a mobile copy, so the options and the selected model are the same on both.
+
 ### Bounded viewport
 
 A page that is a conversation fills the window rather than scrolling as a
@@ -124,7 +129,12 @@ their private skills, and `/tools/browser` the setup of the browser-control
 extension: live status through `browser-bridge.ts`, the store link, the
 `.zip` download, and the steps (see [`browser-control.md`](browser-control.md#for-users)). `/settings` contains the account summary;
 `/settings/notifications`, `/settings/memory`, and `/settings/tokens` keep the
-corresponding personal controls separate. The skills and notifications tabs
+corresponding personal controls separate. The memory page's Preferences card
+takes what it says about standing context from `GET /api/v0/memories` →
+`preferences`: `in_context` is the same `recall` gate the chat driver applies
+(`openai_driver::preferences_in_context`), and the count and character limits
+are the driver's own constants, so the card cannot promise more than a turn
+sends. The skills and notifications tabs
 follow their optional feature switches. The OAuth callback and connect/retry POST endpoints stay
 under `/integrations/*`; they redirect back to `/tools/integrations`.
 The built-in tools tab shows the full registered catalog. A tool that lacks
@@ -199,13 +209,46 @@ stale.
 
 ## The JSON API and its contract
 
-Every dynamic thing the SPA does is a `/api/v0/*` call — about 140 operations
-across more than 100 paths. `GET /openapi.json` generates an OpenAPI 3.1
-document from the route declarations compiled into AIplane. There is no
-detached contract file to copy into the container or synchronize after a route
-change. Path parameters and request methods are inferred from the declarations;
-explicit backend wire types remain the authority for request and response
-fields.
+Every dynamic thing the SPA does is a `/api/v0/*` call — over 220 operations
+across more than 150 paths. `GET /openapi.json` serves the OpenAPI 3.1 document
+for them, generated at runtime; there is no detached contract file to copy into
+the container or keep in sync.
+
+The document has two sources, checked against each other:
+
+- **Which operations exist** is read from `router.rs` itself, so the document
+  lists exactly what is mounted, with each path's parameters.
+- **What each operation takes and answers** comes from its declaration in
+  `crates/aiplane/src/rama_server/openapi/` (one module per area: account,
+  admin, agents, chat, rag, workspace). A declaration names the credential
+  (`x-aiplane-access` plus the OpenAPI `security` requirement: the session
+  cookie, the embed visitor token, the setup claim, or none), the request
+  body and query types, each success status with its body, and the error
+  statuses. The schemas are derived with `schemars` from the very types the
+  handler deserializes and serializes, so a field renamed in Rust is renamed
+  in the document. Every error status answers with the one envelope,
+  `shared::api::ErrorEnvelope` (`{"error":{"message","type","code",…}}`), which
+  every `/api/v0` refusal is built from (`json_error`). A body-taking operation
+  also lists `413`, which its body cap answers.
+
+`every_registered_route_is_declared_exactly_once` fails when a route in
+`router.rs` has no declaration, or a declaration has no route, so a new route
+cannot ship undescribed. A new route therefore needs a declaration, and its
+handler's request and response types need `#[derive(schemars::JsonSchema)]`;
+an ad-hoc `json!` body has no schema to derive, so give the response a type.
+
+Every refusal is the shared error envelope (`json_error`), with the status its
+meaning calls for: 404 for a resource that does not exist or that the caller
+may not see, 502 when a backend the gateway relies on (an upstream, the object
+store, the issue tracker) failed, 503 when the feature is not configured. A
+`200` never carries a failure.
+
+**Operations without a derived schema.** A payload with no wire type to derive
+from is declared with a reason, served as `x-aiplane-schema-unsupported`, and a
+test requires it to be listed here:
+
+- `POST /api/v0/transcriptions` — the success body is the transcription
+  backend's own answer, relayed unchanged; the gateway has no type for it.
 
 **How calls are actually made today.** Every request goes through one helper, `request<T>()` in `lib/api.ts`: a same-origin `fetch` that sends the session cookie, parses the error envelope once, and throws an `ApiError` carrying the status, `code`, the server's sentence (`serverMessage`), a validator's per-field `issues` and the raw body (`detail`). Nothing else re-parses the envelope: the agent views (`parseSpecError`), the inbox and `lib/admin-client.ts` (the same transport for the admin views, flattening the error into a plain `Error`) read those fields. On the server every refusal is `json_error`, or `json_error_with` when it carries fields of its own (`issues`, `failing`). `lib/api.ts` then exposes the `api.*` wrappers routes call, with their response shapes declared by hand against `shared::api`.
 

@@ -29,7 +29,6 @@ use rama::http::service::web::extract::State;
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
 use serde::Deserialize;
-use serde_json::json;
 use session_core::chrome::{CappedBodyError, read_body_capped};
 use session_core::db::{self as chat, TurnRole, TurnStatus};
 use session_core::i18n::Lang;
@@ -192,15 +191,22 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
     match voice::transcribe(&state, &target, &at, Recording { wav, seconds }).await {
         Ok(text) => {
             let text: String = text.chars().take(MAX_MESSAGE_CHARS).collect();
-            json_ok(StatusCode::OK, json!({ "text": text }))
+            json_ok(StatusCode::OK, Transcript { text })
         }
         Err(_) => voice_unavailable(TRANSCRIPTION_UNAVAILABLE),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Transcript {
+    /// What the recording says, for the visitor to read and send.
+    pub text: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpeakBody {
+    /// A finished answer in the visitor's conversation.
     pub turn_id: String,
 }
 

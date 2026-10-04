@@ -531,7 +531,7 @@ async fn patching_a_git_collection_onto_a_remote_source_replaces_it() {
 }
 
 #[tokio::test]
-async fn create_rejects_duplicate_name_with_a_helpful_400() {
+async fn create_rejects_duplicate_name_with_a_409() {
     let state = common::state_with_admin_rbac("http://unused.invalid").await;
     let cookie = seed_admin(&state, "alice").await;
     let app = common::app(state);
@@ -554,8 +554,9 @@ async fn create_rejects_duplicate_name_with_a_helpful_400() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
     let parsed: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["error"]["code"], "name_exists");
     let msg = parsed["error"]["message"].as_str().unwrap();
     assert!(msg.contains("already exists"), "{msg}");
 }
@@ -986,7 +987,7 @@ async fn profiles_create_update_and_guarded_delete() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
 
     // Editing reports which collections must re-index — none yet.
     let edit = json!({
@@ -1225,4 +1226,160 @@ async fn ref_editor_and_index_log_are_available_to_the_admin_ui() {
         .unwrap();
     let refs: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
     assert_eq!(refs["data"][0]["document_count"], 12);
+}
+
+/// Rotating or clearing the sync token of a collection that does not exist
+/// is a 404, not a token for nothing.
+#[tokio::test]
+async fn sync_token_routes_answer_404_for_a_missing_collection() {
+    let state = common::state_with_admin_rbac("http://unused.invalid").await;
+    let cookie = seed_admin(&state, "alice").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(req_with_cookie(
+            Method::POST,
+            "/api/v0/rag/collections",
+            &cookie,
+            Some(create_body()),
+        ))
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    for (path, status) in [
+        (
+            format!("/api/v0/rag/collections/{id}/sync-token"),
+            StatusCode::OK,
+        ),
+        (
+            format!("/api/v0/rag/collections/{id}/sync-token/clear"),
+            StatusCode::OK,
+        ),
+        (
+            "/api/v0/rag/collections/99999/sync-token".to_string(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/api/v0/rag/collections/99999/sync-token/clear".to_string(),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let resp = app
+            .serve(req_with_cookie(Method::POST, &path, &cookie, None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), status, "{path}");
+        if status == StatusCode::NOT_FOUND {
+            let refused: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+            assert_eq!(refused["error"]["code"], "not_found", "{refused}");
+        }
+    }
+}
+
+/// Ref routes are scoped to the collection in the path: a missing collection
+/// has no refs to list, and a ref of one collection cannot be deleted through
+/// another.
+#[tokio::test]
+async fn ref_routes_answer_404_outside_their_collection() {
+    let state = common::state_with_admin_rbac("http://unused.invalid").await;
+    let cookie = seed_admin(&state, "alice").await;
+    let app = common::app(state);
+    let mut ids = Vec::new();
+    for name in ["first-repo", "second-repo"] {
+        let mut body: Value = serde_json::from_str(create_body()).unwrap();
+        body["name"] = json!(name);
+        let resp = app
+            .serve(req_with_cookie(
+                Method::POST,
+                "/api/v0/rag/collections",
+                &cookie,
+                Some(&body.to_string()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let created: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+        ids.push(created["id"].as_i64().unwrap());
+    }
+    let resp = app
+        .serve(req_with_cookie(
+            Method::POST,
+            &format!("/api/v0/rag/collections/{}/refs", ids[0]),
+            &cookie,
+            Some(&json!({ "sources": [{ "url": "https://example.invalid/one.git" }] }).to_string()),
+        ))
+        .await
+        .unwrap();
+    let added: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let ref_id = added["added"][0]["id"].as_i64().unwrap();
+
+    for (method, path) in [
+        (
+            Method::GET,
+            "/api/v0/rag/collections/99999/refs".to_string(),
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v0/rag/collections/{}/refs/{ref_id}", ids[1]),
+        ),
+    ] {
+        let resp = app
+            .serve(req_with_cookie(method.clone(), &path, &cookie, None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{method} {path}");
+    }
+    let resp = app
+        .serve(req_with_cookie(
+            Method::GET,
+            &format!("/api/v0/rag/collections/{}/refs", ids[0]),
+            &cookie,
+            None,
+        ))
+        .await
+        .unwrap();
+    let refs: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert!(
+        refs["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == ref_id),
+        "the ref survives a delete through the wrong collection: {refs}"
+    );
+}
+
+/// A source that does not answer its probe is a failed upstream: 502
+/// `source_unreachable`, with the reason in the message.
+#[tokio::test]
+async fn a_source_that_fails_its_probe_is_a_502() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let archive = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&archive)
+        .await;
+    let state = common::state_with_admin_rbac("http://unused.invalid").await;
+    let cookie = seed_admin(&state, "alice").await;
+    let app = common::app(state);
+    let body = json!({
+        "source_kind": "hyperkitty",
+        "source_config": { "list_url": format!("{}/hyperkitty/list/dev@example.org/", archive.uri()) },
+    })
+    .to_string();
+    let resp = app
+        .serve(req_with_cookie(
+            Method::POST,
+            "/api/v0/rag/test-source",
+            &cookie,
+            Some(&body),
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let refused: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{refused}");
+    assert_eq!(refused["error"]["code"], "source_unreachable", "{refused}");
 }

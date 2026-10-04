@@ -28,6 +28,7 @@ memory-add-short = Añadir
 # while project notes and facts wait to be looked up with `recall`. The
 # difference changes which bucket a user files something in, and nothing
 # else on the page reveals it.
-memory-kind-preference-hint = Siempre en el contexto — se envían desde el primer mensaje de cada conversación, así que el asistente las aplica sin que se lo pidas.
+memory-kind-preference-hint = Se envían con cada conversación mientras la memoria está activada, así que el asistente las aplica sin que se lo pidas. Las más recientes primero, hasta { $count } preferencias y unos { $chars } caracteres; la más reciente siempre se incluye.
 memory-kind-project-hint = Se consulta cuando hace falta — el asistente busca estas entradas cuando la conversación toca tu trabajo.
 memory-kind-fact-hint = Se consulta cuando hace falta — el asistente busca estas entradas en cuanto resultan relevantes.
+memory-preference-not-in-context = La memoria está desactivada o no se te ha concedido, así que estas preferencias no se envían al asistente. Activa la memoria en Herramientas o pide acceso a un administrador.

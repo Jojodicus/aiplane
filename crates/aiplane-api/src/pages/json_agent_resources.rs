@@ -33,7 +33,6 @@ use std::sync::Arc;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Serialize;
-use serde_json::{Value, json};
 
 use super::json_principals::require_agent_manager;
 use super::tool_toggles::{CapabilityEntry, entries_for_tools, sort_entries};
@@ -52,7 +51,7 @@ const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX
 /// One resource the agent setup offers: the row the chat picker shows for
 /// it, plus what switching it on grants and puts into the spec, and where
 /// the viewer maintains it when they may.
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 pub(super) struct GrantableItem {
     #[serde(flatten)]
     pub entry: CapabilityEntry,
@@ -63,7 +62,8 @@ pub(super) struct GrantableItem {
     pub config_url: Option<String>,
 }
 
-#[derive(Serialize)]
+/// The grant switching a resource on takes.
+#[derive(Serialize, schemars::JsonSchema)]
 pub(super) struct GrantRefs {
     pub kind: &'static str,
     pub refs: Vec<String>,
@@ -254,41 +254,80 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
     }
 }
 
+/// What the caller holds and may grant an agent.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct AgentResources {
+    models: GrantableModels,
+    /// The gateway's default model of each kind: what an agent's unset model
+    /// key runs on.
+    defaults: DefaultModels,
+    /// Tools, connectors, skills and knowledge bases.
+    items: Vec<GrantableItem>,
+}
+
+/// The models the caller may grant, by kind.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct GrantableModels {
+    pub chat: Vec<GrantableModel>,
+    pub transcription: Vec<GrantableModel>,
+    pub speech: Vec<GrantableModel>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct GrantableModel {
+    pub id: String,
+    /// Every pool serving it has GDPR safeguards.
+    pub gdpr: bool,
+    /// Every pool serving it is covered by a confidentiality agreement.
+    pub nda: bool,
+    /// A speech model's voices; absent on other kinds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voices: Option<Vec<String>>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct DefaultModels {
+    pub chat: Option<String>,
+    pub transcription: Option<String>,
+    pub speech: Option<String>,
+}
+
+async fn model_list(state: &RamaState, user: &User, kind: PoolKind) -> Vec<GrantableModel> {
+    grantable_models(state, user, kind)
+        .await
+        .into_iter()
+        .map(|c| GrantableModel {
+            voices: (kind == PoolKind::Speech).then(|| state.upstreams.speech_voices_of(&c.id)),
+            id: c.id,
+            gdpr: c.compliance.gdpr,
+            nda: c.compliance.nda,
+        })
+        .collect()
+}
+
 /// What `user` holds and may grant, as `GET /api/v0/agent-resources`
 /// answers it.
-pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Value, Response> {
-    let mut models = serde_json::Map::new();
-    for (key, kind) in [
-        ("chat", PoolKind::Chat),
-        ("transcription", PoolKind::Transcription),
-        ("speech", PoolKind::Speech),
-    ] {
-        let listed: Vec<Value> = grantable_models(state, user, kind)
-            .await
-            .into_iter()
-            .map(|c| {
-                let mut model =
-                    json!({ "id": c.id, "gdpr": c.compliance.gdpr, "nda": c.compliance.nda });
-                if kind == PoolKind::Speech {
-                    model["voices"] = json!(state.upstreams.speech_voices_of(&c.id));
-                }
-                model
-            })
-            .collect();
-        models.insert(key.into(), Value::Array(listed));
-    }
+pub(super) async fn resources_for(
+    state: &RamaState,
+    user: &User,
+) -> Result<AgentResources, Response> {
+    let models = GrantableModels {
+        chat: model_list(state, user, PoolKind::Chat).await,
+        transcription: model_list(state, user, PoolKind::Transcription).await,
+        speech: model_list(state, user, PoolKind::Speech).await,
+    };
 
     let items = grantable_items(state, user).await?;
 
-    let defaults = json!({
-        "chat": gateway_default(state, Feature::Chat).await,
-        "transcription": gateway_default(state, Feature::Transcription).await,
-        "speech": gateway_default(state, Feature::Speech).await,
-    });
+    let defaults = DefaultModels {
+        chat: gateway_default(state, Feature::Chat).await,
+        transcription: gateway_default(state, Feature::Transcription).await,
+        speech: gateway_default(state, Feature::Speech).await,
+    };
 
-    Ok(json!({
-        "models": models,
-        "defaults": defaults,
-        "items": items,
-    }))
+    Ok(AgentResources {
+        models,
+        defaults,
+        items,
+    })
 }

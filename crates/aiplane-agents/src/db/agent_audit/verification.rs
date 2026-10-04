@@ -27,7 +27,7 @@ use super::{
 use aiplane_core::server::crypto::ActivityKey;
 
 /// The first link of a chain that does not hold.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct BrokenLink {
     pub chain_key: String,
     /// The `seq` the walk expected next.
@@ -37,7 +37,7 @@ pub struct BrokenLink {
 }
 
 /// A chain's newest event, for an operator to keep outside the gateway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ChainHead {
     pub chain_key: String,
     pub seq: i64,
@@ -45,7 +45,7 @@ pub struct ChainHead {
 }
 
 /// What [`verify`] found for one agent.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Verification {
     pub chains: u64,
     /// Every event the chains hold that is now known to be sound, whether

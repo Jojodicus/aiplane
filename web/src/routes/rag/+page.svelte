@@ -5,7 +5,7 @@
 	import { adminJson } from '$lib/admin-client';
 	import CollectionCard from '$lib/components/rag/CollectionCard.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import type { RagCollection } from '$lib/rag';
+	import { listNotice, type RagCollection } from '$lib/rag';
 
 	let collections = $state<RagCollection[]>([]);
 	let loading = $state(true);
@@ -15,11 +15,8 @@
 	// The create/edit form lives on its own route and reports back through the
 	// URL, so its confirmation shows up on the list the operator returns to.
 	$effect(() => {
-		const kind = page.url.searchParams.get('notice');
-		const name = page.url.searchParams.get('name') ?? '';
-		if (kind === 'created-aggregate') notice = t('rag-toast-created-aggregate', { name });
-		else if (kind === 'queued') notice = t('rag-toast-indexing-queued', { name, ref: 'main' });
-		else if (kind === 'saved') notice = t('rag-toast-collection-saved', { name });
+		const shown = listNotice(page.url.searchParams);
+		if (shown) notice = t(shown.key, shown.args);
 	});
 
 	async function refreshCollections() {

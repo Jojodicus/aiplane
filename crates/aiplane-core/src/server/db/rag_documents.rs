@@ -34,7 +34,7 @@ use super::{DbError, Pool};
 
 /// The type of one extracted field. Decides which typed column it lands in,
 /// and therefore whether it can be range-filtered or sorted meaningfully.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     Text,
@@ -59,7 +59,7 @@ impl FieldType {
 }
 
 /// One field a profile asks the model to extract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProfileField {
     pub key: String,
     pub label: String,

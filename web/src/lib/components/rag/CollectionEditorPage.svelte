@@ -30,9 +30,10 @@
 	let error = $state<string | null>(null);
 	let missing = $state(false);
 
-	async function done(name: string, aggregate: boolean) {
+	async function done(name: string, aggregate: boolean, gitRef: string | null) {
 		const notice = id === null ? (aggregate ? 'created-aggregate' : 'queued') : 'saved';
-		await goto(`${base}/rag?notice=${notice}&name=${encodeURIComponent(name)}`);
+		const ref = notice === 'queued' && gitRef ? `&ref=${encodeURIComponent(gitRef)}` : '';
+		await goto(`${base}/rag?notice=${notice}&name=${encodeURIComponent(name)}${ref}`);
 	}
 
 	onMount(async () => {

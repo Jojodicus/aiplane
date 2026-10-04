@@ -33,7 +33,7 @@ use aiplane_core::server::db::{DbError, users};
 use aiplane_features::server::push::{self, PushMessage};
 use jiff::Timestamp;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use session_core::db::{self as chat, Answerer, DecisionKind, SuspensionKind};
 use session_core::i18n::{Lang, args, t, t_args};
 
@@ -57,7 +57,7 @@ impl Viewer {
 }
 
 /// Why the viewer may answer an item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Standing {
     /// Admin, or a manager with a `read` or `write` share: may also open
@@ -69,7 +69,7 @@ pub enum Standing {
     Owner,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct AgentRef {
     pub id: String,
     pub name: String,
@@ -77,14 +77,14 @@ pub struct AgentRef {
 }
 
 /// The waiting call of an approval, as the model issued it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct WaitingCall {
     pub name: String,
     pub arguments: String,
 }
 
 /// One pending item, as the inbox shows it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct InboxItem {
     /// The pause's `request_id`; answering names it.
     pub id: String,
@@ -496,9 +496,24 @@ pub async fn answers_for_published(state: &RamaState, viewer: &Viewer) -> Result
     Ok(false)
 }
 
-/// The JSON form of an item list, for the API.
-pub fn items_json(items: &[InboxItem], answers: bool) -> Value {
-    json!({ "items": items, "count": items.len(), "answers": answers })
+/// An item list, as the API answers it.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct InboxList {
+    /// Oldest first.
+    pub items: Vec<InboxItem>,
+    pub count: usize,
+    /// Whether the viewer answers for at least one published agent.
+    pub answers: bool,
+}
+
+impl InboxList {
+    pub fn new(items: Vec<InboxItem>, answers: bool) -> Self {
+        Self {
+            count: items.len(),
+            items,
+            answers,
+        }
+    }
 }
 
 #[cfg(test)]

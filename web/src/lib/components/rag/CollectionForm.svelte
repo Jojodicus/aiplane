@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { adminPatch, adminPost } from '$lib/admin-client';
+	import { ApiError, request } from '$lib/api';
 	import { untrack } from 'svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
@@ -23,7 +24,7 @@
 		models: string[];
 		groups?: string[];
 		defaultModel?: string | null;
-		onsaved: (name: string, aggregate: boolean) => void | Promise<void>;
+		onsaved: (name: string, aggregate: boolean, gitRef: string | null) => void | Promise<void>;
 		oncancel?: () => void;
 	}>();
 
@@ -113,7 +114,7 @@
 				body.pat = form.pat || null;
 				await adminPost('/api/v0/rag/collections', body);
 			}
-			await onsaved(collection?.name ?? form.name, form.aggregate);
+			await onsaved(collection?.name ?? form.name, form.aggregate, form.source_kind === 'git' ? (body.git_ref as string) : null);
 			if (!collection) {
 				form.name = '';
 				form.description = '';
@@ -135,28 +136,29 @@
 				message = t('rag-source-test-git');
 				return;
 			}
-			const result = await adminPost<{
-				ok: boolean;
+			const result = await request<{
 				account?: string;
 				root_entries?: number;
 				server?: string;
-				error?: string;
 			}>('/api/v0/rag/test-source', {
-				source_kind: form.source_kind,
-				source_config: sourceConfig
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ source_kind: form.source_kind, source_config: sourceConfig })
 			});
-			if (!result.ok) message = t('rag-source-test-failed', { error: result.error ?? '' });
-			else {
-				message = result.account
-					? t('rag-source-test-ok', {
-							account: result.account,
-							entries: result.root_entries ?? 0
-						})
-					: t('rag-source-test-ok-plain', { entries: result.root_entries ?? 0 });
-				if (result.server) message += ` ${t('rag-source-detected', { server: result.server })}`;
-			}
+			message = result.account
+				? t('rag-source-test-ok', {
+						account: result.account,
+						entries: result.root_entries ?? 0
+					})
+				: t('rag-source-test-ok-plain', { entries: result.root_entries ?? 0 });
+			if (result.server) message += ` ${t('rag-source-detected', { server: result.server })}`;
 		} catch (error) {
-			message = String(error);
+			message =
+				error instanceof ApiError && error.code === 'source_unreachable'
+					? t('rag-source-test-failed', { error: error.serverMessage ?? '' })
+					: error instanceof ApiError
+						? (error.serverMessage ?? error.message)
+						: String(error);
 		} finally {
 			testing = false;
 		}

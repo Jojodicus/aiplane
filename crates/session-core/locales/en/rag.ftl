@@ -10,6 +10,7 @@ rag-empty-list = No collections yet. Create one above.
 
 # Toasts — collection CRUD
 rag-toast-indexing-queued = Indexing `{ $name }` @ `{ $ref }` was queued.
+rag-toast-source-indexing-queued = Indexing `{ $name }` was queued.
 rag-toast-created-aggregate = Created `{ $name }` (aggregate). Add source repos below to index them.
 rag-toast-collection-saved = Saved `{ $name }`.
 rag-toast-vanished = Collection vanished after save.

@@ -244,7 +244,7 @@ impl Leaf {
 }
 
 /// Why a gate is closed, for one leaf.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Problem {
     Missing,
@@ -269,7 +269,7 @@ pub enum Problem {
 }
 
 /// One unmet condition.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct Unmet {
     /// Where in the tree, e.g. `all[1]`; empty for the root.
     pub path: String,

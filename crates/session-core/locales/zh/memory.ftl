@@ -28,6 +28,7 @@ memory-add-short = 添加
 # while project notes and facts wait to be looked up with `recall`. The
 # difference changes which bucket a user files something in, and nothing
 # else on the page reveals it.
-memory-kind-preference-hint = 始终在上下文中——从每次对话的第一条消息起就一并发送，助手无需提醒即会遵循。
+memory-kind-preference-hint = 记忆开启时，偏好会随每次对话一并发送，助手无需提醒即会遵循。按最新优先，最多 { $count } 条、约 { $chars } 个字符；最新的一条始终包含在内。
 memory-kind-project-hint = 按需读取——当对话涉及你的工作时，助手才会查阅这些条目。
 memory-kind-fact-hint = 按需读取——当这些条目变得相关时，助手才会查阅。
+memory-preference-not-in-context = 记忆已关闭或未授予你，因此这些偏好不会发送给助手。请在“工具”中开启记忆，或向管理员申请权限。

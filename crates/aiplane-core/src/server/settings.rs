@@ -105,6 +105,27 @@ pub enum Kind {
     Choice(&'static [&'static str]),
 }
 
+/// Why [`FieldSpec::check`] refused a submitted value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invalid {
+    NotWholeNumber,
+    Negative,
+    NotNumber,
+    NotChoice,
+}
+
+impl Invalid {
+    /// The Fluent key of the sentence the editor shows under the field.
+    pub fn message_key(self) -> &'static str {
+        match self {
+            Self::NotWholeNumber => "settings-invalid-whole-number",
+            Self::Negative => "settings-invalid-negative",
+            Self::NotNumber => "settings-invalid-number",
+            Self::NotChoice => "settings-invalid-choice",
+        }
+    }
+}
+
 /// How much of a section's two-column row a field's control occupies.
 ///
 /// A DPI or a timeout is four digits; giving it the full width of the card
@@ -189,6 +210,31 @@ impl FieldSpec {
     /// rather than the page rendering a raw identifier.
     pub fn choice_label_key(&self, value: &str) -> String {
         format!("{}-opt-{}", self.label_key(), value)
+    }
+
+    /// The value to store for a submission, or why it cannot be stored.
+    ///
+    /// The typed reads further down fall back to the default on a value they
+    /// cannot use, which is right for a row already in the database but would
+    /// make a save report success while the gateway ran on something else. So
+    /// the save asks this first: it accepts exactly what those reads use.
+    /// Every integer setting is a count, a size or a duration, so a negative
+    /// one is refused too. A float is stored with a dot, whichever separator
+    /// the browser's locale submitted.
+    pub fn check(&self, submitted: &str) -> Result<String, Invalid> {
+        match self.kind {
+            Kind::Int => match submitted.parse::<i64>() {
+                Ok(v) if v < 0 => Err(Invalid::Negative),
+                Ok(v) => Ok(v.to_string()),
+                Err(_) => Err(Invalid::NotWholeNumber),
+            },
+            Kind::Float => match submitted.replace(',', ".").parse::<f64>() {
+                Ok(v) if v.is_finite() => Ok(v.to_string()),
+                _ => Err(Invalid::NotNumber),
+            },
+            Kind::Choice(values) if !values.contains(&submitted) => Err(Invalid::NotChoice),
+            _ => Ok(submitted.to_owned()),
+        }
     }
 
     /// The options of a [`Kind::Choice`] field; empty for every other kind.
@@ -1682,6 +1728,41 @@ mod tests {
             crate::server::config::FeedbackProvider::Github
         );
         assert!(fb.is_configured());
+    }
+
+    #[test]
+    fn check_accepts_what_the_typed_reads_use() {
+        let int = field("chat.ocr.dpi").unwrap();
+        assert_eq!(int.check("300"), Ok("300".to_owned()));
+        assert_eq!(int.check("0"), Ok("0".to_owned()));
+        let float = field("chat.compaction.trigger_ratio").unwrap();
+        assert_eq!(float.check("0.7"), Ok("0.7".to_owned()));
+        assert_eq!(
+            float.check("0,7"),
+            Ok("0.7".to_owned()),
+            "a German browser's decimal comma"
+        );
+        let choice = field("feedback.provider").unwrap();
+        assert_eq!(choice.check("gitlab"), Ok("gitlab".to_owned()));
+        let text = field("sandbox.runner_url").unwrap();
+        assert_eq!(text.check("anything"), Ok("anything".to_owned()));
+    }
+
+    #[test]
+    fn check_refuses_what_the_typed_reads_would_replace_with_the_default() {
+        let int = field("chat.ocr.dpi").unwrap();
+        for bad in ["", "abc", "1.5", "3e2"] {
+            assert_eq!(int.check(bad), Err(Invalid::NotWholeNumber), "{bad:?}");
+        }
+        assert_eq!(int.check("-1"), Err(Invalid::Negative));
+        let float = field("chat.compaction.trigger_ratio").unwrap();
+        for bad in ["", "high", "NaN", "inf"] {
+            assert_eq!(float.check(bad), Err(Invalid::NotNumber), "{bad:?}");
+        }
+        let choice = field("feedback.provider").unwrap();
+        for bad in ["", "GitHub", "bitbucket"] {
+            assert_eq!(choice.check(bad), Err(Invalid::NotChoice), "{bad:?}");
+        }
     }
 
     // Every `Kind::Choice` option needs a label key, and the key is derived

@@ -11,7 +11,6 @@
 use std::sync::LazyLock;
 
 use rama::http::service::web::response::Json;
-use serde_json::{Value, json};
 
 /// Canonical public source repository.
 const DEFAULT_SOURCE_URL: &str = "https://github.com/croit/aiplane";
@@ -69,11 +68,20 @@ pub fn version_label() -> String {
     format!("v{} ({GIT_SHA})", version())
 }
 
-pub async fn metadata() -> Json<Value> {
-    Json(json!({
-        "source_url": source_url(),
-        "version": version_label(),
-    }))
+/// What `GET /api/v0/build` answers: which build this is and where its source is.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BuildMetadata {
+    /// Where this build's source code is published (`AIPLANE_SOURCE_URL`).
+    pub source_url: &'static str,
+    /// The version and commit, e.g. `v2609.1.0 (a1b2c3d4e5f6)`.
+    pub version: String,
+}
+
+pub async fn metadata() -> Json<BuildMetadata> {
+    Json(BuildMetadata {
+        source_url: source_url(),
+        version: version_label(),
+    })
 }
 
 #[cfg(test)]

@@ -21,12 +21,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use jiff::Timestamp;
 use rama::http::service::web::extract::State;
 use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::json_principals::require_agent_manager;
+use super::json_principals::{GrantView, require_agent_manager};
 use super::{
     bad_request, internal, json_error, json_error_with, json_ok, no_content, not_found,
     raw_path_segment,
@@ -40,6 +41,7 @@ use aiplane_core::server::principal::{GrantKind, GrantSet};
 use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::access::effective_access;
 use aiplane_runtime::agents::defaults;
+use aiplane_runtime::agents::embed::LimitsView;
 use aiplane_runtime::agents::spec::secrets;
 use aiplane_runtime::agents::spec::{
     self, AgentSpec, ModelDefaults, SpecContext, SpecIssue, Stage,
@@ -140,52 +142,100 @@ pub(super) fn parse_spec(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or(Value::Null)
 }
 
-pub(super) fn agent_json(a: &agents_db::AgentRow, access: Access) -> Value {
+/// An agent as the API shows it, with the caller's access to it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentView {
+    pub id: String,
+    pub name: String,
+    pub display: String,
+    pub description: String,
+    pub created_by: String,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub disabled_at: Option<Timestamp>,
+    pub live_version: Option<i64>,
+    /// The caller's access to the agent.
+    pub access: &'static str,
+}
+
+pub(super) fn agent_view(a: &agents_db::AgentRow, access: Access) -> AgentView {
     let p = &a.principal;
-    json!({
-        "id": p.id,
-        "name": p.name,
-        "display": p.display,
-        "description": p.description,
-        "created_by": p.created_by,
-        "created_at": a.created_at,
-        "updated_at": a.updated_at,
-        "disabled_at": p.disabled_at,
-        "live_version": a.live_version,
-        "access": access.as_str(),
-    })
+    AgentView {
+        id: p.id.clone(),
+        name: p.name.clone(),
+        display: p.display.clone(),
+        description: p.description.clone(),
+        created_by: p.created_by.clone(),
+        created_at: a.created_at,
+        updated_at: a.updated_at,
+        disabled_at: p.disabled_at,
+        live_version: a.live_version,
+        access: access.as_str(),
+    }
+}
+
+pub(super) fn agent_json(a: &agents_db::AgentRow, access: Access) -> Value {
+    json!(agent_view(a, access))
+}
+
+/// One share of an agent.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ShareView {
+    /// `user` or `group`.
+    pub subject_kind: &'static str,
+    pub subject_id: String,
+    /// `respond`, `read` or `write`.
+    pub access: &'static str,
+    /// A user's display name (null when they have none); absent on a group,
+    /// or a user no longer known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<Option<String>>,
 }
 
 /// The shares as the API shows them: a person's share carries their display
 /// name, so the people an agent is shared with are recognisable by whoever
 /// may see its shares.
-async fn shares_json(state: &RamaState, rows: &[agents_db::ShareRow]) -> Result<Value, Response> {
+async fn share_views(
+    state: &RamaState,
+    rows: &[agents_db::ShareRow],
+) -> Result<Vec<ShareView>, Response> {
     let mut out = Vec::with_capacity(rows.len());
     for s in rows {
-        let mut v = json!({
-            "subject_kind": s.subject_kind.as_str(),
-            "subject_id": s.subject_id,
-            "access": s.access.as_str(),
-        });
-        if s.subject_kind == SubjectKind::User
-            && let Some(u) = users::find_by_id(&state.db, &s.subject_id)
+        let name = if s.subject_kind == SubjectKind::User {
+            users::find_by_id(&state.db, &s.subject_id)
                 .await
                 .map_err(internal)?
-        {
-            v["name"] = json!(u.name);
-        }
-        out.push(v);
+                .map(|u| u.name)
+        } else {
+            None
+        };
+        out.push(ShareView {
+            subject_kind: s.subject_kind.as_str(),
+            subject_id: s.subject_id.clone(),
+            access: s.access.as_str(),
+            name,
+        });
     }
-    Ok(Value::Array(out))
+    Ok(out)
 }
 
-fn version_json(v: &agents_db::VersionRow) -> Value {
-    json!({
-        "version": v.version,
-        "spec": parse_spec(&v.spec),
-        "published_by": v.published_by,
-        "published_at": v.published_at,
-    })
+/// One published version.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VersionView {
+    pub version: i64,
+    /// The agent spec as published (`docs/agents.md` → "Agent definition").
+    pub spec: Value,
+    pub published_by: String,
+    pub published_at: Timestamp,
+}
+
+fn version_view(v: &agents_db::VersionRow) -> VersionView {
+    VersionView {
+        version: v.version,
+        spec: parse_spec(&v.spec),
+        published_by: v.published_by.clone(),
+        published_at: v.published_at,
+    }
 }
 
 /// Validate `spec` for agent `agent_id` against its grants as stored now.
@@ -323,8 +373,13 @@ async fn require_valid(
 pub async fn list(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let rows = or_return!(visible_agents(&state, &user).await);
-    let agents: Vec<Value> = rows.iter().map(|(a, acc)| agent_json(a, *acc)).collect();
-    json_ok(StatusCode::OK, json!({ "agents": agents }))
+    let agents = rows.iter().map(|(a, acc)| agent_view(a, *acc)).collect();
+    json_ok(StatusCode::OK, AgentList { agents })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentList {
+    pub agents: Vec<AgentView>,
 }
 
 /// The agents shared with `user`, with their access; every agent for an
@@ -344,15 +399,30 @@ pub(super) async fn visible_agents(
     .map_err(internal)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "AgentCreateBody")]
 pub struct CreateBody {
     pub name: String,
     #[serde(default)]
     pub display: Option<String>,
     #[serde(default)]
     pub description: String,
+    /// The first draft's agent spec; `{}` when absent.
     #[serde(default)]
     pub spec: Option<Value>,
+}
+
+/// A new agent with its draft.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CreatedAgent {
+    #[serde(flatten)]
+    pub agent: AgentView,
+    pub draft_spec: Value,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CreatedAgentReply {
+    pub agent: CreatedAgent,
 }
 
 /// POST /api/v0/agents — an agent with a fresh principal (no grants) and a
@@ -361,7 +431,7 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     let user = or_return!(require_agent_manager(&state, &req).await);
     let body: CreateBody = or_return!(super::read_json(req.into_body(), "the agent body").await);
     match create_agent(&state, &user, body).await {
-        Ok(agent) => json_ok(StatusCode::CREATED, json!({ "agent": agent })),
+        Ok(agent) => json_ok(StatusCode::CREATED, CreatedAgentReply { agent }),
         Err(resp) => resp,
     }
 }
@@ -372,7 +442,7 @@ pub(super) async fn create_agent(
     state: &RamaState,
     user: &users::User,
     body: CreateBody,
-) -> Result<Value, Response> {
+) -> Result<CreatedAgent, Response> {
     let name = body.name.trim();
     if let Some(reason) = sp_db::invalid_name_reason(name) {
         return Err(bad_request(reason));
@@ -400,11 +470,10 @@ pub(super) async fn create_agent(
     )
     .await;
     match created {
-        Ok(Some(a)) => {
-            let mut v = agent_json(&a, Access::Write);
-            v["draft_spec"] = spec;
-            Ok(v)
-        }
+        Ok(Some(a)) => Ok(CreatedAgent {
+            agent: agent_view(&a, Access::Write),
+            draft_spec: spec,
+        }),
         Ok(None) => Err(json_error(
             StatusCode::CONFLICT,
             "conflict",
@@ -453,33 +522,77 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     )
     .await;
 
-    let mut v = agent_json(&agent, held);
-    v["draft_spec"] = draft;
-    v["live_spec"] = live_spec.unwrap_or(Value::Null);
-    v["limits"] = limits;
-    v["publish_issues"] = json!(publish_issues);
-    v["grants"] = grants
-        .iter()
-        .map(super::json_principals::grant_json)
-        .collect();
-    v["shares"] = or_return!(shares_json(&state, &shares).await);
-    v["audit"] = audit
-        .iter()
-        .map(|e| {
-            json!({
-                "kind": e.kind,
-                "actor_id": e.actor_id,
-                "detail": e.detail,
-                "created_at": e.created_at,
-            })
+    let shares = or_return!(share_views(&state, &shares).await);
+    let audit = audit
+        .into_iter()
+        .map(|e| AgentAuditEntry {
+            kind: e.kind,
+            actor_id: e.actor_id,
+            detail: e.detail,
+            created_at: e.created_at,
         })
         .collect();
-    json_ok(StatusCode::OK, json!({ "agent": v }))
+    json_ok(
+        StatusCode::OK,
+        AgentDetailReply {
+            agent: AgentDetail {
+                agent: agent_view(&agent, held),
+                draft_spec: draft,
+                live_spec,
+                limits,
+                publish_issues,
+                grants: grants.iter().map(GrantView::of).collect(),
+                shares,
+                audit,
+            },
+        },
+    )
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentDetailReply {
+    pub agent: AgentDetail,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentDetail {
+    #[serde(flatten)]
+    pub agent: AgentView,
+    pub draft_spec: Value,
+    /// The live version's spec; `null` before the first publish.
+    pub live_spec: Option<Value>,
+    pub limits: LimitsView,
+    /// What blocks publishing the draft.
+    pub publish_issues: Vec<SpecIssue>,
+    pub grants: Vec<GrantView>,
+    pub shares: Vec<ShareView>,
+    /// Newest first.
+    pub audit: Vec<AgentAuditEntry>,
+}
+
+/// One management or run event on the agent.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AgentAuditEntry {
+    pub kind: String,
+    pub actor_id: Option<String>,
+    /// The event's own fields, which differ by `kind`.
+    pub detail: Value,
+    pub created_at: Timestamp,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct DraftBody {
+    /// The agent spec (`docs/agents.md` → "Agent definition").
     pub spec: Value,
+}
+
+/// A saved draft.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SavedDraft {
+    pub draft_spec: Value,
+    pub live_version: Option<i64>,
+    /// The revision the replaced draft was kept as, if it was kept.
+    pub revision: Option<i64>,
 }
 
 /// PUT /api/v0/agents/{id}/draft — replace the draft. What the live version
@@ -502,16 +615,16 @@ pub(super) async fn save_draft(
     agent: &agents_db::AgentRow,
     mut spec: Value,
     change: DraftChange<'_>,
-) -> Result<Value, Response> {
+) -> Result<SavedDraft, Response> {
     let id = &agent.principal.id;
     require_valid(state, id, &spec, Stage::Draft, "save the draft").await?;
     seal_secrets(state, &mut spec)?;
     match agents_db::update_draft(&state.db, id, &spec.to_string(), &user.id, change).await {
-        Ok(Some(saved)) => Ok(json!({
-            "draft_spec": spec,
-            "live_version": agent.live_version,
-            "revision": saved.revision,
-        })),
+        Ok(Some(saved)) => Ok(SavedDraft {
+            draft_spec: spec,
+            live_version: agent.live_version,
+            revision: saved.revision,
+        }),
         Ok(None) => Err(not_found(
             "the agent was deleted while its draft was being saved",
         )),
@@ -519,7 +632,7 @@ pub(super) async fn save_draft(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RestoreBody {
     pub revision: i64,
@@ -614,17 +727,35 @@ pub async fn restore_draft(State(state): State<Arc<RamaState>>, req: Request) ->
         revoking: &revoking,
         ..DraftChange::default()
     };
-    let mut saved = or_return!(save_draft(&state, &user, &agent, restored, change).await);
+    let saved = or_return!(save_draft(&state, &user, &agent, restored, change).await);
     for (kind, reference) in &revoking {
         if let Err(err) = sp_db::remove_grant(&state.db, id, *kind, reference, &user.id).await {
             return internal(err);
         }
     }
-    saved["revoked"] = revoking
+    let revoked = revoking
         .iter()
-        .map(|(kind, reference)| json!({ "kind": kind.as_str(), "ref": reference }))
+        .map(|(kind, reference)| GrantRef {
+            kind: kind.as_str(),
+            reference: reference.clone(),
+        })
         .collect();
-    json_ok(StatusCode::OK, saved)
+    json_ok(StatusCode::OK, RestoredDraft { saved, revoked })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RestoredDraft {
+    #[serde(flatten)]
+    pub saved: SavedDraft,
+    /// The grants the undone change made, revoked because nothing uses them.
+    pub revoked: Vec<GrantRef>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct GrantRef {
+    pub kind: &'static str,
+    #[serde(rename = "ref")]
+    pub reference: String,
 }
 
 /// POST /api/v0/agents/{id}/publish — validate the draft for running and
@@ -640,11 +771,21 @@ pub async fn publish(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     match agents_db::publish(&state.db, id, &agent.draft_spec, &user.id).await {
         Ok(Some(version)) => json_ok(
             StatusCode::CREATED,
-            json!({ "version": version, "live_version": version }),
+            Published {
+                version,
+                live_version: version,
+            },
         ),
         Ok(None) => not_found("the agent was deleted while it was being published"),
         Err(err) => internal(err),
     }
+}
+
+/// The version a publish created, which is now live.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct Published {
+    pub version: i64,
+    pub live_version: i64,
 }
 
 /// GET /api/v0/agents/{id}/versions — every published version, newest
@@ -655,13 +796,20 @@ pub async fn versions(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     match agents_db::versions(&state.db, &agent.principal.id).await {
         Ok(rows) => json_ok(
             StatusCode::OK,
-            json!({
-                "live_version": agent.live_version,
-                "versions": rows.iter().map(version_json).collect::<Vec<_>>(),
-            }),
+            VersionList {
+                live_version: agent.live_version,
+                versions: rows.iter().map(version_view).collect(),
+            },
         ),
         Err(err) => internal(err),
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct VersionList {
+    pub live_version: Option<i64>,
+    /// Newest first.
+    pub versions: Vec<VersionView>,
 }
 
 const MAX_ANALYTICS_DAYS: i64 = 366;
@@ -741,18 +889,33 @@ pub async fn analytics(State(state): State<Arc<RamaState>>, req: Request) -> Res
     )
     .await
     {
-        Ok(a) => {
-            let mut body = serde_json::to_value(a).expect("analytics serialize");
-            body["currency"] = json!(state.config().usage.currency);
-            json_ok(StatusCode::OK, body)
-        }
+        Ok(analytics) => json_ok(
+            StatusCode::OK,
+            AnalyticsView {
+                analytics,
+                currency: state.config().usage.currency.clone(),
+            },
+        ),
         Err(err) => internal(err),
     }
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AnalyticsView {
+    #[serde(flatten)]
+    pub analytics: agent_analytics::Analytics,
+    /// The currency `usage.cost` and `daily[].cost` are in.
+    pub currency: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct LiveBody {
     pub version: i64,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct LiveVersion {
+    pub live_version: i64,
 }
 
 /// POST /api/v0/agents/{id}/live — make an existing version live: a
@@ -765,7 +928,12 @@ pub async fn set_live(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     let body: LiveBody =
         or_return!(super::read_json(req.into_body(), "the live-version body").await);
     match agents_db::set_live(&state.db, &id, body.version, &user.id).await {
-        Ok(true) => json_ok(StatusCode::OK, json!({ "live_version": body.version })),
+        Ok(true) => json_ok(
+            StatusCode::OK,
+            LiveVersion {
+                live_version: body.version,
+            },
+        ),
         Ok(false) => not_found(format!(
             "`{}` has no version {} — list them with GET /api/v0/agents/{id}/versions",
             agent.principal.name, body.version
@@ -782,8 +950,13 @@ pub async fn shares(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         Ok(rows) => rows,
         Err(err) => return internal(err),
     };
-    let shares = or_return!(shares_json(&state, &rows).await);
-    json_ok(StatusCode::OK, json!({ "shares": shares }))
+    let shares = or_return!(share_views(&state, &rows).await);
+    json_ok(StatusCode::OK, ShareList { shares })
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ShareList {
+    pub shares: Vec<ShareView>,
 }
 
 /// The shortest query a share-subject search answers.
@@ -805,20 +978,24 @@ pub async fn share_subjects(State(state): State<Arc<RamaState>>, req: Request) -
         .map(|q| q.trim().to_string())
         .unwrap_or_default();
     if q.chars().count() < SUBJECT_QUERY_MIN_CHARS {
-        return json_ok(StatusCode::OK, json!({ "users": [], "groups": [] }));
+        return json_ok(
+            StatusCode::OK,
+            ShareSubjects {
+                users: Vec::new(),
+                groups: Vec::new(),
+            },
+        );
     }
     let found = match users::search(&state.db, &q, SUBJECT_MATCHES as i64).await {
         Ok(found) => found,
         Err(err) => return internal(err),
     };
-    let users: Vec<Value> = found
+    let users = found
         .into_iter()
-        .map(|u| {
-            let mut v = json!({ "id": u.id, "name": u.name });
-            if u.email.eq_ignore_ascii_case(&q) {
-                v["email"] = json!(u.email);
-            }
-            v
+        .map(|u| SubjectUser {
+            email: u.email.eq_ignore_ascii_case(&q).then_some(u.email),
+            id: u.id,
+            name: u.name,
         })
         .collect();
     let needle = q.to_lowercase();
@@ -829,13 +1006,32 @@ pub async fn share_subjects(State(state): State<Arc<RamaState>>, req: Request) -
         .filter(|g| g.to_lowercase().contains(&needle))
         .take(SUBJECT_MATCHES)
         .collect();
-    json_ok(StatusCode::OK, json!({ "users": users, "groups": groups }))
+    json_ok(StatusCode::OK, ShareSubjects { users, groups })
 }
 
-#[derive(Deserialize)]
+/// Users and groups matching a share-subject search.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ShareSubjects {
+    pub users: Vec<SubjectUser>,
+    pub groups: Vec<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SubjectUser {
+    pub id: String,
+    pub name: Option<String>,
+    /// Present only when the query is exactly this address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "AgentShareBody")]
 pub struct ShareBody {
+    /// `user` or `group`.
     pub subject_kind: String,
     pub subject_id: String,
+    /// `respond`, `read` or `write`; required when adding a share.
     #[serde(default)]
     pub access: Option<String>,
 }
@@ -938,10 +1134,22 @@ pub async fn share(State(state): State<Arc<RamaState>>, req: Request) -> Respons
             } else {
                 StatusCode::OK
             },
-            json!({ "subject_kind": kind.as_str(), "subject_id": subject, "access": access.as_str() }),
+            ShareSet {
+                subject_kind: kind.as_str(),
+                subject_id: subject.to_string(),
+                access: access.as_str(),
+            },
         ),
         Err(err) => internal(err),
     }
+}
+
+/// The share as it now stands.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ShareSet {
+    pub subject_kind: &'static str,
+    pub subject_id: String,
+    pub access: &'static str,
 }
 
 /// POST /api/v0/agents/{id}/shares/revoke — remove one share.

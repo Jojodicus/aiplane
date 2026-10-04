@@ -523,14 +523,15 @@ pub async fn load_detected(
 /// to survive a restart. A maintenance switch you have to "apply" is not a
 /// maintenance switch, so the two are deliberately not coupled to the
 /// topology-reload flow.
-pub async fn set_backend_enabled(db: &Pool, name: &str, enabled: bool) -> Result<(), DbError> {
-    sqlx::query("UPDATE backends SET enabled = ?, updated_at = ? WHERE name = ?")
+/// `false` when there is no such backend.
+pub async fn set_backend_enabled(db: &Pool, name: &str, enabled: bool) -> Result<bool, DbError> {
+    let updated = sqlx::query("UPDATE backends SET enabled = ?, updated_at = ? WHERE name = ?")
         .bind(enabled as i64)
         .bind(now_rfc3339())
         .bind(name)
         .execute(db)
         .await?;
-    Ok(())
+    Ok(updated.rows_affected() > 0)
 }
 
 /// Whether a backend with this name already exists.
@@ -733,12 +734,13 @@ async fn rename_in(
     })
 }
 
-pub async fn delete_backend(db: &Pool, name: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM backends WHERE name = ?")
+/// `false` when there was no such backend.
+pub async fn delete_backend(db: &Pool, name: &str) -> Result<bool, DbError> {
+    let deleted = sqlx::query("DELETE FROM backends WHERE name = ?")
         .bind(name)
         .execute(db)
         .await?;
-    Ok(())
+    Ok(deleted.rows_affected() > 0)
 }
 
 async fn replace_backend_models(
@@ -836,13 +838,14 @@ pub async fn upsert_pool(db: &Pool, row: &PoolRow) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Delete a pool and all its dependent rows.
-pub async fn delete_pool(db: &Pool, name: &str) -> Result<(), DbError> {
-    sqlx::query("DELETE FROM pools WHERE name = ?")
+/// Delete a pool and all its dependent rows. `false` when there was no such
+/// pool.
+pub async fn delete_pool(db: &Pool, name: &str) -> Result<bool, DbError> {
+    let deleted = sqlx::query("DELETE FROM pools WHERE name = ?")
         .bind(name)
         .execute(db)
         .await?;
-    Ok(())
+    Ok(deleted.rows_affected() > 0)
 }
 
 /// Set a backend's pool membership to *exactly* `pool` (or none). Backs the

@@ -47,6 +47,7 @@ tracing = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 jiff = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
