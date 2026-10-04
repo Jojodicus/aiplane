@@ -24,7 +24,14 @@ This directory holds the design docs for **croit AIplane**. The agent-facing ent
 | [`fileshare-rag.md`](fileshare-rag.md) | **Fileshare RAG** — indexing a file share (Nextcloud, ownCloud, OpenCloud, WebDAV) into RAG: the provider abstraction, extraction ladder, document profiles, structured queries, incremental sync |
 | [`nextcloud-rag-plan.md`](nextcloud-rag-plan.md) | The design record behind `fileshare-rag.md`: what was decided and why, what is deliberately not built, and the cited external protocol behaviour |
 | [`browser-control.md`](browser-control.md) | **Browser control** — the Chrome extension that lets a conversation act in the user's own logged-in browser: user setup (`/tools/browser`), the transport over the chat session, the trust boundary, site access, publishing to the Chrome Web Store |
-| [`agents.md`](agents.md) | **Agent builder** — system principals and default-deny grants, the agent spec, the run model (state, gates, router, sub-agents, finish, suspend/resume), visitor sessions and the embed widget, crate placement |
+| [`agents.md`](agents.md) | **Agents** — the trust rules, system principals and default-deny grants, agent definitions, shares, models, shared mechanisms, crate placement; the map of the agent docs below |
+| [`agent-spec.md`](agent-spec.md) | The agent spec: layout, validation, the typed `AgentSpec`, state slots, gates |
+| [`agent-runs.md`](agent-runs.md) | One agent run: system message, synthetic tools, call chain, router, sub-agents and loops, bound arguments, topic guard, output filter, side calls |
+| [`agent-hil.md`](agent-hil.md) | People in the loop: durable suspend/resume of agent runs, approvals, hand-offs, the inbox, notifications |
+| [`agent-visitors.md`](agent-visitors.md) | The public endpoint: embed keys, visitor sessions, rates, owner budget, retention, identity verifiers, voice, the widget |
+| [`agent-a2a.md`](agent-a2a.md) | A2A: serving an agent to other platforms, and external agents as route targets |
+| [`agent-activity-log.md`](agent-activity-log.md) | The hash-chained activity log of every agent, and the analytics derived from it |
+| [`agent-builder.md`](agent-builder.md) | What the builder runs on: test chat, grantable resources, evaluation, setup and prompt assistants, the agent architect, draft revisions |
 | [`embed.md`](embed.md) | **Embedding an agent** — the `<script>` snippet, attributes, theming, what the widget holds, CSP for host sites, trying it with `dev-ui` |
 | [`connectors.md`](connectors.md) | Per-user MCP connector catalog — operator setup for Google/GitHub/Atlassian/GitLab + troubleshooting |
 | [`ui.md`](ui.md) | The SvelteKit SPA in `web/` — how it is built and served, the generated OpenAPI contract, the chat event protocol, theming, PWA |

@@ -72,7 +72,7 @@ Every connector has a **scope** (the `scope` column, set on the admin form):
   `static_bearer` to store one shared token (encrypted) on the connector.
 
 - **Agent** — a shared identity reserved for system principals
-  ([`agents.md`](agents.md#1-principals)). No person is ever offered it: it is
+  ([`agents.md`](agents.md#principals)). No person is ever offered it: it is
   absent from `/tools/integrations`, from every tool offer, and from the group
   editor's grant families. A principal uses it only after an agent manager
   grants it (`kind = connector`). Same auth rule as global — `none` or
@@ -108,7 +108,7 @@ anyone can answer a pause (`McpConnectionManager::layer_for_user`):
   offered them. This is deliberately not a suspension: an API client cannot
   answer one.
 - **An agent's run** never sees a person's modes; its approvals are its
-  spec's (`tool_resources.<tool>.permission`, [`agents.md`](agents.md#what-96-built)).
+  spec's (`tool_resources.<tool>.permission`, [`agent-hil.md`](agent-hil.md)).
 
 ## Discord (a global connector)
 
@@ -183,7 +183,7 @@ and the upstream Google tokens. Unconfigured, that store lands under `$HOME`
 (Quadlet recreates the container), a `--force-recreate`, or an image update
 throws away.
 
-When it's gone, AIplane's stored `client_id` no longer exists server-side,
+When it's gone, AIplane's stored `client_id` does not exist server-side any more,
 `POST /token` answers `401 invalid_client: Invalid client_id`, and every user's
 card flips to **Needs reconnect** — within one access-token lifetime (~30 min)
 of the restart, because that's how long the server's access tokens live. It
@@ -249,7 +249,7 @@ Related, and deliberate:
 - **Nothing is silently dropped.** If there is nowhere to store the file (a
   `/v1` proxy request has no conversation; an installation without `[chat.s3]`) or
   it is over the 25 MB ceiling, the base64 is *still* removed and the
-  replacement line says what happened, so the model tells the user instead of
+  replacement line says what happened, so the model tells the user rather than
   pretending it has the file.
 - **Limits.** 10 artifacts per tool call; payloads under 4 KiB are left alone
   (an ETag or a cursor is data the model is meant to read, not a file).
@@ -360,7 +360,7 @@ needs a toggle flipped — it's not an AIplane problem.
 |---|---|
 | `The caller does not have permission` (Google) — connects fine, tool *call* fails | You're hitting Google's **hosted** MCP endpoints (`*mcp.googleapis.com`), which are gated behind the Workspace Developer Preview Program. Don't use them — point the connector at a **self-hosted** Google Workspace MCP server instead (see the Google Workspace section). On the self-hosted server, this 403 instead means the user's account lacks access to that GA API, or the API isn't enabled in the server's project. |
 | `Couldn't load tools` right after connecting | Wrong endpoint transport (e.g. an `/sse` URL where AIplane needs streamable-HTTP `/mcp`), TLS/URL error, or the server rejected the token. The connector card shows the real error; check the gateway log too. |
-| OAuth `missing field access_token` / token-exchange errors | The provider returned an OAuth error body instead of a token (bad client secret, wrong redirect URI, unsupported grant). AIplane surfaces the provider's `error_description`. |
+| OAuth `missing field access_token` / token-exchange errors | The provider returned an OAuth error body rather than a token (bad client secret, wrong redirect URI, unsupported grant). AIplane surfaces the provider's `error_description`. |
 | Refresh tokens die after ~7 days (Google) | App is **External + Testing**. Publish to production or switch the audience to **Internal**. |
 | `invalid_client: Invalid client_id` on refresh, everyone "Needs reconnect" at once, recurring | The MCP server lost the OAuth store that holds AIplane's registered client — an ephemeral container filesystem (no volume), or a changed `FASTMCP_SERVER_AUTH_GOOGLE_JWT_SIGNING_KEY` / `GOOGLE_OAUTH_CLIENT_SECRET`. See *The server's OAuth state must be persisted*. Users must reconnect once after fixing it; the old grants are unrecoverable. |
 | A tool returned a file and the model says it can't use it | Look at the replacement line in the tool result: AIplane removes file bytes from every result and stores them as an attachment instead (see *Files a connector returns become conversation artifacts*). If it says the file was **not** stored, the cause is named there — no conversation to attach to (a `/v1` proxy call), `[chat.s3]` unconfigured, or over the 25 MB ceiling. |

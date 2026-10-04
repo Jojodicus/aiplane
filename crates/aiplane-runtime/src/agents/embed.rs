@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! What the public agent endpoint (`/api/v0/embed/*`, `docs/agents.md` §5)
+//! What the public agent endpoint (`/api/v0/embed/*`, `docs/agent-visitors.md`)
 //! needs from the runtime: the visitor-session settings read from an agent's
 //! live spec, and the seam through which it runs one turn.
 //!

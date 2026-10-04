@@ -36,8 +36,8 @@ AIplane is a single Rust binary built on **rama 0.3**, which is a proxy-native H
 
 AIplane is one binary assembled from a layered stack of crates under
 `crates/`. The layering is load-bearing for dev-build speed, not just tidiness:
-the `gateway` crate used to be ~108k lines in a single compilation unit, so
-editing *any* file re-ran the whole frontend + codegen. Each crate below depends
+as one ~108k-line compilation unit, editing *any* file re-ran the whole
+frontend + codegen. Each crate below depends
 only on the ones beneath it, so an edit recompiles that crate and what sits above
 it — never what sits below.
 
@@ -53,43 +53,36 @@ gateway            bin + router/proxy/api/oidc     14.0k  ← thinnest, most-edi
                                └── shared         OpenAI wire types
 ```
 
-(Lines of Rust under each crate's `src/`, measured for #109.)
+(Lines of Rust under each crate's `src/`.)
 
 What that buys, in lines that must recompile after a one-line edit (the crate
 edited plus every crate above it):
 
-| edit site | recompiled (split, first measurement) | recompiled (after #109) |
-|---|---|---|
-| pre-split monolith | **97,310** (one unit) | — |
-| `gateway` | 6,510 | 13,971 |
-| `aiplane-tools` | 21,041 | 38,077 |
-| `aiplane-api` | 32,017 | 31,518 |
-| `aiplane-runtime` | 61,266 | 113,723 |
-| `aiplane-agents` | — (in `aiplane-core`) | 121,086 |
-| `aiplane-features` | 75,124 | 139,241 |
-| `aiplane-core` | 97,189 | 192,178 |
+| edit site | recompiled |
+|---|---|
+| `gateway` | 13,971 |
+| `aiplane-tools` | 38,077 |
+| `aiplane-api` | 31,518 |
+| `aiplane-runtime` | 113,723 |
+| `aiplane-agents` | 121,086 |
+| `aiplane-features` | 139,241 |
+| `aiplane-core` | 192,178 |
 
-The gains are front-loaded deliberately: the layers that churn most (handlers, tools,
-glue — about 60% of file touches over six months) are the cheapest to rebuild, and
-`aiplane-core` — the one that still costs a full rebuild — is the least-edited.
+As one compilation unit, before the split, every edit recompiled the whole
+crate (97,310 lines when it was measured, at about half today's size). The
+gains are front-loaded deliberately: the layers that churn most (handlers,
+tools, glue — about 60% of file touches over six months) are the cheapest to
+rebuild, and `aiplane-core` — the one that costs a full rebuild — is the
+least-edited. UI work recompiles no Rust at all.
 
-The first column is the measurement that motivated the split, taken before the
-SPA migration deleted the server-rendered page stack; the codebase has roughly
-doubled since, which is the second column. The ordering — and therefore the rule
-below — is unchanged, and UI work no longer recompiles Rust at all.
-
-**#109: agent persistence out of the base layer.** The agent builder put about
-6k lines of DB accessors into `aiplane-core`, so an agent DB edit cost a full
-192k-line rebuild (`aiplane-core` and the five crates above it). They now sit in
-`aiplane-agents`: an agent DB edit recompiles 121k lines (that crate, the
-runtime and the three above it) and no longer touches `aiplane-core` or
-`aiplane-features`. Measured with `mise run dev-build` after a one-line body
-edit to `db/agent_tests.rs`: before, `aiplane-core`, `-features`, `-runtime`,
-`-tools`, `-api` and `aiplane` recompiled; after, `aiplane-agents`, `-runtime`,
-`-tools`, `-api` and `aiplane`. Putting the same code in `aiplane-runtime` would
-cost the same for an agent DB edit but add its 7.4k lines to every runtime edit
-(121k instead of 114k), and the runtime is edited far more often — hence a crate
-of its own, beside `aiplane-features` so neither waits for the other.
+**Agent persistence has a crate of its own.** The agent DB accessors (about
+7k lines) sit in `aiplane-agents`, not in `aiplane-core`: an agent DB edit
+recompiles 121k lines (that crate, the runtime and the three above it) and
+does not touch `aiplane-core` or `aiplane-features`; in `aiplane-core` the same
+edit would cost the full 192k. Putting them in `aiplane-runtime` would cost the
+same for an agent DB edit but add their 7.4k lines to every runtime edit (121k
+rather than 114k), and the runtime is edited far more often — hence a crate of
+its own, beside `aiplane-features` so neither waits for the other.
 
 **Rule of thumb when adding code:** put it as high in the stack as it will go.
 Something only belongs in `aiplane-core` if code below the feature layer genuinely
@@ -130,7 +123,7 @@ in the tree. No routing, no `AppState`, no tool registry:
 - `auth/token.rs` — gateway-token mint/hash helpers.
 - `config.rs` — typed `[upstream_pools]`, `[[models]]`, `[oidc]`, `[rbac]` schema.
 - `db/` — sqlx; users / tokens / sessions / prefs / usage / limits / …, plus `migrations/` at the crate root, embedded by `db/mod.rs`'s `sqlx::migrate!`. Migrations run on one connection with foreign keys **off** and a `foreign_key_check` after, so a parent table can be rebuilt without `ON DELETE CASCADE` emptying its children (see `migrations/README.md`).
-- `principal.rs`, `run_chain.rs` — who acts: a person or a system principal, and on an agent run the call chain (agent → sub-agent → tool) that audit rows serialize. See [`agents.md`](agents.md#the-call-chain).
+- `principal.rs`, `run_chain.rs` — who acts: a person or a system principal, and on an agent run the call chain (agent → sub-agent → tool) that audit rows serialize. See [`agent-runs.md`](agent-runs.md#the-call-chain).
 - `crypto.rs` — AES-256-GCM at-rest sealing for DB-stored secrets.
 - `rbac/` — role lookup and grant resolution. It filters grants against the tool and skill registries through the [`GrantableSet`] trait (two methods, used via generics) rather than depending on them, which is what lets RBAC sit at the bottom while the registries live two layers up.
 - `upstreams/` — pool registry, backend health probes, RAII `Acquired` guard for in-flight accounting.
@@ -190,7 +183,7 @@ Where the world gets tied together:
 - `rama_server/state.rs` — `RamaState` wraps `AppState` (via `Deref`) and adds the session store, worker registry, usage sink and rate-limit enforcer; `rama_server/auth.rs` — `require_bearer` for `/v1/*`.
 - `openai_driver.rs` — the `session_core::SessionDriver` impl that streams a chat completion, plus `loop_guard.rs`.
 - `openai_driver/turn_policy.rs` — the chat driver's turn policy. `TurnPolicy` is `Chat` (a person's turn) or `Agent(&AgentRun)`, taken from the turn's `Actor`, and owns everything that differs between them: the leading system message (built in one place, refreshed per round only when an agent's conversation state can change it), the round's tool offer (a person's per-conversation overlay; an agent's grants ∩ spec tools plus its synthetic and terminal tools), the model access, budget, injection scan and usage name, the conversation's "off" switches (a person's only), how the final round and a round without calls end under a finish contract, and settling the run (`run_outcome`). The round loop calls the policy and never asks whether it runs an agent, so an agent run makes none of the chat-only reads (`allowed_tools_for_session`, `chat_session_tools`, the MCP enabled-key union). An enum, not a trait object: the set is closed, as `Actor` is, and the methods are async.
-- `suspend.rs` + `openai_driver/resume.rs` — durable suspend and resume: a tool returns `tool_suspend(…)`, the driver writes the run state to `chat_turn_suspensions` and frees the worker, and a resume continues the same turn from there. `server/tools/ask_first.rs` (`AskFirst`) is the first consumer: any tool, run only after the user approves the call. See [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
+- `suspend.rs` + `openai_driver/resume.rs` — durable suspend and resume: a tool returns `tool_suspend(…)`, the driver writes the run state to `chat_turn_suspensions` and frees the worker, and a resume continues the same turn from there. `server/tools/ask_first.rs` (`AskFirst`) wraps any tool so it runs only after someone approves the call. See [`tools-rbac.md`](tools-rbac.md#suspend-and-resume).
 - `finish.rs` — the completion contract for non-interactive runs (`FinishContract`, `RunOutcome`): a run given one ends only through a schema-valid `finish(result)` call or a structured incomplete outcome. `headless::drive` takes one and returns the outcome. See [`tools-rbac.md`](tools-rbac.md#finish-contract).
 - `server/{scheduled,webhooks,compaction,headless}` — the background workers that need state. `headless::open_session`/`drive` run as a person or as a system principal: an agent run's session is owned by the principal (no person's chat), it is offered only the principal's grants, and with a `RunChain` every tool call's decision is audited (`openai_driver/call_policy.rs`).
 - `agents/` — the agent runtime ([`agents.md`](agents.md)): the spec validator and the typed `AgentSpec` it produces (`agents/spec/model.rs`, the only reader of a spec's JSON and the one place its defaults live), the spec cache that holds each published version compiled, the run profile, router, verifiers, human handoff, A2A client and server halves, output filter and evals.
@@ -218,8 +211,7 @@ constraint is why a handful of test-support helpers (`ToolContext::for_test`,
 `#[cfg(test)]`.
 
 ### `crates/aiplane-api`
-The `/api/v0` JSON handlers the SPA calls — everything the deleted page stack used
-to render server-side, now answering JSON instead. `pages/mod.rs` carries the
+The `/api/v0` JSON handlers the SPA calls. `pages/mod.rs` carries the
 shared helpers every handler uses — `require_session_json` / `require_admin_json`
 (the 401/403 gates) and `json_ok` / `json_error` / `json_error_with` (the response envelope, the last with extra fields such as a validator's `issues`) — and
 re-exports the handlers the router mounts.
@@ -265,7 +257,7 @@ answers 503 and nothing else changes, which is what makes a headless deployment
 2. **RBAC** (`state.rbac`) maps the user's OIDC roles → role IDs → set of allowed tool IDs.
 3. **Branch on the request body:**
    - *Fast path* — no allowed tools. Nothing to inject, so resolve `model` → pool → backend via `state.upstreams.acquire_for`, then `forward_streaming` wraps the upstream's `bytes_stream()` in a `rama::http::Body::from_stream`. The `Acquired` guard rides inside the stream's scan closure so the in-flight slot stays held for the lifetime of the response. (A client-supplied `tools` array does *not* divert here — when the user has grants we take the tool path and union ours in.)
-   - *Tool path* — taken whenever the user has tool grants, including when the client brought its own `tools` (unioned in, de-duped by name). The runner in `server::tools::runner` injects tool defs, forces `stream: false`, and loops: acquire pool → forward → if the turn's `tool_calls` are gateway-owned *only*, execute them concurrently and feed the results back as `role: "tool"` messages → re-POST. A turn that calls any client-owned tool is returned to the client unchanged (it drives its own tools). Bounded by `MAX_TOOL_ROUNDS`. The last round asks for a final answer instead of erroring, and a turn the budget closed carries the `aiplane.tool_budget_exhausted` signal (see [`gateway-api.md`](gateway-api.md#tool-round-budget)). Final response carries an `x-gateway-tool-rounds` header.
+   - *Tool path* — taken whenever the user has tool grants, including when the client brought its own `tools` (unioned in, de-duped by name). The runner in `server::tools::runner` injects tool defs, forces `stream: false`, and loops: acquire pool → forward → if the turn's `tool_calls` are gateway-owned *only*, execute them concurrently and feed the results back as `role: "tool"` messages → re-POST. A turn that calls any client-owned tool is returned to the client unchanged (it drives its own tools). Bounded by `MAX_TOOL_ROUNDS`. The last round asks for a final answer rather than erroring, and a turn the budget closed carries the `aiplane.tool_budget_exhausted` signal (see [`gateway-api.md`](gateway-api.md#tool-round-budget)). Final response carries an `x-gateway-tool-rounds` header.
 4. **`Acquired::drop`** releases the in-flight slot. The pool's atomic counter decrements on the next pick.
 
 ## Request flow: chat (JSON over SSE)

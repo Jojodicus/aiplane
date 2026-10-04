@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Checking an agent's hash chains (`docs/agents.md` → "Anchors",
+//! Checking an agent's hash chains (`docs/agent-activity-log.md` → "Hash chains",
 //! "Verification watermarks").
 //!
 //! **Watermarks.** A chain that checked out is remembered in

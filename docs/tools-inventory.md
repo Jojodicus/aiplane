@@ -48,7 +48,7 @@ message rather than being absent.
 | `company_echo` | — | *(hidden)* | Smoke test for the tool-call loop. Hidden from `/tools` and from `enable_tools` via `is_hidden`; still RBAC-grantable. |
 | `get_current_timestamp` | — | `get_current_timestamp` | Timezone-aware current date/time, from the caller's `users.timezone`. |
 | `convert_currency` | — | `convert_currency` | Currency conversion at daily ECB reference rates. |
-| `ask_user` | yes | `ask_user` | Ask the user a short question mid-turn and wait for the answer, instead of guessing. Needs a live chat turn *and* someone watching it; times out and reports `answered: false` otherwise. |
+| `ask_user` | yes | `ask_user` | Ask the user a short question mid-turn and wait for the answer, rather than guessing. Needs a live chat turn *and* someone watching it; times out and reports `answered: false` otherwise. |
 | `notify_user` | — | `notify_user` | Send the user a Web Push notification (long work finished, a scheduled action found something). Deliberately *not* chat-only — a notification lands on a device, not in a conversation, so it also works from the headless scheduler. Hard limit of **one per turn**, latched in `PushNotifier`; errors clearly when `[push]` is unconfigured or the user has no subscribed device. |
 | `get_user_location` | — | `get_user_location` | Caller's location: a browser GPS prompt when a live chat turn is watching, else coarse GeoIP. |
 | `generate_qr_code` | yes | `generate_qr_code` | QR codes (URL, WiFi, vCard, SEPA) as PNG/SVG, rendered in-process. |
@@ -64,7 +64,7 @@ message rather than being absent.
 | `upload_attachment` | yes | `upload_attachment` | Attach a model-generated file to the reply. |
 | `offer_download` | yes | `upload_attachment` | Hand a file the conversation *already holds* to the user as a download chip on the current reply — an attachment, or a canvas document (its current version is written out as a file, named from the document's title) — including objects with no chip of their own (a typst render's hidden `.json` data base, an intermediate artifact) and files from earlier turns. Takes a reference, never content: the object is copied inside S3, so a large payload never round-trips through the model as prose. Session-scoped twice over — a marker-backed id is proven in-session by the enumeration, an unlisted `<turn_id>/<filename>` by `turn_in_session`. Shares the `upload_attachment` toggle: one switch for "let the assistant hand me files". |
 | `zip_attachments` | yes | `upload_attachment` | Bundle several files the conversation already holds into one `.zip` and attach it as a single download chip. Takes the same reference spellings as `offer_download` (`<turn_id>/<filename>`, canvas `document_id`, bare filename) in `ids`, plus an optional archive `filename` (`.zip` appended when missing). Unlike `offer_download` the bytes cannot stay inside S3 — the archive is assembled in memory — so it is capped at 64 entries and 256 MiB of uncompressed members, and members are read sequentially so the first bad id is the one reported. Colliding entry names are suffixed (`report.md`, `report-2.md`) rather than overwriting each other; a canvas document contributes a snapshot of its current version. Shares the `upload_attachment` toggle. |
-| `list_attachments` | yes | `list_attachments` | Inventory of the conversation's files, so assets get reused instead of regenerated. |
+| `list_attachments` | yes | `list_attachments` | Inventory of the conversation's files, so assets get reused rather than regenerated. |
 | `load_image_url` | yes | `load_image_url` | Fetch an image from a URL (through `outbound_guard`, like `fetch_url`) and keep it as a reusable conversation attachment. |
 | `import_file` | yes | `document` | Turn a text attachment (upload or produced artifact) into an editable, versioned canvas document — server-side, so the content never round-trips through the model. The on-ramp that makes an uploaded `.typ`/`.csv`/`.json`/`.md` editable a passage at a time (and hand-editable by the user); `offer_download` is the exit ramp. Text formats only: binary attachments stay attachments, already usable by id (`att:` refs, sandbox staging, `fetch_attachment`). Capped at the same 512 KB the document tools can write. |
 | `create_document` | yes | `document` | Open a canvas document. |
@@ -83,7 +83,7 @@ message rather than being absent.
 | `rag_grep` | — | `rag_grep` | Regex scan over an indexed collection's chunk text: matching lines with file, line number and context. For patterns BM25 cannot express (`TODO\(.*\)`, `impl .* for Tool`). Full scan with no index behind it, so it is bounded by result / row / wall-clock limits and reports which one it hit. |
 | `rag_list_collections` | — | `rag_list_collections` | Discover which collections exist before searching them. |
 | `rag_query_documents` | — | `rag_query_documents` | Filter, sort and total the documents of a collection by the fields its extraction profile pulled out (vendor, date, amount, project). The answer to any question about a *set* of documents — the latest, the largest, how many, how much — which top-k passage retrieval structurally cannot give: it returns five similar chunks and no way to know whether that was all of them. Always reports `total_matches` alongside the returned page, and surfaces the distinct values a text filter matched so `ACME` hitting both `ACME GmbH` and `ACME Deutschland AG` is visible rather than silently resolved. |
-| `rag_list_documents` | — | `rag_query_documents` | Folder-scoped document listing with the **stored** per-document summaries written at index time. Turns "find everything about project X and summarise it" into one call over ~200 tokens per document instead of re-reading every file. |
+| `rag_list_documents` | — | `rag_query_documents` | Folder-scoped document listing with the **stored** per-document summaries written at index time. Turns "find everything about project X and summarise it" into one call over ~200 tokens per document rather than re-reading every file. |
 | `rag_fetch_document` | — | `rag_query_documents` | Full extracted text of one indexed document by `document_id`. The drill-down after a hit; truncates long documents with a note rather than flooding the context. |
 | `remember` | — | `memory` | Persist a durable fact about the user. |
 | `recall` | — | `memory` | Retrieve everything remembered about the user, each with its `id`. |
@@ -172,7 +172,7 @@ rather than a generic error. Marking the whole tool chat-only would remove a
 working capability from the proxy paths to protect an argument the model
 wouldn't have a use for there — a `/v1` caller has no canvas to reference. Same
 reasoning applies to `run_in_sandbox`'s optional canvas-document staging, which
-degrades to a note instead of failing the run. `export_document` is different
+degrades to a note rather than failing the run. `export_document` is different
 and *is* chat-only: a canvas document is its only possible input.
 
 ### The two shapes a conversation's files come in
@@ -188,12 +188,9 @@ between them rather than duplicating either:
 | User can edit | no | yes (the document panel) |
 | Reached by | `fetch_attachment`, `att:` refs, sandbox `attachments`, `offer_download` | `fetch_attachment`, `read_document`/`edit_document`, sandbox `documents` *or* `attachments`, `typst_*` `document_id`/`base`, `export_document`, `offer_download` |
 
-**One reference syntax, every tool.** Naming a file used to depend on which
-tool you were calling: `run_in_sandbox` took ids and filenames in
-`attachments` but documents only in `documents`, `fetch_attachment` couldn't
-read a document at all, and typst image fields wanted an `att:` prefix. Every
-file-taking tool now resolves through `file_refs::resolve`, which accepts all
-of it — an `<turn_id>/<filename>` id, a bare filename (newest match wins), a
+**One reference syntax, every tool.** A model should not have to know which
+tool takes which way of naming a file. Every file-taking tool resolves through
+`file_refs::resolve`, which accepts all of them — an `<turn_id>/<filename>` id, a bare filename (newest match wins), a
 `doc_…` id, an unambiguous document title or its materialised filename, and a
 leading `att:` / `doc:` / `file:` that some models add unprompted. So a
 reference the model got from *any* result works in *any* argument, and a wrong
@@ -233,13 +230,13 @@ version, because nothing in the transcript would: its history still holds the
 content *it* wrote, so an unwarned edit reverts the correction. The warning
 stops once the model writes on top (it has seen the change by then).
 
-A **typst render** now parks its field data in a canvas document (its
-`document_id` comes back in the result) instead of the hidden
-`<turn>/<basename>.json` it used to write. That data was the one file the model
-worked on constantly and nobody could see: not in the panel, not downloadable,
-not stageable, editable only through `_edit`. The `_read` / `_edit` / `_pptx`
-tools take either id — a slash means the old attachment shape — so
-conversations from before the change keep editing their existing base, and
+A **typst render** parks its field data in a canvas document (its
+`document_id` comes back in the result) rather than a hidden
+`<turn>/<basename>.json` attachment. That data is the file the model works on
+constantly, so it must be visible: in the panel, downloadable, stageable, and
+editable by the user. The `_read` / `_edit` / `_pptx`
+tools take either id — a slash means an attachment — so a conversation whose
+base is a `<turn>/<basename>.json` attachment keeps editing it, and
 `_edit` writes back to whichever surface it read from. The render deliberately
 does *not* push the panel open for a data document: the deliverable is the PDF.
 
@@ -258,12 +255,12 @@ connected server. The drift guard matches them by prefix.
 | `typst_<id>` plus `_edit` / `_read` / `_pptx` | one per directory under `[typst] templates_dir`, discovered at boot | `typst_<id>` (the render id; variants collapse onto it via `entry_key_for`) |
 | `comfyui_<id>` | one per manifest in the `[comfyui]` catalog, hot-reloadable | `comfyui` — **one key for the whole family**, so a newly reloaded workflow is enabled automatically |
 | `mcp__<server>__<tool>` | per-user MCP connectors, connected lazily per request | `mcp__<server>` — one key per integration |
-| the agent architect's tools: `list_agents`, `read_agent`, `list_grantable`, `propose_setup`, `create_agent_draft`, `update_agent_draft`, `run_test_turn` | built per turn for an architect conversation (`pages::architect::tools`, [`agents.md`](agents.md#what-118-built)); they act with the person's rights through the agent routes' own functions; no publish tool | none — persona-scoped, never in the chat catalog or registry, and the person's own tools are not offered beside them |
-| `set_<slot>` | one per slot of an agent's `state` whose `set_by` lists `llm` (`agents::slot_tools`, [`agents.md`](agents.md#what-85-built)) | none — never in the chat catalog or registry; offered only inside an agent run, and needs no grant |
-| `forward_request` | one per agent run whose spec has `routes` (`agents::router`, [`agents.md`](agents.md#what-8788-built)): takes no arguments; picks an open route and runs its sub-agent | none — like `set_<slot>`, run-scoped and never registered |
-| `request_human` | one per main-agent run whose spec has a `human` route (`agents::human`, [`agents.md`](agents.md#what-96-built)): takes `{question}`; hands the conversation to a person on an open human route and waits for their answer | none — run-scoped and never registered |
+| the agent architect's tools: `list_agents`, `read_agent`, `list_grantable`, `propose_setup`, `create_agent_draft`, `update_agent_draft`, `run_test_turn` | built per turn for an architect conversation (`pages::architect::tools`, [`agent-builder.md`](agent-builder.md#agent-architect)); they act with the person's rights through the agent routes' own functions; no publish tool | none — persona-scoped, never in the chat catalog or registry, and the person's own tools are not offered beside them |
+| `set_<slot>` | one per slot of an agent's `state` whose `set_by` lists `llm` (`agents::slot_tools`, [`agent-spec.md`](agent-spec.md#state)) | none — never in the chat catalog or registry; offered only inside an agent run, and needs no grant |
+| `forward_request` | one per agent run whose spec has `routes` (`agents::router`, [`agent-runs.md`](agent-runs.md#the-router)): takes no arguments; picks an open route and runs its sub-agent | none — like `set_<slot>`, run-scoped and never registered |
+| `request_human` | one per main-agent run whose spec has a `human` route (`agents::human`, [`agent-hil.md`](agent-hil.md)): takes `{question}`; hands the conversation to a person on an open human route and waits for their answer | none — run-scoped and never registered |
 | `finish` | one per agent run under a finish contract, i.e. every routed sub-agent (`finish::FinishTool`, [`tools-rbac.md`](tools-rbac.md#finish-contract)): takes `{result}`, checked against the contract's schema; a valid call ends the run (`ToolPhase::Terminal`) | none — run-scoped and never registered |
-| `verify_<id>_request_code`, `verify_<id>_submit_code` | two per `mcp_code` verifier of an agent (`agents::verifier::otp`, [`agents.md`](agents.md#what-95-built)): take no arguments; send a one-time code through the agent's connector and pause for the visitor to type it into a secure field | none — run-scoped like `set_<slot>` |
+| `verify_<id>_request_code`, `verify_<id>_submit_code` | two per `mcp_code` verifier of an agent (`agents::verifier::otp`, [`agent-visitors.md`](agent-visitors.md#identity-verifiers)): take no arguments; send a one-time code through the agent's connector and pause for the visitor to type it into a secure field | none — run-scoped like `set_<slot>` |
 | `verify_<id>` | one per `lookup` verifier (`agents::verifier::lookup`): takes no arguments; checks slots the visitor filled against a granted tool | none — run-scoped like `set_<slot>` |
 
 `BoundTool` (`agents/bind.rs`) is not a family either: it wraps one granted
@@ -294,7 +291,7 @@ for the job". So the rule is:
   keeps the RBAC config stable across deployments that differ only in storage.
 - **Wrong request path → register, don't advertise.** The chat-only tools
   above are real capabilities that simply need a chat turn.
-  `requires_chat_session` keeps them out of the `/v1` tool list instead of
+  `requires_chat_session` keeps them out of the `/v1` tool list rather than
   letting the model pick one and get an error.
 
 ## Adding a tool

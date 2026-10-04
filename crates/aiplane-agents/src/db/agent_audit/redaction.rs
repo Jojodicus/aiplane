@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! What the activity log never stores (`docs/agents.md` → "What #111
-//! built", "Secrets never enter it"), applied in one place: [`append`]
+//! What the activity log never stores (`docs/agent-activity-log.md`, "Secrets never enter it"), applied in one place: [`append`]
 //! hands every event's detail to [`Redaction::apply`] before it is hashed
 //! and written, so no writer can forget it.
 //!

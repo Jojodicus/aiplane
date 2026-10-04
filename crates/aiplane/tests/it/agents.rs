@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Agent definitions end to end (`docs/agents.md` §2, "What #84 built"): drafts,
+//! Agent definitions end to end (`docs/agents.md` → "Agent definition"): drafts,
 //! versions with a live pointer, shares, and spec validation against the
 //! agent principal's grants.
 //!

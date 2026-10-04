@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The human-in-the-loop inbox (`docs/agents.md` "What #96 built"): what is
+//! The human-in-the-loop inbox (`docs/agent-hil.md`): what is
 //! waiting for whom, and the notification when something starts to wait.
 //!
 //! **Who sees an item.**

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Serving an agent over A2A (Agent2Agent protocol v1.0, Linux Foundation;
-//! `docs/agents.md` "What #102 built"): what a published spec says about it,
+//! `docs/agent-a2a.md` → "Serving an agent over A2A"): what a published spec says about it,
 //! and the agent card built from that.
 //!
 //! The JSON-RPC endpoint itself is `aiplane-api::pages::a2a`; it runs every

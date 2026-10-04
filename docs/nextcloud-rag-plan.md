@@ -39,7 +39,7 @@ picks an extraction profile, tests the connection, and:
   whole set. Pinned by `tests/it/rag_profile.rs`.
 - *"Find all documentation of project X and summarise it"* → `rag_list_documents`
   returns every document under a folder with the summary written at index time,
-  ~200 tokens each, so a whole folder costs one call instead of re-reading every
+  ~200 tokens each, so a whole folder costs one call rather than re-reading every
   file. The deck then comes from the existing `typst_presentation` tooling.
 
 **Not built yet:** incremental in-place sync (§9), so each build is still a full
@@ -100,7 +100,7 @@ AIplane is roughly 80% of the way there. Nothing in this table gets rebuilt.
 | Hybrid retrieval (dense kNN ⊕ FTS5/BM25 via RRF) | `aiplane-features/src/server/rag/worker.rs::search_chunks` | Exact identifiers (invoice numbers, project codes) survive alongside paraphrase. |
 | Per-collection store (`rag.sqlite` + `index.usearch`) | `db/mod.rs::open_collection_store`, `rag/index.rs` | Heavy, regenerable state already lives off the backup-critical DB. |
 | Multi-source collections | migration `0017_rag_multi_source.sql` | A collection already aggregates several sources into one unified index. A Nextcloud folder set is just another source shape. |
-| Vector delete | `rag/index.rs::remove` (implemented + tested) | Makes incremental sync possible instead of rebuild-only. |
+| Vector delete | `rag/index.rs::remove` (implemented + tested) | Makes incremental sync possible rather than rebuild-only. |
 | Zero-downtime index swap | `rag/worker.rs::index_ref_inner` | A long rebuild never takes search offline. |
 | OCR with a content-hash cache | `aiplane-features/src/server/ocr.rs`, migration `0054_ocr_derivatives.sql` | Keyed by `doc_sha256` — **a full re-index never re-OCRs a file it has already read.** This is the single biggest cost saver in the whole plan. |
 | Scan detection without word lists | `ocr.rs::pdf_needs_ocr` | Character-count based, so it behaves identically for German and English. Born-digital PDFs never touch the GPU. |
@@ -227,7 +227,7 @@ decorative:
 2. **Identity is `RemoteEntry::id`, not the path.** Every serious host has a
    stable per-file id that survives a move (`oc:fileid`, a Graph `driveItem`
    id, a Dropbox `id:` handle). Keying on it turns a moved folder of 400
-   documents into a path update instead of a re-extraction. Providers without
+   documents into a path update rather than a re-extraction. Providers without
    one report `stable_ids: false` and fall back to the path.
 
 3. **`RemoteEntry::version` is opaque.** An etag, a ctag, a Dropbox `rev`, a
@@ -327,7 +327,7 @@ the difference between a nightly sync that finishes in seconds and one that walk
 
 **Identity.** Items are keyed by `oc:fileid`, not path: *"File IDs never change
 for the lifetime of a file"* ([ownCloud client wiki][etags]). A renamed or moved
-file keeps its fileid, so the sync updates one path column instead of deleting and
+file keeps its fileid, so the sync updates one path column rather than deleting and
 re-embedding — which for a moved folder of 400 invoices is the difference between
 a no-op and a re-OCR of the lot.
 
@@ -449,7 +449,7 @@ CREATE TABLE rag_document_profiles (
     --     filterable: bool, sortable: bool, enum_values?: [..] }
     fields_json  TEXT NOT NULL,
     -- Bumped by the operator on any semantic edit; part of the cache key so a
-    -- changed prompt re-extracts instead of serving stale fields.
+    -- changed prompt re-extracts rather than serving stale fields.
     version      INTEGER NOT NULL DEFAULT 1,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
@@ -484,7 +484,7 @@ CREATE TABLE IF NOT EXISTS rag_documents (
 
 -- Entity-attribute-value rather than a wide table, because the field set is
 -- per-profile. Three typed columns so ordering and range filters use an index
--- instead of SQLite's text collation.
+-- rather than SQLite's text collation.
 CREATE TABLE IF NOT EXISTS rag_doc_fields (
     doc_id      INTEGER NOT NULL,
     key         TEXT NOT NULL,
@@ -515,7 +515,7 @@ matters, because this corpus is German and English and the product must not care
 **Extraction caching**, mirroring `ocr_derivatives` exactly (migration
 `0058_fileshare_rag.sql`, central DB): key `(doc_sha256, profile_id,
 profile_version, model)`, value the extracted JSON. A failed row is kept for the
-operator but reads as a miss, so a transient backend failure retries instead of
+operator but reads as a miss, so a transient backend failure retries rather than
 poisoning the document forever. Consequence worth stating: a full corpus rebuild
 re-embeds but re-runs **neither** OCR nor field extraction.
 
@@ -678,7 +678,7 @@ not going to solve it with a legal-suffix list (which would be a
 language-specific word list, which this product does not do). "Deutsche Telekom
 AG" and "Telekom Deutschland GmbH" are one vendor to a human and two strings to
 SQLite. Surfacing the matched set lets the model notice the ambiguity and — when
-it actually matters — resolve it with the existing `ask_user` tool instead of
+it actually matters — resolve it with the existing `ask_user` tool rather than
 silently answering about one of them. `total_count` alongside a truncated
 `documents` list is the other half: it stops the model concluding "we received 10
 invoices" when it was handed the first 10 of 47.
@@ -728,7 +728,7 @@ knowledge of. `source_kind` and `source_config` must be sent together on PATCH:
 a settings map has no meaning without the kind whose schema defines it.
 
 Changing a collection's source re-queues its refs, since everything indexed
-under the old source is no longer what the collection points at.
+under the old source is not what the collection points at.
 
 ---
 
@@ -915,7 +915,7 @@ Phases 1–3 are the product. Phase 4 is what the second customer will ask for.
   Nextcloud-side, wants its own GPU and its own vector store. The trade we are
   making: giving that up in exchange for structured queries over extracted fields,
   the deck and document tooling, gateway group ACLs, and one system to operate
-  instead of two. Worth being able to say out loud.
+  rather than two. Worth being able to say out loud.
 
 ---
 

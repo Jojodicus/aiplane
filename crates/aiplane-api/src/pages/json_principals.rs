@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/system-principals` — create and configure non-person principals
-//! (`docs/agents.md` §1).
+//! (`docs/agents.md` → "Principals").
 //!
 //! Every route needs the agent-management permission (`can_manage_agents` on
 //! one of the caller's groups; admin implies it). A grant is capped at what
@@ -11,7 +11,7 @@
 //! manager afterwards. Every change is written to `agent_audit` by the db
 //! layer, in the same transaction as the change.
 //!
-//! An agent's principal (`docs/agents.md` §2) is also reachable here, so for
+//! An agent's principal (`docs/agents.md` → "Agent definition") is also reachable here, so for
 //! one of those the caller additionally needs a share on the agent — `read`
 //! to see it, `write` to change it — exactly as on `/api/v0/agents`. Any
 //! other principal is reachable only by its creator and by admins.

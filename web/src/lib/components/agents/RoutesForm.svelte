@@ -5,7 +5,7 @@
 	import RouterFields from './RouterFields.svelte';
 
 	/**
-	 * Router and routes (`docs/agents.md` §3-4). A route is a hard gate plus
+	 * Router and routes (`docs/agent-runs.md` → "The router"). A route is a hard gate plus
 	 * the sub-agent it opens: the gate is the security boundary, the router
 	 * only picks among routes whose gate already holds.
 	 */

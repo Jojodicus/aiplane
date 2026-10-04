@@ -13,8 +13,7 @@
  *
  * Text the model reads (tone and language lines, the hand-off task, the
  * descriptions of the slots the assistant manages) is English, like the
- * structured system prompt it ends up in (`docs/agents.md` "What #115
- * built"). Text a person reads comes from the catalogs.
+ * structured system prompt it ends up in (`docs/agent-runs.md` → "The system message"). Text a person reads comes from the catalogs.
  */
 import { grantable, type AgentError, type AgentResources, type Grant, type GrantableItem, type GrantableKind, type ModelDefaults, type ModelKind, type Spec, type SpecIssue } from './agents.ts';
 import { modelSelectOptions } from './model-option.ts';
@@ -432,7 +431,7 @@ export function liveUses(live: Spec | null, kind: string, ref: string, defaults?
 export const SLOT_KINDS = ['text', 'long_text', 'email', 'phone', 'customer_number', 'order_number', 'date', 'number', 'whole_number', 'yes_no', 'choice'] as const;
 export type SlotKind = (typeof SLOT_KINDS)[number];
 
-/** Each friendly kind's slot type and validator (`docs/agents.md` §3 State). */
+/** Each friendly kind's slot type and validator (`docs/agent-spec.md` → "State"). */
 export const SLOT_SHAPES: Record<SlotKind, Spec> = {
 	text: { type: 'string', max_length: 200 },
 	long_text: { type: 'string', max_length: 2000 },

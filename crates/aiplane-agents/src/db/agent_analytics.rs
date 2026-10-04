@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! What an agent did over a time range, counted from rows that already exist
-//! (`docs/agents.md` §5, "What #100 built").
+//! (`docs/agent-activity-log.md` → "Analytics").
 //!
 //! There is no second event store: conversations and turns come from the chat
 //! tables, outcomes from `agent_audit`, cost and tokens from `usage_events`.

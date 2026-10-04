@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents/{id}/tests` and `/test-runs` — stored test cases and suite
-//! runs (`docs/agents.md` §5, "What #99 built").
+//! runs (`docs/agent-builder.md` → "Evaluation").
 //!
 //! Reading cases and runs needs a `read` share, like the spec itself. Writing
 //! a case or running the suite needs `write`: a run drives the agent's tools

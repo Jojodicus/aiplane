@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! An agent's sliding-window rates (`docs/agents.md` §5, "What #92 built",
-//! and "What #95 built"): a visitor's and a client IP's admitted requests,
+//! An agent's sliding-window rates (`docs/agent-visitors.md` → "Rates"
+//! and "Identity verifiers"): a visitor's and a client IP's admitted requests,
 //! and a verifier's sends and lookups. Exact to the second. Separate from the
 //! spend limits in `aiplane_core::server::limits`, which meter tokens per
 //! user, token and agent and know nothing about visitors.

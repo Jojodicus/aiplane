@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `visitor_sessions`: one anonymous visitor's conversation with an agent
-//! (`docs/agents.md` §5).
+//! (`docs/agent-visitors.md`).
 //!
 //! A visitor is not a principal. The conversation is a `chat_sessions` row
 //! owned by the agent's principal, linked back through

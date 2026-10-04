@@ -3,7 +3,7 @@
 
 //! A built-in chat persona: a person's conversation run on a fixed system
 //! prompt and a small set of its own tools, in place of the person's chat
-//! tools (`docs/agents.md` "What #118 built"; the agent architect is the
+//! tools (`docs/agent-builder.md` → "Agent architect"; the agent architect is the
 //! one persona today).
 //!
 //! The turn is still the person's: their pools, budget, usage and history.

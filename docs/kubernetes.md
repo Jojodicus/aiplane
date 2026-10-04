@@ -65,9 +65,9 @@ stable, and the Secret carries `helm.sh/resource-policy: keep` so
 
 > **GitOps warning.** `helm template` runs without a cluster, so the lookup that
 > preserves the key finds nothing and renders a **fresh** key every time. If you
-> render manifests instead of letting Helm talk to the cluster (Argo CD in
+> render manifests rather than letting Helm talk to the cluster (Argo CD in
 > manifest mode, `helm template | kubectl apply`), use Option A and set
-> `sessionKey.autoGenerate=false` so a mistake fails loudly instead of quietly
+> `sessionKey.autoGenerate=false` so a mistake fails loudly rather than quietly
 > rotating your encryption key.
 
 ## Step 3 — Install
@@ -193,7 +193,7 @@ Put it wherever your other credentials live. See [Backups](#backups-and-restore)
 
 | Object | Why |
 |---|---|
-| `StatefulSet` (1 replica) | The gateway pod, plus any sidecars you enabled. A StatefulSet rather than a Deployment because its `volumeClaimTemplate` keeps the database on uninstall and its update strategy replaces the pod instead of briefly running two. |
+| `StatefulSet` (1 replica) | The gateway pod, plus any sidecars you enabled. A StatefulSet rather than a Deployment because its `volumeClaimTemplate` keeps the database on uninstall and its update strategy replaces the pod rather than briefly running two. |
 | `PersistentVolumeClaim` (`data-<name>-0`) | `/var/lib/gateway` — the SQLite database and the RAG index store. The image points `AIPLANE_DATA_DIR` here, so this one mount is all the persistence there is. |
 | `Secret` (`<name>-session`) | `AIPLANE_SESSION_KEY`, unless you brought your own. |
 | `Service` | Port 8080, plus port 8000 when the Google Workspace sidecar is on. |
@@ -480,7 +480,7 @@ untrusted code and has no authentication of its own.
 
 The cluster-native shape: the runner creates one Pod per job with
 `runtimeClassName: gvisor`, `/work` and `/tmp` as `emptyDir`, a default-deny
-`NetworkPolicy` instead of a Podman network, and a ServiceAccount scoped to
+`NetworkPolicy` rather than a Podman network, and a ServiceAccount scoped to
 `pods` + `pods/exec` in a dedicated sandbox namespace.
 
 **This is not implemented yet** — the runner currently drives a `podman` or

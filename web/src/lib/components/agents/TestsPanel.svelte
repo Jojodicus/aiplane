@@ -19,7 +19,7 @@
 	import { locale, t } from '$lib/i18n.svelte';
 
 	/**
-	 * Stored test cases and their runs (`docs/agents.md`, "What #99 built"). A
+	 * Stored test cases and their runs (`docs/agent-builder.md` → "Evaluation"). A
 	 * case is a script of visitor messages (with trusted slot writes between
 	 * them) plus deterministic expectations; a run executes every case as an
 	 * isolated test conversation against the saved draft or a published

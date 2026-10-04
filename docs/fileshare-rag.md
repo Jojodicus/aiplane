@@ -134,7 +134,7 @@ true:
 2. **Identity is `RemoteEntry::id`, not the path.** Every serious host has a
    stable per-file id that survives a move (`oc:fileid`, a Graph `driveItem`
    id, a Dropbox `id:` handle). Keying on it turns a reorganised folder of 400
-   scans into 400 path updates instead of 400 OCR runs.
+   scans into 400 path updates rather than 400 OCR runs.
 
 3. **`version` is opaque.** An etag, a ctag, a `rev`, a content hash —
    compared for equality, never parsed. That is what lets one walker serve
@@ -440,9 +440,9 @@ Three separate questions, kept separate because conflating any two of them
 caused a bug:
 
 - **Is this corpus searchable?** `last_indexed_commit is not null`. A rebuild
-  request no longer clears it — a full rebuild is atomic and the live store
+  request does not clear it — a full rebuild is atomic and the live store
   answers until the swap, so taking the collection offline for the duration
-  was a lie about data that was sitting right there.
+  would be a lie about data that is sitting right there.
 - **Must the next build start from scratch?** `force_full_rebuild`, set by
   `request_full_rebuild` and cleared by a successful swap. Also implied when
   the ref has never completed a build.
@@ -684,7 +684,7 @@ container down afterwards:
 | an untouched tree answers `Unchanged` | every re-sync would walk the whole corpus |
 | the default DAV path + Basic auth work | nothing would index at all |
 | spaces and umlauts round-trip href → fetch URL | a German archive would 404 half its documents |
-| a wrong password reads as a credential error | the operator would get a puzzle instead of a fix |
+| a wrong password reads as a credential error | the operator would get a puzzle rather than a fix |
 
 The test binary is gated behind `RUN_NEXTCLOUD_E2E`, so a normal `cargo test`
 compiles it and skips every case in ~0 ms. It never touches Docker unless you

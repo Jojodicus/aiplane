@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents/{id}/assist/*` — the prompt assistant
-//! (`docs/agents.md` "What #117 built"): a proposed setup for every step,
+//! (`docs/agent-builder.md` → "Prompt assistant"): a proposed setup for every step,
 //! and an improved text. Both need a `write` share, since they are for
 //! editing the agent and spend the manager's usage; neither writes to the
 //! agent. The work is `aiplane_runtime::agents::assist`; this resolves who

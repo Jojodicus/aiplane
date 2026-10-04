@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The activity log (`docs/agents.md` "What #111 built") over whole runs: a main agent whose gate is
+//! The activity log (`docs/agent-activity-log.md`) over whole runs: a main agent whose gate is
 //! closed until an OTP verifier opens it, a sub-agent, an external A2A
 //! agent with a sealed credential, a handoff to a person and the answer —
 //! every model exchange, tool call, state write and decision in one hash

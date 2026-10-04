@@ -229,7 +229,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_get("/api/v0/comfyui/health", comfyui_api::health)
         .with_get("/api/v0/models", api::chat_models)
         .with_get("/api/v0/usage", api::usage)
-        // System principals (docs/agents.md §1), gated by can_manage_agents.
+        // System principals (docs/agents.md → "Principals"), gated by can_manage_agents.
         .with_get("/api/v0/system-principals", pages::json_principals::list)
         .with_post("/api/v0/system-principals", pages::json_principals::create)
         .with_get(
@@ -256,15 +256,15 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             "/api/v0/system-principals/{id}/tokens/{token_id}/revoke",
             pages::json_principals::revoke_token,
         )
-        // Agent definitions (docs/agents.md §2): can_manage_agents plus a share.
+        // Agent definitions (docs/agents.md → "Agent definition"): can_manage_agents plus a share.
         .with_get(
             "/api/v0/agent-resources",
             pages::json_agent_resources::resources,
         )
-        // The agent architect (docs/agents.md "What #118 built"): a person's
+        // The agent architect (docs/agent-builder.md → "Agent architect"): a person's
         // chat that plans an agent with them.
         .with_post("/api/v0/agent-architect", pages::architect::start)
-        // The inbox (docs/agents.md "What #96 built"): before `/agents/{id}`,
+        // The inbox (docs/agent-hil.md): before `/agents/{id}`,
         // because rama matches in registration order.
         .with_get("/api/v0/agents/inbox", pages::json_inbox::list)
         .with_get("/api/v0/agents/inbox/events", pages::json_inbox::events)
@@ -297,7 +297,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             "/api/v0/agents/{id}/test/{session}/turns/{turn}/debug",
             pages::json_agent_test::turn_debug,
         )
-        // The prompt assistant (docs/agents.md "What #117 built"): writes nothing.
+        // The prompt assistant (docs/agent-builder.md → "Prompt assistant"): writes nothing.
         .with_post(
             "/api/v0/agents/{id}/assist/suggest",
             pages::json_agent_assist::suggest,
@@ -382,7 +382,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
             pages::json_embed_keys::revoke,
         )
         .with_endpoint_layer(endpoint(BodyLimitLayer::HANDLER_CAPPED))
-        // The public agent endpoint (docs/agents.md §5): anonymous visitors
+        // The public agent endpoint (docs/agent-visitors.md): anonymous visitors
         // with an embed key, then a `gwv_` visitor token. No session cookie
         // is read here, and the visitor token is read nowhere else.
         .with_post("/api/v0/embed/sessions", pages::embed::start_session)
@@ -395,7 +395,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_post("/api/v0/embed/transcribe", pages::embed::transcribe)
         .with_post("/api/v0/embed/speak", pages::embed::speak)
         .with_get("/api/v0/embed/recorder.js", pages::embed::recorder)
-        // Agents served over A2A (docs/agents.md "What #102 built"): the
+        // Agents served over A2A (docs/agent-a2a.md → "Serving an agent over A2A"): the
         // public agent card of an opted-in agent, and its JSON-RPC endpoint
         // for `gws_` callers granted `a2a_caller` on it.
         .with_get("/a2a/agents/{id}/agent-card.json", pages::a2a::card)

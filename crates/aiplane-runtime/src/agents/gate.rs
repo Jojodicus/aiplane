@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Route gates: the JSON condition tree and its evaluator (`docs/agents.md`
-//! §4, "What #86 built").
+//! Route gates: the JSON condition tree and its evaluator (`docs/agent-spec.md` → "Gates").
 //!
 //! ```text
 //! Cond := { all: [Cond] } | { any: [Cond] } | { not: Cond }

@@ -47,7 +47,7 @@ The Rust binary and the UI build separately: `cargo build` needs no Node, and th
 
 `mise run setup-hooks` points `core.hooksPath` at `.githooks/`. Run it once per clone — it installs three hooks:
 
-- **pre-commit** — gitleaks over the staged diff (~100 ms), so a credential can't reach local history in the first place, and `rustfmt --check` over the staged Rust files, so formatting lands in the commit it belongs to instead of a follow-up.
+- **pre-commit** — gitleaks over the staged diff (~100 ms), so a credential can't reach local history in the first place, and `rustfmt --check` over the staged Rust files, so formatting lands in the commit it belongs to rather than a follow-up.
 - **pre-push** — the secret scan again over the *full* history, then lint + tests. Push is the last moment before something becomes public.
 - **commit-msg** — rejects `Co-authored-by:` / `Claude-*:` attribution trailers.
 
@@ -102,7 +102,7 @@ Two habits that cost more than any tooling change:
 
 ## Delegating work to an agent
 
-Parallel agents are how the agent-builder epic (#75) grew three capped body
+Parallel agents are how the agent builder grew three capped body
 readers, five IP classifiers and ~6k lines of agent code in `aiplane-core`:
 each brief said *what* to build and nothing about what already existed or where
 it belonged. A brief for delegated work carries the following, filled in — not
@@ -400,7 +400,7 @@ Open any origin page (e.g. `http://127.0.0.1:8080/login`), then inject the cooki
 
 The repo's README/docs screenshots are produced this way — see the `take-screenshots` helper under `.claude/skills/take-screenshots/`, which drives Playwright with the seeded cookie.
 
-### Why a seeded session instead of patching out auth?
+### Why a seeded session rather than patching out auth?
 
 Every code path under test (cookie parsing, session lookup, RBAC, the session gate, the SSE stream, …) is the same one production runs. The only things faked are the upstream LLM and the OIDC handoff.
 
@@ -486,7 +486,7 @@ staged as deleted, with a single `README.md` left in the index whose blob is
 friends to hooks and to every process a hook starts. `.githooks/pre-push` runs
 the whole test suite, so the suite inherits a pointer to the real repository —
 and a fixture that spawns `git` without clearing those variables operates on
-*that* repo instead of its tempdir. `git config` overwrites your identity,
+*that* repo rather than its tempdir. `git config` overwrites your identity,
 `git init` sets `core.bare`, `git add` replaces your index.
 
 The damage is confined to the index and config: **working-tree files are never
@@ -524,7 +524,7 @@ merely far over the limit: `cap + 1` bytes with a declared length, or for the
 "no `Content-Length`" case a bounded stream such as `common::endless_body()`
 (8 MiB, `crates/aiplane/tests/it/common/mod.rs`) or the 8 MiB chunked peer in
 `capped_read.rs`'s tests. Against a missing cap such a test fails cleanly — the
-handler reads it all and answers something other than 413 — instead of taking
+handler reads it all and answers something other than 413 — rather than taking
 the machine down. Put a `tokio::time::timeout` around the call as well, so a
 handler that waits for more input fails rather than hangs.
 

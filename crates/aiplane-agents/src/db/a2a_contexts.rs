@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `a2a_contexts`: one A2A context, which is one agent conversation opened by
-//! a remote caller over A2A (`docs/agents.md` "What #102 built").
+//! a remote caller over A2A (`docs/agent-a2a.md` → "Serving an agent over A2A").
 //!
 //! The conversation is a `chat_sessions` row owned by the agent's principal,
 //! exactly like a visitor's; this row says which system principal opened it,

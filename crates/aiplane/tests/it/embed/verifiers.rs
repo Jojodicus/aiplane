@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Identity verifiers over HTTP (`docs/agents.md` "What #95 built"): a
+//! Identity verifiers over HTTP (`docs/agent-visitors.md` → "Identity verifiers"): a
 //! visitor proving their address with the code the agent's own ERP sends,
 //! typed into the widget's secure field and posted to
 //! `/api/v0/embed/resume`; and a website vouching for its visitor on

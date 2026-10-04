@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! The agent builder's internal test chat end to end
-//! (`docs/agents.md` "What #90 built"): `POST /api/v0/agents/{id}/test/messages`
+//! (`docs/agent-builder.md` → "Test chat"): `POST /api/v0/agents/{id}/test/messages`
 //! runs the **draft** through the real run path on wiremock upstreams in the
 //! background; the conversation streams on `…/test/{session}/events`, and
 //! `…/turns/{turn}/debug` gives each turn's debug view only a manager gets.

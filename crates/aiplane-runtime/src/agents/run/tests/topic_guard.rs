@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The topic guard of a strict scope (`docs/agents.md` "What #115 built"),
+//! The topic guard of a strict scope (`docs/agent-runs.md` → "Topic guard"),
 //! and the structured system prompt every agent run gets. The real case: an
 //! agent told to "deny questions outside your scope" with no scope defined
 //! answered a question about diesel engines in detail.

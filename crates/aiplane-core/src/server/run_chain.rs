@@ -8,7 +8,7 @@
 //! made anywhere in that tree is checked against the innermost principal's
 //! grants and audited with the whole chain, so an audit row answers "which
 //! agent, called through which agents, for which visitor". See
-//! `docs/agents.md` §3 "The call chain".
+//! `docs/agent-runs.md` → "The call chain".
 //!
 //! It lives here, beside [`crate::server::principal`], because the audit and
 //! usage rows that serialize it are written from this crate.

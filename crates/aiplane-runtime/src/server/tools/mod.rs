@@ -522,7 +522,7 @@ pub trait Tool: Send + Sync + 'static {
     /// conversation. Only an MCP server says so today (a destructive tool
     /// that is not read-only); everything else is `false` because nothing
     /// is known about it. An agent asks for approval before such a call
-    /// unless its spec sets the tool's `permission` (`docs/agents.md`).
+    /// unless its spec sets the tool's `permission` (`docs/agent-hil.md` → "Per-tool approval").
     fn changes_state(&self) -> bool {
         false
     }

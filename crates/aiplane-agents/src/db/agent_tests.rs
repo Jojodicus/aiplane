@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Stored evaluation of an agent (`docs/agents.md` §5, "What #99 built"):
+//! Stored evaluation of an agent (`docs/agent-builder.md` → "Evaluation"):
 //! test cases, and runs with a result per case.
 //!
 //! This layer stores shapes and knows nothing of what a script or an

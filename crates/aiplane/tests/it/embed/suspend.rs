@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Suspended agent runs over HTTP (`docs/agents.md` "Suspend and resume"):
+//! Suspended agent runs over HTTP (`docs/agent-hil.md` → "Suspend and resume"):
 //! a visitor answering a secure input on `/api/v0/embed/resume`, an approval
 //! only staff may give on `/api/v0/agents/{id}/conversations/…/resume`, a
 //! message queued behind a pending decision, and the test chat's pause.

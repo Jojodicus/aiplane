@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Human in the loop (`docs/agents.md` "What #96 built"): a tool whose spec says `always_ask`, a handoff
+//! Human in the loop (`docs/agent-hil.md`): a tool whose spec says `always_ask`, a handoff
 //! to a person through `request_human` and through a `human` route, the
 //! inbox that lists them for the right people, and the notification that
 //! goes out once per pause.

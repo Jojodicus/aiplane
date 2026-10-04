@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/agents/{id}/activity` — the agent's activity log
-//! (`docs/agents.md` → "What #111 built"): every event of its conversations,
+//! (`docs/agent-activity-log.md`): every event of its conversations,
 //! sub-agent runs included, and of the agent itself, page by page, as a
 //! JSONL export, and the hash-chain check.
 //!

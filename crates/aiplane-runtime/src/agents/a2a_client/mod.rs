@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! A route to an external agent that speaks A2A v1.0
-//! (`docs/agents.md` "What #101 built").
+//! (`docs/agent-a2a.md` → "External agents as route targets").
 //!
 //! ```yaml
 //! routes:

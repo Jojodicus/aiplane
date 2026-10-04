@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `/api/v0/embed/*` — the public agent endpoint a website's widget talks to
-//! (`docs/agents.md` §5).
+//! (`docs/agent-visitors.md`).
 //!
 //! Nobody here is signed in. A visitor starts a session with an embed key
 //! (`gwe_…`) from an allowlisted `Origin` and gets a visitor token (`gwv_…`)
@@ -199,8 +199,7 @@ async fn live_agent(
 }
 
 /// Gate a request that makes the agent work — a new conversation or a
-/// message — on the agent's visitor rates and budget (`docs/agents.md` §5,
-/// "What #92 built"). Reads cost the agent nothing and are not gated: the
+/// message — on the agent's visitor rates and budget (`docs/agent-visitors.md` → "Rates"). Reads cost the agent nothing and are not gated: the
 /// widget re-attaches to its event stream whenever it likes.
 async fn admit(
     state: &RamaState,
@@ -579,7 +578,7 @@ fn queued_message(turns: &[TurnWithTools]) -> Option<String> {
 }
 
 /// A message sent while the conversation waits for a decision is stored and
-/// runs after the decision, as "What #96 built" decided for suspend/resume — it
+/// runs after the decision, as `docs/agent-hil.md` → "Suspend and resume" says — it
 /// neither cancels the pending request nor answers it. One message waits at
 /// a time.
 async fn queue_behind_decision(

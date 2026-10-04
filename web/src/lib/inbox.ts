@@ -1,5 +1,5 @@
 /**
- * The human-in-the-loop inbox (`docs/agents.md` "What #96 built"): wire
+ * The human-in-the-loop inbox (`docs/agent-hil.md`): wire
  * types, the calls, and the pure helpers the page leans on.
  *
  * An item is something a paused turn waits for: an approval of a tool call

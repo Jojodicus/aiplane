@@ -18,7 +18,7 @@ pub mod token;
 /// `require_bearer` in `rama_server::auth`).
 ///
 /// A `gwk_` token resolves to a [`Principal::User`], a `gws_` token to a
-/// [`Principal::System`]; see `docs/agents.md` §1.
+/// [`Principal::System`]; see `docs/agents.md` → "Principals".
 #[derive(Debug, Clone)]
 pub struct UserCtx {
     pub principal: crate::server::principal::Principal,

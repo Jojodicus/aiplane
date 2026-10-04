@@ -703,7 +703,7 @@ fn the_whole_body_scan_matches_awaited_reads_only() {
 // Agent spec JSON.
 
 /// Where an agent spec's JSON may be read by key: the validator walk, and
-/// the few places that must keep JSON (docs/agents.md → "The typed spec").
+/// the few places that must keep JSON (docs/agent-spec.md → "The typed spec").
 const SPEC_JSON_READERS: &[Allowed] = &[
     Allowed {
         path: "aiplane-runtime/src/agents/spec.rs",

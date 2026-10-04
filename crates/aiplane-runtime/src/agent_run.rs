@@ -14,7 +14,7 @@
 //!
 //! [`AgentRun::new`] is the only way to build one, and it refuses a chain
 //! whose running frame is not the principal, so a run can never act as one
-//! agent while auditing as another. See docs/agents.md → "`AgentRun`".
+//! agent while auditing as another. See docs/agent-runs.md → "One run, one value".
 //!
 //! [`ToolContext`]: crate::server::tools::ToolContext
 

@@ -226,7 +226,7 @@ that problem, it removes it:
 It runs **two** sandbox calls in one leased container: `ffprobe` first (clip
 lengths, and `fc-match` for fonts), then the render. `xfade` needs to know when
 to start a crossfade, which means knowing how long the previous clip is —
-probing first keeps that arithmetic in Rust instead of assembling strings inside
+probing first keeps that arithmetic in Rust rather than assembling strings inside
 the sandbox. The media is uploaded once, in pass 1, and pass 2 finds it in
 `/work`.
 
@@ -296,7 +296,7 @@ state ever becomes a real need, stage-in/stage-out through S3 under a
 single conversation turn** — user prompt → final answer, across however many
 tool rounds. Successive calls `exec` into the same container, so `/work` and
 scratch state survive between them and the model can iterate (run → read the
-error → patch → rerun) instead of cramming everything into one call. The other
+error → patch → rerun) rather than cramming everything into one call. The other
 sandbox tools (`generate_document`, `capture_webpage`, `convert_document`,
 `edit_presentation`, `render_excalidraw`, `render_typst`) are genuinely
 one-shot and stay single-use.
@@ -485,7 +485,7 @@ sudo podman run --rm --network none --runtime runsc docker.io/library/alpine una
 > 1. On rootful podman, runsc's default network mode (its own netstack) aborts
 >    with `cannot run with network enabled in root network namespace`.
 >    `--network=host` makes gVisor use the network namespace podman hands the
->    container instead of building its own — empty for default-deny runs,
+>    container rather than building its own — empty for default-deny runs,
 >    proxy-only for egress runs. The **kernel/syscall isolation is unchanged**;
 >    only who owns the netstack changes.
 > 2. `containers.conf` runtime entries are a list of **binary paths**, not a

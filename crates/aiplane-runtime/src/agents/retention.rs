@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The retention sweeper (`docs/agents.md` §5, "What #92 built"): deletes
+//! The retention sweeper (`docs/agent-visitors.md` → "Retention"): deletes
 //! each agent's conversations once they have been idle longer than its live
 //! version's `publish.retention_days`, with their sub-agent runs, state and
 //! visitor sessions. A person's chat is never touched
-//! (`db::agent_retention`). Then the activity log (`docs/agents.md` "What #111 built"): the whole chain of
+//! (`db::agent_retention`). Then the activity log (`docs/agent-activity-log.md`): the whole chain of
 //! every conversation that is gone and whose last event is older than
 //! `publish.audit_retention_days`.
 

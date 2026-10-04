@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Handing a conversation to a person (`docs/agents.md` "What #96 built").
+//! Handing a conversation to a person (`docs/agent-hil.md`).
 //!
 //! A `human` route is a target like a sub-agent, reached two ways: the main
 //! agent calls `request_human(question)`, offered whenever the spec has a

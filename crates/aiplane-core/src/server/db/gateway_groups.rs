@@ -27,7 +27,7 @@ pub struct GroupRow {
     pub description: String,
     pub is_admin: bool,
     pub is_default: bool,
-    /// May create and configure system principals (`docs/agents.md` §1).
+    /// May create and configure system principals (`docs/agents.md` → "Principals").
     /// `is_admin` implies it; see `Resolver::can_manage_agents`.
     pub can_manage_agents: bool,
 }

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `agents`, their immutable `agent_versions` and their `agent_shares`
-//! (`docs/agents.md` §2).
+//! (`docs/agents.md` → "Agent definition").
 //!
 //! An agent is keyed by its system principal: [`create`] writes both in one
 //! transaction and [`delete`] removes the principal, which cascades to

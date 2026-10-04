@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Agent evaluation (`docs/agents.md` §5, "What #99 built"): a stored
+//! Agent evaluation (`docs/agent-builder.md` → "Evaluation"): a stored
 //! test case is run as an isolated test conversation and judged on more than
 //! the final answer, as a Goal-Plan-Action report.
 //!

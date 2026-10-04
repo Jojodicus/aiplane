@@ -26,7 +26,7 @@ issuer/client id/secret and shows the exact `{public_url}/auth/callback`
 redirect URI to whitelist. Submitting runs a **genuine authorization-code round
 trip** — through that same production redirect URI, marked by
 `pending_logins.purpose = 'setup'` so `/auth/callback` routes it to the wizard
-instead of minting a session. Screen 2 shows the verified ID token's claims and
+rather than minting a session. Screen 2 shows the verified ID token's claims and
 asks which claim value grants admin.
 
 The round trip is the point: discovery only proves a URL answers. It does not
@@ -127,7 +127,7 @@ The distinction between API routes (`/v1/*`, `/api/v0/*`) and page routes (`/`, 
 ## System principals and `gws_` tokens
 
 A **system principal** is an identity that is not a person — CI, an
-integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principals).
+integration, and every agent. Design: [`agents.md`](agents.md#principals).
 
 - **Own tables.** `system_principals` (a slug `name`, `display`,
   `description`, `created_by`, `disabled_at`), `principal_grants` and
@@ -157,7 +157,7 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   token issued/revoked) is a row in `agent_audit` with the acting user, written
   in the same transaction as the change. Every tool call inside an agent run
   is a row there too (`kind = 'tool_call'`, no acting user, the run's call
-  chain in `chain`; see [`agents.md`](agents.md#the-call-chain)).
+  chain in `chain`; see [`agent-runs.md`](agent-runs.md#the-call-chain)).
   `GET /api/v0/system-principals/{id}` returns the trail, `chain` included.
 
 ### Management API
@@ -179,7 +179,7 @@ the field leaves it unchanged.
 | POST | `/api/v0/system-principals/{id}/tokens/{token_id}/revoke` | Revoke one token |
 
 An agent's principal (created by `POST /api/v0/agents`, see
-[`agents.md`](agents.md#what-84-built)) is reachable here too. For one of
+[`agents.md`](agents.md#agent-definition)) is reachable here too. For one of
 those, the caller also needs a share on the agent: `read` for `GET`, `write`
 for every change. Without one it answers 404 and is left out of the list.
 Admins need no share: they hold `write` on every agent.
@@ -231,13 +231,12 @@ what this process cannot see: a skill directory edited on disk, a second
 gateway writing the same database. The token's `last_used_at` is written at
 most once a minute per token (`TOUCH_EVERY`).
 
-There is no SPA screen for this yet; it is API-only.
+A principal that is not an agent has no SPA screen; it is managed through this API. An agent's principal is managed from the agent's workbench.
 
 ## Embed keys (`gwe_`) and visitor tokens (`gwv_`)
 
 The public agent endpoint `/api/v0/embed/*` serves anonymous visitors of a
-website that embeds an agent. Design: [`agents.md`](agents.md#5-visitor-sessions-and-embedding);
-what was built: [`agents.md`](agents.md#what-91-built).
+website that embeds an agent. How it works: [`agent-visitors.md`](agent-visitors.md).
 
 - **Embed key** `gwe_<64 hex>`, one per website, created by a manager with a
   `write` share under `/api/v0/agents/{id}/embed-keys` with a list of exact
@@ -249,8 +248,8 @@ what was built: [`agents.md`](agents.md#what-91-built).
   lists, and, when the conversation's agent version sets `publish.origins`,
   that list too. This keeps other websites from embedding the agent; it does not stop
   abuse, since a non-browser client sets any `Origin` it likes. Abuse is
-  bounded by the agent's default-deny grants, its gates and (with #92)
-  per-visitor and per-IP limits.
+  bounded by the agent's default-deny grants, its gates, the per-visitor and
+  per-IP limits and the owner's budget.
 - **Visitor token** `gwv_<64 hex>`, minted by `POST /api/v0/embed/sessions`
   and stored as SHA-256 (`visitor_sessions.token_hash`). The widget keeps it
   in `sessionStorage` and sends it as `Authorization: Bearer`. No cookie is
@@ -271,7 +270,7 @@ what was built: [`agents.md`](agents.md#what-91-built).
 ## A2A callers (`gws_` + `a2a_caller`)
 
 Another agent platform calls an AIplane agent over A2A
-(`/a2a/agents/{id}`, [`agents.md`](agents.md#what-102-built)) as a **system
+(`/a2a/agents/{id}`, [`agent-a2a.md`](agent-a2a.md#serving-an-agent-over-a2a)) as a **system
 principal** with its own `gws_` token. There is no new credential type:
 
 - **Scope is a grant.** The token's principal must hold `principal_grants`
@@ -282,7 +281,7 @@ principal** with its own `gws_` token. There is no new credential type:
   `WWW-Authenticate: Bearer`; a person's `gwk_` token gets `403`.
 - **Who may grant it.** `POST /api/v0/system-principals/{id}/grants
   {"kind": "a2a_caller", "ref": "<agent id>"}` needs `can_manage_agents` and
-  a `write` share on that agent (admins hold one): #77's grant-time cap, with
+  a `write` share on that agent (admins hold one): the grant-time cap, with
   "holding" an agent meaning being allowed to change it. Revoking the grant,
   the token or disabling the principal ends access at the next request.
 - **The caller is not the actor.** A task runs as the agent's principal with
@@ -301,8 +300,8 @@ The other direction — an AIplane agent calling an external A2A agent from a
 route — is grant kind **`a2a_agent`** (ref: the external agent's card URL).
 Only an admin can make it, because it lets visitor-derived data leave the
 gateway; the credential for the external agent lives sealed in the route's
-`a2a.auth` ([`agents.md`](agents.md#what-101-built)).
+`a2a.auth` ([`agent-a2a.md`](agent-a2a.md#external-agents-as-route-targets)).
 
-## What's intentionally out of scope (for now)
+## What's intentionally out of scope
 
 - **Refresh tokens between CLI and gateway** — re-login is acceptable for a 90-day TTL.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The prompt assistant end to end (`docs/agents.md` "What #117 built"):
+//! The prompt assistant end to end (`docs/agent-builder.md` → "Prompt assistant"):
 //! `POST /api/v0/agents/{id}/assist/suggest` and `…/assist/improve` on a
 //! scripted wiremock model.
 //!

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! The agent spec: its JSON layout and the validator that runs on every save
-//! and again on publish (`docs/agents.md` §2 → "Spec layout").
+//! and again on publish (`docs/agent-spec.md` → "Layout").
 //!
 //! The validator walks the JSON itself rather than deserializing into typed
 //! structs, so it can report *every* problem at once, each with the path the
@@ -1383,8 +1383,8 @@ impl<'a> Check<'a> {
         }
     }
 
-    /// The gate condition tree (`docs/agents.md` §4). Only its shape and the
-    /// slots it names; the gate checks the types (`docs/agents.md` "What #86 built").
+    /// The gate condition tree (`docs/agent-spec.md` → "Gates"). Only its shape and the
+    /// slots it names; the gate checks the types (`docs/agent-spec.md` → "Gates").
     fn cond(&mut self, v: &Value, path: &str) {
         let Value::Object(map) = v else {
             self.issue(
@@ -1862,7 +1862,7 @@ mod tests {
         issues.iter().map(|i| i.path.as_str()).collect()
     }
 
-    /// The layout from docs/agents.md §2, in JSON, with the sub-agent
+    /// The layout from docs/agent-spec.md → "Layout", in JSON, with the sub-agent
     /// referenced by id.
     fn full() -> Value {
         json!({

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! Route targets beyond a sub-agent and a person (`docs/agents.md` "What
-//! #101 built"). A target is the one key of a route that is not `when`,
+//! Route targets beyond a sub-agent and a person (`docs/agent-a2a.md` → "External agents as route targets"). A target is the one key of a route that is not `when`,
 //! `description`, `task` or `bind`; everything it needs lives under that
 //! key, so a builder that does not know a kind still finds the route's
 //! shared keys where they always are.
 //!
 //! - `a2a`: an external agent behind an A2A agent card.
-//! - `loop`: a worker and a critic, draft, critique, revise ("What #103
-//!   built").
+//! - `loop`: a worker and a critic, draft, critique, revise
+//!   (`docs/agent-runs.md` → "Loop routes").
 
 use std::collections::BTreeSet;
 

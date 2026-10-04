@@ -30,7 +30,7 @@ the environment variables it already supports.
 
    As a safety net, the per-kind unknown-model fallback (`/admin/upstreams`)
    catches any id you didn't alias: with a chat fallback configured, a model
-   name AIplane has never heard of resolves to it instead of 404ing.
+   name AIplane has never heard of resolves to it rather than 404ing.
 
 3. **Point Claude Code at AIplane.**
 
@@ -88,7 +88,7 @@ the environment variables it already supports.
 
 On a pool with several self-hosted replicas, set the pool's strategy to
 `prefix_affinity` (`/admin/upstreams`). Without it, consecutive turns of one
-session alternate between replicas and every turn pays a full prefill instead of
+session alternate between replicas and every turn pays a full prefill rather than
 a prefix-cache hit — measured on two replicas with seven interleaved
 conversations of four turns each:
 
@@ -113,7 +113,7 @@ It is optional. Without it AIplane matches the request's prompt prefix
 against a per-pool index of what each replica was recently sent, which pins a
 conversation just as well *and* lets a new session start warm on a replica that
 already holds the shared system prompt. Set the header when you want the
-guarantee instead of the inference — most usefully when sessions are launched
+guarantee rather than the inference — most usefully when sessions are launched
 from a script that always opens with the same prompt, where the prefix cannot
 tell them apart.
 
@@ -187,7 +187,7 @@ This adds an entry to `/model` rather than replacing the built-in aliases.
 | `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | Output reservation and the auto-compaction threshold; both come out of the same budget. |
 | `ANTHROPIC_CUSTOM_HEADERS="x-aiplane-affinity: …"` | Pin this session to one replica on a `prefix_affinity` pool — see [Keeping one session on one GPU](#keeping-one-session-on-one-gpu). |
 | `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | Drops the short attribution block Claude Code prepends to the system prompt. AIplane forwards that block to the model as ordinary prompt text; set this if you'd rather it weren't sent at all. |
-| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, … | Name gateway model ids directly instead of aliasing the Claude ones. |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, … | Name gateway model ids directly rather than aliasing the Claude ones. |
 
 ## What AIplane does with a request
 
@@ -250,7 +250,7 @@ inference, then asks vLLM's `POST /tokenize` to run the model's chat template
 over the messages and tool definitions. The number is the real one, not an
 estimate.
 
-A backend that doesn't expose a tokenizer gets a `404` instead of a guess, and
+A backend that doesn't expose a tokenizer gets a `404` rather than a guess, and
 Claude Code falls back to counting context from the `usage` figures on real
 responses. The first `404` from a given backend is remembered, so later counts
 don't pay for the round trip; only a status that means the endpoint is *absent*

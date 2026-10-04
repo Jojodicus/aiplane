@@ -35,7 +35,7 @@ How they work: each production `.rs` file under `crates/` (not `tests/`,
 blanked, string literal contents blanked except for the spec-key rule, which
 matches the literal on purpose — and searched for the call shape that breaks
 the rule. A hit outside the rule's allow-list fails with the file and line. An
-allow-list entry that no longer matches anything fails too, so an exception
+allow-list entry that matches nothing fails too, so an exception
 cannot outlive its reason. A scan is a tripwire, not a proof: it catches the
 silent omission in a new file, which is how every one of these invariants was
 actually broken.
@@ -53,6 +53,17 @@ production file (an undeclared `.rs` file under some `src/` is enough — the
 scan reads files, not the module tree), watch the test fail naming it, remove
 it. Prefer a `clippy.toml` entry as well where clippy can resolve the path (see
 below), so the editor points at the line.
+
+### Docs describe the current system
+
+`crates/aiplane/tests/it/docs_current.rs` reads every `docs/*.md` the same
+way and fails, naming file, line and rule, on a heading that names an issue
+(`### What #84 built`), an issue reference (`#120`) in prose, and the
+phrases `no longer` and `instead of`, which narrate a change rather than
+state a fact. Fenced code blocks and inline code spans are skipped, so a
+colour (`#242427`) or quoted code never trips it. A doc whose subject is
+history goes on its `HISTORY_DOCS` allow-list with the reason; the list is
+empty, and an entry that matches nothing fails like the architecture lists.
 
 ### The same rules in `clippy.toml`
 
@@ -109,7 +120,7 @@ Write the test before the code — red, green, refactor (**TDD**). Tests are **s
 - New tool → test that invokes it via the registry (with a mocked upstream that fakes a `tool_calls` response).
 - Schema change → round-trip serde test (`from_json(to_json(v)) == v` for a representative fixture).
 - New chat event or a change to one → a case in `web/src/lib/chat-protocol.test.ts`. The fold is deliberately framework-free so this needs no browser; wire behaviour that can only be checked through a browser is wire behaviour nobody checks.
-- New **server-rendered** string (error envelopes, the chat-render helpers) → a Fluent key in `locales/en/<module>.ftl` **and** its translation in all 5 other locales (`de`/`fr`/`es`/`ru`/`zh`) — not a checklist item you can skip: `session-core/build.rs` won't let the crate compile otherwise. The SPA renders the same six-language Fluent corpus as the server (generated into `web/src/lib/locales/` by `mise run gen-locales`, guarded by `i18n_drift`). See [`docs/ui.md`](ui.md#i18n--what-still-applies).
+- New **server-rendered** string (error envelopes, the chat-render helpers) → a Fluent key in `locales/en/<module>.ftl` **and** its translation in all 5 other locales (`de`/`fr`/`es`/`ru`/`zh`) — not a checklist item you can skip: `session-core/build.rs` won't let the crate compile otherwise. The SPA renders the same six-language Fluent corpus as the server (generated into `web/src/lib/locales/` by `mise run gen-locales`, guarded by `i18n_drift`). See [`docs/ui.md`](ui.md#i18n).
 
 If a change has no tests, the PR description must explain why and which existing test covers it.
 
@@ -138,7 +149,7 @@ The version-controlled pre-push git hook (`.githooks/pre-push`, enabled with `mi
 - Driver: Node's built-in `node:test` + Playwright. No project-level `node_modules` — the tests import `playwright` directly out of the mise-installed `npm:@playwright/cli` tool, with the path overridable via `$PLAYWRIGHT_DIR`.
 - Run with `mise run e2e` against a live `mise run dev` in another terminal. The public `:8080` origin is Vite/HMR and proxies the complete gateway surface to private `:8081`, so the browser suites exercise the everyday development topology. Use `mise run dev-served` when the compiled SPA itself is under test. The task points `PLAYWRIGHT_DIR` at the mise-installed `npm:@playwright/cli` automatically. See `e2e/README.md` for first-time setup (shared libs + a one-time Chromium download).
 - `e2e/spa-chat.test.mjs` needs a running AIplane with a chat upstream, so it targets `dev-ui` (`AIPLANE_STATIC_DIR=target/frontend/build mise run dev-ui`) and skips with a pointer at that command when no pool is configured.
-- `AIPLANE_URL` (default `http://localhost:8080`) targets a specific gateway; `CHROMIUM_HEADED=1` shows the browser instead of running headless.
+- `AIPLANE_URL` (default `http://localhost:8080`) targets a specific gateway; `CHROMIUM_HEADED=1` shows the browser rather than running headless.
 - **Not part of the CI default** — the browser suite needs a running gateway and Chromium, so it stays a local/opt-in loop.
 - Authenticated flows (`e2e/authed.test.mjs`, the `spa*` signed-in tests) don't need OIDC: they sign in through the debug-only `/__dev/*` seeding endpoints (`rama_server::dev_seed`), compiled in under `cfg(debug_assertions)` and never present in a release build. `/__dev/seed-session` resets the canonical fixture (user `alice@example.com` + her three tokens) and is reserved for the one file that asserts those counts; everything else uses the delete-free `/__dev/session`. Completing setup is also how the suite makes `/readyz` deterministic on a fresh dev database.
 
@@ -195,10 +206,10 @@ report. These four existing alerts have specific false-positive rationales:
 
 | GitHub alert | Code | Rationale |
 | --- | --- | --- |
-| #52 | `crypto::sha256_hex`, called by `auth::token` | Gateway bearer tokens are generated from 32 OS-random bytes, not user-chosen passwords. SHA-256 is used for lookup of these high-entropy credentials; password hashing rules do not apply. Revisit if human-chosen credentials ever reach this path. |
-| #81 | `known_answers::a_ciphertext_from_an_earlier_release_still_opens` | The fixed nonce belongs to a historical decryption-only test vector. Production encryption generates a fresh nonce. |
-| #93 | `known_answers::key_derivation_is_byte_for_byte_stable` | A fixed session-secret input pins the exact HMAC derivation output across releases. It is not a deployed credential. |
-| #94 | `known_answers::a_ciphertext_from_an_earlier_release_still_opens` | The fixed AES key must match the historical ciphertext. Randomizing it would remove the compatibility check. |
+| 52 | `crypto::sha256_hex`, called by `auth::token` | Gateway bearer tokens are generated from 32 OS-random bytes, not user-chosen passwords. SHA-256 is used for lookup of these high-entropy credentials; password hashing rules do not apply. Revisit if human-chosen credentials ever reach this path. |
+| 81 | `known_answers::a_ciphertext_from_an_earlier_release_still_opens` | The fixed nonce belongs to a historical decryption-only test vector. Production encryption generates a fresh nonce. |
+| 93 | `known_answers::key_derivation_is_byte_for_byte_stable` | A fixed session-secret input pins the exact HMAC derivation output across releases. It is not a deployed credential. |
+| 94 | `known_answers::a_ciphertext_from_an_earlier_release_still_opens` | The fixed AES key must match the historical ciphertext. Randomizing it would remove the compatibility check. |
 
 Preserve these known-answer vectors unchanged. Other round-trip fixtures use
 ephemeral keys; production entropy failure must never substitute a fixed key.

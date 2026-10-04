@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The agent activity log (`docs/agents.md`, "What #111 built"): an
+//! The agent activity log (`docs/agent-activity-log.md`): an
 //! append-only, hash-chained record of everything done to or by a system
 //! principal, in the `agent_audit` table.
 //!

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 croit GmbH
 
 //! `forward_request()`: the router and sub-agent dispatch
-//! (`docs/agents.md` §3, "What #87/#88 built").
+//! (`docs/agent-runs.md` → "The router").
 //!
 //! The tool takes no arguments. The gateway decides from state:
 //! 1. Every route's gate is evaluated. Only open routes are candidates; with
