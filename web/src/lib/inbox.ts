@@ -25,6 +25,8 @@ export interface InboxItem {
 	title?: string;
 	question?: string;
 	call?: { name: string; arguments: string };
+	/** What an approved call would do, in the tool's own words. */
+	detail?: string;
 	context?: HandoffContext;
 	options: DecisionKind[];
 	created_at: string;

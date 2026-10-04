@@ -824,7 +824,9 @@ agent's responders), and their own paused scheduled or webhook runs. It is the `
 [`agents.md`](agents.md#what-96-built); the data layer and pure helpers are
 `web/src/lib/inbox.ts` (unit-tested in `inbox.test.ts`).
 
-- **An item** is a [suspension card](#suspension-card) under a heading with
+- **An item** (`{…, question?, call?, detail?, context?}`: `detail` is an
+  approval's `message`, such as `schedule_action`'s preview) is a
+  [suspension card](#suspension-card) under a heading with
   the agent (or the run's title), its kind and when it was asked. A
   manager's item links to the agent, an owner's to the chat; a responder's
   links nowhere, since they may open nothing else.

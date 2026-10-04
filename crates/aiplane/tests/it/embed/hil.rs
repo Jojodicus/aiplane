@@ -693,3 +693,58 @@ async fn a_scheduled_run_that_paused_is_resumed_from_its_owners_inbox() {
     }
     panic!("the resumed run never finished");
 }
+
+/// What `schedule_action` would schedule is its approval's `detail`, so the
+/// owner deciding from the inbox reads it as the chat would show it.
+#[tokio::test]
+async fn a_paused_schedule_shows_its_preview_in_the_owners_inbox() {
+    let llm = upstream(vec![call(
+        "s1",
+        "schedule_action",
+        json!({"name": "Weekly summary", "prompt": "Summarise last week.", "cron": "0 8 * * 1"}),
+    )])
+    .await;
+    let tools = ToolRegistry::new()
+        .with(CurrentTimestamp)
+        .with(aiplane_tools::schedule::ScheduleAction);
+    let fx = agents::fixture_with(Some(&llm.uri()), tools, &[TIME, "schedule_action"]).await;
+    scheduled::create(
+        &fx.state.db,
+        NewAction {
+            user_id: "plain".into(),
+            name: "Planner".into(),
+            prompt: "Set up the weekly summary.".into(),
+            model: "m".into(),
+            cron: "0 3 * * *".into(),
+            timezone: "UTC".into(),
+            tools_enabled: true,
+            reuse_conversation: false,
+            reuse_rounds: 0,
+            next_run_at: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60)),
+        },
+    )
+    .await
+    .unwrap();
+    scheduled::worker::spawn(Arc::new(fx.state.clone()));
+
+    let mut item = Value::Null;
+    for _ in 0..500 {
+        let (_, inbox) = fx.get(&fx.plain, "/api/v0/agents/inbox").await;
+        if inbox["count"] == 1 {
+            item = inbox["items"][0].clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(item["kind"], "approval", "{item}");
+    assert_eq!(item["call"]["name"], "schedule_action");
+    let detail = item["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("Weekly summary") && detail.contains("UTC"),
+        "the preview reaches the inbox: {item}"
+    );
+    assert!(
+        item.get("question").is_none(),
+        "an approval asks no question: {item}"
+    );
+}
