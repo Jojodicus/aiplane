@@ -337,6 +337,8 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
             ..chat_pool(&upstream.uri(), vec![])
         },
     );
+    // Not probed yet: it serves nothing until a test seeds it.
+    pools.insert("late".to_string(), chat_pool(&upstream.uri(), vec![]));
     for (name, kind) in [("embed", PoolKind::Embedding), ("image", PoolKind::Image)] {
         pools.insert(
             name.to_string(),
@@ -1311,12 +1313,21 @@ async fn a_model_grant_routes_only_through_the_pools_its_manager_could_use() {
         .find(|g| g["ref"] == "model-a")
         .cloned()
         .unwrap();
-    assert_eq!(grant["pools"], json!(["pool"]), "{shown}");
+    assert_eq!(
+        grant["pools"],
+        json!(["late", "pool"]),
+        "every chat pool the manager may use, serving the model yet or not: {shown}"
+    );
 
     assert!(reaches(&fx, &id, "pool").await);
     assert!(
         !reaches(&fx, &id, "vip").await,
         "the manager could not use `vip`"
+    );
+    common::seed_pool_models(&fx.state.upstreams, "late", 0, &["model-a"]);
+    assert!(
+        reaches(&fx, &id, "late").await,
+        "a pool the manager could use serves it later: the grant reaches it"
     );
 
     let (status, body) = fx.grant(&fx.admin, &id, "model", "model-a").await;

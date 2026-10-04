@@ -153,10 +153,13 @@ pub async fn holds(
     Ok(held)
 }
 
-/// The pools a `model` grant `user` makes routes through: those they may use
-/// that serve `model` — for an automatic route, any of its members. `None`
-/// for an admin, whose grant routes through every pool serving it, as their
-/// own requests do.
+/// The pools a `model` grant `user` makes routes through: every pool of the
+/// model's kind they may use — for an automatic route, of chat and selector
+/// models — whether it serves the model right now or not, so a pool that is
+/// down or not probed yet when the grant is made still counts once it serves
+/// it. Routing takes those that serve it at request time. `None` for an
+/// admin, whose grant routes through every pool serving it, as their own
+/// requests do.
 pub async fn model_grant_pools(
     state: &RamaState,
     user: &users::User,
@@ -165,15 +168,29 @@ pub async fn model_grant_pools(
     if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) {
         return Ok(None);
     }
-    let route = automatic_routes::get(&state.db, model).await?;
-    let names: Vec<&str> = match &route {
-        Some(route) => route.members().collect(),
-        None => vec![model],
+    let kinds = match automatic_routes::get(&state.db, model).await? {
+        Some(_) => vec![PoolKind::Chat, PoolKind::SystemOne],
+        None => kinds_of(state, model).await,
     };
-    Ok(Some(state.upstreams.pools_knowing(
-        &names,
+    Ok(Some(state.upstreams.pools_of_kinds(
+        &kinds,
         &state.pool_access_for(&user.roles),
     )))
+}
+
+/// The kinds of model `model` is offered as anywhere on the gateway.
+async fn kinds_of(state: &RamaState, model: &str) -> Vec<PoolKind> {
+    let mut kinds = Vec::new();
+    for kind in GRANTABLE_KINDS {
+        if model_choices::offered(state, kind, &PoolAccess::all())
+            .await
+            .iter()
+            .any(|c| c.id == model)
+        {
+            kinds.push(kind);
+        }
+    }
+    kinds
 }
 
 /// The choice named `model` among the models of every kind an agent can use

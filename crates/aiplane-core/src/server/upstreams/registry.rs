@@ -2041,14 +2041,14 @@ impl UpstreamRegistry {
             .any(|p| p.kind == kind && p.knows_model(model))
     }
 
-    /// The pools `access` may use that know any of `models`, by name and
-    /// sorted: what a model grant made by that caller routes through.
-    pub fn pools_knowing(&self, models: &[&str], access: &PoolAccess) -> Vec<String> {
+    /// The pools of `kinds` `access` may use, by name and sorted — served
+    /// models aside: what a model grant made by that caller routes through.
+    pub fn pools_of_kinds(&self, kinds: &[PoolKind], access: &PoolAccess) -> Vec<String> {
         let mut names: Vec<String> = self
             .data()
             .pools
             .values()
-            .filter(|p| access.allows(p) && models.iter().any(|m| p.knows_model(m)))
+            .filter(|p| kinds.contains(&p.kind) && access.allows(p))
             .map(|p| p.name.clone())
             .collect();
         names.sort();
