@@ -25,7 +25,7 @@
 	import ConversationCanvas from '$lib/components/chat/ConversationCanvas.svelte';
 	import MessageAttachments from '$lib/components/chat/MessageAttachments.svelte';
 	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
-	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
+	import { pausedTurn, waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
 	import { feedback, openDialog as openFeedback } from '$lib/feedback.svelte';
 	import { clearPageTitleOverride, setPageTitleOverride } from '$lib/page-title';
 	import { page } from '$app/state';
@@ -160,6 +160,8 @@
 	const turns = $derived(controller ? controller.state.turns : []);
 	const streaming = $derived(controller !== null && controller.state.liveTurnId !== null);
 	const prompt = $derived(controller?.state.prompt ?? null);
+	// A turn waiting for a decision holds the conversation until it is answered.
+	const paused = $derived(pausedTurn(turns));
 	const selectedModel = $derived(models.find((candidate) => candidate.id === model));
 	/**
 	 * Whether the effort control does anything for the selected model.
@@ -356,7 +358,7 @@
 
 	/** Voice turns submit exactly like typed ones — plus the flag. */
 	async function submitVoiceTurn(text: string) {
-		if (!model.trim() || sending) return;
+		if (!model.trim() || sending || paused) return;
 		sending = true;
 		try {
 			await api.sendChatMessage(id, { model: model.trim(), message: text, voice: true });
@@ -426,7 +428,7 @@
 	 */
 	async function send(): Promise<boolean> {
 		const text = draft.trim();
-		if ((!text && files.length === 0) || !model.trim() || sending) return false;
+		if ((!text && files.length === 0) || !model.trim() || sending || paused) return false;
 		sending = true;
 		notice = null;
 		const sentText = text;
@@ -1056,6 +1058,7 @@
 {:else}
 <div data-chat-composer class="card mt-3 w-full shrink-0 border border-base-300 bg-base-100/85 backdrop-blur-sm">
 	<div class="flex flex-col gap-1 p-2">
+		{#if paused}<p class="m-0 px-2 text-sm text-warning" role="status">{t('chat-composer-paused')}</p>{/if}
 		<div class="flex flex-wrap items-center gap-2">
 			<CapabilityPicker capabilities={tools} onset={setCapability} />
 			<span class="flex-1"></span>
@@ -1105,6 +1108,7 @@
 				class="textarea textarea-ghost min-h-11 max-h-48 flex-1 resize-none focus:outline-none"
 				rows="1"
 				placeholder={t('chat-render-composer-placeholder')}
+				disabled={paused !== null}
 				bind:value={draft}
 				onkeydown={onKeydown}
 				onpaste={onPaste}
@@ -1157,7 +1161,7 @@
 					<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
 				</button>
 			{:else}
-				<button class="btn btn-sm btn-circle btn-primary" onclick={send} disabled={(!draft.trim() && files.length === 0) || !model.trim() || sending} aria-label={t('render-composer-send')} title={t('render-composer-send')}>
+				<button class="btn btn-sm btn-circle btn-primary" onclick={send} disabled={(!draft.trim() && files.length === 0) || !model.trim() || sending || paused !== null} aria-label={t('render-composer-send')} title={t('render-composer-send')}>
 					<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5m0 0-6 6m6-6 6 6" /></svg>
 				</button>
 			{/if}

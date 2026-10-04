@@ -368,6 +368,11 @@ pub async fn message_send(
         }
     };
 
+    // Before the body too: a refused message must not upload attachments.
+    if let Err(err) = super::refuse_while_paused(&state, &active.id).await {
+        return submit_refusal(err);
+    }
+
     let user_turn_id = uuid::Uuid::new_v4().to_string();
     let (_, body) = req.into_parts();
     let submit = if content_type.starts_with("multipart/form-data") {
@@ -456,6 +461,9 @@ fn submit_refusal(err: SubmitTurnError) -> Response {
             "rate_limited",
             "rate limit or quota exceeded — see /usage",
         ),
+        SubmitTurnError::DecisionPending(message) => {
+            json_error(StatusCode::CONFLICT, "decision_pending", &message)
+        }
         SubmitTurnError::Db(msg) => {
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", &msg)
         }

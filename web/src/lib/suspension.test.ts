@@ -8,6 +8,7 @@ import {
 	prettyArguments,
 	slotLine,
 	slotText,
+	pausedTurn,
 	waitingFrom,
 	waitingLead,
 	type SuspensionView
@@ -38,6 +39,13 @@ test('the lead says what the conversation waits for, in the chat and in the test
 	assert.equal(waitingLead('secure_input', 'test'), 'agents-test-waiting-secure-input');
 	assert.equal(waitingLead('approval', 'test'), 'agents-test-waiting-approval');
 	assert.equal(waitingLead('human_answer', 'test'), 'agents-test-waiting-human');
+});
+
+test('a conversation is held while one of its turns waits for a decision', () => {
+	const live = (id: string, status: string) => ({ turn: { id, status } });
+	assert.equal(pausedTurn([live('u1', 'completed'), live('a1', 'suspended')]), 'a1');
+	assert.equal(pausedTurn([live('u1', 'completed'), live('a1', 'completed')]), null);
+	assert.equal(pausedTurn([]), null);
 });
 
 test('a staff answer is typed in the clear, a visitor secret masked', () => {

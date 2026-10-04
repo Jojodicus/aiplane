@@ -1146,6 +1146,7 @@ export const ru: Catalog = {
  "backends-test-unreachable": "Не удалось связаться с {url}: {err}",
  "chat-composer-interrupt": "Прервать и перенаправить",
  "chat-composer-interrupt-title": "Остановить текущий ответ и отправить вместо него это. Написанное остаётся в переписке.",
+ "chat-composer-paused": "Сначала одобрите или отклоните запрос выше; следующее сообщение ждёт этого решения.",
  "chat-composer-send-during-turn-title": "Отправить. Пока пишется ответ, это добавляется к нему; если не успеет — будет отправлено следующим сообщением.",
  "chat-default-title": "Чат",
  "chat-error-attachment-not-found": "не найдено",

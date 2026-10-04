@@ -1134,6 +1134,7 @@ export const de: Catalog = {
  "backends-test-unreachable": "{url} nicht erreichbar: {err}",
  "chat-composer-interrupt": "Unterbrechen und neu ansetzen",
  "chat-composer-interrupt-title": "Die laufende Antwort abbrechen und stattdessen dies senden. Das bisher Geschriebene bleibt im Gespräch.",
+ "chat-composer-paused": "Gib oder verweigere zuerst die Freigabe oben; die nächste Nachricht wartet auf diese Entscheidung.",
  "chat-composer-send-during-turn-title": "Senden. Während eine Antwort entsteht, wird dies ergänzt; kommt es zu spät, wird es als nächste Nachricht gesendet.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "nicht gefunden",

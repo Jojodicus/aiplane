@@ -1128,6 +1128,7 @@ export const zh: Catalog = {
  "backends-test-unreachable": "无法连接 {url}：{err}",
  "chat-composer-interrupt": "中断并重新提问",
  "chat-composer-interrupt-title": "停止当前回答，改为发送这条。已经写出的内容仍保留在会话中。",
+ "chat-composer-paused": "请先批准或拒绝上方的请求；下一条消息需等待该决定。",
  "chat-composer-send-during-turn-title": "发送。回答生成期间，这条会补充进去；若送达太晚，则作为下一条消息发送。",
  "chat-default-title": "聊天",
  "chat-error-attachment-not-found": "未找到",

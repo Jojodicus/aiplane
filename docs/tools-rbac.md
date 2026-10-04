@@ -791,9 +791,12 @@ call only while the turn lives in memory; this pause is durable.
 - **Restart.** Nothing is held in memory: the startup sweep leaves suspended
   turns and their waiting call alone, and the resume runs on whichever
   process gets it.
-- **Holding the conversation.** A suspended turn holds its conversation as a
-  running worker does: a new message is queued behind it and starts once the
-  turn finishes; `…/cancel` gives the decision up (`cancelled`).
+- **Holding the conversation.** A suspended turn holds its conversation: a
+  new message is refused with `409 decision_pending`
+  (`agents::run::refuse_if_waiting`, the rule agent runs and the test chat
+  follow too), since it would run before the paused call, in a context the
+  decision was not asked about; `…/cancel` gives the decision up. The public
+  embed endpoint alone queues one visitor message behind the decision.
 
 `AskFirst::new(tool, timeout)` (`server/tools/ask_first.rs`) is the first
 consumer: it keeps the wrapped tool's id and schema, pauses every call for an

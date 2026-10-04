@@ -15,7 +15,7 @@
 //!     timeout fallback;
 //!   - only the turn's owner may answer, only with a decision the request
 //!     offers, and only while it is waiting;
-//!   - a paused conversation holds new messages back until it is settled, and
+//!   - a paused conversation refuses new messages until it is settled, and
 //!     cancelling it gives up on the decision;
 //!   - a connector tool in `ask` mode is offered in chat and waits the same
 //!     way: it runs once approved and never when denied;
@@ -530,24 +530,85 @@ async fn only_the_owner_answers_only_with_an_offered_decision_and_only_once() {
     assert_eq!(body["error"]["code"], "not_suspended", "{body}");
 }
 
-#[tokio::test]
-async fn a_paused_conversation_holds_new_messages_and_cancel_gives_up_on_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = upstream("Done.", Duration::ZERO).await;
-    let (state, cookie, session_id, turn_id) =
-        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
-
+/// A message into `session_id`: the status and the body.
+async fn say(state: &Arc<RamaState>, cookie: &str, session_id: &str) -> (StatusCode, Value) {
     let resp = router(state.clone())
         .serve(post(
             format!("/api/v0/chat/sessions/{session_id}/messages"),
-            &cookie,
+            cookie,
             json!({"model": "model-a", "message": "anything else?"}),
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert_eq!(json_body(resp).await["placement"], "queued");
-    assert_eq!(state.chats.running_for_user("alice"), 0);
+    let status = resp.status();
+    (status, json_body(resp).await)
+}
+
+/// A message sent while a call waits for a decision would run before it, in
+/// a context the decision was not asked about. It is refused, saying what to
+/// do, and nothing is stored or queued.
+fn assert_refused_while_paused(status: StatusCode, body: &Value) {
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "decision_pending", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("decision")),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_paused_conversation_refuses_new_messages_until_the_decision_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Done.", Duration::ZERO).await;
+    let (state, cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
+    let before = chat::list_turns(&state.db, &session_id)
+        .await
+        .unwrap()
+        .len();
+
+    let (status, body) = say(&state, &cookie, &session_id).await;
+    assert_refused_while_paused(status, &body);
+    assert_eq!(
+        chat::list_turns(&state.db, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        before,
+        "nothing stored"
+    );
+    assert!(
+        chat::list_pending_for_session(&state.db, &session_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing queued"
+    );
+
+    let (status, body) = resume(
+        &state,
+        &cookie,
+        &session_id,
+        &turn_id,
+        json!({"decision": "deny"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    wait_for_status(&state, &session_id, &turn_id, TurnStatus::Completed).await;
+
+    let (status, body) = say(&state, &cookie, &session_id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["placement"], "started");
+}
+
+#[tokio::test]
+async fn cancelling_a_paused_turn_gives_up_on_it_and_frees_the_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = upstream("Done.", Duration::ZERO).await;
+    let (state, cookie, session_id, turn_id) =
+        paused(&dir.path().join("gateway.db"), &server.uri(), AN_HOUR).await;
 
     let resp = router(state.clone())
         .serve(post(
@@ -565,18 +626,9 @@ async fn a_paused_conversation_holds_new_messages_and_cancel_gives_up_on_it() {
     assert_eq!(cancelled.turn.status, TurnStatus::Cancelled);
     assert_eq!(cancelled.tool_calls[0].status, ToolCallStatus::Errored);
 
-    // Giving up freed the conversation, so the held message starts.
-    for _ in 0..200 {
-        if chat::list_pending_for_session(&state.db, &session_id)
-            .await
-            .unwrap()
-            .is_empty()
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the held message never started");
+    let (status, body) = say(&state, &cookie, &session_id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["placement"], "started");
 }
 
 /// A connector with one shared identity whose one tool its server marks

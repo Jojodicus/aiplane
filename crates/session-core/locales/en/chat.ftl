@@ -21,6 +21,7 @@ chat-turn-stopped = stopped
 chat-waiting-approval = Runs { $tool } only once you approve it.
 chat-waiting-value = Waits for a value only you may type. It goes to the tool, never to the model.
 chat-waiting-answer = Waits for a person's answer.
+chat-composer-paused = Approve or deny the request above first; the next message waits for that decision.
 chat-prompt-heading = The assistant asks
 chat-prompt-placeholder = Type an answer…
 chat-prompt-answer = Answer

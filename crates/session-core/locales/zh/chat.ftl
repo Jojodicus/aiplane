@@ -22,6 +22,7 @@ chat-turn-stopped = 已停止
 chat-waiting-approval = 仅在您批准后才会运行 { $tool }。
 chat-waiting-value = 等待只有您可以输入的值。它只会发送给工具，绝不会发送给模型。
 chat-waiting-answer = 等待人员的回答。
+chat-composer-paused = 请先批准或拒绝上方的请求；下一条消息需等待该决定。
 chat-prompt-heading = 助手提问
 chat-prompt-placeholder = 输入答案…
 chat-prompt-answer = 回答

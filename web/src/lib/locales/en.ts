@@ -1134,6 +1134,7 @@ export const en: Catalog = {
  "backends-test-unreachable": "Could not reach {url}: {err}",
  "chat-composer-interrupt": "Interrupt and re-aim",
  "chat-composer-interrupt-title": "Stop the current answer and send this instead. What was written so far stays in the conversation.",
+ "chat-composer-paused": "Approve or deny the request above first; the next message waits for that decision.",
  "chat-composer-send-during-turn-title": "Send. While an answer is being written this is added to it, and if it arrives too late it is sent as the next message.",
  "chat-default-title": "Chat",
  "chat-error-attachment-not-found": "not found",

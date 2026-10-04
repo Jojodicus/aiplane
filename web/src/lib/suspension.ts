@@ -94,6 +94,15 @@ export function waitingLead(kind: SuspensionKind, where: 'chat' | 'test'): strin
 	return keys[kind][where === 'chat' ? 0 : 1];
 }
 
+/**
+ * The turn a conversation waits on for a decision, if any. Until it is
+ * answered the conversation takes no new message: one sent now would run
+ * before the paused call, in a context the decision was not asked about.
+ */
+export function pausedTurn(turns: { turn: { id: string; status: string } }[]): string | null {
+	return turns.find((live) => live.turn.status === 'suspended')?.turn.id ?? null;
+}
+
 /** The buttons a card offers, exactly the decisions it was offered; `value` is the answer form's own button. */
 export function decisionButtons(waiting: Pick<Waiting, 'kind' | 'options'>): { decision: DecisionKind; key: string; primary: boolean }[] {
 	const buttons: { decision: DecisionKind; key: string; primary: boolean }[] = [];
