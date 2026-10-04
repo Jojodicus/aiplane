@@ -88,22 +88,19 @@ where
         // the browser sends `OPTIONS` without the `Authorization` header,
         // so the preflight must not be gated on auth.
         if req.method() == Method::OPTIONS {
-            let mut resp = Response::new(Body::empty());
-            *resp.status_mut() = StatusCode::NO_CONTENT;
-            apply_cors_headers(resp.headers_mut(), origin);
-            return Ok(resp);
+            return Ok(V1_CORS.preflight(origin));
         }
 
         // Actual request: run the handler, then decorate the response.
         // Header-only, so this works identically for JSON, error envelopes,
         // audio, and streaming (SSE) bodies.
         let mut resp = self.inner.serve(req).await?;
-        apply_cors_headers(resp.headers_mut(), origin);
+        V1_CORS.apply(resp.headers_mut(), origin);
         Ok(resp)
     }
 }
 
-/// The request headers a cross-origin caller may set on a `/v1` request.
+/// The `/v1` answer.
 ///
 /// `authorization` and `x-api-key` are the two spellings of the same gateway
 /// token (see `rama_server::auth`), so allowing only the first would let an
@@ -111,26 +108,56 @@ where
 /// `anthropic-version` rides on *every* Messages API request, and
 /// `anthropic-beta` is forwarded upstream deliberately — both are useless if
 /// the preflight rejects them before the handler ever runs.
-const ALLOWED_REQUEST_HEADERS: &str =
-    "authorization, content-type, x-api-key, anthropic-version, anthropic-beta";
+const V1_CORS: CorsHeaders = CorsHeaders {
+    allow_headers: "authorization, content-type, x-api-key, anthropic-version, anthropic-beta",
+    max_age_secs: "86400",
+};
 
-/// Write the four `Access-Control-*` headers — plus `Vary: Origin`, since
-/// the allow-origin value is derived from the request — into `headers`.
-fn apply_cors_headers(headers: &mut HeaderMap, origin: HeaderValue) {
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, OPTIONS"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static(ALLOWED_REQUEST_HEADERS),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_MAX_AGE,
-        HeaderValue::from_static("86400"),
-    );
-    // Reflected origin ⇒ shared caches must key on the `Origin` request
-    // header. `append`, so any `Vary` an inner handler already set is kept.
+/// The `Access-Control-*` headers one cross-origin surface answers with. The
+/// surfaces decide differently *which* origin to allow (`/v1` reflects any,
+/// the embed endpoint only a live embed key's); what they write once they
+/// allow one is this.
+pub struct CorsHeaders {
+    /// The request headers a cross-origin caller may set.
+    pub allow_headers: &'static str,
+    /// How long a browser may cache the preflight answer.
+    pub max_age_secs: &'static str,
+}
+
+impl CorsHeaders {
+    /// Allow `origin`: the four `Access-Control-*` headers, plus
+    /// `Vary: Origin`, since the allow-origin value is derived from the
+    /// request.
+    pub fn apply(&self, headers: &mut HeaderMap, origin: HeaderValue) {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, OPTIONS"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static(self.allow_headers),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static(self.max_age_secs),
+        );
+        vary_origin(headers);
+    }
+
+    /// The `204` that answers an allowed preflight, without running the
+    /// handler: the browser sends `OPTIONS` without credentials.
+    pub fn preflight(&self, origin: HeaderValue) -> Response {
+        let mut resp = Response::new(Body::empty());
+        *resp.status_mut() = StatusCode::NO_CONTENT;
+        self.apply(resp.headers_mut(), origin);
+        resp
+    }
+}
+
+/// `Vary: Origin` — shared caches must key on the `Origin` request header
+/// whenever the answer depends on it, allowed or not. `append`, so any
+/// `Vary` an inner handler already set is kept.
+pub fn vary_origin(headers: &mut HeaderMap) {
     headers.append(header::VARY, HeaderValue::from_static("origin"));
 }
