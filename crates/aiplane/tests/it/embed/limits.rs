@@ -282,7 +282,7 @@ async fn spend(e: &Embed, tokens: i64) {
             user_email: Some("billing".into()),
             token_id: None,
             token_name: None,
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             kind: UsageKind::Chat,
             backend: "mock".into(),
             model: "m".into(),

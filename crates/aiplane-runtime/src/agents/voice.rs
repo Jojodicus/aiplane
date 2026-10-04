@@ -326,7 +326,7 @@ async fn finish<T>(
                 user_email: Some(conversation.principal.name.clone()),
                 token_id: None,
                 token_name: None,
-                source: UsageSource::Scheduled,
+                source: UsageSource::Agent,
                 kind: usage.kind,
                 backend: usage.backend,
                 enforce_limits: state.upstreams.enforce_limits_for_model(&model, pool_kind),

@@ -368,7 +368,7 @@ impl RunProfile {
             session_id: session_id.to_string(),
             assistant_turn_id: assistant_turn_id.to_string(),
             model: self.model.clone(),
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             history_limit: None,
         })
     }

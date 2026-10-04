@@ -16,6 +16,7 @@ usage-source-all = 所有来源
 usage-source-api = API (/v1)
 usage-source-chat = 聊天界面
 usage-source-scheduled = 计划任务
+usage-source-agent = 智能体
 usage-backend-all = 所有后端
 
 usage-filter-period = 时间段

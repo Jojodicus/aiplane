@@ -827,7 +827,7 @@ async fn spend(a: &A2a, tokens: i64) {
             user_email: Some("support".into()),
             token_id: None,
             token_name: None,
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             kind: UsageKind::Chat,
             backend: "mock".into(),
             model: "m".into(),

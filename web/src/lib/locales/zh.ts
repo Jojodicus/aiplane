@@ -2658,6 +2658,7 @@ export const zh: Catalog = {
  "usage-period-this-month": "本月",
  "usage-period-this-week": "本周",
  "usage-period-today": "今天",
+ "usage-source-agent": "智能体",
  "usage-source-all": "所有来源",
  "usage-source-api": "API (/v1)",
  "usage-source-chat": "聊天界面",

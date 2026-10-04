@@ -1728,6 +1728,11 @@ model rule, and retention.
   and the sub-agents' (as before, now with `agent_id`), and the router's
   classifier call, which wrote no usage row until now. Usage rows need
   `[usage] enabled`; with metrics off, nothing is ever spent against a budget.
+  Every agent row — a turn's rounds, the router and the scope guard's side
+  calls, voice — has `source = 'agent'` (`UsageSource::Agent`), however the
+  conversation came in (embed, A2A, a parent's route, the test chat), so the
+  Usage page tells an agent's traffic apart from a person's scheduled
+  actions and filters it as *Agents*.
 - **Spec settings** (`publish`, validated on save):
   - `rate_limits.visitor` / `rate_limits.ip`: `{max, per}`, both required,
     `max ≥ 1`, `per` a duration. Defaults when unset: **20 messages per 10

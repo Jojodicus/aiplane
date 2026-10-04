@@ -1470,8 +1470,9 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
     .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
-    let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
-        "SELECT user_id, agent_id, principal_kind, model FROM usage_events ORDER BY created_at",
+    let rows: Vec<(String, Option<String>, String, String, String)> = sqlx::query_as(
+        "SELECT user_id, agent_id, principal_kind, model, source FROM usage_events \
+         ORDER BY created_at",
     )
     .fetch_all(world.db())
     .await
@@ -1501,6 +1502,10 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
         "{rows:?}"
     );
     assert!(rows.iter().all(|r| r.2 == "system"), "{rows:?}");
+    assert!(
+        rows.iter().all(|r| r.4 == "agent"),
+        "an agent's turns and side calls are agent traffic, not scheduled runs: {rows:?}"
+    );
     let chain: Option<String> =
         sqlx::query_scalar("SELECT chain FROM usage_events WHERE model = 'helper-model' LIMIT 1")
             .fetch_one(world.db())
