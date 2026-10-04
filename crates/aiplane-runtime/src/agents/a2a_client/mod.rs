@@ -157,34 +157,6 @@ impl A2aTarget {
     }
 }
 
-/// Replace every plaintext credential of an `a2a` route with its sealed
-/// form, so no draft, version, audit row or GET carries it.
-pub fn seal_secrets(
-    spec: &mut Value,
-    crypto: &aiplane_core::server::crypto::Crypto,
-) -> Result<(), String> {
-    let Some(routes) = spec.get_mut("routes").and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    for route in routes.values_mut() {
-        let Some(auth) = route
-            .pointer_mut("/a2a/auth")
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        for key in ["token", "client_secret"] {
-            if let Some(Value::String(secret)) = auth.remove(key) {
-                let sealed = crypto
-                    .seal_to_string(&secret)
-                    .map_err(|e| format!("sealing the A2A credential failed: {e}"))?;
-                auth.insert(format!("{key}_sealed"), Value::String(sealed));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// The structured result inside the parts of a task's artifacts or a
 /// message: the first `data` object, else the first text that parses as a
 /// JSON object.

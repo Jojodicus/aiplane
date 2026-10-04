@@ -61,6 +61,7 @@ use verifiers::HOST_JWT;
 mod a2a;
 pub mod model;
 mod route_kinds;
+pub mod secrets;
 mod verifiers;
 use super::state::StateSchema;
 use crate::finish::FinishContract;

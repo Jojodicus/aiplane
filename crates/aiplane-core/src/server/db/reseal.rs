@@ -95,6 +95,37 @@ const COLUMNS: &[Column] = &[
     },
 ];
 
+/// The suffix of a JSON key whose string value is sealed (`"<nonce>.<ct>"`,
+/// [`Crypto::seal_to_string`]). Agent specs keep their credentials this way
+/// (`token_sealed`, `secret_sealed`, …), so this pass finds every one of
+/// them without knowing the spec's layout.
+pub const SEALED_SUFFIX: &str = "_sealed";
+
+/// A JSON text column that may carry sealed strings under
+/// [`SEALED_SUFFIX`] keys, addressed by `rowid`.
+struct JsonColumn {
+    table: &'static str,
+    column: &'static str,
+}
+
+/// Every agent spec as stored: the draft, each autosaved revision of it and
+/// each published version. The audit trail's copies are left alone: a
+/// hash-chained row is never rewritten, and nothing runs from it.
+const JSON_COLUMNS: &[JsonColumn] = &[
+    JsonColumn {
+        table: "agents",
+        column: "draft_spec",
+    },
+    JsonColumn {
+        table: "agent_draft_revisions",
+        column: "spec",
+    },
+    JsonColumn {
+        table: "agent_versions",
+        column: "spec",
+    },
+];
+
 /// Re-seal everything still under the previous key. Returns how many values
 /// were rewritten, for logging.
 pub async fn legacy_sealed_values(pool: &Pool, crypto: &Crypto) -> Result<usize, DbError> {
@@ -106,7 +137,82 @@ pub async fn legacy_sealed_values(pool: &Pool, crypto: &Crypto) -> Result<usize,
     // BLOB pair: the VAPID key, the web-search key, the OIDC client secret and
     // every `Kind::Secret` settings field. One table, so one pass covers all.
     rewritten += app_settings_strings(pool, crypto).await?;
+    for col in JSON_COLUMNS {
+        rewritten += json_column(pool, crypto, col).await?;
+    }
     Ok(rewritten)
+}
+
+async fn json_column(pool: &Pool, crypto: &Crypto, col: &JsonColumn) -> Result<usize, DbError> {
+    let sql = format!(
+        "SELECT rowid, {column} FROM {table} WHERE {column} LIKE '%{SEALED_SUFFIX}%'",
+        column = col.column,
+        table = col.table
+    );
+    let rows: Vec<(i64, String)> = sqlx::query_as(&sql).fetch_all(pool).await?;
+    let mut rewritten = 0usize;
+    for (rowid, text) in rows {
+        let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let count = reseal_sealed_strings(&mut doc, crypto);
+        if count == 0 {
+            continue;
+        }
+        let update = format!(
+            "UPDATE {table} SET {column} = ? WHERE rowid = ?",
+            table = col.table,
+            column = col.column
+        );
+        sqlx::query(&update)
+            .bind(doc.to_string())
+            .bind(rowid)
+            .execute(pool)
+            .await?;
+        rewritten += count;
+    }
+    Ok(rewritten)
+}
+
+/// Re-seal, under the current key, every string under a [`SEALED_SUFFIX`]
+/// key anywhere in `doc` that only a retired key opens. How many it
+/// rewrote.
+fn reseal_sealed_strings(doc: &mut serde_json::Value, crypto: &Crypto) -> usize {
+    use serde_json::Value;
+    match doc {
+        Value::Object(map) => map
+            .iter_mut()
+            .map(|(key, value)| match value {
+                Value::String(stored) if key.ends_with(SEALED_SUFFIX) => {
+                    if !crypto.is_legacy_sealed_string(stored) {
+                        return 0;
+                    }
+                    let resealed = crypto
+                        .open_bytes_from_string(stored)
+                        .and_then(|plain| crypto.seal_bytes_to_string(&plain).ok());
+                    match resealed {
+                        Some(fresh) => {
+                            *stored = fresh;
+                            1
+                        }
+                        None => {
+                            tracing::warn!(
+                                %key,
+                                "re-sealing a legacy-encrypted spec credential failed; leaving it"
+                            );
+                            0
+                        }
+                    }
+                }
+                other => reseal_sealed_strings(other, crypto),
+            })
+            .sum(),
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|v| reseal_sealed_strings(v, crypto))
+            .sum(),
+        _ => 0,
+    }
 }
 
 async fn one_column(pool: &Pool, crypto: &Crypto, col: &Column) -> Result<usize, DbError> {
@@ -236,6 +342,103 @@ mod tests {
         assert_eq!(no_fallback.open(&nonce, &ct).unwrap(), b"sk-upstream");
 
         // And it is idempotent.
+        assert_eq!(legacy_sealed_values(&pool, &now).await.unwrap(), 0);
+    }
+
+    /// A spec in the shape `seal_spec_secrets` writes: an A2A route's token
+    /// and a host_jwt secret, sealed under `key`.
+    fn sealed_spec(key: &Crypto) -> serde_json::Value {
+        serde_json::json!({
+            "routes": { "partner": { "a2a": { "auth": {
+                "kind": "bearer",
+                "token_sealed": key.seal_to_string("a2a-token").unwrap()
+            } } } },
+            "verifiers": { "site": {
+                "kind": "host_jwt",
+                "secret_sealed": key.seal_to_string("jwt-secret").unwrap(),
+                "issuer": "https://www.example.com"
+            } }
+        })
+    }
+
+    async fn spec_texts(pool: &Pool) -> Vec<String> {
+        let mut out = Vec::new();
+        for sql in [
+            "SELECT draft_spec FROM agents",
+            "SELECT spec FROM agent_draft_revisions",
+            "SELECT spec FROM agent_versions",
+        ] {
+            out.extend(
+                sqlx::query_scalar::<_, String>(sql)
+                    .fetch_all(pool)
+                    .await
+                    .unwrap(),
+            );
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn spec_credentials_in_drafts_revisions_and_versions_follow_the_key() {
+        let pool = fresh().await;
+        let (old, now, no_fallback) = keys();
+        let spec = sealed_spec(&old).to_string();
+        let ts = "2026-01-01T00:00:00Z";
+        sqlx::query(
+            "INSERT INTO system_principals (id, name, display, description, created_by, created_at)
+             VALUES ('a1', 'support', 'Support', '', 'u1', ?)",
+        )
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (principal_id, draft_spec, live_version, created_at, updated_at)
+             VALUES ('a1', ?, 1, ?, ?)",
+        )
+        .bind(&spec)
+        .bind(ts)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_versions (principal_id, version, spec, published_by, published_at)
+             VALUES ('a1', 1, ?, 'u1', ?)",
+        )
+        .bind(&spec)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_draft_revisions (principal_id, spec, saved_by, saved_at)
+             VALUES ('a1', ?, 'u1', ?)",
+        )
+        .bind(&spec)
+        .bind(ts)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(legacy_sealed_values(&pool, &now).await.unwrap(), 6);
+
+        let texts = spec_texts(&pool).await;
+        assert_eq!(texts.len(), 3);
+        for text in texts {
+            let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let open = |v: &serde_json::Value| no_fallback.open_from_string(v.as_str().unwrap());
+            assert_eq!(
+                open(&doc["routes"]["partner"]["a2a"]["auth"]["token_sealed"]).as_deref(),
+                Some("a2a-token"),
+                "the retired key is no longer needed: {text}"
+            );
+            assert_eq!(
+                open(&doc["verifiers"]["site"]["secret_sealed"]).as_deref(),
+                Some("jwt-secret")
+            );
+            assert_eq!(doc["verifiers"]["site"]["issuer"], "https://www.example.com");
+        }
         assert_eq!(legacy_sealed_values(&pool, &now).await.unwrap(), 0);
     }
 

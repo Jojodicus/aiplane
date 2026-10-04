@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use super::suspend::{answer, every_stored_text};
 use super::*;
-use crate::agents::a2a_client as a2a;
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
 use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
@@ -204,7 +204,7 @@ async fn support(world: &World, card_url: &str, target: Value) -> String {
         )
         .await;
     let mut spec = partner_spec(target);
-    a2a::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     assert_eq!(world.issues(&id, &spec).await, []);
     world.publish(&id, &spec).await;
     id

@@ -17,6 +17,7 @@ use session_core::i18n::t;
 use super::suspend::every_stored_text;
 use super::*;
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use crate::agents::verifier::host_jwt::{self, IdentityError, Refusal};
 
 pub(super) const CODE: &str = "481516";
@@ -771,7 +772,7 @@ fn host_spec(world: &World, key: Value) -> Value {
         "state": { "verified": { "type": "subject", "set_by": ["host"] } },
         "verifiers": { "site": verifier }
     });
-    host_jwt::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     spec
 }
 
@@ -1174,7 +1175,7 @@ fn two_slot_spec(world: &World, b_set_by: &str) -> Value {
             "claims": { "a_verified": { "customer_id": "sub" }, "b_plan": "plan" }
         } }
     });
-    host_jwt::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     spec
 }
 

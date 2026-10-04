@@ -235,33 +235,6 @@ pub fn is_jwks_url(s: &str) -> bool {
     }
 }
 
-/// Replace every plaintext `secret` of a `host_jwt` verifier with
-/// `secret_sealed`, so the spec is never stored with a usable secret — not in
-/// the draft, a version, the audit trail or a manager's GET.
-pub fn seal_secrets(
-    spec: &mut Value,
-    crypto: &aiplane_core::server::crypto::Crypto,
-) -> Result<(), String> {
-    let Some(verifiers) = spec.get_mut("verifiers").and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    for v in verifiers.values_mut() {
-        let Some(cfg) = v.as_object_mut() else {
-            continue;
-        };
-        if cfg.get("kind").and_then(Value::as_str) != Some("host_jwt") {
-            continue;
-        }
-        if let Some(Value::String(secret)) = cfg.remove("secret") {
-            let sealed = crypto
-                .seal_to_string(&secret)
-                .map_err(|e| format!("sealing the host_jwt secret failed: {e}"))?;
-            cfg.insert("secret_sealed".into(), Value::String(sealed));
-        }
-    }
-    Ok(())
-}
-
 type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;
 static JWKS: LazyLock<JwksCache> = LazyLock::new(Default::default);
 

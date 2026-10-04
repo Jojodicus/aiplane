@@ -1931,7 +1931,13 @@ verifiers:
 - **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
   `secret` (at least 32 characters) and then replace it with `secret_sealed`
   (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.
-  A GET → PUT round trip keeps `secret_sealed`.
+  A GET → PUT round trip keeps `secret_sealed`. One helper seals every spec
+  credential, `agents::spec::secrets::seal_spec_secrets`, from one list of
+  where they live (`SPEC_SECRETS`). The at-rest key rotation
+  (`aiplane_core::server::db::reseal`) re-seals every string under a
+  `*_sealed` key in `agents.draft_spec`, `agent_draft_revisions.spec` and
+  `agent_versions.spec`, so a retired key is not needed to open them; the
+  audit trail's copies are hash-chained and left as they are.
 - **Validation.** Shape on every save (keys per kind, grants, ranges,
   algorithms, PEM keys parse, JWKS URL scheme, write sources, slot types);
   what a verifier needs to run on publish (`connector`/`email_slot`/`writes`;
@@ -2360,7 +2366,7 @@ routes:
   secret, the sorted scopes and the agent's principal id, so a route with
   another secret (a wrong one included), other scopes or of another agent
   signs in itself and never rides on a token it did not earn. `token` and `client_secret` are sealed on
-  every save (`a2a_client::seal_secrets`, next to the host-JWT secret) and
+  every save (`spec::secrets::seal_spec_secrets`, with the host-JWT secret) and
   stored as `token_sealed` / `client_secret_sealed`; a GET → PUT round trip
   keeps them. A card that requires auth when the route brings none, or offers
   no scheme of the route's kind, ends the route `incomplete` saying which.

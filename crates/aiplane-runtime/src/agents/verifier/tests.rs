@@ -6,7 +6,8 @@
 
 use serde_json::json;
 
-use super::host_jwt::{ClaimMap, HostJwt, KeySource, is_jwks_url, seal_secrets};
+use super::host_jwt::{ClaimMap, HostJwt, KeySource, is_jwks_url};
+use crate::agents::spec::secrets::{HOST_JWT_SECRET, seal_spec_secrets};
 use super::*;
 use crate::server::tools::tool_content_parts;
 
@@ -211,7 +212,7 @@ fn a_saved_secret_is_sealed_and_reads_back_only_with_the_gateways_key() {
         "site": { "kind": "host_jwt", "algorithm": "HS256", "secret": secret },
         "otp": { "kind": "mcp_code", "secret": "left alone" }
     } });
-    seal_secrets(&mut spec, &crypto).unwrap();
+    seal_spec_secrets(&mut spec, &[HOST_JWT_SECRET], &crypto).unwrap();
     let site = &spec["verifiers"]["site"];
     assert!(site.get("secret").is_none());
     let sealed = site["secret_sealed"].as_str().unwrap();
@@ -220,7 +221,7 @@ fn a_saved_secret_is_sealed_and_reads_back_only_with_the_gateways_key() {
     assert_eq!(spec["verifiers"]["otp"]["secret"], "left alone");
 
     let again = spec.clone();
-    seal_secrets(&mut spec, &crypto).unwrap();
+    seal_spec_secrets(&mut spec, &[HOST_JWT_SECRET], &crypto).unwrap();
     assert_eq!(spec, again, "a sealed secret stays as it is");
 }
 
