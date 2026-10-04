@@ -1317,9 +1317,19 @@ runs. Migration `0077_agent_builder.sql`.
     `db::agent_channels`, `aiplane_agents::notify_channels`). The
     URL is the credential: sealed at rest (and in the reseal pass), never
     returned by the API, never in a log line or an audit row; only its host
-    is kept in clear. A URL must be `https` on `hooks.slack.com` or
-    `discord.com`/`discordapp.com` `/api/webhooks/…` (loopback `http` only,
-    for tests). A message holds the agent, the kind and the absolute inbox
+    is kept in clear. **Who configured a channel decides where it may post**
+    (`notify_channels::Reach`, from `inbox::channel_reach`). An admin's
+    channel is the operator's own choice: any `http(s)` URL, a private or
+    loopback host included (an internal Discord relay), posted through the
+    operator's client (`AppState::http`). Anyone else's must be `https` on
+    `hooks.slack.com` or `discord.com`/`discordapp.com` `/api/webhooks/…`,
+    checked on save with `outbound_guard::check_url` and posted on every
+    send through `outbound_guard::pin` with `Policy::agent` (public hosts
+    only unless `$AIPLANE_ALLOW_PRIVATE_NETWORKS`), so a manager's channel
+    never posts into the gateway's network. The standing is decided at send
+    time from the channel's `created_by` as that person stands today: a
+    channel whose creator is no longer an admin, or is gone, is posted as a
+    manager's — no column records it. A message holds the agent, the kind and the absolute inbox
     link (`public_url`); with the channel's `details` on, also the question or
     the tool name (cut to 300 characters). No visitor message, transcript or
     slot value is ever sent. Slack text is escaped, Discord gets
@@ -1917,7 +1927,10 @@ verifiers:
   as an A2A route (`outbound_guard`, `Policy::agent`, [below](#what-101-built)):
   resolved and pinned, no redirects, at most 64 KiB, link-local always
   refused, and loopback, private addresses and plain `http` only under
-  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true`. Answers: `200 {slots}`, `401
+  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true`. Saving a spec checks `jwks_url`
+  against the same policy (`host_jwt::check_jwks_url`, through
+  `outbound_guard::check_url`), so a URL the run would refuse is refused on
+  save with the same reason; only the DNS answer is left to run time. Answers: `200 {slots}`, `401
   identity_token_invalid` (the message says what is wrong, never a claim
   value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
   identity_keys_unavailable`. The `503` message is generic — no URL, status
@@ -2382,8 +2395,13 @@ routes:
   reason: not_granted`). **Grant-time cap:** an external agent is nothing a
   manager holds, and the grant lets visitor-derived data leave the gateway, so
   only an admin may make it (`403 grant_exceeds_manager` otherwise); the ref
-  must pass `check_card_url` (https, or http to a loopback host; no
-  credentials or fragment in it).
+  must pass `check_card_url`: `outbound_guard::check_url` under the same
+  `Policy::agent` the dispatch uses (https; plain http and private or
+  loopback hosts only under `$AIPLANE_ALLOW_PRIVATE_NETWORKS`), no
+  credentials or fragment in it. A spec naming the card is checked the same
+  way (`SpecContext::allow_private`), so granting, saving and running agree.
+  The card URL stays on the guard even though an admin grants it: the
+  endpoint and token URLs come from the card, which the remote side writes.
 - **SSRF** (`aiplane_core::server::outbound_guard`, `Policy::agent`; the
   same guard `fetch_url` and `load_image_url` use). The card URL, the
   endpoint the card names and the OAuth token URL are each resolved before

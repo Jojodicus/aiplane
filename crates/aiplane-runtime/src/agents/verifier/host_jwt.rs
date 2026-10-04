@@ -223,16 +223,11 @@ pub fn public_key(alg: JwtAlgorithm, pem: &str) -> Result<DecodingKey, String> {
     })
 }
 
-/// `https://…`, or `http://` to localhost for development.
-pub fn is_jwks_url(s: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(s) else {
-        return false;
-    };
-    match url.scheme() {
-        "https" => url.host().is_some(),
-        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
-        _ => false,
-    }
+/// Whether [`fetch_jwks`] may reach `url`, as far as that can be told before
+/// resolving it: the same `outbound_guard` policy, so a spec is refused on
+/// save for a URL its run would refuse.
+pub fn check_jwks_url(url: &str, allow_private: bool) -> Result<(), String> {
+    outbound_guard::check_url(url, Policy::agent(allow_private)).map(|_| ())
 }
 
 type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;

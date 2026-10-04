@@ -450,6 +450,7 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
         agents: &world.agents,
         live_specs: &world.live_specs,
         candidates: &candidates,
+        allow_private: world.allow_private,
     };
     let base = parse_spec(&agent.draft_spec);
     let applied = apply_changes(&args.changes, &base, &review);

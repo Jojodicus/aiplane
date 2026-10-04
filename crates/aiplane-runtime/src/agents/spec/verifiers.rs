@@ -350,14 +350,11 @@ impl Check<'_> {
         }
         if let Some(x) = map.get("jwks_url")
             && let Some(url) = self.string(x, &join(p, "jwks_url"))
-            && !verifier::host_jwt::is_jwks_url(url)
+            && let Err(why) = verifier::host_jwt::check_jwks_url(url, self.ctx.allow_private)
         {
             self.issue(
                 &join(p, "jwks_url"),
-                format!(
-                    "`{url}` is not a JWKS address the gateway fetches — use an `https://` URL \
-                     (plain `http://` only for localhost)"
-                ),
+                format!("the gateway cannot fetch keys from this address: {why}"),
             );
         }
         for (key, what) in [

@@ -132,7 +132,8 @@ pub async fn holds(
                 .is_some_and(|a| a >= Access::Write)
         }
         GrantKind::A2aAgent => {
-            if let Err(why) = crate::agents::a2a_client::check_card_url(reference) {
+            let allow_private = state.config().network.allow_private_networks;
+            if let Err(why) = crate::agents::a2a_client::check_card_url(reference, allow_private) {
                 return Err(HoldRefusal::Invalid(format!(
                     "`{reference}` cannot be granted as an A2A agent: {why}"
                 )));

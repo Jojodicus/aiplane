@@ -82,6 +82,7 @@ impl World {
             agents: &self.agents,
             live_specs: &self.live,
             candidates: &self.candidates,
+            allow_private: false,
         }
     }
 }
@@ -227,6 +228,7 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
         agents: &w.agents,
         live_specs: &w.live,
         model_defaults: &Default::default(),
+        allow_private: false,
     };
     spec::check(&draft, &ctx, Stage::Draft).unwrap();
     spec::check(&draft, &ctx, Stage::Publish).unwrap();
@@ -637,6 +639,7 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
         agents: &w.agents,
         live_specs: &w.live,
         model_defaults: &Default::default(),
+        allow_private: false,
     };
     spec::check(&out.draft, &ctx, Stage::Draft).unwrap();
 }
@@ -687,6 +690,7 @@ fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() 
             agents: &w.agents,
             live_specs: &w.live,
             model_defaults: &Default::default(),
+            allow_private: false,
         },
         Stage::Draft,
     )

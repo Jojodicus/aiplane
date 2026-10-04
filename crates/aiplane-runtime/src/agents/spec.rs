@@ -96,6 +96,9 @@ pub struct SpecContext<'a> {
     pub live_specs: &'a HashMap<String, Value>,
     /// What an unset model key runs on.
     pub model_defaults: &'a ModelDefaults,
+    /// `$AIPLANE_ALLOW_PRIVATE_NETWORKS`: whether a URL the spec names (an
+    /// A2A card, a JWKS) may be plain http or a private host, as at run time.
+    pub allow_private: bool,
 }
 
 /// The gateway's default model of each kind
@@ -1808,6 +1811,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &HashMap::new(),
                 model_defaults: &Default::default(),
+                allow_private: false,
             },
             stage,
         )
@@ -1900,6 +1904,7 @@ mod tests {
             agents: &agents,
             live_specs: &live,
             model_defaults: &Default::default(),
+            allow_private: false,
         };
         let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
         assert_eq!(typed.main_model(), Some("chat"));
@@ -2698,6 +2703,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &live_specs,
                 model_defaults: &Default::default(),
+                allow_private: false,
             },
             stage,
         )
@@ -2999,6 +3005,7 @@ mod tests {
                 agents: &agents,
                 live_specs: &HashMap::new(),
                 model_defaults: defaults,
+                allow_private: false,
             },
             Stage::Publish,
         )

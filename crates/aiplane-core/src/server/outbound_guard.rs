@@ -278,6 +278,35 @@ fn pinned_client(
     Ok(client)
 }
 
+/// What can be told about `raw` under `policy` without resolving it: the
+/// scheme, a host, no credentials in the URL, and a literal address (or
+/// `localhost`) the policy reaches. A configuration is checked with it when
+/// it is saved, so that a URL [`pin`] would refuse at run time is refused
+/// then already, with the same reason; a host name is resolved only then.
+pub fn check_url(raw: &str, policy: Policy) -> Result<Url, String> {
+    let url = Url::parse(raw.trim()).map_err(|e| format!("`{raw}` is not a URL ({e})"))?;
+    check_scheme(&url, policy)?;
+    let host = url.host().ok_or_else(|| format!("`{url}` names no host"))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!(
+            "`{}` carries a user name or password; a URL here must not",
+            url.host_str().unwrap_or_default()
+        ));
+    }
+    let literal = match host {
+        url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+        url::Host::Domain(_) if is_loopback_host(&host) => {
+            Some(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+        }
+        url::Host::Domain(_) => None,
+    };
+    if let Some(ip) = literal {
+        check_ip(ip, policy.allow_private).map_err(|why| format!("`{url}`: {why}"))?;
+    }
+    Ok(url)
+}
+
 /// Resolve `raw`, check every address, and build a client pinned to them
 /// that follows no redirect.
 pub async fn pin(raw: &str, policy: Policy, timeout: Duration) -> Result<Pinned, String> {
@@ -434,6 +463,40 @@ mod tests {
             pin("ftp://example.com/x", Policy::agent(true), T)
                 .await
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn a_url_is_checked_before_saving_as_it_is_pinned_at_run_time() {
+        let agent = Policy::agent(false);
+        assert!(check_url("https://partner.example.com/card", agent).is_ok());
+        for refused in [
+            "http://partner.example.com/card",
+            "https://127.0.0.1:9/card",
+            "https://localhost/card",
+            "https://10.0.0.1/card",
+            "https://[::1]/card",
+            "https://169.254.169.254/latest",
+            "https://user:pw@partner.example.com/card",
+            "ftp://partner.example.com/card",
+            "not a url",
+        ] {
+            assert!(check_url(refused, agent).is_err(), "{refused}");
+        }
+        let private = Policy::agent(true);
+        assert!(check_url("http://127.0.0.1:9/card", private).is_ok());
+        assert!(check_url("http://localhost:9/card", private).is_ok());
+        assert!(
+            check_url("https://169.254.169.254/latest", private).is_err(),
+            "never reached, whatever the operator allows"
+        );
+        let why = check_url("https://127.0.0.1/card", agent).unwrap_err();
+        assert!(why.contains(PRIVATE_NETWORKS_VAR), "{why}");
+        assert!(
+            !check_url("https://u:hunter2@example.com/", agent)
+                .unwrap_err()
+                .contains("hunter2"),
+            "the refusal does not repeat the password"
         );
     }
 

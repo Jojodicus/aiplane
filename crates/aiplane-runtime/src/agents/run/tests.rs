@@ -422,6 +422,7 @@ impl World {
                 agents: &agents,
                 live_specs: &live_specs,
                 model_defaults: &Default::default(),
+                allow_private: self.state.config().network.allow_private_networks,
             },
             Stage::Publish,
         )

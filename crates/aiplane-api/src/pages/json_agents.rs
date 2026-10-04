@@ -205,6 +205,7 @@ async fn spec_check(
             agents: &world.agents,
             live_specs: &world.live_specs,
             model_defaults: &world.model_defaults,
+            allow_private: world.allow_private,
         },
         stage,
     ))
@@ -217,6 +218,7 @@ pub(super) struct SpecWorld {
     pub agents: HashMap<String, bool>,
     pub live_specs: HashMap<String, Value>,
     pub model_defaults: ModelDefaults,
+    pub allow_private: bool,
 }
 
 impl SpecWorld {
@@ -238,6 +240,7 @@ impl SpecWorld {
             agents,
             live_specs,
             model_defaults,
+            allow_private: state.config().network.allow_private_networks,
         })
     }
 }
@@ -514,6 +517,7 @@ fn uses_grant(
                 agents: &world.agents,
                 live_specs: &world.live_specs,
                 model_defaults: &world.model_defaults,
+                allow_private: world.allow_private,
             },
             Stage::Publish,
         )

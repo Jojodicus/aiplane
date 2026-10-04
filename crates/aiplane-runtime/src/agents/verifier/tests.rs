@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::host_jwt::{ClaimMap, HostJwt, KeySource, is_jwks_url};
+use super::host_jwt::{ClaimMap, HostJwt, KeySource, check_jwks_url};
 use crate::agents::spec::secrets::{HOST_JWT_SECRET, seal_spec_secrets};
 use super::*;
 use crate::server::tools::tool_content_parts;
@@ -256,10 +256,12 @@ fn a_host_jwt_verifier_reads_its_key_and_claim_map() {
 
 #[test]
 fn keys_are_fetched_over_https_or_from_localhost() {
-    assert!(is_jwks_url("https://www.example.com/.well-known/jwks.json"));
-    assert!(is_jwks_url("http://127.0.0.1:8080/jwks"));
-    assert!(is_jwks_url("http://localhost/jwks"));
-    assert!(!is_jwks_url("http://www.example.com/jwks"));
-    assert!(!is_jwks_url("file:///etc/passwd"));
-    assert!(!is_jwks_url("jwks.json"));
+    assert!(check_jwks_url("https://www.example.com/.well-known/jwks.json", false).is_ok());
+    assert!(check_jwks_url("http://127.0.0.1:8080/jwks", false).is_err());
+    assert!(check_jwks_url("https://localhost/jwks", false).is_err());
+    assert!(check_jwks_url("http://127.0.0.1:8080/jwks", true).is_ok());
+    assert!(check_jwks_url("http://localhost/jwks", true).is_ok());
+    assert!(check_jwks_url("http://www.example.com/jwks", false).is_err());
+    assert!(check_jwks_url("file:///etc/passwd", true).is_err());
+    assert!(check_jwks_url("jwks.json", true).is_err());
 }

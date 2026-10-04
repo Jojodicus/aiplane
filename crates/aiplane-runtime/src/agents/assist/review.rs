@@ -44,6 +44,8 @@ pub struct ReviewContext<'a> {
     pub agents: &'a HashMap<String, bool>,
     pub live_specs: &'a HashMap<String, Value>,
     pub candidates: &'a Candidates,
+    /// As [`SpecContext::allow_private`].
+    pub allow_private: bool,
 }
 
 /// The offer, one entry per assistant step, and what was left out.
@@ -359,6 +361,7 @@ impl<'a> Reviewer<'a> {
             agents: self.ctx.agents,
             live_specs: self.ctx.live_specs,
             model_defaults: &Default::default(),
+            allow_private: self.ctx.allow_private,
         };
         spec::validate(draft, &ctx, Stage::Draft)
             .into_iter()
