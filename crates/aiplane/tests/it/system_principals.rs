@@ -1068,6 +1068,98 @@ async fn an_agent_run_is_told_the_turn_rule_and_its_granted_skills() {
     }
 }
 
+/// The router is told the turn has tools from the very list the turn offers:
+/// an agent whose spec lists no tools but whose principal holds the skill
+/// loader and a skill is offered `read_skill`, so it has tools, and an
+/// automatic route never hands it to a candidate that cannot call one. Here
+/// the route's fallback cannot, so the turn has no model to run on rather
+/// than sending `read_skill` to one that would ignore it.
+#[tokio::test]
+async fn an_agent_with_only_the_skill_loader_is_routed_as_one_with_tools() {
+    use aiplane_agents::db::{agents as agents_db, system_principals as sp};
+    use aiplane_runtime::agents::run::{AgentTurn, run_turn};
+    let fx = fixture().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+            "text/event-stream",
+        ))
+        .with_priority(1)
+        .mount(&fx.upstream)
+        .await;
+    upsert_route(&fx, "auto-skills", &["model-b", "model-a"]).await;
+    db::model_defaults::set_capabilities(
+        &fx.state.db,
+        "model-b",
+        &db::model_defaults::ModelCapabilities {
+            tools: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let id = agents_db::create(
+        &fx.state.db,
+        &sp::NewPrincipal {
+            name: "brand-voice",
+            display: "Brand voice",
+            description: "",
+        },
+        "{}",
+        "admin",
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .principal
+    .id;
+    for (kind, reference) in [
+        ("model", "auto-skills"),
+        ("skill", "brand"),
+        ("tool", "read_skill"),
+    ] {
+        let (status, body) = fx.grant(&fx.admin, &id, kind, reference).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    let spec = json!({ "main": {
+        "model": "auto-skills",
+        "instructions": { "orchestration": "Write in the brand voice." },
+        "tools": [],
+    } });
+    agents_db::publish(&fx.state.db, &id, &spec.to_string(), "admin")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let reply = run_turn(
+        &Arc::new(fx.state.clone()),
+        AgentTurn {
+            agent_id: &id,
+            session_id: None,
+            message: "write it in our brand voice",
+            visitor_id: None,
+            lang: None,
+        },
+    )
+    .await;
+
+    let sent: Vec<Value> = fx
+        .upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|r| serde_json::from_slice(&r.body).ok())
+        .collect();
+    assert!(
+        sent.iter().all(|body| body["model"] != "model-b"),
+        "the tool-less candidate got the turn: {sent:?}"
+    );
+    let outcome = format!("{reply:?}");
+    assert!(outcome.contains("not currently eligible"), "{outcome}");
+}
+
 #[tokio::test]
 async fn the_audit_trail_shows_a_run_events_call_chain() {
     use aiplane_agents::db::agent_audit::{self, AuditKind};

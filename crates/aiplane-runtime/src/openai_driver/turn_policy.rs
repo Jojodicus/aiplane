@@ -265,7 +265,7 @@ impl<'a> TurnPolicy<'a> {
                         .unwrap_or_default()
                         .is_empty()
             }
-            Self::Agent(run) => !agent_offer(run, granted).is_empty(),
+            Self::Agent(run) => !agent_offer(d, run, granted).is_empty(),
             Self::Persona(persona) => !persona.offer().is_empty(),
         }
     }
@@ -286,13 +286,7 @@ impl<'a> TurnPolicy<'a> {
     ) -> Vec<String> {
         match self {
             Self::Chat => chat_offer(d, session_id, user_mcp).await,
-            Self::Agent(run) => {
-                let mut offer = agent_offer(run, granted);
-                if skill_loader_on(d, granted) && !offer.iter().any(|id| id == READ_SKILL_ID) {
-                    offer.push(READ_SKILL_ID.to_string());
-                }
-                offer
-            }
+            Self::Agent(run) => agent_offer(d, run, granted),
             Self::Persona(persona) => persona.offer(),
         }
     }
@@ -409,11 +403,18 @@ fn skill_loader_on(d: &OpenAiDriver, granted: &[String]) -> bool {
             .is_empty()
 }
 
-fn agent_offer(run: &AgentRun, granted: &[String]) -> Vec<String> {
+/// An agent run's offer, the one list both the round and the automatic
+/// router read: its grants (the spec's tools among them, when it has a
+/// spec), the skill loader when its skills are listed, the run's synthetic
+/// tools and, under a contract, `finish`.
+fn agent_offer(d: &OpenAiDriver, run: &AgentRun, granted: &[String]) -> Vec<String> {
     let mut offer = match run.surface() {
         Some(surface) => surface.offered(granted),
         None => granted.to_vec(),
     };
+    if skill_loader_on(d, granted) && !offer.iter().any(|id| id == READ_SKILL_ID) {
+        offer.push(READ_SKILL_ID.to_string());
+    }
     offer.extend(run.terminal_tool().iter().map(|t| t.id().to_string()));
     offer
 }
