@@ -178,7 +178,10 @@ fn credential(headers: &HeaderMap) -> Option<&str> {
     parse_bearer(headers.get(AUTHORIZATION)).or_else(|| parse_api_key(headers.get(API_KEY_HEADER)))
 }
 
-fn parse_bearer(value: Option<&HeaderValue>) -> Option<&str> {
+/// The token of an `Authorization: Bearer …` header, trimmed; `None` for any
+/// other header or an empty token. The one bearer parser: the `/v1` gate and
+/// the embed widget's visitor sessions both read theirs with it.
+pub fn parse_bearer(value: Option<&HeaderValue>) -> Option<&str> {
     let s = value?.to_str().ok()?;
     let rest = s.strip_prefix("Bearer ")?;
     let trimmed = rest.trim();

@@ -103,8 +103,59 @@ fn hash_with_prefix(prefix: &str, s: &str) -> Option<String> {
     Some(sha256_hex(s.as_bytes()))
 }
 
+/// The longest name a token may carry, in bytes.
+pub const MAX_TOKEN_NAME: usize = 128;
+/// The longest a token may live: five years.
+pub const MAX_TOKEN_TTL_DAYS: i64 = 365 * 5;
+
+/// A new token's name, trimmed, and when it expires: `ttl_days` (else the
+/// gateway's `default_ttl_days`) from `now`, kept to 1 day ..= five years. The
+/// same terms for a person's `gwk_` token and an agent's `gws_` token; the
+/// error is the sentence to send back.
+pub fn token_terms(
+    name: &str,
+    ttl_days: Option<i64>,
+    default_ttl_days: i64,
+    now: jiff::Timestamp,
+) -> Result<(&str, jiff::Timestamp), String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_TOKEN_NAME {
+        return Err(format!(
+            "token name must be 1..={MAX_TOKEN_NAME} characters"
+        ));
+    }
+    let days = ttl_days
+        .unwrap_or(default_ttl_days)
+        .clamp(1, MAX_TOKEN_TTL_DAYS);
+    Ok((name, now + jiff::SignedDuration::from_hours(24 * days)))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn token_terms_trim_the_name_and_keep_the_lifetime_in_bounds() {
+        let now: jiff::Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+        let day = jiff::SignedDuration::from_hours(24);
+        assert_eq!(
+            super::token_terms("  ci  ", None, 30, now),
+            Ok(("ci", now + day * 30))
+        );
+        assert_eq!(
+            super::token_terms("ci", Some(0), 30, now),
+            Ok(("ci", now + day))
+        );
+        assert_eq!(
+            super::token_terms("ci", Some(100_000), 30, now),
+            Ok(("ci", now + day * 1825))
+        );
+        for bad in ["", "   ", &"x".repeat(129)] {
+            assert_eq!(
+                super::token_terms(bad, None, 30, now),
+                Err("token name must be 1..=128 characters".to_string())
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

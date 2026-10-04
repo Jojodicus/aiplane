@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use rama::http::service::web::extract::{Path, Query, State};
 use rama::http::service::web::response::IntoResponse;
 use rama::http::{Request, Response, StatusCode, header};
@@ -158,14 +158,16 @@ pub async fn create_token(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(err) => return invalid_request(&format!("body is not a CreateTokenRequest: {err}")),
     };
 
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 128 {
-        return invalid_request("token name must be 1..=128 characters");
-    }
-    let ttl_days = body
-        .ttl_days
-        .unwrap_or(state.config().gateway.token_ttl_days)
-        .clamp(1, 365 * 5);
+    let now = Timestamp::now();
+    let (name, expires_at) = match token::token_terms(
+        &body.name,
+        body.ttl_days,
+        state.config().gateway.token_ttl_days,
+        now,
+    ) {
+        Ok(terms) => terms,
+        Err(message) => return invalid_request(&message),
+    };
 
     // Tool config (defaults: off, nothing disabled). Validate the
     // requested disable keys against the caller's own grant so we never
@@ -184,8 +186,6 @@ pub async fn create_token(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(message) => return invalid_request(&message),
     };
 
-    let now = Timestamp::now();
-    let expires_at = now + SignedDuration::from_hours(24 * ttl_days);
     let (plaintext, hash) = token::mint();
     let row = tokens::Token {
         id: Uuid::new_v4().to_string(),
