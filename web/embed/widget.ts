@@ -6,7 +6,8 @@
  * components plus Tailwind utilities, compiled into `embed.css`.
  */
 import { EmbedApi, EmbedError, type AgentView } from './api.ts';
-import { MicRecording, Speaker, canRecord } from './audio.ts';
+import { Speaker } from './audio.ts';
+import { MicRecording, recordingBlocker } from '../shared/voice-recorder.ts';
 import { applyFrame, emptyConversation, fromTurns, type Conversation, type Message } from './conversation.ts';
 import { isSafeHref } from '../shared/url.ts';
 import { parseBlocks, type Block, type Inline } from './markdown.ts';
@@ -353,7 +354,7 @@ export class Widget {
 	private async startRecording(): Promise<void> {
 		this.error = null;
 		this.renderLog();
-		if (!canRecord()) {
+		if (recordingBlocker()) {
 			this.micEvent({ type: 'failed' });
 			return this.showError('embed-voice-unsupported');
 		}
@@ -374,7 +375,9 @@ export class Widget {
 		const recording = this.takeRecording();
 		try {
 			if (!recording) return;
-			const { text, agent } = await this.o.api.transcribe(await recording.stop());
+			const wav = await recording.stop();
+			if (!wav) return this.showError('embed-voice-too-short');
+			const { text, agent } = await this.o.api.transcribe(wav);
 			if (agent) this.applyAgent(agent);
 			if (!text.trim()) return this.showError('embed-voice-empty');
 			const before = this.input.value.trimEnd();

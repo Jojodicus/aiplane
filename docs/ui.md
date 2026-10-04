@@ -60,7 +60,7 @@ web/
 │   │   ├── feedback-annotator.ts   canvas annotator (rect/arrow/pen/text/redact)
 │   │   ├── push.svelte.ts     Web Push opt-in (device-local state)
 │   │   ├── voice.svelte.ts    voice-conversation orchestration
-│   │   ├── voice-recorder.ts  PCM capture + analyser
+│   │   ├── voice-recorder.ts  the shared recorder (web/shared/) as Blobs + worded errors
 │   │   ├── markdown.ts        marked → DOMPurify → {@html}
 │   │   ├── ui-variants.ts     class strings for components/ui/ (see Theming)
 │   │   ├── components/ui/     Modal, ChoiceCard, SegmentedControl, ChipToggle,
@@ -80,7 +80,9 @@ web/
 └── static/               copied verbatim into the build output
     ├── manifest.webmanifest, sw.js, robots.txt
     ├── favicon.svg, icons/*.png
-    └── pcm-recorder.js   AudioWorklet processor (its own JS realm — not bundled)
+    └── pcm-recorder.js   AudioWorklet processor (its own JS realm — not bundled);
+                          the gateway embeds the same file for the widget
+                          (/api/v0/embed/recorder.js)
 ```
 
 `+layout.ts` sets `prerender = false` and `ssr = false`. Prerendering would bake the anonymous shell into every route, and this is a private surface: the identity render would flash "signed out" on first paint anyway, and no per-route HTML should be emitted for an authed page.
@@ -886,7 +888,7 @@ Distinct from the composer's dictation button (transcript into the textarea), vo
 
 The turn pipeline is **half-duplex, push-to-talk**:
 
-1. Tap to record via `lib/voice-recorder.ts` (PCM capture through the `static/pcm-recorder.js` AudioWorklet, plus an `AnalyserNode` tap for the visualiser). Tap again to stop.
+1. Tap to record via `lib/voice-recorder.ts` (PCM capture through the `static/pcm-recorder.js` AudioWorklet, by `web/shared/voice-recorder.ts`, which the embed widget records with too). Tap again to stop.
 2. The WAV posts to `POST /api/v0/transcriptions`; the transcript is submitted as an ordinary chat turn with the `voice` flag set, so the server injects the voice directive (short spoken replies, no tool-use narration — see [`gateway-api.md`](gateway-api.md)).
 3. As the reply streams in, sentences are peeled off and posted to `POST /api/v0/speech`, played in order. While the assistant speaks the mic stays inert, so there is no echo loop.
 

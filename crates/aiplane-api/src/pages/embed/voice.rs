@@ -46,17 +46,10 @@ const MAX_RECORDING_SECONDS: f64 = 60.0;
 const MIN_RECORDING_SECONDS: f64 = 0.4;
 
 /// The audio worklet the widget records with: it hands each block of raw
-/// samples to the page, which encodes them as WAV. Served here, not as a
-/// static file, so it rides the embed CORS a cross-origin worklet needs. The
-/// SPA's copy is `web/static/pcm-recorder.js`.
-const RECORDER_JS: &str = "class PcmRecorder extends AudioWorkletProcessor {\n\
-  process(inputs) {\n\
-    const channel = inputs[0] && inputs[0][0];\n\
-    if (channel && channel.length) this.port.postMessage(channel.slice());\n\
-    return true;\n\
-  }\n\
-}\n\
-registerProcessor('pcm-recorder', PcmRecorder);\n";
+/// samples to the page, which encodes them as WAV. The SPA's file
+/// (`web/static/pcm-recorder.js`), served here too so it rides the embed CORS
+/// a cross-origin worklet needs.
+const RECORDER_JS: &str = include_str!("../../../../../web/static/pcm-recorder.js");
 
 fn voice_off(direction: &str) -> Response {
     json_error(

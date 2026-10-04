@@ -3443,7 +3443,7 @@ chain as for messages):
 | POST | `/api/v0/embed/agent` | `{key}` → `{agent: {display, color, voice: {input, output}}}` before any conversation; not rate-gated (reads cost nothing). `start`/`session` return the same `agent` |
 | POST | `/api/v0/embed/transcribe` | body `audio/wav`, 16 kHz mono 16-bit PCM, at most **2 MiB** (`413 payload_too_large`), 0.4–60 s (`400 audio_too_short`, `413 audio_too_long`), anything else `415 unsupported_audio` → `{text}` (at most 8 000 characters). Not posted to the conversation: the widget puts it in the input for the visitor to read, change and send |
 | POST | `/api/v0/embed/speak` | `{turn_id}` → `audio/mpeg` (`204` when nothing is speakable). Only a `completed` assistant turn of *this* visitor's conversation that no worker holds any more (`404 turn_not_found`, `409 turn_not_final`): the content as stored after the output filter ruled, never text from the client; Markdown is turned into speakable prose, and at most 3 000 characters (to the last whole sentence) are spoken |
-| GET | `/api/v0/embed/recorder.js` | the audio worklet the widget records with — served under the embed CORS a cross-origin worklet needs |
+| GET | `/api/v0/embed/recorder.js` | the audio worklet the widget records with — the SPA's `web/static/pcm-recorder.js` (`include_str!`, one file), served under the embed CORS a cross-origin worklet needs |
 
 A direction that is off answers `404 voice_not_enabled`; a failing backend
 `503 voice_unavailable` (the real error is in the activity log and the server
@@ -3464,7 +3464,8 @@ event keeps the text sent and `{content_type, bytes}` of the audio. The
 chain is anchored after each call. **Audio is never stored**: a recording
 lives in memory for the request, and spoken audio only in the bounded cache.
 
-**Widget** (`web/embed/voice.ts`, `audio.ts`, `theme.ts`). A microphone
+**Widget** (`web/embed/voice.ts`, `audio.ts` — the speaker —, `theme.ts`;
+recording is `web/shared/voice-recorder.ts`, the SPA's recorder too). A microphone
 button when `voice.input`: held down it records until release, a short
 click starts a recording the next click (or Enter/Space) sends; a
 recording stops by itself at 60 s; Escape or *Cancel* throws it away; a
@@ -3489,7 +3490,7 @@ audio in the log, disabled → 404, body cap with a finite oversize and
 "endless" body, length and format, visitor rate, owner budget, only a final
 answer of this visitor spoken from the stored text, cache, owner's voice,
 `describe`, worklet, voice models); `spec.rs` and `spec/model.rs`;
-`web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color}.test.ts`,
+`web/embed/{voice,theme,api}.test.ts`, `web/shared/{wav,color,voice-recorder}.test.ts`,
 `web/src/lib/agent-setup.test.ts`.
 
 ### Models
