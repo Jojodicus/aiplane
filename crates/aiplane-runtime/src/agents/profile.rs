@@ -97,6 +97,11 @@ pub enum AgentRunError {
          that turn's resume route (or let it expire) before sending the next message"
     )]
     DecisionPending { session: String, turn: String },
+    #[error(
+        "conversation `{session}` is running a turn right now; wait for its answer, then send \
+         the next message"
+    )]
+    Busy { session: String },
     #[error(transparent)]
     Mismatched(#[from] MismatchedRun),
     #[error("reading or writing the agent run failed: {0}")]
@@ -161,8 +166,9 @@ pub enum SpecSource {
     Live,
     /// A published version, so a conversation keeps the one it started on.
     Pinned(i64),
-    /// An unpublished spec, run as version [`agents_db::DRAFT_VERSION`]. Its
-    /// only caller is the test-turn handler.
+    /// An unpublished spec, run as version [`agents_db::DRAFT_VERSION`]. Only
+    /// `agents::run::draft` loads one: the test chat, the architect's test
+    /// turn and an evaluation.
     Draft(Value),
 }
 

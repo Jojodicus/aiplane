@@ -251,13 +251,13 @@ async fn a_test_chat_handoff_carries_its_context_and_stays_out_of_the_inbox() {
     ])
     .await;
     let e = handing_off(&llm).await;
-    let (status, paused) =
-        e.fx.post(
-            &e.fx.alice,
-            &format!("/api/v0/agents/{}/test-turn", e.agent),
-            json!({ "message": "I was billed twice for RE-1." }),
-        )
-        .await;
+    let (status, paused) = crate::common::test_chat_turn(
+        &e.fx.state,
+        &e.fx.alice,
+        &e.agent,
+        json!({ "message": "I was billed twice for RE-1." }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{paused}");
     assert_eq!(paused["status"], "suspended");
     let suspension = &paused["suspension"];

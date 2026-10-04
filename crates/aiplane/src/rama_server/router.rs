@@ -286,8 +286,16 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         )
         .with_post("/api/v0/agents/{id}/publish", pages::json_agents::publish)
         .with_post(
-            "/api/v0/agents/{id}/test-turn",
-            pages::json_agent_test::test_turn,
+            "/api/v0/agents/{id}/test/messages",
+            pages::json_agent_test::send_message,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test/{session}/events",
+            pages::json_agent_test::events,
+        )
+        .with_get(
+            "/api/v0/agents/{id}/test/{session}/turns/{turn}/debug",
+            pages::json_agent_test::turn_debug,
         )
         // The prompt assistant (docs/agents.md "What #117 built"): writes nothing.
         .with_post(

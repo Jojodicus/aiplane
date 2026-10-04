@@ -387,14 +387,16 @@ async fn a_visitor_cannot_give_an_approval_and_staff_can() {
     let (status, _) = fx.post(&fx.bob, &uri, body.clone()).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "no share, no agent");
     let (status, reply) = fx.post(&fx.alice, &uri, body.clone()).await;
-    assert_eq!(status, StatusCode::OK, "{reply}");
-    assert_eq!(reply["status"], "completed");
-    assert_eq!(reply["answer"], "Approved and done.");
-    assert!(
-        reply.get("debug").is_none(),
-        "a visitor's conversation is not the test chat's: {reply}"
+    assert_eq!(status, StatusCode::ACCEPTED, "{reply}");
+    assert_eq!(
+        reply,
+        json!({ "turn_id": paused.id }),
+        "the turn continues on its stream"
     );
-    assert_eq!(reply["turn_id"], paused.id.as_str());
+    let done = e.settled(&token).await;
+    assert_eq!(done.id, paused.id);
+    assert_eq!(done.status, chat::TurnStatus::Completed);
+    assert_eq!(done.content.as_deref(), Some("Approved and done."));
     let (status, again) = fx.post(&fx.alice, &uri, body).await;
     assert_eq!(status, StatusCode::CONFLICT, "{again}");
     assert_eq!(again["error"]["code"], "not_suspended");
@@ -444,7 +446,8 @@ async fn a_message_sent_while_a_decision_is_pending_runs_after_it() {
             json!({"decision": "deny"}),
         )
         .await;
-    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{reply}");
+    e.settled(&token).await;
     let turns = chat::list_turns(&e.fx.state.db, &session).await.unwrap();
     let texts: Vec<(chat::TurnRole, Option<String>)> = turns
         .iter()
@@ -474,13 +477,13 @@ async fn the_test_chat_shows_its_manager_a_pause_they_can_answer() {
     .await;
     let e = gated(&llm).await;
     let fx = &e.fx;
-    let (status, paused) = fx
-        .post(
-            &fx.alice,
-            &format!("/api/v0/agents/{}/test-turn", e.agent),
-            json!({ "message": "test me" }),
-        )
-        .await;
+    let (status, paused) = crate::common::test_chat_turn(
+        &fx.state,
+        &fx.alice,
+        &e.agent,
+        json!({ "message": "test me" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{paused}");
     assert_eq!(paused["status"], "suspended");
     assert_eq!(paused["answer"], Value::Null);
@@ -495,26 +498,28 @@ async fn the_test_chat_shows_its_manager_a_pause_they_can_answer() {
     let (status, refused) = fx
         .post(
             &fx.alice,
-            &format!("/api/v0/agents/{}/test-turn", e.agent),
+            &format!("/api/v0/agents/{}/test/messages", e.agent),
             json!({ "message": "next", "session_id": session }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert_eq!(refused["error"]["code"], "decision_pending");
 
-    let (status, done) = fx
+    let (status, resumed) = fx
         .post(
             &fx.alice,
             &e.staff_resume_uri(session, turn),
             json!({ "decision": "value", "value": CODE }),
         )
         .await;
-    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
+    let done =
+        crate::common::test_chat_settled(&fx.state, &fx.alice, &e.agent, session, turn).await;
     assert_eq!(done["status"], "completed");
     assert_eq!(done["answer"], "Verified in the test chat.");
     assert!(
         done["debug"]["slots"].is_array() && done["debug"]["routes"].is_array(),
-        "the resumed test turn carries the debug view as it is now, not the paused one's: {done}"
+        "the resumed test turn has its debug view: {done}"
     );
     assert!(!every_stored_text(&fx.state.db).await.contains(CODE));
 }

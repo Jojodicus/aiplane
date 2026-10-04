@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 
 use session_core::db as chat;
 
-use super::profile::{Role, RunOptions, RunProfile};
+use super::profile::{AgentRunError, Role, RunOptions, RunProfile};
 pub use super::resume::ClaimedResume;
 use super::resume::run_claimed;
 pub use super::run::OpenedTurn;
@@ -498,45 +498,59 @@ pub struct LiveAgentRunner;
 #[async_trait::async_trait]
 impl AgentTurnRunner for LiveAgentRunner {
     async fn run(&self, state: Arc<RamaState>, turn: OpenedTurn) {
-        let ran = match RunProfile::load_version(
+        let profile = RunProfile::load_version(
             &state,
             &turn.agent_id,
             Some(turn.version),
             Role::Main,
             &RunOptions::default(),
         )
+        .await;
+        drive_or_error(&state, profile, &turn).await;
+    }
+}
+
+/// Drive `turn` as `profile`, or record why it could not run on the turn.
+async fn drive_or_error(
+    state: &Arc<RamaState>,
+    profile: Result<RunProfile, AgentRunError>,
+    turn: &OpenedTurn,
+) {
+    let ran = match profile {
+        Ok(profile) => drive_opened(state, &profile, turn).await.map(|_| ()),
+        Err(err) => Err(err),
+    };
+    if let Err(err) = ran {
+        tracing::warn!(error = %err, turn = %turn.turn_id, "agent turn could not run");
+        if let Err(db) = chat::finalize_turn(
+            &state.db,
+            &turn.turn_id,
+            chat::TurnStatus::Errored,
+            Some(&err.to_string()),
+        )
         .await
         {
-            Ok(profile) => drive_opened(&state, &profile, &turn).await.map(|_| ()),
-            Err(err) => Err(err),
-        };
-        if let Err(err) = ran {
-            tracing::warn!(error = %err, turn = %turn.turn_id, "visitor turn could not run");
-            if let Err(db) = chat::finalize_turn(
-                &state.db,
-                &turn.turn_id,
-                chat::TurnStatus::Errored,
-                Some(&err.to_string()),
-            )
-            .await
-            {
-                tracing::warn!(error = %db, turn = %turn.turn_id, "recording a failed visitor turn");
-            }
+            tracing::warn!(error = %db, turn = %turn.turn_id, "recording a failed agent turn");
         }
     }
 }
 
-/// A turn to produce in the background: a fresh one, or a suspended one
-/// whose decision won the claim.
+/// A turn to produce in the background: a fresh one, a test-chat turn on the
+/// agent's draft, or a suspended one whose decision won the claim.
 pub enum TurnWork {
     Run(OpenedTurn),
+    /// The draft's profile, loaded by the caller: no runner can load a draft,
+    /// so no visitor's turn can reach one.
+    Draft(Box<RunProfile>, OpenedTurn),
     Resume(ClaimedResume),
 }
 
 impl TurnWork {
     fn ids(&self) -> (String, String) {
         match self {
-            Self::Run(turn) => (turn.session_id.clone(), turn.turn_id.clone()),
+            Self::Run(turn) | Self::Draft(_, turn) => {
+                (turn.session_id.clone(), turn.turn_id.clone())
+            }
             Self::Resume(claimed) => (
                 claimed.session_id().to_string(),
                 claimed.turn_id().to_string(),
@@ -563,6 +577,9 @@ pub fn spawn_guarded(
             async move {
                 match work {
                     TurnWork::Run(turn) => runner.run(state, turn).await,
+                    TurnWork::Draft(profile, turn) => {
+                        drive_or_error(&state, Ok(*profile), &turn).await
+                    }
                     TurnWork::Resume(claimed) => runner.resume(state, claimed).await,
                 }
             }

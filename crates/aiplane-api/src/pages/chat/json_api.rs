@@ -812,36 +812,7 @@ pub async fn session_events(
     }
 
     match live {
-        Some(worker) => {
-            // Subscribe BEFORE reading the snapshot: anything the worker
-            // commits after this point arrives as a tick; anything before
-            // is in the snapshot. No gap.
-            let broadcast_rx = worker.broadcast.subscribe();
-            let turns = match chat::list_turns(&state.db, &session_id).await {
-                Ok(t) => t,
-                Err(err) => {
-                    return internal(err);
-                }
-            };
-            let (tx, rx) = rama::futures::channel::mpsc::unbounded::<
-                Result<rama::bytes::Bytes, std::io::Error>,
-            >();
-            let waiting_turn_ids = waiting_turn_ids(&state, &session_id).await;
-            let initial = vec![session_core::chat_json::ChatEvent::Snapshot {
-                live_turn_id: Some(worker.turn_id.clone()),
-                turns,
-                waiting_turn_ids,
-            }];
-            tokio::spawn(session_core::chat_json::run_json_turn_stream(
-                state.db.clone(),
-                session_id,
-                worker.turn_id.clone(),
-                broadcast_rx,
-                initial,
-                tx,
-            ));
-            session_core::chat_json::json_stream_response(rx)
-        }
+        Some(worker) => live_stream(&state, &worker, session_id).await,
         None => {
             let orphan_ids: Vec<_> = prior_turns
                 .iter()
@@ -879,16 +850,7 @@ pub async fn session_events(
                     .unwrap_or_default()
                     .is_empty();
             if !waiting {
-                return session_core::chrome::sse_response(&[
-                    session_core::chat_json::sse_json(
-                        &session_core::chat_json::ChatEvent::Snapshot {
-                            live_turn_id: None,
-                            turns,
-                            waiting_turn_ids: Vec::new(),
-                        },
-                    ),
-                    session_core::chat_json::sse_json(&session_core::chat_json::ChatEvent::Idle),
-                ]);
+                return quiet_stream(turns);
             }
             // Hold the stream open until the scheduler starts it. Ending at
             // `idle` here would leave the page showing "waiting" long after
@@ -910,6 +872,53 @@ pub async fn session_events(
             session_core::chat_json::json_stream_response(rx)
         }
     }
+}
+
+/// Tail `worker`'s turn of conversation `session_id`: a snapshot, then the
+/// turn's frames until it ends. Shared by every stream of a conversation that
+/// has a worker, whoever owns it.
+pub(crate) async fn live_stream(
+    state: &Arc<RamaState>,
+    worker: &session_core::workers::ActiveWorker,
+    session_id: String,
+) -> Response {
+    // Subscribe BEFORE reading the snapshot: anything the worker commits
+    // after this point arrives as a tick; anything before is in the
+    // snapshot. No gap.
+    let broadcast_rx = worker.broadcast.subscribe();
+    let turns = match chat::list_turns(&state.db, &session_id).await {
+        Ok(t) => t,
+        Err(err) => return internal(err),
+    };
+    let (tx, rx) =
+        rama::futures::channel::mpsc::unbounded::<Result<rama::bytes::Bytes, std::io::Error>>();
+    let waiting_turn_ids = waiting_turn_ids(state, &session_id).await;
+    let initial = vec![session_core::chat_json::ChatEvent::Snapshot {
+        live_turn_id: Some(worker.turn_id.clone()),
+        turns,
+        waiting_turn_ids,
+    }];
+    tokio::spawn(session_core::chat_json::run_json_turn_stream(
+        state.db.clone(),
+        session_id,
+        worker.turn_id.clone(),
+        broadcast_rx,
+        initial,
+        tx,
+    ));
+    session_core::chat_json::json_stream_response(rx)
+}
+
+/// A conversation nothing is running in: its snapshot, then `idle`.
+pub(crate) fn quiet_stream(turns: Vec<chat::TurnWithTools>) -> Response {
+    session_core::chrome::sse_response(&[
+        session_core::chat_json::sse_json(&session_core::chat_json::ChatEvent::Snapshot {
+            live_turn_id: None,
+            turns,
+            waiting_turn_ids: Vec::new(),
+        }),
+        session_core::chat_json::sse_json(&session_core::chat_json::ChatEvent::Idle),
+    ])
 }
 
 fn not_found_conversation() -> Response {

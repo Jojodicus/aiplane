@@ -6,6 +6,13 @@
 //! agent's **draft**, and what a manager may see of it that a visitor never
 //! does.
 //!
+//! The test chat starts a turn with [`start_draft_turn`], which claims the
+//! conversation as the public endpoint does, so the turn runs in the
+//! background and its frames stream like any conversation's. The architect's
+//! `run_test_turn` tool, itself inside a turn, runs one to its end with
+//! [`run_draft_turn`]. Either way [`collect_turn_debug`] reads what the turn
+//! decided from the agent's activity log; nothing else stores it.
+//!
 //! The draft is passed explicitly as [`SpecSource::Draft`]; nothing about
 //! "live" is overridden anywhere, so no other path can reach a draft. The turn
 //! then goes through the same `open_session` and `drive_opened` as a
@@ -24,22 +31,89 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{AgentReply, AgentTurn, OpenedTurn, drive_opened};
+use crate::agents::embed::{TurnClaim, claim};
 use crate::agents::gate::{GateInput, GateStatus, Unmet};
 use crate::agents::profile::{AgentRunError, Role, RunOptions, RunProfile, SpecSource};
 use crate::agents::spec_cache::CompiledSpec;
 use crate::agents::state::{AgentState, Provenance, SlotState};
 use crate::rama_server::state::RamaState;
 use crate::server::headless::{OpenParams, Owner, open_session};
+use session_core::db as chat;
 
 pub use agents_db::DRAFT_VERSION;
 
-/// Run one visitor message against `draft` as the agent's principal.
+/// Run one visitor message against `draft` as the agent's principal, to its
+/// end.
 pub async fn run_draft_turn(
     state: &Arc<RamaState>,
     turn: AgentTurn<'_>,
     draft: &Value,
     options: RunOptions,
 ) -> Result<AgentReply, AgentRunError> {
+    let (profile, opened) = open_draft_turn(state, turn, draft, &options).await?;
+    drive_opened(state, &profile, &opened).await
+}
+
+/// A test-chat turn whose rows exist and whose conversation it holds: drive
+/// it in the background, keeping `claim` until it is settled.
+pub struct StartedDraftTurn {
+    pub claim: TurnClaim,
+    pub profile: RunProfile,
+    pub turn: OpenedTurn,
+}
+
+/// Open one visitor message against `draft` and claim its conversation, so a
+/// stream of it follows the turn from its first frame. Refused when the
+/// conversation is running a turn already.
+pub async fn start_draft_turn(
+    state: &Arc<RamaState>,
+    turn: AgentTurn<'_>,
+    draft: &Value,
+    options: &RunOptions,
+) -> Result<StartedDraftTurn, AgentRunError> {
+    let busy = |session: &str| AgentRunError::Busy {
+        session: session.to_string(),
+    };
+    if let Some(session) = turn.session_id
+        && state.chats.get(turn.agent_id, session).is_some()
+    {
+        return Err(busy(session));
+    }
+    let (profile, opened) = open_draft_turn(state, turn, draft, options).await?;
+    match claim(
+        &state.chats,
+        &opened.agent_id,
+        &opened.session_id,
+        &opened.turn_id,
+    ) {
+        Some(claim) => Ok(StartedDraftTurn {
+            claim,
+            profile,
+            turn: opened,
+        }),
+        None => {
+            let err = busy(&opened.session_id);
+            chat::finalize_turn(
+                &state.db,
+                &opened.turn_id,
+                chat::TurnStatus::Errored,
+                Some(&err.to_string()),
+            )
+            .await
+            .map_err(DbError::from)?;
+            Err(err)
+        }
+    }
+}
+
+/// Load `draft` as the agent's run and open the message's rows in its test
+/// conversation, a new one unless `turn` continues one.
+async fn open_draft_turn(
+    state: &Arc<RamaState>,
+    turn: AgentTurn<'_>,
+    draft: &Value,
+    options: &RunOptions,
+) -> Result<(RunProfile, OpenedTurn), AgentRunError> {
     if let Some(session) = turn.session_id {
         let continues = run_sessions::get_principal_session(&state.db, turn.agent_id, session)
             .await?
@@ -60,7 +134,7 @@ pub async fn run_draft_turn(
         turn.agent_id,
         SpecSource::Draft(draft.clone()),
         Role::Main,
-        &options,
+        options,
     )
     .await?;
     let (session_id, turn_id) = open_session(
@@ -87,7 +161,7 @@ pub async fn run_draft_turn(
         caller: None,
         lang: turn.lang,
     };
-    drive_opened(state, &profile, &opened).await
+    Ok((profile, opened))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,14 +214,51 @@ pub struct DraftDebug {
     pub scope: Option<Value>,
 }
 
-/// The state after the turn, and the audit rows the turn wrote (`since`
-/// bounds the conversation's earlier turns out).
+/// The conversation's state now, and the decisions turn `turn_id` made: the
+/// activity rows of the conversation written from the turn's start until the
+/// next turn's, a pause and its resume included.
+pub async fn collect_turn_debug(
+    state: &RamaState,
+    agent_id: &str,
+    draft: &Value,
+    session_id: &str,
+    turn_id: &str,
+    options: &RunOptions,
+) -> Result<DraftDebug, DbError> {
+    let turns = chat::list_turns(&state.db, session_id).await?;
+    let Some(at) = turns.iter().position(|t| t.turn.id == turn_id) else {
+        return Ok(DraftDebug::default());
+    };
+    let since = turns[at].turn.created_at;
+    let until = turns
+        .iter()
+        .skip(at + 1)
+        .find(|t| t.turn.role == chat::TurnRole::Assistant)
+        .map(|t| t.turn.created_at);
+    collect_window(state, agent_id, draft, session_id, since, until, options).await
+}
+
+/// The state after a run of several turns, and the audit rows they wrote
+/// (`since` bounds the conversation's earlier turns out): an evaluation case.
 pub async fn collect_debug(
     state: &RamaState,
     agent_id: &str,
     draft: &Value,
     session_id: &str,
     since: Timestamp,
+    options: &RunOptions,
+) -> Result<DraftDebug, DbError> {
+    collect_window(state, agent_id, draft, session_id, since, None, options).await
+}
+
+/// The state now, and the audit rows written in `[since, until)`.
+async fn collect_window(
+    state: &RamaState,
+    agent_id: &str,
+    draft: &Value,
+    session_id: &str,
+    since: Timestamp,
+    until: Option<Timestamp>,
     options: &RunOptions,
 ) -> Result<DraftDebug, DbError> {
     let compiled = CompiledSpec::compile(DRAFT_VERSION, draft.clone());
@@ -194,6 +305,7 @@ pub async fn collect_debug(
     events.reverse();
     for event in events.into_iter().filter(|e| {
         e.created_at >= since
+            && until.is_none_or(|until| e.created_at < until)
             && e.chain
                 .as_ref()
                 .and_then(|c| c.get("root_session"))
@@ -237,6 +349,18 @@ pub async fn collect_debug(
         }
     }
     Ok(debug)
+}
+
+/// What turn `turn_id` hands to a person, as the inbox would show it to
+/// whoever answers, while it waits for them.
+pub async fn waiting_handoff(
+    db: &aiplane_core::server::db::Pool,
+    turn_id: &str,
+) -> Result<Option<Value>, DbError> {
+    Ok(chat::get_suspension(db, turn_id)
+        .await?
+        .filter(|s| s.kind == chat::SuspensionKind::HumanAnswer)
+        .and_then(|s| crate::agents::human::handoff_of(s.run_context.as_ref()).cloned()))
 }
 
 fn slot_debug(slot: String, state: &SlotState, set_by: &[Provenance]) -> SlotDebug {
