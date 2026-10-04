@@ -645,6 +645,10 @@ export const ru: Catalog = {
  "agents-setup-name": "Имя",
  "agents-setup-next": "Далее",
  "agents-setup-nothing-available": "Пока нечего дать этому агенту. Администратор может подключить базы знаний и коннекторы.",
+ "agents-setup-notify": "Сообщать о передаче человеку",
+ "agents-setup-notify-hint": "Все, кто может ответить, увидят её во входящих. Также сообщать через:",
+ "agents-setup-notify-none": "Пока нет канала для оповещений. Добавьте ниже канал Slack или Discord.",
+ "agents-setup-notify-push": "Push-уведомление всем, кто может ответить",
  "agents-setup-open-count": {
   "few": "{count} пункта не готовы",
   "many": "{count} пунктов не готовы",

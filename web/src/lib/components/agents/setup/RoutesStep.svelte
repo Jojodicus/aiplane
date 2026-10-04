@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { agentsApi, type Spec } from '$lib/agents';
-	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, readHandoffs, readSlots, writeHandoffs, type Rule } from '$lib/agent-setup';
+	import { CHANNEL_KINDS, agentsApi, type NotifyChannel, type Spec } from '$lib/agents';
+	import ChannelsPanel from '../ChannelsPanel.svelte';
+	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyOn, readHandoffs, readSlots, setNotify, writeHandoffs, type Rule } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
@@ -53,6 +54,17 @@
 	}
 
 	onMount(() => model.rules.forEach((_, i) => void derive(i)));
+
+	let channels = $state<NotifyChannel[]>([]);
+	let pushEnabled = $state(false);
+	onMount(() => {
+		agentsApi.pushEnabled().then((on) => (pushEnabled = on)).catch(() => (pushEnabled = false));
+	});
+	const toPerson = $derived(model.fallback || model.rules.some((r) => r.target.kind === 'human'));
+	/** The channel kinds this agent can announce on: push when the gateway sends it, a service once it has a channel. */
+	const available = $derived([...(pushEnabled ? ['push'] : []), ...CHANNEL_KINDS.filter((kind) => channels.some((c) => c.kind === kind))]);
+	const announcing = $derived(notifyOn(model.notify, available));
+	const channelsOf = (kind: string) => channels.filter((c) => c.kind === kind).map((c) => `${c.name} (${c.url_host})`).join(', ');
 
 	/** A target agent not shared with the viewer, by its id: they may not read its name. */
 	function unlisted(rule: Rule): string | null {
@@ -156,5 +168,24 @@
 	{#if model.custom.length}
 		<p class="m-0 text-sm text-base-content/60">{t('agents-setup-routes-custom', { count: model.custom.length })}</p>
 	{/if}
+	{#if toPerson}
+		<fieldset class="flex flex-col gap-2">
+			<legend class="font-semibold">{t('agents-setup-notify')}</legend>
+			<span class="text-sm text-base-content/60">{t('agents-setup-notify-hint')}</span>
+			{#each available as kind (kind)}
+				<label class="flex items-start gap-2">
+					<input class="checkbox checkbox-sm mt-0.5" type="checkbox" checked={announcing.includes(kind)} disabled={!ws.writable} onchange={(e) => (model.notify = setNotify(model.notify, available, kind, e.currentTarget.checked))} />
+					<span class="flex flex-col">
+						<span>{kind === 'push' ? t('agents-setup-notify-push') : t(`agents-channels-kind-${kind}`)}</span>
+						{#if kind !== 'push'}<span class="text-xs text-base-content/60 break-all">{channelsOf(kind)}</span>{/if}
+					</span>
+				</label>
+			{:else}
+				<p class="m-0 text-sm text-base-content/60">{t('agents-setup-notify-none')}</p>
+			{/each}
+			<ChannelsPanel agentId={ws.id} writable={ws.writable} onchannels={(list) => (channels = list)} />
+		</fieldset>
+	{/if}
+
 	<p class="m-0 text-sm text-base-content/60">{t('agents-setup-routes-note')}</p>
 </div>

@@ -639,6 +639,10 @@ export const es: Catalog = {
  "agents-setup-name": "Nombre",
  "agents-setup-next": "Siguiente",
  "agents-setup-nothing-available": "Aún no hay nada que pueda dar a este agente. Un admin puede conectar bases de conocimiento y conectores.",
+ "agents-setup-notify": "Anunciar un traspaso a una persona",
+ "agents-setup-notify-hint": "Quien pueda responder lo encuentra en la bandeja de entrada. Anunciarlo también en:",
+ "agents-setup-notify-none": "Todavía no hay ningún canal para anunciarlo. Añade abajo un canal de Slack o Discord.",
+ "agents-setup-notify-push": "Notificación push a quien pueda responder",
  "agents-setup-open-count": {
   "one": "{count} punto pendiente",
   "other": "{count} puntos pendientes"

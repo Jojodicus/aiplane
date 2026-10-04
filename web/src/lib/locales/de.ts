@@ -639,6 +639,10 @@ export const de: Catalog = {
  "agents-setup-name": "Name",
  "agents-setup-next": "Weiter",
  "agents-setup-nothing-available": "Es gibt noch nichts, was Sie diesem Agenten geben können. Ein Admin kann Wissensdatenbanken und Connectoren anbinden.",
+ "agents-setup-notify": "Übergabe an eine Person ankündigen",
+ "agents-setup-notify-hint": "Alle, die antworten dürfen, finden sie im Posteingang. Zusätzlich ankündigen über:",
+ "agents-setup-notify-none": "Noch kein Kanal für Ankündigungen. Unten einen Slack- oder Discord-Kanal hinzufügen.",
+ "agents-setup-notify-push": "Push-Benachrichtigung an alle, die antworten dürfen",
  "agents-setup-open-count": {
   "one": "{count} Punkt offen",
   "other": "{count} Punkte offen"

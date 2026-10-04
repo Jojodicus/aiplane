@@ -372,6 +372,8 @@ export const agentsApi = {
 		call<void>(`/api/v0/agents/${id}/responders/revoke`, json('POST', r)),
 	channels: (id: string) =>
 		call<{ channels: NotifyChannel[] }>(`/api/v0/agents/${id}/channels`).then((r) => r.channels),
+	/** Whether this gateway sends Web Push at all (`GET /api/v0/push/config`). */
+	pushEnabled: () => call<{ enabled: boolean }>('/api/v0/push/config').then((r) => r.enabled),
 	addChannel: (id: string, channel: NewChannel) =>
 		call<{ channel: NotifyChannel }>(`/api/v0/agents/${id}/channels`, json('POST', channel)).then((r) => r.channel),
 	removeChannel: (id: string, channelId: string) =>

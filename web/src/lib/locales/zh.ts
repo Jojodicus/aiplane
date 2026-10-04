@@ -636,6 +636,10 @@ export const zh: Catalog = {
  "agents-setup-name": "名称",
  "agents-setup-next": "下一步",
  "agents-setup-nothing-available": "目前还没有可以分配给这个智能体的内容。管理员可以接入知识库和连接器。",
+ "agents-setup-notify": "通知转交给人工",
+ "agents-setup-notify-hint": "所有可以回复的人都会在收件箱中看到。另外通过以下方式通知：",
+ "agents-setup-notify-none": "尚无可用于通知的渠道。请在下方添加 Slack 或 Discord 渠道。",
+ "agents-setup-notify-push": "向所有可以回复的人发送推送通知",
  "agents-setup-open-count": {
   "other": "{count} 项待处理"
  },

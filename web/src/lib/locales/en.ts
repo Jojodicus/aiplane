@@ -639,6 +639,10 @@ export const en: Catalog = {
  "agents-setup-name": "Name",
  "agents-setup-next": "Next",
  "agents-setup-nothing-available": "There is nothing you could give this agent yet. An admin can connect knowledge bases and connectors.",
+ "agents-setup-notify": "Announce a hand-off to a person",
+ "agents-setup-notify-hint": "Everyone who may answer finds it in the inbox. Announce it also on:",
+ "agents-setup-notify-none": "No channel to announce on yet. Add a Slack or Discord channel below.",
+ "agents-setup-notify-push": "Push notification to whoever may answer",
  "agents-setup-open-count": {
   "one": "{count} point open",
   "other": "{count} points open"

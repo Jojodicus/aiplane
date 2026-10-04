@@ -754,6 +754,12 @@ export interface Handoffs {
 	fallback: boolean;
 	/** Routes the advanced editor set up, kept as they are. */
 	custom: string[];
+	/**
+	 * Where a hand-off to a person is announced (`human.notify` of every
+	 * human route the setup writes): channel kinds, `null` for every channel
+	 * the agent has. Left out, each route keeps what it has.
+	 */
+	notify?: string[] | null;
 }
 
 const REQUEST_SET = { slot: REQUEST_SLOT, set: true };
@@ -808,15 +814,39 @@ function routeOrder(spec: Spec): string[] {
 }
 
 export function readHandoffs(spec: Spec): Handoffs {
-	const out: Handoffs = { rules: [], fallback: false, custom: [] };
+	const out: Handoffs = { rules: [], fallback: false, custom: [], notify: null };
 	const details = detailKeys(spec);
+	const toPerson: Spec[] = [];
 	for (const name of routeOrder(spec)) {
 		const route = spec.routes[name];
 		const rule = ruleOf(name, route, details);
 		if (rule) out.rules.push(rule);
 		else if (isFallback(name, route)) out.fallback = true;
 		else out.custom.push(name);
+		if ((rule?.target.kind === 'human' || (!rule && isFallback(name, route))) && route.human) toPerson.push(route.human);
 	}
+	const listed = toPerson.find((h) => Array.isArray(h.notify));
+	if (listed) out.notify = [...listed.notify];
+	return out;
+}
+
+/** The kinds of `available` that announce, under the setup's choice (`null`: all of them). */
+export function notifyOn(notify: string[] | null | undefined, available: string[]): string[] {
+	return notify ? available.filter((kind) => notify.includes(kind)) : [...available];
+}
+
+/** The choice with `kind` switched; all of `available` on again is every channel (`null`). */
+export function setNotify(notify: string[] | null | undefined, available: string[], kind: string, on: boolean): string[] | null {
+	const current = notifyOn(notify, available);
+	const next = on ? [...new Set([...current, kind])] : current.filter((k) => k !== kind);
+	return available.every((k) => next.includes(k)) ? null : available.filter((k) => next.includes(k));
+}
+
+function withNotify(human: Spec, notify: string[] | null | undefined): Spec {
+	if (notify === undefined) return human;
+	const out = clone(human);
+	if (notify === null) delete out.notify;
+	else out.notify = [...notify];
 	return out;
 }
 
@@ -844,14 +874,14 @@ export function writeHandoffs(spec: Spec, h: Handoffs): void {
 			route.task = HANDOFF_TASK;
 			if (Object.keys(rule.bind).length) route.bind = clone(rule.bind);
 		} else {
-			route.human = prev?.human ? clone(prev.human) : {};
+			route.human = withNotify(prev?.human ? clone(prev.human) : {}, h.notify);
 		}
 		routes[name] = route;
 	}
 	for (const name of h.custom) if (before[name]) routes[name] = before[name];
 	if (h.fallback) {
 		const prev = before[FALLBACK_ROUTE];
-		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {} };
+		routes[FALLBACK_ROUTE] = { when: clone(REQUEST_SET), human: withNotify(prev?.human && isFallback(FALLBACK_ROUTE, prev) ? clone(prev.human) : {}, h.notify) };
 	}
 	spec.routes = routes;
 

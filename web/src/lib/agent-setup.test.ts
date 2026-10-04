@@ -49,6 +49,8 @@ import {
 	unique,
 	writeBasics,
 	writeHandoffs,
+	notifyOn,
+	setNotify,
 	writeIdentity,
 	writeScope,
 	writeColor,
@@ -309,7 +311,8 @@ test('hand-off sentences become routes with derived gates, and read back unchang
 			{ route: 'technik', topic: 'Technik', details: false, identity: false, target: { kind: 'human' }, bind: {} }
 		],
 		fallback: true,
-		custom: ['legacy']
+		custom: ['legacy'],
+		notify: null
 	});
 
 	writeHandoffs(spec, { rules: [], fallback: false, custom: ['legacy'] });
@@ -770,4 +773,27 @@ test('the voice picker lists the speech model\'s own voices', () => {
 	assert.deepEqual(speechVoices({ ...voice, speechModel: '' }, r), ['af_heart'], 'unset: the default model\'s');
 	assert.deepEqual(speechVoices({ ...voice, voice: 'nova' }, r), ['alloy', 'onyx', 'nova'], 'what is set stays visible');
 	assert.deepEqual(speechVoices({ ...voice, speechModel: 'gone' }, r), []);
+});
+
+test('a hand-off to a person is announced where the setup says, on every human route', () => {
+	const spec: Spec = {};
+	const person = { route: null, topic: 'Billing', details: false, identity: false, target: { kind: 'human' as const }, bind: {} };
+	writeHandoffs(spec, { rules: [person], fallback: true, custom: [], notify: ['slack'] });
+	assert.deepEqual(spec.routes.billing.human, { notify: ['slack'] });
+	assert.deepEqual(spec.routes.fallback.human, { notify: ['slack'] });
+	assert.deepEqual(readHandoffs(throughEditor(spec)).notify, ['slack']);
+
+	spec.routes.billing.human.inbox = 'support';
+	writeHandoffs(spec, { ...readHandoffs(spec), notify: null });
+	assert.deepEqual(spec.routes.billing.human, { inbox: 'support' }, 'every channel: no list, the rest of the route kept');
+	assert.equal(readHandoffs(spec).notify, null);
+});
+
+test('the notification choice covers what exists, and all of it is every channel', () => {
+	const available = ['push', 'slack'];
+	assert.deepEqual(notifyOn(null, available), ['push', 'slack'], 'unset: everything announces');
+	assert.deepEqual(notifyOn(['slack', 'discord'], available), ['slack']);
+	assert.deepEqual(setNotify(null, available, 'push', false), ['slack']);
+	assert.equal(setNotify(['slack'], available, 'push', true), null, 'everything on again: every channel');
+	assert.deepEqual(setNotify(['slack'], available, 'slack', false), []);
 });
