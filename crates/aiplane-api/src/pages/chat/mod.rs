@@ -643,9 +643,7 @@ async fn queue_for_later(
         // and nothing to produce one — and its uploads would be unreferenced
         // for good, so they are swept the same way every other truncation
         // does it.
-        let doomed = doomed_attachments(state, &active.id, user_turn.seq).await;
-        let _ = chat::delete_turns_from_seq(&state.db, &active.id, user_turn.seq).await;
-        reclaim_attachments(state, doomed);
+        let _ = truncate_reclaiming(state, &active.id, user_turn.seq).await;
         return Err(SubmitTurnError::Db(err.to_string()));
     }
     let _ = chat::touch_session(&state.db, &active.id).await;
@@ -760,43 +758,31 @@ pub struct SteerPath {
     pub steer_id: String,
 }
 
-/// The attachments a pending `delete_turns_from_seq` is about to
-/// orphan. Read *before* the delete — afterwards the markers are gone
-/// and the bucket objects are unreferenced forever. Empty when
-/// attachments aren't configured or the read fails: reclaiming is
-/// housekeeping and must never block the user's retry/edit.
-async fn doomed_attachments(
+/// [`chat_attachments::delete_reclaiming`] with the configured bucket,
+/// reclaiming off the request path: drops every turn of `session_id` from
+/// `from_seq` on, together with the files they referenced.
+async fn truncate_reclaiming(
     state: &Arc<RamaState>,
     session_id: &str,
     from_seq: i64,
-) -> Vec<chat_attachments::AttachmentRef> {
-    if state.config().chat.s3.is_none() {
-        return Vec::new();
+) -> Result<(), session_core::db::DbError> {
+    let config = state.config();
+    let doomed = [chat_attachments::Doomed {
+        session_id,
+        from_seq,
+    }];
+    let delete = async {
+        chat::delete_turns_from_seq(&state.db, session_id, from_seq)
+            .await
+            .map(|_| true)
+    };
+    if let Some(reclaim) =
+        chat_attachments::delete_reclaiming(&state.db, config.chat.s3.as_ref(), &doomed, delete)
+            .await?
+    {
+        reclaim.in_background();
     }
-    match chat_attachments::attachments_from_seq(&state.db, session_id, from_seq).await {
-        Ok(refs) => refs,
-        Err(err) => {
-            tracing::warn!(error = %err, %session_id, "listing attachments of doomed turns");
-            Vec::new()
-        }
-    }
-}
-
-/// Fire-and-forget the bucket DELETEs for turns that are already gone
-/// from the DB. Off the request path: a slow or flaky bucket must not
-/// delay the regeneration the user is waiting on, and a failed DELETE
-/// only leaves an orphan (which a later delete of the same key would
-/// clean up — S3 DELETE is idempotent).
-fn reclaim_attachments(state: &Arc<RamaState>, orphaned: Vec<chat_attachments::AttachmentRef>) {
-    if orphaned.is_empty() {
-        return;
-    }
-    let state = state.clone();
-    tokio::spawn(async move {
-        if let Some(cfg) = state.config().chat.s3.as_ref() {
-            chat_attachments::reclaim_all(cfg, &orphaned).await;
-        }
-    });
+    Ok(())
 }
 
 /// Request-derived bits the worker needs that aren't part of the chat
@@ -1080,10 +1066,10 @@ async fn notify_turn_complete(
     session_id: &str,
     assistant_turn_id: &str,
 ) {
-    use aiplane_features::server::push::{PushMessage, SendOutcome};
+    use aiplane_features::server::push::{self, PushMessage};
     use session_core::db::TurnStatus;
 
-    let Some(push) = state.push.clone() else {
+    let Some(sender) = state.push.clone() else {
         return;
     };
 
@@ -1103,60 +1089,32 @@ async fn notify_turn_complete(
         _ => return,
     };
 
-    let subs = match aiplane_core::server::db::push_subscriptions::list_for_user(&state.db, user_id)
-        .await
-    {
-        Ok(s) if !s.is_empty() => s,
-        Ok(_) => return,
-        Err(err) => {
-            tracing::warn!(error = %err, "push: listing subscriptions");
-            return;
-        }
-    };
-
     // Conversation title for the heading; an untitled chat gets a localized
-    // fallback per subscription below.
+    // fallback per subscription.
     let session_title = session_core::db::get_session(&state.db, user_id, session_id)
         .await
         .ok()
         .flatten()
         .and_then(|s| s.title)
         .filter(|t| !t.trim().is_empty());
-
     let url = format!("/chat/{session_id}");
-    for sub in subs {
-        let lang = sub
-            .lang
-            .as_deref()
-            .and_then(Lang::from_code)
-            .unwrap_or(Lang::En);
-        // Cap the title: it's a user-influenced conversation title, and the
-        // whole payload rides in one aes128gcm record with a 4 KB budget (and
-        // FCM's own 4 KB body cap). 80 chars is plenty for a heading.
-        let title = session_title
+    let compose = |lang: Lang| PushMessage {
+        title: session_title
             .clone()
-            .map(|t| session_core::text::truncate_chars(&t, 80))
-            .unwrap_or_else(|| t(lang, "push-untitled-conversation"));
-        let body = t(
+            .unwrap_or_else(|| t(lang, "push-untitled-conversation")),
+        body: t(
             lang,
             if errored {
                 "push-turn-error-body"
             } else {
                 "push-turn-complete-body"
             },
-        );
-        let message = PushMessage {
-            title,
-            body,
-            url: url.clone(),
-            tag: session_id.to_string(),
-        };
-        if push.send(&sub, &message).await == SendOutcome::Gone
-            && let Err(err) =
-                aiplane_core::server::db::push_subscriptions::delete(&state.db, &sub.id).await
-        {
-            tracing::warn!(error = %err, "push: pruning gone subscription");
-        }
+        ),
+        url: url.clone(),
+        tag: session_id.to_string(),
+    };
+    if let Err(err) = push::send_to_user(&sender, &state.db, user_id, compose).await {
+        tracing::warn!(error = %err, "push: notifying a finished turn");
     }
 }
 

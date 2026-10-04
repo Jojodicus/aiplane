@@ -18,8 +18,8 @@ use super::a2a::{Peer, TOKEN, completed, finish_schema};
 use super::suspend::{answer, every_stored_text, staff, visitor_says};
 use super::verifiers::{ALICE, CODE, erp};
 use super::*;
-use crate::agents::a2a_client as a2a;
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 
 const VISITOR: &str = "My March invoice is wrong and I want to know about my warranty.";
 const QUESTION: &str = "May we refund the duplicate charge on RE-1?";
@@ -140,7 +140,7 @@ async fn the_story() -> Run {
         )
         .await;
     let mut spec = support_spec(&billing, &peer.card_url());
-    a2a::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     assert_eq!(world.issues(&support, &spec).await, []);
     world.publish(&support, &spec).await;
 

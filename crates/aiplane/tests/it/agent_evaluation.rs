@@ -707,6 +707,65 @@ async fn publishing_is_blocked_until_the_suite_is_green_for_this_draft_when_the_
     );
 }
 
+/// The at-rest key rotation re-seals every credential in a draft, which
+/// gives it new ciphertext but leaves its meaning alone: a green run stays
+/// the evidence for it. Done here as the pass does it, by sealing the same
+/// credential again — what the run tested is unchanged.
+#[tokio::test]
+async fn a_resealed_credential_leaves_a_green_run_current() {
+    let fx = fixture(vec![text("An answer.")]).await;
+    let guarded = fx
+        .build_support("-sealed", json!({ "require_passing_tests": true }))
+        .await;
+    let (_, detail) = fx.get(&format!("/api/v0/agents/{guarded}")).await;
+    let mut draft = detail["agent"]["draft_spec"].clone();
+    draft["verifiers"] = json!({ "site": {
+        "kind": "host_jwt", "algorithm": "HS256",
+        "secret": "the-website-and-the-agent-share-this-secret",
+        "issuer": "https://www.example.com", "audience": "support",
+        "claims": { "verified": { "customer_id": "sub" } } } });
+    fx.save_draft(&guarded, draft).await;
+    let tests = |suffix: &str| format!("/api/v0/agents/{guarded}/{suffix}");
+    let (status, body) = fx
+        .post(
+            &tests("tests"),
+            json!({ "name": "answers", "script": [{ "say": "hello" }],
+                    "expect": { "route": null } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, run) = fx
+        .post(&tests("tests/run"), json!({ "source": "draft" }))
+        .await;
+    assert_eq!(run["green"], true, "{run}");
+
+    let stored: String = sqlx::query_scalar("SELECT draft_spec FROM agents WHERE principal_id = ?")
+        .bind(&guarded)
+        .fetch_one(&fx.state.db)
+        .await
+        .unwrap();
+    let mut stored: Value = serde_json::from_str(&stored).unwrap();
+    let sealed = stored["verifiers"]["site"]["secret_sealed"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let plain = fx.state.crypto.open_from_string(&sealed).unwrap();
+    let resealed = fx.state.crypto.seal_to_string(&plain).unwrap();
+    assert_ne!(sealed, resealed);
+    stored["verifiers"]["site"]["secret_sealed"] = json!(resealed);
+    sqlx::query("UPDATE agents SET draft_spec = ? WHERE principal_id = ?")
+        .bind(stored.to_string())
+        .bind(&guarded)
+        .execute(&fx.state.db)
+        .await
+        .unwrap();
+
+    let (_, listing) = fx.get(&tests("tests")).await;
+    assert_eq!(listing["latest_draft_run_current"], true, "{listing}");
+    let (status, body) = fx.publish(&guarded).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
 #[tokio::test]
 async fn a_suite_run_leaves_the_analytics_untouched() {
     let fx = fixture(technical_script()).await;

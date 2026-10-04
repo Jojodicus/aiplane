@@ -2706,6 +2706,7 @@ export const ru: Catalog = {
  "usage-period-this-month": "Этот месяц",
  "usage-period-this-week": "Эта неделя",
  "usage-period-today": "Сегодня",
+ "usage-source-agent": "Агенты",
  "usage-source-all": "Все источники",
  "usage-source-api": "API (/v1)",
  "usage-source-chat": "Чат",

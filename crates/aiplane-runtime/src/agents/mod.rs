@@ -11,10 +11,12 @@
 //! identity verifiers that write trusted slots (`verifier`). Human in the
 //! loop is `approval` (per-tool `always_ask`), `human` (handoffs) and
 //! `inbox` (who answers what, and the notification). `a2a_client` is the
-//! route to an external agent over the A2A protocol.
+//! route to an external agent over the A2A protocol. `access` is the one
+//! rule for who may act on an agent.
 
 pub mod a2a;
 pub mod a2a_client;
+pub mod access;
 pub mod approval;
 pub mod assist;
 pub mod audit;

@@ -2689,6 +2689,7 @@ export const fr: Catalog = {
  "usage-period-this-month": "Ce mois-ci",
  "usage-period-this-week": "Cette semaine",
  "usage-period-today": "Aujourd'hui",
+ "usage-source-agent": "Agents",
  "usage-source-all": "Toutes les sources",
  "usage-source-api": "API (/v1)",
  "usage-source-chat": "Interface de chat",

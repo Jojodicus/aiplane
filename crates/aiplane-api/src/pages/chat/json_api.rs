@@ -30,6 +30,7 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
+use aiplane_features::server::chat_attachments;
 use aiplane_runtime::rama_server::state::RamaState;
 
 use aiplane_core::server::db::users::User;
@@ -196,17 +197,23 @@ pub async fn session_delete(
     if !user_owns(&state, &user.id, &session_id).await {
         return not_found_conversation();
     }
-    // Deleting the conversation deletes its files: seq 0 covers every turn.
-    // Read before the rows go — see `doomed_attachments`.
-    let orphaned = super::doomed_attachments(&state, &session_id, 0).await;
-    let deleted = match chat::delete_session(&state.db, &user.id, &session_id).await {
-        Ok(v) => v,
+    // Deleting the conversation deletes its files.
+    let config = state.config();
+    let deleted = match chat_attachments::delete_reclaiming(
+        &state.db,
+        config.chat.s3.as_ref(),
+        &[chat_attachments::Doomed::session(&session_id)],
+        chat::delete_session(&state.db, &user.id, &session_id),
+    )
+    .await
+    {
+        Ok(reclaim) => reclaim,
         Err(err) => {
             return internal(err);
         }
     };
-    if deleted {
-        super::reclaim_attachments(&state, orphaned);
+    if let Some(reclaim) = deleted {
+        reclaim.in_background();
         Response::builder()
             .status(StatusCode::NO_CONTENT)
             .body(rama::http::Body::empty())
@@ -351,7 +358,7 @@ pub async fn message_send(
     // Ownership BEFORE the body is parsed. Parsing a multipart submit uploads
     // every attachment to S3 under this turn's prefix, and we will not spend
     // storage on a turn the caller does not own: no turn row is created on the
-    // 404 path, so `doomed_attachments`/`reclaim_attachments` can never find
+    // 404 path, so `chat_attachments::delete_reclaiming` can never find
     // those objects to sweep them. The quota enforcer runs later still.
     let active = match chat::get_session(&state.db, &user.id, &session_id).await {
         Ok(Some(s)) => s,
@@ -993,13 +1000,8 @@ pub async fn turn_delete(
         }
         Err(err) => return internal(err),
     }
-    // Uploads first, like every other path that truncates a conversation:
-    // after the delete the markers are gone and the objects are unreferenced
-    // forever. See `doomed_attachments`.
-    let doomed = super::doomed_attachments(&state, &session_id, target.turn.seq).await;
-    match chat::delete_turns_from_seq(&state.db, &session_id, target.turn.seq).await {
-        Ok(_) => {
-            super::reclaim_attachments(&state, doomed);
+    match super::truncate_reclaiming(&state, &session_id, target.turn.seq).await {
+        Ok(()) => {
             let _ = chat::touch_session(&state.db, &session_id).await;
             ok_json(StatusCode::OK, json!({ "deleted": turn_id }))
         }
@@ -1033,11 +1035,9 @@ pub async fn turn_retry(
     if turn.role != chat::TurnRole::Assistant {
         return bad_request("only assistant turns can be retried");
     }
-    let orphaned = super::doomed_attachments(&state, &session_id, turn.seq).await;
-    if let Err(err) = chat::delete_turns_from_seq(&state.db, &session_id, turn.seq).await {
+    if let Err(err) = super::truncate_reclaiming(&state, &session_id, turn.seq).await {
         return internal(err);
     }
-    super::reclaim_attachments(&state, orphaned);
     match start_regeneration_json(&state, &user, &session_id, parsed.model, ctx).await {
         Ok(ids) => ok_json(StatusCode::ACCEPTED, ids),
         Err(resp) => resp,
@@ -1103,11 +1103,9 @@ pub async fn turn_edit(
     {
         return internal(err);
     }
-    let orphaned = super::doomed_attachments(&state, &session_id, turn.seq + 1).await;
-    if let Err(err) = chat::delete_turns_from_seq(&state.db, &session_id, turn.seq + 1).await {
+    if let Err(err) = super::truncate_reclaiming(&state, &session_id, turn.seq + 1).await {
         return internal(err);
     }
-    super::reclaim_attachments(&state, orphaned);
     match start_regeneration_json(&state, &user, &session_id, model, ctx).await {
         Ok(ids) => ok_json(StatusCode::ACCEPTED, ids),
         Err(resp) => resp,

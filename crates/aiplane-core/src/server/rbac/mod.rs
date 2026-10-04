@@ -21,4 +21,4 @@ pub mod config;
 pub mod resolver;
 
 pub use config::{RbacConfig, RoleConfig, RoleMapping};
-pub use resolver::{GrantableSet, ResolveError, Resolver};
+pub use resolver::{BOOTSTRAP_ADMIN_GROUP, GrantableSet, ResolveError, Resolver};

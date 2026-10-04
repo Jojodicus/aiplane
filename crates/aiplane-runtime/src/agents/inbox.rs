@@ -28,9 +28,9 @@ use aiplane_agents::db::agent_responders;
 use aiplane_agents::db::agents::{self as agents_db, Access, SubjectKind};
 use aiplane_agents::db::run_sessions;
 use aiplane_agents::db::run_sessions::{PendingSuspension, SessionOwner};
-use aiplane_agents::notify_channels::{self, Notice};
-use aiplane_core::server::db::{DbError, push_subscriptions, users};
-use aiplane_features::server::push::{PushMessage, SendOutcome};
+use aiplane_agents::notify_channels::{self, Notice, Reach};
+use aiplane_core::server::db::{DbError, users};
+use aiplane_features::server::push::{self, PushMessage};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -174,12 +174,8 @@ pub async fn agent_standing(
     viewer: &Viewer,
     agent_id: &str,
 ) -> Result<Option<Standing>, DbError> {
-    if state.rbac.is_admin(&viewer.groups) {
-        return Ok(Some(Standing::Manager));
-    }
-    if state.rbac.can_manage_agents(&viewer.groups)
-        && agents_db::access_for(&state.db, agent_id, &viewer.user_id, &viewer.groups).await?
-            == Some(Access::Write)
+    if super::access::effective_access(state, agent_id, &viewer.user_id, &viewer.groups).await?
+        == Some(Access::Write)
     {
         return Ok(Some(Standing::Manager));
     }
@@ -413,31 +409,29 @@ async fn push(
         return;
     };
     for user in recipients {
-        let subs = match push_subscriptions::list_for_user(&state.db, user).await {
-            Ok(subs) => subs,
-            Err(err) => {
-                tracing::warn!(error = %err, "push: listing subscriptions");
-                continue;
-            }
+        let compose = |lang| PushMessage {
+            title: wording.headline(lang),
+            body: wording.summary(lang),
+            url: path.to_string(),
+            tag: tag.to_string(),
         };
-        for sub in subs {
-            let lang = sub
-                .lang
-                .as_deref()
-                .and_then(Lang::from_code)
-                .unwrap_or(Lang::En);
-            let message = PushMessage {
-                title: wording.headline(lang),
-                body: wording.summary(lang),
-                url: path.to_string(),
-                tag: tag.to_string(),
-            };
-            if sender.send(&sub, &message).await == SendOutcome::Gone
-                && let Err(err) = push_subscriptions::delete(&state.db, &sub.id).await
-            {
-                tracing::warn!(error = %err, "push: pruning gone subscription");
-            }
+        if let Err(err) = push::send_to_user(&sender, &state.db, user, compose).await {
+            tracing::warn!(error = %err, "push: announcing a waiting turn");
         }
+    }
+}
+
+/// Where a notification channel set up by `configured_by` may post: an
+/// admin's is the operator's own choice ([`Reach::Operator`]); anyone
+/// else's — and one whose creator is gone — goes through `outbound_guard`.
+/// Asked again on every post, so a channel follows its creator's standing
+/// today, not the day it was made.
+pub fn channel_reach(state: &RamaState, configured_by: Option<&users::User>) -> Reach {
+    match configured_by {
+        Some(user) if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) => Reach::Operator,
+        _ => Reach::Guarded {
+            allow_private: state.config().network.allow_private_networks,
+        },
     }
 }
 
@@ -473,7 +467,15 @@ async fn channels(
             link_label: t(lang, "agent-inbox-notify-open"),
         };
         let payload = notify_channels::payload(kind, &notice);
-        if let Err(err) = notify_channels::post(&state.http, &target.url, &payload).await {
+        let creator = match users::find_by_id(&state.db, &target.channel.created_by).await {
+            Ok(creator) => creator,
+            Err(err) => {
+                tracing::warn!(error = %err, channel = %target.channel.id, "reading a channel's creator");
+                continue;
+            }
+        };
+        let reach = channel_reach(state, creator.as_ref());
+        if let Err(err) = notify_channels::post(&state.http, reach, &target.url, &payload).await {
             tracing::warn!(
                 channel = %target.channel.id,
                 kind = kind.as_str(),

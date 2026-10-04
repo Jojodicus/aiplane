@@ -282,7 +282,7 @@ async fn spend(e: &Embed, tokens: i64) {
             user_email: Some("billing".into()),
             token_id: None,
             token_name: None,
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             kind: UsageKind::Chat,
             backend: "mock".into(),
             model: "m".into(),
@@ -389,7 +389,7 @@ async fn retention_deletes_only_the_agents_idle_conversations() {
             .unwrap();
     }
 
-    let swept = retention::sweep(&e.fx.state.db, jiff::Timestamp::now())
+    let swept = retention::sweep(&e.fx.state.db, None, jiff::Timestamp::now())
         .await
         .unwrap();
     assert_eq!(

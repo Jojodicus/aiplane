@@ -30,9 +30,11 @@ use aiplane_agents::db::agents::{
     self as agents_db, Access, DraftChange, ShareChange, SubjectKind,
 };
 use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
-use aiplane_core::server::db::{gateway_groups, users};
+use aiplane_core::server::db::users;
 use aiplane_core::server::principal::{GrantKind, GrantSet};
+use aiplane_runtime::agents::access::effective_access;
 use aiplane_runtime::agents::defaults;
+use aiplane_runtime::agents::spec::secrets;
 use aiplane_runtime::agents::spec::{
     self, AgentSpec, ModelDefaults, SpecContext, SpecIssue, Stage,
 };
@@ -42,20 +44,15 @@ fn group_ids(state: &RamaState, user: &users::User) -> Vec<String> {
     state.rbac.role_ids_for(&user.roles)
 }
 
-/// The caller's access to agent `id`: `write` for an admin, otherwise their
-/// strongest share — a 404 when they hold none, a 403 when it is weaker than
-/// `need`.
+/// The caller's access to agent `id` ([`effective_access`]) — a 404 when
+/// they hold none, a 403 when it is weaker than `need`.
 async fn access(
     state: &RamaState,
     user: &users::User,
     id: &str,
     need: Access,
 ) -> Result<Option<Access>, Response> {
-    let groups = group_ids(state, user);
-    if state.rbac.is_admin(&groups) {
-        return Ok(Some(Access::Write));
-    }
-    let held = agents_db::access_for(&state.db, id, &user.id, &groups)
+    let held = effective_access(state, id, &user.id, &group_ids(state, user))
         .await
         .map_err(internal)?;
     match held {
@@ -208,6 +205,7 @@ async fn spec_check(
             agents: &world.agents,
             live_specs: &world.live_specs,
             model_defaults: &world.model_defaults,
+            allow_private: world.allow_private,
         },
         stage,
     ))
@@ -220,6 +218,7 @@ pub(super) struct SpecWorld {
     pub agents: HashMap<String, bool>,
     pub live_specs: HashMap<String, Value>,
     pub model_defaults: ModelDefaults,
+    pub allow_private: bool,
 }
 
 impl SpecWorld {
@@ -241,6 +240,7 @@ impl SpecWorld {
             agents,
             live_specs,
             model_defaults,
+            allow_private: state.config().network.allow_private_networks,
         })
     }
 }
@@ -249,9 +249,7 @@ impl SpecWorld {
 /// valid (the plaintext is checked), before it is stored or echoed: it never
 /// rests in a draft, a version or the audit trail in clear.
 fn seal_secrets(state: &RamaState, spec: &mut Value) -> Result<(), Response> {
-    aiplane_runtime::agents::verifier::host_jwt::seal_secrets(spec, &state.crypto)
-        .and_then(|()| aiplane_runtime::agents::a2a_client::seal_secrets(spec, &state.crypto))
-        .map_err(internal)
+    secrets::seal_spec_secrets(spec, secrets::SPEC_SECRETS, &state.crypto).map_err(internal)
 }
 
 fn invalid_spec(what: &str, issues: &[SpecIssue]) -> Response {
@@ -519,6 +517,7 @@ fn uses_grant(
                 agents: &world.agents,
                 live_specs: &world.live_specs,
                 model_defaults: &world.model_defaults,
+                allow_private: world.allow_private,
             },
             Stage::Publish,
         )
@@ -797,13 +796,10 @@ async fn require_manager_subject(
             state.rbac.can_manage_agents(&group_ids(state, &u))
         }
         SubjectKind::Group => {
-            let groups = gateway_groups::list_groups(&state.db)
-                .await
-                .map_err(internal)?;
-            let Some(g) = groups.into_iter().find(|g| g.name == subject) else {
+            if !state.rbac.has_group(subject) {
                 return Err(not_found(format!("there is no group `{subject}`")));
-            };
-            g.is_admin || g.can_manage_agents
+            }
+            state.rbac.can_manage_agents(&[subject.to_string()])
         }
     };
     if holds {

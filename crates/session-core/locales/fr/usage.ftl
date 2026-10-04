@@ -16,6 +16,7 @@ usage-source-all = Toutes les sources
 usage-source-api = API (/v1)
 usage-source-chat = Interface de chat
 usage-source-scheduled = Planifié
+usage-source-agent = Agents
 usage-backend-all = Tous les backends
 
 usage-filter-period = Période

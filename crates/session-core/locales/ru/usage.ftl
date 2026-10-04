@@ -16,6 +16,7 @@ usage-source-all = Все источники
 usage-source-api = API (/v1)
 usage-source-chat = Чат
 usage-source-scheduled = Запланировано
+usage-source-agent = Агенты
 usage-backend-all = Все бэкенды
 
 usage-filter-period = Период

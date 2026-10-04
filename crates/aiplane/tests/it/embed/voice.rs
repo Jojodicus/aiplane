@@ -306,6 +306,37 @@ async fn a_recording_comes_back_as_text_for_the_visitor_to_send_and_is_not_kept(
 }
 
 #[tokio::test]
+async fn a_visitors_recording_is_booked_as_the_agents_usage() {
+    let mock = upstream().await;
+    let mut e = voice_embed(&mock, both(), json!({})).await;
+    let metered = aiplane_core::server::usage::spawn(e.fx.state.db.clone(), 90);
+    e.fx.state = e.fx.state.clone().with_usage(metered);
+    let token = e.visitor().await;
+    let r = e.transcribe(&token, wav(1.0)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    for _ in 0..100 {
+        rows = sqlx::query_as("SELECT user_id, source, kind FROM usage_events")
+            .fetch_all(&e.fx.state.db)
+            .await
+            .unwrap();
+        if !rows.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        rows,
+        [(
+            e.agent.clone(),
+            "agent".to_string(),
+            "transcription".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
 async fn voice_routes_are_not_there_for_an_agent_without_voice() {
     let mock = upstream().await;
     let e = voice_embed(
@@ -425,7 +456,7 @@ async fn a_spent_budget_silences_voice_too() {
             user_email: None,
             token_id: None,
             token_name: None,
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             kind: UsageKind::Chat,
             backend: "mock".into(),
             model: "m".into(),

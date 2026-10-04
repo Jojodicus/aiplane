@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use super::suspend::{answer, every_stored_text};
 use super::*;
-use crate::agents::a2a_client as a2a;
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
 use session_core::i18n::Lang;
@@ -204,7 +204,7 @@ async fn support(world: &World, card_url: &str, target: Value) -> String {
         )
         .await;
     let mut spec = partner_spec(target);
-    a2a::seal_secrets(&mut spec, &world.state.crypto).unwrap();
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     assert_eq!(world.issues(&id, &spec).await, []);
     world.publish(&id, &spec).await;
     id
@@ -458,7 +458,25 @@ async fn a_loopback_peer_is_refused_unless_the_operator_allows_private_networks(
     let main = llm(main_script("I cannot reach that service.")).await;
     let peer = Peer::bearer(vec![completed(json!({ "answer": "covered" }))]).await;
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
-    let agent = support(&world, &peer.card_url(), bearer_target(&peer.card_url())).await;
+    let agent = world
+        .agent(
+            "support",
+            &[
+                (GrantKind::Model, "support-model"),
+                (GrantKind::A2aAgent, &peer.card_url()),
+            ],
+        )
+        .await;
+    let mut spec = partner_spec(bearer_target(&peer.card_url()));
+    seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
+    let issues = world.issues(&agent, &spec).await;
+    assert!(
+        issues.iter().any(|i| i.path.ends_with("card_url")
+            && i.message.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS")),
+        "publishing is refused for the reason the run would refuse it: {issues:?}"
+    );
+    // Published while the operator still allowed private networks.
+    world.publish(&agent, &spec).await;
 
     conversation(&world, &agent).await;
     let outcome = forwarded(&main).await["outcome"].clone();

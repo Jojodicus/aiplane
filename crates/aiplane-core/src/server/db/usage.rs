@@ -46,6 +46,10 @@ pub enum UsageSource {
     /// collection). Has no end user: the cost belongs to the corpus, not to
     /// whoever happened to trigger the re-index.
     Indexer,
+    /// An agent's own traffic, however its conversation came in — the embed
+    /// widget, A2A, a parent agent's route, voice — and its side calls
+    /// (router, scope guard). Booked to the agent's principal.
+    Agent,
 }
 
 impl UsageSource {
@@ -56,6 +60,7 @@ impl UsageSource {
             UsageSource::Scheduled => "scheduled",
             UsageSource::Webhook => "webhook",
             UsageSource::Indexer => "indexer",
+            UsageSource::Agent => "agent",
         }
     }
 }

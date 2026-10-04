@@ -96,7 +96,7 @@ impl Check<'_> {
             Some(v) => {
                 let p = join(&at, "card_url");
                 if let Some(url) = self.string(v, &p) {
-                    match client::check_card_url(url) {
+                    match client::check_card_url(url, self.ctx.allow_private) {
                         Err(why) => self.issue(&p, format!("`{url}` cannot be used: {why}")),
                         Ok(_) => self.require_grant(&p, GrantKind::A2aAgent, url, "A2A agent"),
                     }
@@ -350,6 +350,7 @@ mod tests {
                 agents: &agents,
                 live_specs: live,
                 model_defaults: &Default::default(),
+                allow_private: false,
             },
             stage,
         )

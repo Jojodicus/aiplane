@@ -223,43 +223,11 @@ pub fn public_key(alg: JwtAlgorithm, pem: &str) -> Result<DecodingKey, String> {
     })
 }
 
-/// `https://…`, or `http://` to localhost for development.
-pub fn is_jwks_url(s: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(s) else {
-        return false;
-    };
-    match url.scheme() {
-        "https" => url.host().is_some(),
-        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
-        _ => false,
-    }
-}
-
-/// Replace every plaintext `secret` of a `host_jwt` verifier with
-/// `secret_sealed`, so the spec is never stored with a usable secret — not in
-/// the draft, a version, the audit trail or a manager's GET.
-pub fn seal_secrets(
-    spec: &mut Value,
-    crypto: &aiplane_core::server::crypto::Crypto,
-) -> Result<(), String> {
-    let Some(verifiers) = spec.get_mut("verifiers").and_then(Value::as_object_mut) else {
-        return Ok(());
-    };
-    for v in verifiers.values_mut() {
-        let Some(cfg) = v.as_object_mut() else {
-            continue;
-        };
-        if cfg.get("kind").and_then(Value::as_str) != Some("host_jwt") {
-            continue;
-        }
-        if let Some(Value::String(secret)) = cfg.remove("secret") {
-            let sealed = crypto
-                .seal_to_string(&secret)
-                .map_err(|e| format!("sealing the host_jwt secret failed: {e}"))?;
-            cfg.insert("secret_sealed".into(), Value::String(sealed));
-        }
-    }
-    Ok(())
+/// Whether [`fetch_jwks`] may reach `url`, as far as that can be told before
+/// resolving it: the same `outbound_guard` policy, so a spec is refused on
+/// save for a URL its run would refuse.
+pub fn check_jwks_url(url: &str, allow_private: bool) -> Result<(), String> {
+    outbound_guard::check_url(url, Policy::agent(allow_private)).map(|_| ())
 }
 
 type JwksCache = Mutex<HashMap<String, (Instant, JwkSet)>>;

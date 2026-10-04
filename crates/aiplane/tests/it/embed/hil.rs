@@ -484,6 +484,31 @@ async fn responders_and_channels_are_managed_with_a_share_and_a_url_is_never_sho
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"]["code"], "invalid_webhook_url");
+    let relay = json!({ "kind": "discord", "name": "relay", "url": "http://127.0.0.1:9/relay" });
+    let (status, body) = fx
+        .post(&fx.alice, &format!("{base}/channels"), relay.clone())
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("admin"),
+        "a manager is told who can point a channel into the network: {body}"
+    );
+    let (status, body) = fx.post(&fx.root, &format!("{base}/channels"), relay).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "an admin's relay is the operator's: {body}"
+    );
+    let relay_id = body["channel"]["id"].as_str().unwrap().to_string();
+    let (status, _) = fx
+        .send(
+            Some(&fx.root),
+            Method::DELETE,
+            &format!("{base}/channels/{relay_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, created) = fx
         .post(
             &fx.alice,

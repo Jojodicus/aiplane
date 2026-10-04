@@ -14,6 +14,7 @@
 use std::time::Duration;
 
 use crate::db::agent_channels::ChannelKind;
+use aiplane_core::server::outbound_guard::{self, Policy};
 use serde_json::{Value, json};
 
 /// How long one webhook post may take. A slow chat service must not hold
@@ -83,11 +84,51 @@ pub fn payload(kind: ChannelKind, notice: &Notice) -> Value {
     }
 }
 
-/// Post `payload` to an incoming webhook. The error never contains the URL:
-/// it is a credential, and the error ends up in a log line.
-pub async fn post(http: &reqwest::Client, url: &str, payload: &Value) -> Result<(), String> {
-    let resp = http
-        .post(url)
+/// Where a channel may post, which follows from who configured it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// An admin's channel: the operator's own choice, like a backend. Any
+    /// http(s) URL, a private or loopback host included (an internal relay),
+    /// posted through the operator's client.
+    Operator,
+    /// A manager's channel: the service's own webhook host, reached through
+    /// `outbound_guard` like every URL someone other than the operator
+    /// chooses — public https, unless the operator allows private networks.
+    Guarded { allow_private: bool },
+}
+
+impl Reach {
+    fn policy(allow_private: bool) -> Policy {
+        Policy::agent(allow_private)
+    }
+}
+
+/// Post `payload` to an incoming webhook within `reach`: through `operator`
+/// (the gateway's own client) for [`Reach::Operator`], through a client
+/// pinned to the checked addresses otherwise. The error never contains the
+/// URL: it is a credential, and the error ends up in a log line.
+pub async fn post(
+    operator: &reqwest::Client,
+    reach: Reach,
+    url: &str,
+    payload: &Value,
+) -> Result<(), String> {
+    let request = match reach {
+        Reach::Operator => operator.post(url),
+        Reach::Guarded { allow_private } => {
+            let pinned = outbound_guard::pin(url, Reach::policy(allow_private), POST_TIMEOUT)
+                .await
+                .map_err(|why| {
+                    let mut why = why.replace(url, "<webhook>");
+                    if let Ok(parsed) = reqwest::Url::parse(url) {
+                        why = why.replace(parsed.as_str(), "<webhook>");
+                    }
+                    format!("the webhook's address is not one this channel may reach ({why})")
+                })?;
+            pinned.client.post(pinned.url)
+        }
+    };
+    let resp = request
         .timeout(POST_TIMEOUT)
         .json(payload)
         .send()
@@ -103,29 +144,38 @@ pub async fn post(http: &reqwest::Client, url: &str, payload: &Value) -> Result<
     }
 }
 
-/// Check an incoming-webhook URL for `kind` and return its host, the part
-/// shown back. `https` only, except a loopback host for local testing.
-pub fn validate_webhook_url(kind: ChannelKind, raw: &str) -> Result<String, String> {
+/// Check an incoming-webhook URL for `kind` within `reach` and return its
+/// host, the part shown back. An admin may name any http(s) URL; anyone
+/// else the service's own `https` webhook host, checked as
+/// `outbound_guard` will check it on every post.
+pub fn validate_webhook_url(kind: ChannelKind, raw: &str, reach: Reach) -> Result<String, String> {
     let url = reqwest::Url::parse(raw.trim())
         .map_err(|e| format!("`url` is not a URL ({e}); paste the incoming-webhook URL"))?;
+    if url.username() != "" || url.password().is_some() {
+        return Err("`url` must not carry a user name or password".into());
+    }
     let host = url
         .host_str()
         .ok_or("`url` has no host; paste the incoming-webhook URL")?
         .to_ascii_lowercase();
-    let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
-    match url.scheme() {
-        "https" => {}
-        "http" if loopback => {}
-        other => {
-            return Err(format!(
-                "`url` uses `{other}`; a webhook URL must be `https`, because it carries the \
-                 channel's credential"
-            ));
+    let allow_private = match reach {
+        Reach::Operator => {
+            return match url.scheme() {
+                "https" | "http" => Ok(host),
+                other => Err(format!(
+                    "`url` uses `{other}`; a webhook URL is `https` (or `http` to a relay in \
+                     your own network)"
+                )),
+            };
         }
-    }
-    if url.username() != "" || url.password().is_some() {
-        return Err("`url` must not carry a user name or password".into());
-    }
+        Reach::Guarded { allow_private } => allow_private,
+    };
+    outbound_guard::check_url(raw, Reach::policy(allow_private)).map_err(|why| {
+        format!(
+            "`url` cannot be used: {why}. Only an admin can point a channel at a host in your \
+             own network"
+        )
+    })?;
     let expected = match kind {
         ChannelKind::Slack => host == "hooks.slack.com",
         ChannelKind::Discord => {
@@ -133,14 +183,15 @@ pub fn validate_webhook_url(kind: ChannelKind, raw: &str) -> Result<String, Stri
                 && url.path().starts_with("/api/webhooks/")
         }
     };
-    if !expected && !loopback {
+    if !expected {
         return Err(match kind {
             ChannelKind::Slack => "a Slack incoming webhook is on `https://hooks.slack.com/…`; \
-                                   create one under the Slack app's Incoming Webhooks"
+                                   create one under the Slack app's Incoming Webhooks (an admin \
+                                   can point a channel at any other relay)"
                 .into(),
             ChannelKind::Discord => {
-                "a Discord webhook is on `https://discord.com/api/webhooks/…`; \
-                                     create one under the channel's Integrations"
+                "a Discord webhook is on `https://discord.com/api/webhooks/…`; create one under \
+                 the channel's Integrations (an admin can point a channel at any other relay)"
                     .into()
             }
         });
@@ -199,26 +250,101 @@ mod tests {
         assert!(text.len() < 600, "{}", text.len());
     }
 
+    const MANAGER: Reach = Reach::Guarded {
+        allow_private: false,
+    };
+
     #[test]
-    fn a_webhook_url_must_be_the_services_own_and_https() {
+    fn a_managers_webhook_url_must_be_the_services_own_and_https() {
         assert_eq!(
-            validate_webhook_url(ChannelKind::Slack, "https://hooks.slack.com/services/T/B/x"),
+            validate_webhook_url(
+                ChannelKind::Slack,
+                "https://hooks.slack.com/services/T/B/x",
+                MANAGER
+            ),
             Ok("hooks.slack.com".into())
         );
-        assert!(validate_webhook_url(ChannelKind::Slack, "https://evil.example/hook").is_err());
-        assert!(validate_webhook_url(ChannelKind::Slack, "http://hooks.slack.com/x").is_err());
+        for (kind, refused) in [
+            (ChannelKind::Slack, "https://evil.example/hook"),
+            (ChannelKind::Slack, "http://hooks.slack.com/x"),
+            (ChannelKind::Discord, "https://discord.com/channels/1"),
+            (ChannelKind::Discord, "http://127.0.0.1:9/api/webhooks/1/x"),
+            (ChannelKind::Slack, "https://localhost/hook"),
+            (ChannelKind::Slack, "not a url"),
+        ] {
+            assert!(
+                validate_webhook_url(kind, refused, MANAGER).is_err(),
+                "{refused}"
+            );
+        }
         assert!(
             validate_webhook_url(
                 ChannelKind::Discord,
-                "https://discord.com/api/webhooks/1/abc"
+                "https://discord.com/api/webhooks/1/abc",
+                MANAGER
+            )
+            .is_ok()
+        );
+        let local = validate_webhook_url(ChannelKind::Discord, "http://127.0.0.1:9/hook", MANAGER)
+            .unwrap_err();
+        assert!(local.contains("admin"), "the refusal says who can: {local}");
+    }
+
+    #[test]
+    fn an_admins_webhook_url_may_name_any_relay() {
+        assert_eq!(
+            validate_webhook_url(
+                ChannelKind::Discord,
+                "http://127.0.0.1:9/relay",
+                Reach::Operator
+            ),
+            Ok("127.0.0.1".into())
+        );
+        assert!(
+            validate_webhook_url(
+                ChannelKind::Slack,
+                "https://relay.internal/x",
+                Reach::Operator
             )
             .is_ok()
         );
         assert!(
-            validate_webhook_url(ChannelKind::Discord, "https://discord.com/channels/1").is_err()
+            validate_webhook_url(
+                ChannelKind::Slack,
+                "ftp://relay.internal/x",
+                Reach::Operator
+            )
+            .is_err()
         );
-        assert!(validate_webhook_url(ChannelKind::Discord, "http://127.0.0.1:9/hook").is_ok());
-        assert!(validate_webhook_url(ChannelKind::Slack, "not a url").is_err());
+        assert!(
+            validate_webhook_url(
+                ChannelKind::Slack,
+                "https://u:p@relay.internal/x",
+                Reach::Operator
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_managers_channel_never_posts_into_the_gateways_network() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let url = format!("{}/secret-hook", server.uri());
+        let err = post(
+            &reqwest::Client::new(),
+            MANAGER,
+            &url,
+            &slack_payload(&notice(None)),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("may reach"), "{err}");
+        assert!(!err.contains("secret-hook"), "{err}");
     }
 
     #[tokio::test]
@@ -233,12 +359,22 @@ mod tests {
             .mount(&server)
             .await;
         let http = reqwest::Client::new();
-        post(&http, &format!("{}/hook", server.uri()), &payload)
-            .await
-            .unwrap();
-        let err = post(&http, &format!("{}/gone-secret", server.uri()), &payload)
-            .await
-            .unwrap_err();
+        post(
+            &http,
+            Reach::Operator,
+            &format!("{}/hook", server.uri()),
+            &payload,
+        )
+        .await
+        .unwrap();
+        let err = post(
+            &http,
+            Reach::Operator,
+            &format!("{}/gone-secret", server.uri()),
+            &payload,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("404"), "{err}");
         assert!(!err.contains("gone-secret"), "{err}");
     }

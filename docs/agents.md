@@ -443,7 +443,16 @@ part above — `profile`, `scope`, `main` (with `tool_resources`, their `bind`,
     with #88 ([§3](#what-8788-built)).
 - **Shares.** The holder must have `can_manage_agents` when the share is
   written. For a user that means through their groups; a group needs the flag
-  or `is_admin`. The caller must also hold the permission on every request.
+  or `is_admin`, asked of the RBAC resolver, so a group from `[rbac]` config
+  or the bootstrap admin group counts as one from the database does. The
+  caller must also hold the permission on every request.
+  **One rule** decides who may act on an agent:
+  `aiplane_runtime::agents::access::effective_access` — `write` for an
+  admin; otherwise the strongest share, but only while the person holds
+  `can_manage_agents`; otherwise nothing. The `/api/v0/agents` routes, the
+  inbox's manager standing and the `a2a_caller` grant cap all ask it, so a
+  manager who loses the permission loses every agent with it, whatever
+  shares are left behind.
   Without a share, an agent answers 404, not 403. Removing or downgrading the
   last `write` share is refused (`409 last_writer`). Admins implicitly hold
   `write` on every agent without a share: they see it in the list and can read,
@@ -1303,14 +1312,25 @@ runs. Migration `0077_agent_builder.sql`.
     directly or through a group, and responders (admins without a share are
     not notified — they may answer everything and would be told everything),
     or the run's owner. Title and body from the catalog in each
-    subscription's language; the link is `/inbox?item=<request_id>`.
+    subscription's language, through the one fan-out (`push::send_to_user`,
+    which also cuts and prunes); the link is `/inbox?item=<request_id>`.
   - **Slack and Discord** incoming webhooks (`agent_notify_channels`,
     `db::agent_channels`, `aiplane_agents::notify_channels`). The
     URL is the credential: sealed at rest (and in the reseal pass), never
     returned by the API, never in a log line or an audit row; only its host
-    is kept in clear. A URL must be `https` on `hooks.slack.com` or
-    `discord.com`/`discordapp.com` `/api/webhooks/…` (loopback `http` only,
-    for tests). A message holds the agent, the kind and the absolute inbox
+    is kept in clear. **Who configured a channel decides where it may post**
+    (`notify_channels::Reach`, from `inbox::channel_reach`). An admin's
+    channel is the operator's own choice: any `http(s)` URL, a private or
+    loopback host included (an internal Discord relay), posted through the
+    operator's client (`AppState::http`). Anyone else's must be `https` on
+    `hooks.slack.com` or `discord.com`/`discordapp.com` `/api/webhooks/…`,
+    checked on save with `outbound_guard::check_url` and posted on every
+    send through `outbound_guard::pin` with `Policy::agent` (public hosts
+    only unless `$AIPLANE_ALLOW_PRIVATE_NETWORKS`), so a manager's channel
+    never posts into the gateway's network. The standing is decided at send
+    time from the channel's `created_by` as that person stands today: a
+    channel whose creator is no longer an admin, or is gone, is posted as a
+    manager's — no column records it. A message holds the agent, the kind and the absolute inbox
     link (`public_url`); with the channel's `details` on, also the question or
     the tool name (cut to 300 characters). No visitor message, transcript or
     slot value is ever sent. Slack text is escaped, Discord gets
@@ -1708,6 +1728,11 @@ model rule, and retention.
   and the sub-agents' (as before, now with `agent_id`), and the router's
   classifier call, which wrote no usage row until now. Usage rows need
   `[usage] enabled`; with metrics off, nothing is ever spent against a budget.
+  Every agent row — a turn's rounds, the router and the scope guard's side
+  calls, voice — has `source = 'agent'` (`UsageSource::Agent`), however the
+  conversation came in (embed, A2A, a parent's route, the test chat), so the
+  Usage page tells an agent's traffic apart from a person's scheduled
+  actions and filters it as *Agents*.
 - **Spec settings** (`publish`, validated on save):
   - `rate_limits.visitor` / `rate_limits.ip`: `{max, per}`, both required,
     `max ≥ 1`, `per` a duration. Defaults when unset: **20 messages per 10
@@ -1789,8 +1814,13 @@ model rule, and retention.
   Per agent it deletes the conversations — root sessions it owns, visitor and
   test-chat (`agent_version = 0`) alike — whose last activity
   (`chat_sessions.updated_at`) is older than `retention_days`, together with
-  every sub-agent run below them, however deep. The foreign keys take turns,
-  tool calls, `agent_state` and the visitor session. The selection requires
+  every sub-agent run below them, however deep. It deletes them the way a
+  person's chat is deleted, through
+  `aiplane_features::server::chat_attachments::delete_reclaiming`: the files
+  their turns reference are listed first, the rows go (one transaction per
+  conversation, re-checking that it is still idle and waits for nothing),
+  then the files leave the S3 bucket. The foreign keys take turns, tool
+  calls, `agent_state` and the visitor session. The selection requires
   `user_id IS NULL` at every step, so a person's chat is never touched. Each
   sweep that deleted something writes `conversations_swept` with
   `{retention_days, conversations, sub_agent_runs}` — counts only.
@@ -1903,7 +1933,10 @@ verifiers:
   as an A2A route (`outbound_guard`, `Policy::agent`, [below](#what-101-built)):
   resolved and pinned, no redirects, at most 64 KiB, link-local always
   refused, and loopback, private addresses and plain `http` only under
-  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true`. Answers: `200 {slots}`, `401
+  `$AIPLANE_ALLOW_PRIVATE_NETWORKS=true`. Saving a spec checks `jwks_url`
+  against the same policy (`host_jwt::check_jwks_url`, through
+  `outbound_guard::check_url`), so a URL the run would refuse is refused on
+  save with the same reason; only the DNS answer is left to run time. Answers: `200 {slots}`, `401
   identity_token_invalid` (the message says what is wrong, never a claim
   value), `409 identity_token_replayed`, `422 identity_not_configured`, `503
   identity_keys_unavailable`. The `503` message is generic — no URL, status
@@ -1917,7 +1950,13 @@ verifiers:
 - **Secrets.** `POST /api/v0/agents` and `PUT …/draft` validate the plain
   `secret` (at least 32 characters) and then replace it with `secret_sealed`
   (the at-rest `Crypto`), so no draft, version, audit row or GET carries it.
-  A GET → PUT round trip keeps `secret_sealed`.
+  A GET → PUT round trip keeps `secret_sealed`. One helper seals every spec
+  credential, `agents::spec::secrets::seal_spec_secrets`, from one list of
+  where they live (`SPEC_SECRETS`). The at-rest key rotation
+  (`aiplane_core::server::db::reseal`) re-seals every string under a
+  `*_sealed` key in `agents.draft_spec`, `agent_draft_revisions.spec` and
+  `agent_versions.spec`, so a retired key is not needed to open them; the
+  audit trail's copies are hash-chained and left as they are.
 - **Validation.** Shape on every save (keys per kind, grants, ranges,
   algorithms, PEM keys parse, JWKS URL scheme, write sources, slot types);
   what a verifier needs to run on publish (`connector`/`email_slot`/`writes`;
@@ -2117,7 +2156,10 @@ version and judged on more than the final answer.
   agent_tests_failing` unless the newest draft run is green **for the draft and
   the suite as they are now**: each run stores a hash of the spec it ran and of
   the cases, so editing either makes the last run stale and the message says
-  to run the suite again. With failing cases, `error.failing` lists `[{case_id,
+  to run the suite again. The spec hash (`agent_tests::spec_hash`) counts
+  every sealed credential (`*_sealed`) as a fixed marker: the at-rest key
+  rotation re-seals them with new ciphertext, and that is no change the suite
+  tests, so it leaves a green run current. With failing cases, `error.failing` lists `[{case_id,
   case_name, problems}]` with the failed checks in words; with no cases or no
   matching run it is empty. Rolling back (`/live`) is not guarded: it publishes
   nothing new.
@@ -2171,9 +2213,11 @@ are `aiplane-runtime::agents::a2a` and `agents/spec/a2a.rs`.
   agent's id as `ref`. Default deny: a token without that grant, or with one
   for another agent, gets `403 PERMISSION_DENIED`; no token or a bad one
   `401` with `WWW-Authenticate: Bearer`; a person's `gwk_` token `403`.
-  Granting `a2a_caller` follows #77's grant-time cap: the manager needs a
-  `write` share on that agent (admins hold one), since letting another
-  platform call the agent changes the agent. The caller gets nothing of the
+  Granting `a2a_caller` follows #77's grant-time cap: the manager needs
+  `write` on that agent by the one access rule (§2 "Shares": admins hold it,
+  anyone else needs `can_manage_agents` and a `write` share), since letting
+  another platform call the agent changes the agent. A token a manager
+  minted loses the grant once the manager no longer holds that. The caller gets nothing of the
   agent's: the task runs as the agent's principal, with its grants.
 - **Version.** Every request must carry `A2A-Version: 1.0` (header, or the
   `A2A-Version` query parameter). A missing header means 0.3 per §3.6.2, so it
@@ -2344,7 +2388,7 @@ routes:
   secret, the sorted scopes and the agent's principal id, so a route with
   another secret (a wrong one included), other scopes or of another agent
   signs in itself and never rides on a token it did not earn. `token` and `client_secret` are sealed on
-  every save (`a2a_client::seal_secrets`, next to the host-JWT secret) and
+  every save (`spec::secrets::seal_spec_secrets`, with the host-JWT secret) and
   stored as `token_sealed` / `client_secret_sealed`; a GET → PUT round trip
   keeps them. A card that requires auth when the route brings none, or offers
   no scheme of the route's kind, ends the route `incomplete` saying which.
@@ -2360,8 +2404,13 @@ routes:
   reason: not_granted`). **Grant-time cap:** an external agent is nothing a
   manager holds, and the grant lets visitor-derived data leave the gateway, so
   only an admin may make it (`403 grant_exceeds_manager` otherwise); the ref
-  must pass `check_card_url` (https, or http to a loopback host; no
-  credentials or fragment in it).
+  must pass `check_card_url`: `outbound_guard::check_url` under the same
+  `Policy::agent` the dispatch uses (https; plain http and private or
+  loopback hosts only under `$AIPLANE_ALLOW_PRIVATE_NETWORKS`), no
+  credentials or fragment in it. A spec naming the card is checked the same
+  way (`SpecContext::allow_private`), so granting, saving and running agree.
+  The card URL stays on the guard even though an admin grants it: the
+  endpoint and token URLs come from the card, which the remote side writes.
 - **SSRF** (`aiplane_core::server::outbound_guard`, `Policy::agent`; the
   same guard `fetch_url` and `load_image_url` use). The card URL, the
   endpoint the card names and the OAuth token URL are each resolved before

@@ -14,10 +14,10 @@
 //!   - **Message Encryption** (RFC 8291, see [`encrypt`]) encrypts the payload
 //!     end-to-end for the subscription so the push service can't read it.
 //!
-//! [`PushSender`] owns the keypair + an HTTP client and does one thing:
-//! [`PushSender::send`] a [`PushMessage`] to one subscription. The turn-finalize
-//! hook in `spawn_assistant_worker` fans a message out over a user's
-//! subscriptions and prunes any the service reports gone.
+//! [`PushSender`] owns the keypair and does one thing: [`PushSender::send`] a
+//! [`PushMessage`] to one subscription. [`send_to_user`] is the one fan-out
+//! over a user's subscriptions, pruning any the service reports gone — used
+//! by the turn-finalize hook, the agent inbox and the `notify_user` tool.
 
 pub mod encrypt;
 
@@ -28,10 +28,11 @@ use p256::ecdsa::{Signature, SigningKey};
 use rand::TryRng;
 
 use aiplane_core::server::crypto::Crypto;
-use aiplane_core::server::db::push_subscriptions::PushSubscription;
-use aiplane_core::server::db::{self, Pool};
+use aiplane_core::server::db::push_subscriptions::{self, PushSubscription};
+use aiplane_core::server::db::{self, DbError, Pool};
 use aiplane_core::server::net_guard::{IpClass, classify_host};
 use aiplane_core::server::outbound_guard::{self, Pinned, Policy};
+use session_core::i18n::Lang;
 
 /// `app_settings` key holding the sealed VAPID private scalar.
 const VAPID_PRIVATE_KEY_SETTING: &str = "push.vapid.private";
@@ -58,6 +59,100 @@ pub struct PushMessage {
     /// Coalescing tag so repeated pings for one conversation replace rather
     /// than stack — the session id.
     pub tag: String,
+}
+
+/// The longest notification title, in characters. The whole payload rides
+/// in one aes128gcm record with a ~4 KB budget (and FCM caps the body at
+/// 4 KB too), and a phone cuts long text anyway.
+pub const MAX_TITLE_CHARS: usize = 80;
+
+/// The longest notification body, in characters. See [`MAX_TITLE_CHARS`].
+pub const MAX_BODY_CHARS: usize = 300;
+
+/// What one [`send_to_user`] reached.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FanOut {
+    /// The user's subscribed browsers when it started.
+    pub subscriptions: usize,
+    pub delivered: usize,
+    /// Subscriptions the push service reported gone, now deleted.
+    pub pruned: usize,
+}
+
+/// Send one notification to every browser `user_id` subscribed: the message
+/// `compose` writes in each subscription's language (English when it has
+/// none), title and body cut to [`MAX_TITLE_CHARS`] / [`MAX_BODY_CHARS`]. A
+/// subscription the push service reports gone is deleted; one that fails
+/// otherwise is kept for next time. The one fan-out for every caller: a
+/// finished turn, the inbox, `notify_user`.
+pub async fn send_to_user(
+    sender: &PushSender,
+    db: &Pool,
+    user_id: &str,
+    compose: impl Fn(Lang) -> PushMessage,
+) -> Result<FanOut, DbError> {
+    fan_out(db, user_id, compose, sender).await
+}
+
+/// What a fan-out sends through: [`PushSender`], or a stand-in in a test.
+/// A seam because every real push service is a public https host
+/// `outbound_guard` lets through, and a test can stand none of them up.
+trait Deliver {
+    fn deliver(
+        &self,
+        sub: &PushSubscription,
+        message: &PushMessage,
+    ) -> impl Future<Output = SendOutcome> + Send;
+}
+
+impl Deliver for PushSender {
+    fn deliver(
+        &self,
+        sub: &PushSubscription,
+        message: &PushMessage,
+    ) -> impl Future<Output = SendOutcome> + Send {
+        self.send(sub, message)
+    }
+}
+
+async fn fan_out(
+    db: &Pool,
+    user_id: &str,
+    compose: impl Fn(Lang) -> PushMessage,
+    send: &impl Deliver,
+) -> Result<FanOut, DbError> {
+    let subs = push_subscriptions::list_for_user(db, user_id).await?;
+    let mut out = FanOut {
+        subscriptions: subs.len(),
+        ..FanOut::default()
+    };
+    for sub in &subs {
+        let lang = sub
+            .lang
+            .as_deref()
+            .and_then(Lang::from_code)
+            .unwrap_or(Lang::En);
+        let message = fitted(compose(lang));
+        match send.deliver(sub, &message).await {
+            SendOutcome::Delivered => out.delivered += 1,
+            SendOutcome::Gone => {
+                out.pruned += 1;
+                if let Err(err) = push_subscriptions::delete(db, &sub.id).await {
+                    tracing::warn!(error = %err, "push: pruning a gone subscription");
+                }
+            }
+            SendOutcome::Failed => {}
+        }
+    }
+    Ok(out)
+}
+
+fn fitted(message: PushMessage) -> PushMessage {
+    PushMessage {
+        title: session_core::text::truncate_chars(&message.title, MAX_TITLE_CHARS),
+        body: session_core::text::truncate_chars(&message.body, MAX_BODY_CHARS),
+        ..message
+    }
 }
 
 /// What happened when we posted to a push endpoint.
@@ -377,6 +472,121 @@ mod tests {
             .verifying_key()
             .verify(signing_input.as_bytes(), &sig)
             .expect("VAPID JWT signature verifies");
+    }
+
+    /// A push service answering by the endpoint's last segment: `gone`,
+    /// `flaky` (a failure), anything else delivered. Records what it got.
+    #[derive(Default)]
+    struct PushService {
+        sent: std::sync::Mutex<Vec<(String, PushMessage)>>,
+    }
+
+    impl Deliver for PushService {
+        async fn deliver(&self, sub: &PushSubscription, message: &PushMessage) -> SendOutcome {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((sub.endpoint.clone(), message.clone()));
+            match sub.endpoint.rsplit('/').next() {
+                Some("gone") => SendOutcome::Gone,
+                Some("flaky") => SendOutcome::Failed,
+                _ => SendOutcome::Delivered,
+            }
+        }
+    }
+
+    async fn subscribed(pool: &Pool, user: &str, endpoint: &str, lang: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO users (id, email, created_at, updated_at)
+             VALUES (?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(user)
+        .bind(format!("{user}@example.com"))
+        .execute(pool)
+        .await
+        .unwrap();
+        push_subscriptions::upsert(pool, user, endpoint, P256DH, AUTH, lang, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_fan_out_speaks_each_browsers_language_cuts_the_text_and_prunes_the_gone() {
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        subscribed(&pool, "u1", "https://push.example/de", Some("de")).await;
+        subscribed(&pool, "u1", "https://push.example/gone", None).await;
+        subscribed(&pool, "u1", "https://push.example/flaky", Some("fr")).await;
+        subscribed(&pool, "u2", "https://push.example/other", None).await;
+        let service = PushService::default();
+
+        let out = fan_out(
+            &pool,
+            "u1",
+            |lang| PushMessage {
+                title: format!("{}{}", lang.code(), "t".repeat(200)),
+                body: "b".repeat(1000),
+                url: "/chat/s1".into(),
+                tag: "s1".into(),
+            },
+            &service,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            out,
+            FanOut {
+                subscriptions: 3,
+                delivered: 1,
+                pruned: 1
+            }
+        );
+        let sent = service.sent.into_inner().unwrap();
+        let mut langs: Vec<(String, String)> = sent
+            .iter()
+            .map(|(endpoint, m)| (endpoint.clone(), m.title[..2].to_string()))
+            .collect();
+        langs.sort();
+        assert_eq!(
+            langs,
+            [
+                ("https://push.example/de".to_string(), "de".to_string()),
+                ("https://push.example/flaky".to_string(), "fr".to_string()),
+                ("https://push.example/gone".to_string(), "en".to_string()),
+            ]
+        );
+        for (_, m) in &sent {
+            assert_eq!(m.title.chars().count(), MAX_TITLE_CHARS + 1, "{}", m.title);
+            assert!(m.title.ends_with('…'), "cut, and marked as cut");
+            assert_eq!(m.body.chars().count(), MAX_BODY_CHARS + 1);
+        }
+        let left: Vec<String> = push_subscriptions::list_for_user(&pool, "u1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.endpoint)
+            .collect();
+        assert_eq!(left.len(), 2, "only the gone one went: {left:?}");
+        assert!(!left.iter().any(|e| e.ends_with("/gone")));
+    }
+
+    #[tokio::test]
+    async fn a_user_without_subscriptions_reaches_nobody() {
+        let pool = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        let out = fan_out(
+            &pool,
+            "nobody",
+            |_| unreachable!("nothing to compose for"),
+            &PushService::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, FanOut::default());
     }
 
     #[test]

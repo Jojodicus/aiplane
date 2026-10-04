@@ -378,7 +378,8 @@ pub async fn create_channel(State(state): State<Arc<RamaState>>, req: Request) -
             "`{lang}` is not a supported language — use en, de, fr, es, ru or zh"
         ));
     }
-    let host = match validate_webhook_url(kind, &body.url) {
+    let reach = inbox::channel_reach(&state, Some(&user));
+    let host = match validate_webhook_url(kind, &body.url, reach) {
         Ok(host) => host,
         Err(why) => {
             return json_error(

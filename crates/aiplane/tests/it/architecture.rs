@@ -711,21 +711,16 @@ const SPEC_JSON_READERS: &[Allowed] = &[
     },
     Allowed {
         path: "aiplane-runtime/src/agents/spec/",
-        why: "the validator's per-kind walks",
+        why: "the validator's per-kind walks, and `secrets`, which seals a credential in the \
+              stored JSON before it is saved (a typed round trip would re-serialize the spec)",
     },
     Allowed {
         path: "aiplane-runtime/src/agents/state.rs",
         why: "StateSchema compiles `state` from the same JSON the walk checks",
     },
     Allowed {
-        path: "aiplane-runtime/src/agents/verifier/host_jwt.rs",
-        why: "seal_secrets rewrites a verifier's secret in the stored JSON before it is \
-              saved; a typed round trip would re-serialize the whole spec",
-    },
-    Allowed {
         path: "aiplane-runtime/src/agents/a2a_client/mod.rs",
-        why: "seal_secrets rewrites a route's credential in the stored JSON before it is \
-              saved; the A2A task answer also has a `state` of its own",
+        why: "the A2A task answer has a `state` of its own, not a spec's",
     },
     Allowed {
         path: "aiplane-runtime/src/agents/assist/",

@@ -13,7 +13,7 @@ use crate::server::principal::{GrantKind, Principal};
 /// Synthetic group that `[gateway].bootstrap_admin_groups` resolve to. It is
 /// injected on every build/reload so a break-glass admin works regardless of
 /// what's in (or missing from) the DB group tables — the anti-lockout anchor.
-const BOOTSTRAP_ADMIN_GROUP: &str = "__bootstrap_admin__";
+pub const BOOTSTRAP_ADMIN_GROUP: &str = "__bootstrap_admin__";
 
 /// A group's grants, minus skills (those come via the [`Self::skill_overlay`]).
 /// `is_admin` grants the admin UI + resource-restriction bypass; `is_default`
@@ -235,6 +235,14 @@ impl Resolver {
             }
         }
         out
+    }
+
+    /// Whether `group` is a group id this resolver knows, wherever it was
+    /// defined: the database, `[rbac]` config, or the bootstrap admin group.
+    pub fn has_group(&self, group: &str) -> bool {
+        self.inner
+            .read()
+            .is_ok_and(|snap| snap.groups.contains_key(group))
     }
 
     /// True if any of the given group ids is flagged `is_admin`.
@@ -1116,6 +1124,27 @@ mod tests {
         )
         .unwrap();
         assert!(r.can_manage_agents(&r.role_ids_for(&["break-glass".into()])));
+    }
+
+    #[test]
+    fn every_resolvable_group_is_known_wherever_it_was_defined() {
+        let config = Resolver::build(RbacConfig::default(), vec![admin_role("ops")]).unwrap();
+        assert!(config.has_group("ops"));
+        assert!(config.can_manage_agents(&["ops".into()]));
+        assert!(!config.has_group("ghost"));
+
+        let db = snapshot_with(&[("managers", false, false, true)]);
+        assert!(db.has_group("managers"));
+        assert!(!db.has_group("ops"));
+
+        let bootstrap = Resolver::build_with_bootstrap(
+            RbacConfig::default(),
+            Vec::new(),
+            vec!["break-glass".into()],
+        )
+        .unwrap();
+        assert!(bootstrap.has_group(BOOTSTRAP_ADMIN_GROUP));
+        assert!(bootstrap.can_manage_agents(&[BOOTSTRAP_ADMIN_GROUP.into()]));
     }
 
     #[test]

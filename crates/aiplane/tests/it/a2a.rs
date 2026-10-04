@@ -493,6 +493,31 @@ async fn granting_a2a_caller_needs_a_write_share_on_the_agent() {
     );
 }
 
+/// The token's minter keeps a `write` share but loses the agent-management
+/// permission: the share no longer counts, so the token no longer carries
+/// the `a2a_caller` grant and nothing runs.
+#[tokio::test]
+async fn a_caller_whose_minter_lost_the_permission_is_refused_despite_the_share() {
+    let llm = upstream(vec![text(ANSWER)]).await;
+    let a = served(&llm).await;
+    aiplane_core::server::db::gateway_groups::set_can_manage_agents(
+        &a.fx.state.db,
+        "managers",
+        false,
+    )
+    .await
+    .unwrap();
+    a.fx.state.reload_rbac().await;
+
+    let r = a.send("hello").await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.body);
+    assert_eq!(r.reason(), "PERMISSION_DENIED");
+    assert!(
+        sent(&llm).await.is_empty(),
+        "no refused call reached a model"
+    );
+}
+
 #[tokio::test]
 async fn the_protocol_version_and_the_envelope_are_checked() {
     let llm = upstream(vec![text(ANSWER)]).await;
@@ -802,7 +827,7 @@ async fn spend(a: &A2a, tokens: i64) {
             user_email: Some("support".into()),
             token_id: None,
             token_name: None,
-            source: UsageSource::Scheduled,
+            source: UsageSource::Agent,
             kind: UsageKind::Chat,
             backend: "mock".into(),
             model: "m".into(),

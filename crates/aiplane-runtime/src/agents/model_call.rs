@@ -150,7 +150,7 @@ impl ModelCall {
             &self.state,
             &self.principal.id,
             Some(self.principal.name.clone()),
-            UsageSource::Scheduled,
+            UsageSource::Agent,
             PrincipalKind::System,
         ) else {
             return 0;

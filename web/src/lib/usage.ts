@@ -19,7 +19,8 @@ export const USAGE_SOURCES = [
 	['', 'usage-source-all'],
 	['v1_api', 'usage-source-api'],
 	['chat', 'usage-source-chat'],
-	['scheduled', 'usage-source-scheduled']
+	['scheduled', 'usage-source-scheduled'],
+	['agent', 'usage-source-agent']
 ] as const;
 
 export function usageSearch(filters: UsageFilters): string {

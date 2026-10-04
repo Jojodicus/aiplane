@@ -8,6 +8,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::agents::spec::secrets::{A2A_AUTH, seal_spec_secrets};
 
 fn schema() -> Value {
     json!({ "type": "object", "required": ["answer"],
@@ -177,7 +178,7 @@ fn credentials_are_sealed_and_the_sealed_route_reads_back() {
             "finish": { "schema": schema() }
         } }
     } });
-    seal_secrets(&mut spec, &crypto).unwrap();
+    seal_spec_secrets(&mut spec, &[A2A_AUTH], &crypto).unwrap();
     let text = spec.to_string();
     assert!(!text.contains("secret-token-123") && !text.contains("client-secret-456"));
     let bearer = A2aTarget::from_route(&a2a_of(&spec["routes"]["partner"])).unwrap();

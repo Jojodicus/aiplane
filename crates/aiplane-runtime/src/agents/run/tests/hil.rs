@@ -368,6 +368,38 @@ async fn forward_request_on_a_human_route_hands_off_too() {
     assert!(tool_answer(&requests(&main).await, "fwd").contains("Confirmed."));
 }
 
+/// A person in the `admins` group, which is flagged `is_admin`.
+async fn admin(world: &World, id: &str) {
+    use aiplane_core::server::db::{gateway_groups, users};
+    gateway_groups::upsert_group(world.db(), "admins", "", true, false)
+        .await
+        .unwrap();
+    gateway_groups::set_mappings_for_group(world.db(), "admins", &["admins".into()])
+        .await
+        .unwrap();
+    world.state.reload_rbac().await;
+    let now = jiff::Timestamp::now();
+    users::upsert(
+        world.db(),
+        &users::User {
+            id: id.into(),
+            email: format!("{id}@example.com"),
+            name: None,
+            roles: vec!["admins".into()],
+            created_at: now,
+            updated_at: now,
+            timezone: None,
+            speech_voice: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Every channel here posts to a loopback relay: the admin's does, as the
+/// operator's own choice; the manager's (`u1`) never does, because a URL a
+/// manager chose goes through `outbound_guard`, which keeps the gateway out
+/// of its own network.
 #[tokio::test]
 async fn a_pause_is_announced_once_on_the_agents_channels() {
     let hook = MockServer::start().await;
@@ -376,18 +408,26 @@ async fn a_pause_is_announced_once_on_the_agents_channels() {
         .respond_with(ResponseTemplate::new(200))
         .mount(&hook)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/managers-hook"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&hook)
+        .await;
     let main = llm(vec![
         call("s1", "set_issue", json!({"value": "refund"})),
         call("h1", "request_human", json!({"question": QUESTION})),
     ])
     .await;
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
+    admin(&world, "root").await;
     let agent = handing_off(&world, json!({ "notify": ["slack"] })).await;
-    for (name, kind, details) in [
-        ("ops", ChannelKind::Slack, true),
-        ("chat", ChannelKind::Discord, false),
+    for (name, kind, details, hook_path, by) in [
+        ("ops", ChannelKind::Slack, true, "/hook", "root"),
+        ("chat", ChannelKind::Discord, false, "/hook", "root"),
+        ("team", ChannelKind::Slack, true, "/managers-hook", "u1"),
     ] {
-        let url = format!("{}/hook", hook.uri());
+        let url = format!("{}{hook_path}", hook.uri());
         agent_channels::create(
             world.db(),
             &world.state.crypto,
@@ -400,7 +440,7 @@ async fn a_pause_is_announced_once_on_the_agents_channels() {
                 details,
                 lang: "en",
             },
-            "u1",
+            by,
         )
         .await
         .unwrap();
