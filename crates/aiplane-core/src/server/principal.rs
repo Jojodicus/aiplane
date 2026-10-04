@@ -40,8 +40,9 @@ pub enum GrantKind {
     Skill,
     /// A RAG collection id.
     RagCollection,
-    /// An upstream pool name.
-    Pool,
+    /// A model the gateway serves, by the name a person picks it by: a
+    /// model id, a backend alias or an automatic-route alias.
+    Model,
     /// An agent id (`system_principals.id`) this principal may call over
     /// A2A (`docs/agents.md` "What #102 built"). It grants nothing else.
     A2aCaller,
@@ -56,7 +57,7 @@ impl GrantKind {
         Self::Connector,
         Self::Skill,
         Self::RagCollection,
-        Self::Pool,
+        Self::Model,
         Self::A2aCaller,
         Self::A2aAgent,
     ];
@@ -67,7 +68,7 @@ impl GrantKind {
             Self::Connector => "connector",
             Self::Skill => "skill",
             Self::RagCollection => "rag_collection",
-            Self::Pool => "pool",
+            Self::Model => "model",
             Self::A2aCaller => "a2a_caller",
             Self::A2aAgent => "a2a_agent",
         }
@@ -197,7 +198,7 @@ mod tests {
         for kind in GrantKind::ALL {
             assert_eq!(GrantKind::parse(kind.as_str()), Some(kind));
         }
-        assert_eq!(GrantKind::parse("model"), None);
+        assert_eq!(GrantKind::parse("pool"), None);
         assert_eq!(GrantKind::parse("*"), None);
     }
 
@@ -227,17 +228,17 @@ mod tests {
     fn a_grant_is_exact_per_kind_and_never_a_wildcard() {
         let grants = GrantSet::new([
             (GrantKind::Tool, "time".to_string()),
-            (GrantKind::Pool, "chat".to_string()),
+            (GrantKind::Model, "chat".to_string()),
             (GrantKind::Tool, "*".to_string()),
         ]);
         assert!(grants.has(GrantKind::Tool, "time"));
-        assert!(!grants.has(GrantKind::Pool, "time"));
+        assert!(!grants.has(GrantKind::Model, "time"));
         assert!(!grants.has(GrantKind::Tool, "echo"));
         assert_eq!(
             grants.refs(GrantKind::Tool).collect::<Vec<_>>(),
             ["*", "time"]
         );
-        assert_eq!(grants.refs(GrantKind::Pool).collect::<Vec<_>>(), ["chat"]);
+        assert_eq!(grants.refs(GrantKind::Model).collect::<Vec<_>>(), ["chat"]);
     }
 
     #[test]

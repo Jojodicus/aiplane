@@ -145,7 +145,7 @@ pub(super) fn finish_schema() -> Value {
 fn partner_spec(target: Value) -> Value {
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Collect the question, then call forward_request." },
             "budget": { "rounds": 8 }
         },
@@ -198,7 +198,7 @@ async fn support(world: &World, card_url: &str, target: Value) -> String {
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::A2aAgent, card_url),
             ],
         )

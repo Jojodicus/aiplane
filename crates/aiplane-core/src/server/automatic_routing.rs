@@ -176,10 +176,7 @@ impl AutomaticRouter {
             return Err(AutomaticRoutingError::AliasNotAllowed(alias.to_string()));
         }
 
-        let target_access = PoolAccess {
-            allowed_models: None,
-            ..access.clone()
-        };
+        let target_access = access.for_route_targets(route.members());
         let requirements = RequestRequirements::from_state(state);
         let defaults_by_model: HashMap<String, _> =
             crate::server::db::model_defaults::all(&self.db)

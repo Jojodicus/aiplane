@@ -224,14 +224,14 @@ mod token_gate_tests {
     }
 
     #[tokio::test]
-    async fn a_system_principal_reaches_no_pool_it_was_not_granted() {
+    async fn a_system_principal_reaches_no_model_it_was_not_granted() {
         let state = star_state().await;
-        let access = state.pool_access_for_token(&system_ctx(&[(GrantKind::Pool, "chat")]));
+        let access = state.pool_access_for_token(&system_ctx(&[(GrantKind::Model, "qwen")]));
         assert!(!access.is_admin);
         assert!(access.role_ids.is_empty());
         assert_eq!(
-            access.granted_pools.as_deref(),
-            Some(&std::collections::HashSet::from(["chat".to_string()]))
+            access.granted_models.as_deref(),
+            Some(&std::collections::HashSet::from(["qwen".to_string()]))
         );
     }
 

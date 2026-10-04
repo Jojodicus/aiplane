@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use shared::api::ToolDef;
 
 use super::super::json_agent_assist::{SuggestBody, candidates, suggest_for};
-use super::super::json_agent_resources::{resources_for, usable_chat_pools};
+use super::super::json_agent_resources::{grantable_chat_models, resources_for};
 use super::super::json_agent_test::draft_test_turn;
 use super::super::json_agents::{
     CreateBody, SpecWorld, agent_by_id, agent_json, create_agent, parse_spec, publish_issues,
@@ -27,8 +27,9 @@ use aiplane_agents::db::agents::{Access, AgentRow, DraftChange};
 use aiplane_agents::db::architect_sessions;
 use aiplane_core::server::db::users::User;
 use aiplane_core::server::principal::GrantKind;
+use aiplane_core::server::feature_defaults::Feature;
+use aiplane_runtime::server::model_choices::gateway_default;
 use aiplane_runtime::agents::assist::{ReviewContext, apply_changes, changes_schema};
-use aiplane_runtime::agents::defaults;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
@@ -115,9 +116,10 @@ impl Tool for ArchitectTool {
                         "properties": { "agent_id": agent_id_param() } }),
             ),
             Kind::ListGrantable => (
-                "What the person may give an agent: chat pools (`pools`), the admin's model \
-                 choices (`tiers`: fast, balanced, thorough), tools, connectors, skills and \
-                 knowledge collections.",
+                "What the person may give an agent: models by kind (`models.chat`, \
+                 `models.transcription`, `models.speech`), the gateway's default model of each \
+                 kind (`defaults`, what an agent runs on when its draft names none), tools, \
+                 connectors, skills and knowledge collections.",
                 json!({ "type": "object", "properties": {}, "additionalProperties": false }),
             ),
             Kind::ProposeSetup => (
@@ -146,7 +148,7 @@ impl Tool for ArchitectTool {
             ),
             Kind::UpdateAgentDraft => (
                 "Change an agent's draft, only the steps given in `changes`: name (`display`), \
-                 model (`pool`), task, tone, scope, abilities (granted to the agent), slots \
+                 model (`model`, one of `models.chat`), task, tone, scope, abilities (granted to the agent), slots \
                  (information to collect), handoffs (topic → agent or person) and \
                  fallback_to_person. Each piece is checked and kept or \
                  dropped with a reason; the previous draft is kept so the person can undo.",
@@ -306,7 +308,7 @@ async fn propose(ctx: &Ctx, args: ProposeArgs) -> Result<Value, Refusal> {
         scenario: args.scenario,
         template: args.template,
         current_draft: None,
-        pool: None,
+        model: None,
     };
     Ok(suggest_for(&ctx.state, &ctx.user, &agent, body).await?)
 }
@@ -340,7 +342,7 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<Value, Refusal> {
     )
     .await?;
     let id = agent["id"].as_str().unwrap_or_default().to_string();
-    let pool = start_on_default_pool(ctx, &id, &display_of(&agent)).await?;
+    let model = grant_default_model(ctx, &id, &display_of(&agent)).await?;
     let planned = architect_sessions::get(&ctx.state.db, &ctx.session_id)
         .await
         .ok()
@@ -355,7 +357,7 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<Value, Refusal> {
         "agent_id": id,
         "name": name,
         "display": agent["display"],
-        "pool": pool,
+        "model": model,
         "setup_url": setup_url(&id),
     }))
 }
@@ -364,39 +366,34 @@ fn display_of(agent: &Value) -> String {
     agent["display"].as_str().unwrap_or_default().to_string()
 }
 
-/// Put a new agent on the model a new agent starts on in the setup
-/// (`agents::defaults::chat_pool`: the admin's Balanced choice, else the
-/// gateway's default chat model), granted through the capped route, when the
-/// person may use it. `None` when there is none; the setup then asks.
-async fn start_on_default_pool(
+/// Grant a new agent the model it starts on, as in the setup: the gateway's
+/// default chat model, which its unset `main.model` runs on — through the
+/// capped route, when the person may grant it. `None` when there is none;
+/// the setup then asks for a model.
+async fn grant_default_model(
     ctx: &Ctx,
     agent_id: &str,
     display: &str,
 ) -> Result<Option<String>, Refusal> {
-    let access = ctx.state.pool_access_for(&ctx.user.roles);
-    let Some(default) = defaults::chat_pool(&ctx.state, &access).await else {
+    let Some(default) = gateway_default(&ctx.state, Feature::Chat).await else {
         return Ok(None);
     };
-    if !usable_chat_pools(&ctx.state, &ctx.user).contains(&default.pool) {
+    if !grantable_chat_models(&ctx.state, &ctx.user)
+        .await
+        .contains(&default)
+    {
         return Ok(None);
     }
     let (agent, _) = agent_by_id(&ctx.state, &ctx.user, agent_id, Access::Write).await?;
-    add_capped_grant(
-        &ctx.state,
-        &ctx.user,
-        agent_id,
-        GrantKind::Pool,
-        &default.pool,
-    )
-    .await?;
-    let spec = json!({ "profile": { "display": display }, "main": { "pool": default.pool } });
-    let granted = [(GrantKind::Pool, default.pool.clone())];
+    add_capped_grant(&ctx.state, &ctx.user, agent_id, GrantKind::Model, &default).await?;
+    let spec = json!({ "profile": { "display": display } });
+    let granted = [(GrantKind::Model, default.clone())];
     let change = DraftChange {
         granted: &granted,
         ..DraftChange::default()
     };
     save_draft(&ctx.state, &ctx.user, &agent, spec, change).await?;
-    Ok(Some(default.pool))
+    Ok(Some(default))
 }
 
 /// An agent id from the name a person gives it: what the create dialog
@@ -493,8 +490,8 @@ async fn update(ctx: &Ctx, args: UpdateArgs) -> Result<Value, Refusal> {
     if applied.display.is_some() {
         changed.push("display");
     }
-    if applied.pool.is_some() {
-        changed.push("pool");
+    if applied.model.is_some() {
+        changed.push("model");
     }
     changed.extend(applied.suggestion.steps.offered());
     if applied.handoffs {

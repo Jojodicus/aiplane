@@ -85,9 +85,10 @@ impl AgentSpec {
         &EMPTY
     }
 
-    /// `main.pool`, the pool the main run's model comes from.
-    pub fn main_pool(&self) -> Option<&str> {
-        self.main.pool.as_deref()
+    /// `main.model`, the model the main run uses; `None` runs on the
+    /// gateway's default chat model.
+    pub fn main_model(&self) -> Option<&str> {
+        self.main.model.as_deref()
     }
 
     /// `finish.schema`, what a routed run of this agent returns.
@@ -171,8 +172,8 @@ pub struct Scope {
     pub refusal: Option<String>,
     #[serde(default)]
     pub strict: bool,
-    /// The pool the guard classifies on; `main.pool` when unset.
-    pub classifier_pool: Option<String>,
+    /// The model the guard classifies with; the main run's model when unset.
+    pub classifier_model: Option<String>,
 }
 
 impl Scope {
@@ -197,7 +198,7 @@ impl Scope {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Main {
-    pub pool: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
     pub instructions: Instructions,
     #[serde(default)]
@@ -477,7 +478,7 @@ impl<'de> Deserialize<'de> for AuthKind {
 #[serde(deny_unknown_fields)]
 pub struct RouterConfig {
     pub kind: RouterKind,
-    pub pool: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
     pub order: Vec<String>,
 }
@@ -759,10 +760,9 @@ pub fn is_hex_color(s: &str) -> bool {
 }
 
 /// Spoken input and output for the embed widget (`publish.voice`). A
-/// direction that is on runs on the pool named here, else on the pool of the
-/// gateway's default model for it among the agent's grants
-/// (`agents::defaults::voice_pool`); the validator requires one of the two
-/// before publishing.
+/// direction that is on runs on the model named here, else on the gateway's
+/// default model for it (`agents::defaults::voice_model`); either way the
+/// agent must hold a grant on it, which the validator checks on publish.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceSpec {
@@ -770,21 +770,22 @@ pub struct VoiceSpec {
     pub input: bool,
     #[serde(default)]
     pub output: bool,
-    /// The TTS voice; the speech pool's default for the language when unset.
+    /// The TTS voice; the speech model's default for the language when unset.
     pub voice: Option<String>,
-    pub speech_pool: Option<String>,
-    pub transcription_pool: Option<String>,
+    pub speech_model: Option<String>,
+    pub transcription_model: Option<String>,
 }
 
 impl VoiceSpec {
-    /// The pool a visitor's recording is transcribed on, when voice input is on.
-    pub fn input_pool(&self) -> Option<&str> {
-        self.transcription_pool.as_deref().filter(|_| self.input)
+    /// The model named for transcribing a visitor's recording, when voice
+    /// input is on.
+    pub fn input_model(&self) -> Option<&str> {
+        self.transcription_model.as_deref().filter(|_| self.input)
     }
 
-    /// The pool answers are spoken on, when voice output is on.
-    pub fn output_pool(&self) -> Option<&str> {
-        self.speech_pool.as_deref().filter(|_| self.output)
+    /// The model named for speaking answers, when voice output is on.
+    pub fn output_model(&self) -> Option<&str> {
+        self.speech_model.as_deref().filter(|_| self.output)
     }
 }
 
@@ -873,7 +874,7 @@ mod tests {
         assert!(spec.publish.allows_origin("https://any.example"));
         assert!(!spec.publish.a2a_enabled());
         assert!(!spec.publish.require_passing_tests);
-        assert!(spec.main_pool().is_none() && spec.routes.is_empty());
+        assert!(spec.main_model().is_none() && spec.routes.is_empty());
     }
 
     #[test]
@@ -885,27 +886,26 @@ mod tests {
     }
 
     #[test]
-    fn voice_is_off_until_a_direction_is_switched_on_with_its_pool() {
+    fn voice_is_off_until_a_direction_is_switched_on() {
         let spec = read(json!({}));
-        assert_eq!(spec.publish.voice.input_pool(), None);
-        assert_eq!(spec.publish.voice.output_pool(), None);
+        assert_eq!(spec.publish.voice.input_model(), None);
+        assert_eq!(spec.publish.voice.output_model(), None);
 
         let spec = read(json!({ "publish": { "voice": {
             "input": true, "output": false, "voice": "alloy",
-            "speech_pool": "tts", "transcription_pool": "stt"
+            "speech_model": "tts-1", "transcription_model": "whisper"
         } } }));
-        assert_eq!(spec.publish.voice.input_pool(), Some("stt"));
-        assert_eq!(spec.publish.voice.output_pool(), None, "output is off");
+        assert!(spec.publish.voice.input && !spec.publish.voice.output);
+        assert_eq!(spec.publish.voice.input_model(), Some("whisper"));
+        assert_eq!(spec.publish.voice.output_model(), None, "output is off");
         assert_eq!(spec.publish.voice.voice.as_deref(), Some("alloy"));
-
-        let unpooled = read(json!({ "publish": { "voice": { "output": true } } }));
-        assert_eq!(
-            unpooled.publish.voice.output_pool(),
-            None,
-            "no pool, no voice"
-        );
         assert!(
             AgentSpec::from_value(&json!({ "publish": { "voice": { "loud": true } } })).is_err()
+        );
+        assert!(
+            AgentSpec::from_value(&json!({ "publish": { "voice": { "speech_pool": "tts" } } }))
+                .is_err(),
+            "voice names models, not pools"
         );
     }
 

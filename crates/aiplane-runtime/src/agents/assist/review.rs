@@ -237,13 +237,13 @@ pub struct Applied {
     /// Made before the draft is saved, through the capped grant route.
     pub grants: Vec<(GrantKind, String)>,
     pub display: Option<String>,
-    pub pool: Option<String>,
+    pub model: Option<String>,
     /// Whether the hand-offs changed.
     pub handoffs: bool,
 }
 
 /// Apply `changes` — the proposal's steps plus `display` (the agent's name)
-/// and `pool` (its model) — to `base`, one piece at a time, with the same
+/// and `model` — to `base`, one piece at a time, with the same
 /// checks [`review`] makes. Slots and hand-offs are written in the shapes the
 /// setup assistant reads (a slot's `order`; hand-offs as its rules, see
 /// [`super::handoffs`]). Test cases are not part of a draft, so they are left
@@ -254,7 +254,7 @@ pub fn apply_changes(changes: &Value, base: &Value, ctx: &ReviewContext<'_>) -> 
     let display = r
         .field::<String>(changes, "display")
         .and_then(|d| r.display(d));
-    let pool = r.field::<String>(changes, "pool").and_then(|p| r.pool(p));
+    let model = r.field::<String>(changes, "model").and_then(|m| r.model(m));
     r.steps(changes);
     let wanted = r
         .field::<Vec<SetupHandoff>>(changes, "handoffs")
@@ -274,7 +274,7 @@ pub fn apply_changes(changes: &Value, base: &Value, ctx: &ReviewContext<'_>) -> 
         draft: r.draft,
         grants: r.granted,
         display,
-        pool,
+        model,
         handoffs,
     }
 }
@@ -358,7 +358,7 @@ impl<'a> Reviewer<'a> {
             grants: &grants,
             agents: self.ctx.agents,
             live_specs: self.ctx.live_specs,
-            voice_defaults: &Default::default(),
+            model_defaults: &Default::default(),
         };
         spec::validate(draft, &ctx, Stage::Draft)
             .into_iter()
@@ -589,24 +589,24 @@ impl<'a> Reviewer<'a> {
         }
     }
 
-    fn pool(&mut self, pool: String) -> Option<String> {
-        let pool = pool.trim().to_string();
-        if !self.ctx.candidates.pools.contains(&pool) {
+    fn model(&mut self, model: String) -> Option<String> {
+        let model = model.trim().to_string();
+        if !self.ctx.candidates.models.contains(&model) {
             self.drop(
-                "pool",
-                Some(&pool),
-                "it is not a model you may use and grant — pick one of the model choices \
-                 `list_grantable` names",
+                "model",
+                Some(&model),
+                "it is not a model you may use and grant — pick one of the chat models \
+                 `list_grantable` names under `models.chat`",
             );
             return None;
         }
-        let candidate = self.with(&["main", "pool"], json!(pool));
-        self.granted.push((GrantKind::Pool, pool.clone()));
+        let candidate = self.with(&["main", "model"], json!(model));
+        self.granted.push((GrantKind::Model, model.clone()));
         match self.adopt(candidate) {
-            Ok(()) => Some(pool),
+            Ok(()) => Some(model),
             Err(reason) => {
                 self.granted.pop();
-                self.drop("pool", Some(&pool), reason);
+                self.drop("model", Some(&model), reason);
                 None
             }
         }

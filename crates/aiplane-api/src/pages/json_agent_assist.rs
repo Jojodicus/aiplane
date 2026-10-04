@@ -17,7 +17,7 @@ use rama::http::{Request, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::json_agent_resources::{grantable_collections, grantable_tools, usable_chat_pools};
+use super::json_agent_resources::{grantable_chat_models, grantable_collections, grantable_tools};
 use super::json_agents::{SpecWorld, agent_at, parse_spec, visible_agents};
 use super::json_principals::require_agent_manager;
 use super::{internal, json_error, json_ok};
@@ -42,7 +42,7 @@ pub struct SuggestBody {
     #[serde(default)]
     pub current_draft: Option<Value>,
     #[serde(default)]
-    pub pool: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,13 +51,13 @@ pub struct ImproveBody {
     pub field: ImproveField,
     pub text: String,
     #[serde(default)]
-    pub pool: Option<String>,
+    pub model: Option<String>,
 }
 
 fn refused(err: AssistError) -> Response {
     let (status, code) = match &err {
         AssistError::Input(_) => (StatusCode::BAD_REQUEST, "invalid_assist_input"),
-        AssistError::PoolNotAllowed(_) => (StatusCode::FORBIDDEN, "assist_pool_not_allowed"),
+        AssistError::ModelNotAllowed(_) => (StatusCode::FORBIDDEN, "assist_model_not_allowed"),
         AssistError::NoModel => (StatusCode::SERVICE_UNAVAILABLE, "assist_no_model"),
         AssistError::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, "assist_rate_limited"),
         AssistError::OverBudget(_) => (StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded"),
@@ -74,8 +74,8 @@ fn refused(err: AssistError) -> Response {
 }
 
 /// What `user` may offer agent `agent_id`: the tools and knowledge bases
-/// they may grant, the agents shared with them, and the chat pools they may
-/// use.
+/// they may grant, the agents shared with them, and the chat models they may
+/// grant.
 pub(super) async fn candidates(
     state: &RamaState,
     user: &User,
@@ -103,12 +103,12 @@ pub(super) async fn candidates(
             })
             .collect(),
         agents,
-        pools: usable_chat_pools(state, user),
+        models: grantable_chat_models(state, user).await,
     })
 }
 
 /// POST /api/v0/agents/{id}/assist/suggest — `{scenario, template?,
-/// current_draft?, pool?}`: a proposal per setup step, each piece checked
+/// current_draft?, model?}`: a proposal per setup step, each piece checked
 /// against the draft, and what was dropped and why.
 pub async fn suggest(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
@@ -152,7 +152,7 @@ pub(super) async fn suggest_for(
         scenario: &body.scenario,
         template: body.template.as_deref(),
         base: &base,
-        pool: body.pool.as_deref(),
+        model: body.model.as_deref(),
     };
     asker
         .suggest(request, &ctx)
@@ -162,7 +162,7 @@ pub(super) async fn suggest_for(
 }
 
 /// POST /api/v0/agents/{id}/assist/improve — `{field: task|tone|refusal,
-/// text, pool?}`: `{field, suggestion, why, pool, model, usage}`.
+/// text, model?}`: `{field, suggestion, why, model, usage}`.
 pub async fn improve(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let user = or_return!(require_agent_manager(&state, &req).await);
     let (agent, _) = or_return!(agent_at(&state, &req, &user, 2, Access::Write).await);
@@ -176,7 +176,7 @@ pub async fn improve(State(state): State<Arc<RamaState>>, req: Request) -> Respo
     };
     let draft = parse_spec(&agent.draft_spec);
     match asker
-        .improve(body.field, &body.text, body.pool.as_deref(), &draft)
+        .improve(body.field, &body.text, body.model.as_deref(), &draft)
         .await
     {
         Ok(improved) => json_ok(

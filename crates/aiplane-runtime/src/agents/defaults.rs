@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 croit GmbH
 
-//! The pools an agent falls back to when its spec names none: the gateway's
-//! admin "Default models" (`feature_defaults`), resolved against the access
-//! that bounds the caller — an agent's grants, or a manager's groups. Agents
-//! have no model settings of their own besides the optional Fast/Balanced/
-//! Thorough choice, whose "Balanced" is this chat default when unset.
+//! The models an agent runs on when its spec names none: the gateway's
+//! admin "Default models" (`server::model_choices::gateway_default`).
+//! Agents have no model settings of their own; an unset model key means
+//! "the gateway's default", which the agent must hold a grant on like on
+//! any model it names.
 
-use aiplane_core::server::feature_defaults::{self, Feature, PoolDefault};
-use aiplane_core::server::principal::SystemPrincipal;
-use aiplane_core::server::upstreams::PoolAccess;
+use aiplane_core::server::feature_defaults::Feature;
 
+use super::spec::AgentSpec;
+use super::spec::ModelDefaults;
 use super::spec::model::VoiceSpec;
-use crate::rama_server::state::RamaState;
+use crate::server::AppState;
+use crate::server::model_choices::gateway_default;
 
 /// A direction of `publish.voice`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,8 +34,8 @@ impl VoiceDirection {
 
     fn named(self, voice: &VoiceSpec) -> Option<&str> {
         match self {
-            Self::Input => voice.input_pool(),
-            Self::Output => voice.output_pool(),
+            Self::Input => voice.input_model(),
+            Self::Output => voice.output_model(),
         }
     }
 
@@ -46,55 +47,38 @@ impl VoiceDirection {
     }
 }
 
-/// The chat pool a caller with `access` gets when nothing names one: the
-/// admin's "Balanced" choice (`agents.pool_balanced`) when set and reachable,
-/// else the pool of the gateway's default chat model.
-pub async fn chat_pool(state: &RamaState, access: &PoolAccess) -> Option<PoolDefault> {
-    let balanced = state.config().agents.pool_balanced.clone();
-    if let Some(pool) = balanced.as_deref()
-        && let Some(model) = super::profile::pool_model(state, pool, access)
-    {
-        return Some(PoolDefault {
-            pool: pool.to_string(),
-            model,
-        });
+/// The model the main run of `spec` uses: `main.model`, else the gateway's
+/// default chat model. `None` when neither exists.
+pub async fn main_model(state: &AppState, spec: &AgentSpec) -> Option<String> {
+    match spec.main_model() {
+        Some(model) => Some(model.to_string()),
+        None => gateway_default(state, Feature::Chat).await,
     }
-    feature_defaults::default_pool(&state.db, &state.upstreams, Feature::Chat, access).await
 }
 
-/// The pool and model a direction of `voice` runs on for agent `principal`,
-/// or `None` when it is off or nothing it may reach serves it. The pool the
-/// spec names when it names one, else the gateway's default model for that
-/// direction — always among the pools granted to the agent.
-pub async fn voice_pool(
-    state: &RamaState,
-    principal: &SystemPrincipal,
+/// The model a direction of `voice` runs on, or `None` when it is off or
+/// there is none: the one the spec names, else the gateway's default model
+/// for that direction. Whether the agent may use it is its grants' call.
+pub async fn voice_model(
+    state: &AppState,
     voice: &VoiceSpec,
     direction: VoiceDirection,
-) -> Option<PoolDefault> {
+) -> Option<String> {
     if !direction.on(voice) {
         return None;
     }
-    let access = match direction.named(voice) {
-        Some(pool) => PoolAccess::for_system_pools(principal, [pool]),
-        None => PoolAccess::for_system(principal),
-    };
-    feature_defaults::default_pool(&state.db, &state.upstreams, direction.feature(), &access).await
+    match direction.named(voice) {
+        Some(model) => Some(model.to_string()),
+        None => gateway_default(state, direction.feature()).await,
+    }
 }
 
-/// The pool the gateway's default for `feature` resolves to among the pools
-/// `granted` names: what the validator checks a voice direction without a
-/// pool against before publishing.
-pub async fn granted_default(
-    state: &RamaState,
-    feature: Feature,
-    granted: impl IntoIterator<Item = String>,
-) -> Option<String> {
-    let access = PoolAccess {
-        granted_pools: Some(std::sync::Arc::new(granted.into_iter().collect())),
-        ..PoolAccess::all()
-    };
-    feature_defaults::default_pool(&state.db, &state.upstreams, feature, &access)
-        .await
-        .map(|d| d.pool)
+/// The gateway's default of each kind, which the validator checks an unset
+/// model key against.
+pub async fn model_defaults(state: &AppState) -> ModelDefaults {
+    ModelDefaults {
+        chat: gateway_default(state, Feature::Chat).await,
+        transcription: gateway_default(state, Feature::Transcription).await,
+        speech: gateway_default(state, Feature::Speech).await,
+    }
 }

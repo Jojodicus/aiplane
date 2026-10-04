@@ -29,7 +29,7 @@ const FINAL: &str = "RE-1 was billed twice and is refunded today; you are covere
 fn billing_spec() -> Value {
     json!({
         "main": {
-            "pool": "billing-pool",
+            "model": "billing-model",
             "instructions": { "orchestration": "Explain the customer's invoice." },
             "budget": { "rounds": 3 }
         },
@@ -42,7 +42,7 @@ fn support_spec(billing: &str, card_url: &str) -> Value {
     let verified = json!({ "slot": "verified", "provenance": "verifier:otp" });
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Verify the visitor, then route the request." },
             "budget": { "rounds": 12 }
         },
@@ -126,14 +126,14 @@ async fn the_story() -> Run {
     .await;
     world.connect_erp(&erp).await;
     let billing = world
-        .agent("billing", &[(GrantKind::Pool, "billing-pool")])
+        .agent("billing", &[(GrantKind::Model, "billing-model")])
         .await;
     world.publish(&billing, &billing_spec()).await;
     let support = world
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Connector, "erp"),
                 (GrantKind::A2aAgent, &peer.card_url()),
             ],
@@ -570,14 +570,14 @@ async fn exchanges_of(world: &World, agent: &str, purpose: &str) -> Vec<StoredEv
 }
 
 async fn plain_agent(world: &World, extra: &[(GrantKind, &str)], tools: &[&str]) -> String {
-    let mut grants = vec![(GrantKind::Pool, "support-pool")];
+    let mut grants = vec![(GrantKind::Model, "support-model")];
     grants.extend_from_slice(extra);
     let agent = world.agent("support", &grants).await;
     world
         .publish(
             &agent,
             &json!({ "main": {
-                "pool": "support-pool",
+                "model": "support-model",
                 "instructions": { "orchestration": "Answer." },
                 "tools": tools,
                 "budget": { "rounds": 4 }
@@ -614,7 +614,7 @@ async fn an_agent_conversations_compaction_summary_is_an_exchange_of_its_log() {
         .unwrap();
     let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
     let access =
-        aiplane_core::server::upstreams::PoolAccess::for_system_pools(&principal, ["support-pool"]);
+        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["support-model"]);
 
     crate::server::compaction::maybe_autocompact(
         &world.state,
@@ -670,12 +670,12 @@ async fn the_rubric_judges_exchange_is_logged_in_the_case_conversation() {
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
     let agent = plain_agent(&world, &[], &[]).await;
     let spec = crate::agents::spec::AgentSpec::from_value(&json!({ "main": {
-        "pool": "support-pool", "instructions": { "orchestration": "Answer." }
+        "model": "support-model", "instructions": { "orchestration": "Answer." }
     } }))
     .unwrap();
-    let judge = crate::agents::eval_judge::PoolJudge::for_agent(world.state.clone(), &agent, &spec)
+    let judge = crate::agents::eval_judge::ModelJudge::for_agent(world.state.clone(), &agent, &spec)
         .await
-        .expect("a judge on the agent's pool");
+        .expect("a judge on the agent's model");
     let verdict = crate::agents::eval::RubricJudge::judge(
         &judge,
         "greets",
@@ -897,7 +897,7 @@ async fn echoing_agent() -> (World, String, MockServer, tempfile::TempDir) {
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Tool, "company_echo"),
             ],
         )
@@ -906,7 +906,7 @@ async fn echoing_agent() -> (World, String, MockServer, tempfile::TempDir) {
         .publish(
             &agent,
             &json!({ "main": {
-                "pool": "support-pool",
+                "model": "support-model",
                 "instructions": { "orchestration": "Echo, then answer." },
                 "tools": ["company_echo"],
                 "budget": { "rounds": 4 }

@@ -148,7 +148,7 @@ fn otp_spec(otp: Value) -> Value {
     }
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Verify the visitor, then help." },
             "budget": { "rounds": 12 }
         },
@@ -183,7 +183,7 @@ async fn support(world: &World, spec: &Value) -> String {
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Connector, "erp"),
             ],
         )
@@ -708,7 +708,7 @@ async fn a_forward_in_the_round_of_the_lookup_that_opens_its_route_is_dispatched
         .await;
         world.connect_erp(&erp).await;
         let helper_id = world
-            .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+            .agent("helper", &[(GrantKind::Model, "helper-model")])
             .await;
         world.publish(&helper_id, &helper_spec(4)).await;
         let mut spec = otp_spec(json!({}));

@@ -7,8 +7,9 @@
 //! `refusal` is the turn's answer and the main model is never called.
 //!
 //! The model may only deny (trust rule 1): it answers from an enum of
-//! `in_scope` / `out_of_scope` ([`PoolChoice`]), and anything but a clean
-//! `in_scope` refuses. A guard that cannot decide — the pool is down, the
+//! `in_scope` / `out_of_scope` ([`ModelCall`]), and anything but a clean
+//! `in_scope` refuses. A guard that cannot decide — the model is down or
+//! not granted, the
 //! answer is not one of the two — fails **closed**: the visitor gets the
 //! refusal and the error is recorded. A scope the owner declared strict is a
 //! promise that off-topic messages never reach the main model; failing open
@@ -25,7 +26,7 @@ use aiplane_core::server::principal::SystemPrincipal;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::pool_choice::{PoolChoice, Question};
+use super::model_call::{ModelCall, Question};
 use super::spec::AgentSpec;
 use crate::rama_server::state::RamaState;
 use crate::server::tools::ToolContext;
@@ -47,7 +48,7 @@ const OUT_OF_SCOPE: &str = "out_of_scope";
 /// A strict scope, ready to judge messages.
 #[derive(Debug, Clone)]
 pub struct TopicGuard {
-    pool: String,
+    model: String,
     topics: Vec<String>,
     refusal: String,
 }
@@ -74,20 +75,20 @@ pub struct Decision {
 }
 
 impl TopicGuard {
-    /// The guard of `spec`'s scope, when it is strict; it classifies on
-    /// `scope.classifier_pool`, else `main_pool`. A strict scope missing its
-    /// topics or refusal never passed the validator, and gets no guard.
-    pub fn from_spec(spec: &AgentSpec, main_pool: &str) -> Option<Self> {
+    /// The guard of `spec`'s scope, when it is strict; it classifies with
+    /// `scope.classifier_model`, else `main_model`. A strict scope missing
+    /// its topics or refusal never passed the validator, and gets no guard.
+    pub fn from_spec(spec: &AgentSpec, main_model: &str) -> Option<Self> {
         let scope = spec.scope.as_ref().filter(|s| s.strict)?;
         let topics: Vec<String> = scope.topics().into_iter().map(str::to_string).collect();
         if topics.is_empty() {
             return None;
         }
         Some(Self {
-            pool: scope
-                .classifier_pool
+            model: scope
+                .classifier_model
                 .clone()
-                .unwrap_or_else(|| main_pool.to_string()),
+                .unwrap_or_else(|| main_model.to_string()),
             topics,
             refusal: scope.refusal()?.to_string(),
         })
@@ -102,7 +103,7 @@ impl TopicGuard {
         log: &ToolContext,
         messages: &[Value],
     ) -> Decision {
-        let chooser = PoolChoice::new(state, &self.pool, principal, log);
+        let chooser = ModelCall::new(state, &self.model, principal, log);
         let (verdict, tokens, error) = match latest_with_context(messages) {
             None => (
                 Verdict::Failed,
@@ -139,10 +140,10 @@ impl TopicGuard {
         let mut detail = json!({
             "verdict": verdict,
             "topics": self.topics,
-            "pool": chooser.pool(),
+            "model": chooser.model(),
         });
         if let Some(error) = &error {
-            tracing::warn!(error, pool = %self.pool, "topic guard failed; refusing the message");
+            tracing::warn!(error, model = %self.model, "topic guard failed; refusing the message");
             detail["error"] = json!(error);
         }
         log.audit(AuditKind::ScopeDecision, detail).await;
@@ -213,16 +214,16 @@ mod tests {
         let strict = json!({ "topics": ["Ceph"], "refusal": "Only Ceph.", "strict": true });
         let guard = TopicGuard::from_spec(&spec(strict), "main").unwrap();
         assert_eq!(
-            guard.pool, "main",
-            "it classifies on the main pool by default"
+            guard.model, "main",
+            "it classifies with the main model by default"
         );
         assert_eq!(guard.topics, ["Ceph"]);
         assert_eq!(guard.refusal, "Only Ceph.");
 
-        let own_pool = json!({ "topics": ["Ceph"], "refusal": "Only Ceph.", "strict": true,
-                               "classifier_pool": "small" });
+        let own_model = json!({ "topics": ["Ceph"], "refusal": "Only Ceph.", "strict": true,
+                               "classifier_model": "small" });
         assert_eq!(
-            TopicGuard::from_spec(&spec(own_pool), "main").unwrap().pool,
+            TopicGuard::from_spec(&spec(own_model), "main").unwrap().model,
             "small"
         );
 

@@ -49,7 +49,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::server::config::{
-    AgentsConfig, ChatConfig, ComfyuiConfig, CompactionConfig, Config, ContentGuardConfig,
+    ChatConfig, ComfyuiConfig, CompactionConfig, Config, ContentGuardConfig,
     ContentGuardMode, ContentGuardPolicy, FeedbackConfig, GatewayConfig, GeoipConfig, LimitsConfig,
     OcrConfig, PushConfig, RagConfig, S3Config, SandboxConfig, SkillsConfig, TurnsConfig,
     TypstConfig, UsageConfig,
@@ -483,15 +483,6 @@ pub static SECTIONS: &[SectionSpec] = &[
         fields: &[f("limits.enabled", Kind::Bool)],
     },
     SectionSpec {
-        name: "agents",
-        category: Category::Chat,
-        fields: &[
-            f("agents.pool_fast", Kind::Text),
-            f("agents.pool_balanced", Kind::Text),
-            f("agents.pool_thorough", Kind::Text),
-        ],
-    },
-    SectionSpec {
         name: "feedback",
         category: Category::Notifications,
         fields: &[
@@ -854,11 +845,6 @@ pub fn apply(settings: &Settings, config: &mut Config) {
         .bool("feedback.enabled", false)
         .then(|| feedback(settings));
     config.push = push(settings);
-    config.agents = AgentsConfig {
-        pool_fast: settings.text("agents.pool_fast"),
-        pool_balanced: settings.text("agents.pool_balanced"),
-        pool_thorough: settings.text("agents.pool_thorough"),
-    };
 
     // Field-by-field, not `config.gateway = …` like the blocks above. Two keys
     // in this block are owned by the config file on purpose — the wizard's
@@ -1259,9 +1245,6 @@ pub fn snapshot(c: &Config) -> Vec<(String, String)> {
     put("usage.currency", c.usage.currency.clone());
 
     put("limits.enabled", c.limits.enabled.to_string());
-    put("agents.pool_fast", opt(c.agents.pool_fast.clone()));
-    put("agents.pool_balanced", opt(c.agents.pool_balanced.clone()));
-    put("agents.pool_thorough", opt(c.agents.pool_thorough.clone()));
 
     put("content_guard.enabled", c.content_guard.enabled.to_string());
     put("content_guard.model", c.content_guard.model.clone());

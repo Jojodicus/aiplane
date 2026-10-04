@@ -22,7 +22,7 @@ const ECHO: &str = "company_echo";
 
 fn asking_spec(permission: &str) -> Value {
     json!({ "main": {
-        "pool": "support-pool",
+        "model": "support-model",
         "instructions": { "orchestration": "Help the visitor." },
         "tools": [ECHO],
         "tool_resources": { ECHO: { "permission": permission, "approval_timeout": "2h" } },
@@ -34,7 +34,7 @@ async fn asking(world: &World, permission: &str) -> String {
     let id = world
         .agent(
             "support",
-            &[(GrantKind::Pool, "support-pool"), (GrantKind::Tool, ECHO)],
+            &[(GrantKind::Model, "support-model"), (GrantKind::Tool, ECHO)],
         )
         .await;
     assert_eq!(world.issues(&id, &asking_spec(permission)).await, []);
@@ -165,7 +165,7 @@ async fn always_allow_runs_without_asking() {
 fn handoff_spec(human: Value) -> Value {
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Hand refunds to a person." },
             "budget": { "rounds": 6 }
         },
@@ -185,7 +185,7 @@ fn handoff_spec(human: Value) -> Value {
 
 async fn handing_off(world: &World, human: Value) -> String {
     let id = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     assert_eq!(world.issues(&id, &handoff_spec(human.clone())).await, []);
     world.publish(&id, &handoff_spec(human)).await;
@@ -543,7 +543,7 @@ async fn resuming(world: &World) -> String {
     let id = world
         .agent(
             "support",
-            &[(GrantKind::Pool, "support-pool"), (GrantKind::Tool, ECHO)],
+            &[(GrantKind::Model, "support-model"), (GrantKind::Tool, ECHO)],
         )
         .await;
     assert_eq!(world.issues(&id, &resuming_spec()).await, []);

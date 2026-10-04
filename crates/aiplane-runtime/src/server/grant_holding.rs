@@ -17,8 +17,10 @@ use std::time::{Duration, Instant};
 use aiplane_agents::db::agents::{self as agents_db, Access};
 use aiplane_core::server::db::{DbError, mcp_catalog, rag as rag_db, users};
 use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
 use crate::rama_server::state::RamaState;
+use crate::server::model_choices::{self, ModelChoice};
 use crate::server::tools::mcp::MCP_ID_PREFIX;
 
 /// Why a grant could not be judged held: the resource does not exist, the
@@ -110,16 +112,13 @@ pub async fn holds(
                 .rbac
                 .resource_allowed(&role_ids, &collection.allowed_groups)
         }
-        GrantKind::Pool => {
-            let Some(pool) = state
-                .upstreams
-                .pools()
-                .into_iter()
-                .find(|p| p.name == reference)
-            else {
-                return Err(missing(format!("pool `{reference}`")));
-            };
-            state.pool_access_for(&user.roles).allows(&pool)
+        GrantKind::Model => {
+            if offers(state, &PoolAccess::all(), reference).await.is_none() {
+                return Err(missing(format!("model `{reference}`")));
+            }
+            offers(state, &state.pool_access_for(&user.roles), reference)
+                .await
+                .is_some_and(|choice| choice.grantable())
         }
         GrantKind::A2aCaller => {
             // Letting another platform call an agent is a change to that
@@ -153,6 +152,24 @@ pub async fn holds(
     };
     Ok(held)
 }
+
+/// The choice named `model` among the models of every kind an agent can use
+/// that `access` may pick (`server::model_choices`).
+async fn offers(state: &RamaState, access: &PoolAccess, model: &str) -> Option<ModelChoice> {
+    for kind in GRANTABLE_KINDS {
+        if let Some(found) = model_choices::offered(state, kind, access)
+            .await
+            .into_iter()
+            .find(|c| c.id == model)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The kinds of model a model grant can name: what an agent runs on.
+const GRANTABLE_KINDS: [PoolKind; 3] = [PoolKind::Chat, PoolKind::Transcription, PoolKind::Speech];
 
 /// `principal` as a token minted by user `minted_by` may use it: every grant
 /// when the minter is an admin today, otherwise only the grants the minter

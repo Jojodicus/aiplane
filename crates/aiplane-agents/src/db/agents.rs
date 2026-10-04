@@ -1054,7 +1054,7 @@ mod tests {
         let pool = pool().await;
         let a = agent(&pool, "support", "alice").await;
         let id = &a.principal.id;
-        sp::add_grant(&pool, id, GrantKind::Pool, "chat", "alice")
+        sp::add_grant(&pool, id, GrantKind::Model, "chat", "alice")
             .await
             .unwrap();
         publish(&pool, id, "{}", "alice").await.unwrap();

@@ -31,11 +31,10 @@ use aiplane_agents::db::agents::{
 };
 use aiplane_agents::db::{agent_analytics, agent_audit, system_principals as sp_db};
 use aiplane_core::server::db::{gateway_groups, users};
-use aiplane_core::server::feature_defaults::Feature;
 use aiplane_core::server::principal::{GrantKind, GrantSet};
 use aiplane_runtime::agents::defaults;
 use aiplane_runtime::agents::spec::{
-    self, AgentSpec, SpecContext, SpecIssue, Stage, VoiceDefaults,
+    self, AgentSpec, SpecContext, SpecIssue, Stage, ModelDefaults,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 
@@ -208,7 +207,7 @@ async fn spec_check(
             grants: &world.grants,
             agents: &world.agents,
             live_specs: &world.live_specs,
-            voice_defaults: &world.voice_defaults,
+            model_defaults: &world.model_defaults,
         },
         stage,
     ))
@@ -220,18 +219,14 @@ pub(super) struct SpecWorld {
     pub grants: GrantSet,
     pub agents: HashMap<String, bool>,
     pub live_specs: HashMap<String, Value>,
-    pub voice_defaults: VoiceDefaults,
+    pub model_defaults: ModelDefaults,
 }
 
 impl SpecWorld {
     pub(super) async fn load(state: &RamaState, agent_id: &str) -> Result<Self, Response> {
         let grants = sp_db::grants(&state.db, agent_id).await.map_err(internal)?;
         let grants = GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)));
-        let pools = || grants.refs(GrantKind::Pool).map(str::to_string);
-        let voice_defaults = VoiceDefaults {
-            transcription: defaults::granted_default(state, Feature::Transcription, pools()).await,
-            speech: defaults::granted_default(state, Feature::Speech, pools()).await,
-        };
+        let model_defaults = defaults::model_defaults(state).await;
         let agents = agents_db::publication_status(&state.db)
             .await
             .map_err(internal)?;
@@ -245,7 +240,7 @@ impl SpecWorld {
             grants,
             agents,
             live_specs,
-            voice_defaults,
+            model_defaults,
         })
     }
 }
@@ -511,7 +506,10 @@ pub struct RestoreBody {
 
 /// Whether `spec` needs `kind` `reference`: the validator finds more wrong
 /// with it once that grant is gone. Asking the validator rather than listing
-/// where a spec names a pool or tool keeps this right as the spec grows.
+/// where a spec names a model or tool keeps this right as the spec grows. It
+/// asks at the publish stage, the one that also checks the gateway default an
+/// unset model key runs on: a draft that names no model still needs that
+/// grant.
 fn uses_grant(
     world: &SpecWorld,
     agent_id: &str,
@@ -527,9 +525,9 @@ fn uses_grant(
                 grants,
                 agents: &world.agents,
                 live_specs: &world.live_specs,
-                voice_defaults: &world.voice_defaults,
+                model_defaults: &world.model_defaults,
             },
-            Stage::Draft,
+            Stage::Publish,
         )
         .len()
     };

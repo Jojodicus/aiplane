@@ -17,7 +17,7 @@
 //! [`app_settings`]: crate::server::db::app_settings
 
 use crate::server::db::{Pool, app_settings};
-use crate::server::upstreams::{PoolAccess, PoolKind, UpstreamRegistry};
+use crate::server::upstreams::PoolKind;
 
 /// The features that carry a configurable default model. The wire name (used
 /// in the admin form and the `app_settings` key) is stable; adding a variant
@@ -27,7 +27,7 @@ pub enum Feature {
     Chat,
     Transcription,
     /// Text-to-speech: what an agent's spoken answers run on when its spec
-    /// names no speech pool, and the gateway's own read-aloud.
+    /// names no speech model, and the gateway's own read-aloud.
     Speech,
     Image,
     /// The embedding model pre-selected in the RAG collection form. Unlike the
@@ -146,71 +146,6 @@ pub fn promote<T>(configured: Option<&str>, items: &mut [T], id_of: impl Fn(&T) 
     }
 }
 
-/// A pool, and the model of it a feature's default resolves to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PoolDefault {
-    pub pool: String,
-    pub model: String,
-}
-
-/// The pool `feature`'s default model runs on for a caller with `access`:
-/// [`resolve`] over the models of the pools of the feature's kind that
-/// `access` reaches, then the first of those pools (by name) serving the
-/// model. `None` when `access` reaches no such pool serving anything.
-///
-/// The one answer to "which pool, when nothing names one": an agent's voice
-/// directions, a new agent's chat pool and the prompt assistant all ask it,
-/// each with the access that bounds them (an agent's grants, a manager's
-/// groups).
-pub async fn default_pool(
-    db: &Pool,
-    upstreams: &UpstreamRegistry,
-    feature: Feature,
-    access: &PoolAccess,
-) -> Option<PoolDefault> {
-    let configured = get(db, feature).await;
-    let kind = feature.pool_kind();
-    let mut pools: Vec<(String, Vec<String>)> = upstreams
-        .pools()
-        .into_iter()
-        .filter(|p| p.kind == kind && access.allows(p))
-        .map(|p| (p.name.clone(), pool_models(&p)))
-        .collect();
-    pools.sort();
-    pick_pool(configured.as_deref(), &pools)
-}
-
-/// The models a pool offers, the operator's declared ones first (a cloud
-/// provider lists its whole catalogue on `/models`), then what its healthy
-/// backends report, sorted.
-pub fn pool_models(pool: &crate::server::upstreams::Pool) -> Vec<String> {
-    let mut live: Vec<String> = pool
-        .backends
-        .iter()
-        .filter(|b| b.is_available())
-        .flat_map(|b| b.models_snapshot())
-        .collect();
-    live.sort();
-    let mut models = pool.configured_models.clone();
-    for model in live {
-        if !models.contains(&model) {
-            models.push(model);
-        }
-    }
-    models
-}
-
-/// [`default_pool`] over `(pool, its models)`, in the order given.
-pub fn pick_pool(configured: Option<&str>, pools: &[(String, Vec<String>)]) -> Option<PoolDefault> {
-    let available: Vec<String> = pools.iter().flat_map(|(_, m)| m.iter().cloned()).collect();
-    let model = resolve(configured, &available)?;
-    let (pool, _) = pools.iter().find(|(_, m)| m.contains(&model))?;
-    Some(PoolDefault {
-        pool: pool.clone(),
-        model,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,41 +180,6 @@ mod tests {
     fn resolve_none_on_empty_pool() {
         assert_eq!(resolve(Some("x"), &[]), None);
         assert_eq!(resolve(None, &[]), None);
-    }
-
-    fn pools(xs: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
-        xs.iter().map(|(p, m)| (p.to_string(), v(m))).collect()
-    }
-
-    #[test]
-    fn pick_pool_finds_the_pool_serving_the_configured_default() {
-        let reachable = pools(&[("cloud", &["tts-1"]), ("local", &["kokoro", "piper"])]);
-        assert_eq!(
-            pick_pool(Some("piper"), &reachable),
-            Some(PoolDefault {
-                pool: "local".into(),
-                model: "piper".into()
-            })
-        );
-    }
-
-    #[test]
-    fn pick_pool_falls_back_to_the_first_reachable_model_like_resolve() {
-        let reachable = pools(&[("cloud", &["tts-1"]), ("local", &["kokoro"])]);
-        assert_eq!(
-            pick_pool(Some("not-reachable"), &reachable).map(|d| d.pool),
-            Some("cloud".into())
-        );
-        assert_eq!(
-            pick_pool(None, &reachable).map(|d| d.model),
-            Some("tts-1".into())
-        );
-    }
-
-    #[test]
-    fn pick_pool_is_none_without_a_reachable_model() {
-        assert_eq!(pick_pool(Some("x"), &[]), None);
-        assert_eq!(pick_pool(None, &pools(&[("empty", &[])])), None);
     }
 
     #[test]

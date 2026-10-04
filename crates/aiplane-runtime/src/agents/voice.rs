@@ -2,14 +2,13 @@
 // Copyright (C) 2026 croit GmbH
 
 //! Voice in a visitor's conversation (`publish.voice`, `docs/embed.md` →
-//! "Voice"): a recording transcribed on the agent's transcription pool, and
-//! a finished answer spoken on its speech pool.
+//! "Voice"): a recording transcribed on the agent's transcription model,
+//! and a finished answer spoken on its speech model.
 //!
-//! Both calls run as the agent's principal on one pool granted to it —
-//! the one its spec names for that direction, else the pool of the
-//! gateway's default model for it ([`super::defaults::voice_pool`]) —
-//! narrowed with `PoolAccess::for_system_pools`, exactly like a
-//! model round: the usage row is the agent run's (so it spends the owner's
+//! Both calls run as the agent's principal on one model it holds a grant
+//! on — the one its spec names for that direction, else the gateway's
+//! default model for it ([`super::defaults::voice_model`]) — narrowed with
+//! `PoolAccess::for_system_models`, exactly like a model round: the usage row is the agent run's (so it spends the owner's
 //! budget) and the exchange is an `llm_exchange` in the conversation's
 //! activity chain (`purpose: transcription` or `speech`). The log keeps the
 //! transcript and the text spoken; it never keeps audio — a recording's
@@ -25,7 +24,6 @@ use std::time::{Duration, Instant};
 
 use aiplane_core::server::capped_read::{self, CappedReadError};
 use aiplane_core::server::db::usage::{UsageKind, UsageRecord, UsageSource};
-use aiplane_core::server::feature_defaults::PoolDefault;
 use aiplane_core::server::principal::{PrincipalKind, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
@@ -72,7 +70,7 @@ impl Conversation<'_> {
 /// unavailable; this is for the activity log and the server log.
 #[derive(Debug, thiserror::Error)]
 pub enum VoiceError {
-    #[error("routing to the {what} pool failed: {message}")]
+    #[error("routing to the {what} model failed: {message}")]
     Route { what: &'static str, message: String },
     #[error("the {what} backend could not be reached: {message}")]
     Transport { what: &'static str, message: String },
@@ -89,11 +87,11 @@ pub struct Recording {
     pub seconds: f64,
 }
 
-/// Transcribe `recording` on `target`. The transcript is returned to the
-/// visitor to read and send; nothing is posted to the conversation.
+/// Transcribe `recording` on model `model`. The transcript is returned to
+/// the visitor to read and send; nothing is posted to the conversation.
 pub async fn transcribe(
     state: &RamaState,
-    target: &PoolDefault,
+    model: &str,
     conversation: &Conversation<'_>,
     recording: Recording,
 ) -> Result<String, VoiceError> {
@@ -101,10 +99,10 @@ pub async fn transcribe(
     let mut exchange = SideExchange::new("transcription");
     let mut usage = Usage::new(UsageKind::Transcription, Some(recording.seconds));
     let result = async {
-        let access = PoolAccess::for_system_pools(conversation.principal, [target.pool.as_str()]);
+        let access = PoolAccess::for_system_models(conversation.principal, [model]);
         let acquired = state
             .upstreams
-            .route_access(&target.model, PoolKind::Transcription, &access)
+            .route_access(model, PoolKind::Transcription, &access)
             .map_err(|e| VoiceError::Route {
                 what: WHAT,
                 message: e.to_string(),
@@ -171,13 +169,13 @@ pub async fn transcribe(
     result
 }
 
-/// Speak `answer`, the final text of assistant turn `turn_id`, on `target`
-/// in `voice` (the pool's voice for `lang` when `None`). `Ok(None)` when
+/// Speak `answer`, the final text of assistant turn `turn_id`, on model
+/// `model` in `voice` (its pool's voice for `lang` when `None`). `Ok(None)` when
 /// nothing of the answer is speakable (a bare code block). A turn already
 /// spoken in the same voice is served from memory.
 pub async fn speak(
     state: &RamaState,
-    target: &PoolDefault,
+    model: &str,
     voice: Option<&str>,
     conversation: &Conversation<'_>,
     turn_id: &str,
@@ -199,26 +197,11 @@ pub async fn speak(
     if spoken.is_empty() {
         return Ok(None);
     }
-    let pool = target.pool.as_str();
-    let access = PoolAccess::for_system_pools(conversation.principal, [pool]);
-    let found = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .find(|p| p.name == pool && p.kind == PoolKind::Speech && access.allows(p));
-    let voice = voice.map(str::to_string).or_else(|| {
-        found.as_ref().and_then(|p| {
-            p.voices
-                .get(lang.code())
-                .or_else(|| p.voices.get(""))
-                .cloned()
-        })
-    });
-    let cache_key = format!(
-        "{turn_id}|{pool}|{}|{}",
-        target.model,
-        voice.as_deref().unwrap_or("")
-    );
+    let access = PoolAccess::for_system_models(conversation.principal, [model]);
+    let voice = voice
+        .map(str::to_string)
+        .or_else(|| state.upstreams.speech_voice(model, lang.code()));
+    let cache_key = format!("{turn_id}|{model}|{}", voice.as_deref().unwrap_or(""));
     if let Some(audio) = SPOKEN.lock().ok().and_then(|c| c.get(&cache_key)) {
         return Ok(Some(audio));
     }
@@ -228,7 +211,7 @@ pub async fn speak(
     let result = async {
         let acquired = state
             .upstreams
-            .route_access(&target.model, PoolKind::Speech, &access)
+            .route_access(model, PoolKind::Speech, &access)
             .map_err(|e| VoiceError::Route {
                 what: WHAT,
                 message: e.to_string(),
@@ -417,7 +400,7 @@ fn within(text: &str, max: usize) -> String {
     head[..end].trim().to_string()
 }
 
-/// Spoken answers, by turn, pool and voice: a visitor replaying an answer
+/// Spoken answers, by turn, model and voice: a visitor replaying an answer
 /// costs no second synthesis. Bounded by entries and bytes; the oldest go
 /// first.
 static SPOKEN: LazyLock<Mutex<SpokenCache>> =

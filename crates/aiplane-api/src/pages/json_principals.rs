@@ -352,7 +352,7 @@ fn kind_label(kind: GrantKind) -> &'static str {
         GrantKind::Connector => "connector",
         GrantKind::Skill => "skill",
         GrantKind::RagCollection => "RAG collection",
-        GrantKind::Pool => "pool",
+        GrantKind::Model => "model",
         GrantKind::A2aCaller => "A2A caller",
         GrantKind::A2aAgent => "A2A agent",
     }
@@ -523,10 +523,10 @@ mod tests {
         };
         assert!(parse_grant(&body("tool", "*")).is_err());
         assert!(parse_grant(&body("skill", "brand*")).is_err());
-        assert!(parse_grant(&body("model", "gpt")).is_err());
+        assert!(parse_grant(&body("pool", "chat")).is_err());
         assert!(parse_grant(&body("tool", "  ")).is_err());
-        let ok = body("pool", " chat ");
-        assert_eq!(parse_grant(&ok).unwrap(), (GrantKind::Pool, "chat"));
+        let ok = body("model", " qwen ");
+        assert_eq!(parse_grant(&ok).unwrap(), (GrantKind::Model, "qwen"));
     }
 
     #[test]

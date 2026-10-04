@@ -338,7 +338,7 @@ mod tests {
 
     fn check_with(spec: Value, stage: Stage, live: &HashMap<String, Value>) -> Vec<SpecIssue> {
         let grants = GrantSet::new([
-            (GrantKind::Pool, "chat".to_string()),
+            (GrantKind::Model, "chat".to_string()),
             (GrantKind::A2aAgent, CARD.to_string()),
         ]);
         let agents: HashMap<String, bool> = live.keys().map(|k| (k.clone(), true)).collect();
@@ -349,7 +349,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: live,
-                voice_defaults: &Default::default(),
+                model_defaults: &Default::default(),
             },
             stage,
         )
@@ -365,7 +365,7 @@ mod tests {
 
     fn with_route(route: Value) -> Value {
         json!({
-            "main": { "pool": "chat", "instructions": { "orchestration": "Help." } },
+            "main": { "model": "chat", "instructions": { "orchestration": "Help." } },
             "state": {
                 "issue": { "type": "string", "set_by": ["llm"] },
                 "verified": { "type": "subject", "set_by": ["host"] }

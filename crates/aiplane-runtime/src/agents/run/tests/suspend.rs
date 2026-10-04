@@ -37,7 +37,7 @@ async fn world(pools: &[(&str, &str, &MockServer)], timeout: Duration) -> World 
 
 fn main_spec(tools: &[&str]) -> Value {
     json!({ "main": {
-        "pool": "support-pool",
+        "model": "support-model",
         "instructions": { "orchestration": "Help the visitor." },
         "tools": tools,
         "budget": { "rounds": 6 }
@@ -45,7 +45,7 @@ fn main_spec(tools: &[&str]) -> Value {
 }
 
 async fn support(world: &World, tools: &[&str]) -> String {
-    let mut grants = vec![(GrantKind::Pool, "support-pool")];
+    let mut grants = vec![(GrantKind::Model, "support-model")];
     grants.extend(tools.iter().map(|t| (GrantKind::Tool, *t)));
     let id = world.agent("support", &grants).await;
     world.publish(&id, &main_spec(tools)).await;
@@ -214,7 +214,7 @@ async fn a_secure_input_reaches_the_tool_and_nothing_else() {
 fn billing_spec_with_echo() -> Value {
     json!({
         "main": {
-            "pool": "billing-pool",
+            "model": "billing-model",
             "instructions": { "orchestration": "Issue the refund." },
             "tools": [ECHO],
             "budget": { "rounds": 4 }
@@ -227,7 +227,7 @@ fn billing_spec_with_echo() -> Value {
 fn refunds_spec(billing: &str) -> Value {
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Find out what the visitor needs, then forward it." },
             "budget": { "rounds": 6 }
         },
@@ -269,12 +269,12 @@ async fn a_paused_sub_agent_pauses_its_caller_and_one_staff_decision_resumes_bot
     let billing = world
         .agent(
             "billing",
-            &[(GrantKind::Pool, "billing-pool"), (GrantKind::Tool, ECHO)],
+            &[(GrantKind::Model, "billing-model"), (GrantKind::Tool, ECHO)],
         )
         .await;
     world.publish(&billing, &billing_spec_with_echo()).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     assert_eq!(world.issues(&support, &refunds_spec(&billing)).await, []);
     world.publish(&support, &refunds_spec(&billing)).await;

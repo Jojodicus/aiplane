@@ -149,22 +149,6 @@ pub struct Config {
     /// default is the safe one. See `outbound_guard`.
     #[serde(default)]
     pub network: NetworkConfig,
-    /// Which pool each of the agent setup's model choices (Fast / Balanced /
-    /// Thorough) stands for. See [`AgentsConfig`].
-    #[serde(default)]
-    pub agents: AgentsConfig,
-}
-
-/// The pools behind the agent setup's three model choices
-/// (`docs/agents.md` "What #116 built"). A manager picks "Fast",
-/// "Balanced" or "Thorough"; an admin decides once which pool each one is.
-/// An unset tier is not offered.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentsConfig {
-    pub pool_fast: Option<String>,
-    pub pool_balanced: Option<String>,
-    pub pool_thorough: Option<String>,
 }
 
 /// What a URL someone other than the operator chose may reach.

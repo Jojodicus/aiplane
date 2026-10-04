@@ -33,7 +33,7 @@ CREATE TABLE system_principals (
 -- external agent whose card URL is `ref`.
 CREATE TABLE principal_grants (
     principal_id TEXT NOT NULL REFERENCES system_principals(id) ON DELETE CASCADE,
-    kind         TEXT NOT NULL CHECK (kind IN ('tool', 'connector', 'skill', 'rag_collection', 'pool', 'a2a_caller', 'a2a_agent')),
+    kind         TEXT NOT NULL CHECK (kind IN ('tool', 'connector', 'skill', 'rag_collection', 'model', 'a2a_caller', 'a2a_agent')),
     ref          TEXT NOT NULL,
     granted_by   TEXT NOT NULL,
     granted_at   TEXT NOT NULL,

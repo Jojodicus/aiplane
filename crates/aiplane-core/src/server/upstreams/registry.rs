@@ -32,6 +32,7 @@ use super::config::{
     BackendConfig, Compliance, FallbackConfig, PickerStrategy, PoolKind, UpstreamPoolConfig,
 };
 use super::profile::{BackendProfile, Detected};
+use crate::server::principal::GrantKind;
 
 /// A configured alias and its current state, for the read-only admin view.
 #[derive(Debug, Clone)]
@@ -647,11 +648,12 @@ pub struct PoolAccess {
     /// chosen by whoever issued it, and an admin's token that says "only
     /// these models" means it.
     pub allowed_models: Option<Arc<HashSet<String>>>,
-    /// A system principal's pool grants. `Some` replaces the group rule
-    /// entirely: only the named pools are reachable, an empty `allowed_groups`
-    /// does not count as open, and `is_admin` does not apply. `None` for
-    /// people, who go through their groups.
-    pub granted_pools: Option<Arc<HashSet<String>>>,
+    /// A system principal's model grants: model ids, backend aliases and
+    /// automatic-route aliases. `Some` replaces the group rule entirely —
+    /// every pool is open to it, `is_admin` does not apply, and only these
+    /// names route ([`Self::allows_model`]). An empty set reaches nothing.
+    /// `None` for people, who go through their groups.
+    pub granted_models: Option<Arc<HashSet<String>>>,
 }
 
 impl PoolAccess {
@@ -662,54 +664,63 @@ impl PoolAccess {
             role_ids: Vec::new(),
             is_admin: true,
             allowed_models: None,
-            granted_pools: None,
+            granted_models: None,
         }
     }
 
-    /// The access of a system principal: its pool grants and nothing else.
+    /// The access of a system principal: its model grants and nothing else.
     pub fn for_system(sp: &crate::server::principal::SystemPrincipal) -> Self {
-        let pools = sp
-            .grants
-            .refs(crate::server::principal::GrantKind::Pool)
+        Self::for_system_models(sp, sp.grants.refs(GrantKind::Model))
+    }
+
+    /// [`Self::for_system`], narrowed to `listed`: an agent run reaches only
+    /// the models its spec names *and* its principal was granted.
+    pub fn for_system_models<'a>(
+        sp: &crate::server::principal::SystemPrincipal,
+        listed: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let models = listed
+            .into_iter()
+            .filter(|m| sp.grants.has(GrantKind::Model, m))
             .map(str::to_string)
             .collect();
         Self {
             role_ids: Vec::new(),
             is_admin: false,
             allowed_models: None,
-            granted_pools: Some(Arc::new(pools)),
+            granted_models: Some(Arc::new(models)),
         }
     }
 
-    /// [`Self::for_system`], narrowed to `listed`: an agent run reaches only
-    /// the pools its spec names *and* its principal was granted. Narrowing
-    /// by pool, not by model, matters because routing goes by model: one
-    /// model name served by a self-hosted and a cloud pool would otherwise
-    /// reach both whenever both are granted.
-    pub fn for_system_pools<'a>(
-        sp: &crate::server::principal::SystemPrincipal,
-        listed: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
-        let listed: HashSet<&str> = listed.into_iter().collect();
-        let pools = sp
-            .grants
-            .refs(crate::server::principal::GrantKind::Pool)
-            .filter(|p| listed.contains(p))
-            .map(str::to_string)
-            .collect();
+    /// The access that routes an automatic route's chosen `targets`: the
+    /// calling token's allowlist no longer applies (it allowed the route's
+    /// alias, and the operator picked the targets), while a system
+    /// principal's grants are widened by exactly `targets` — never opened.
+    pub fn for_route_targets<'a>(&self, targets: impl IntoIterator<Item = &'a str>) -> Self {
+        let granted_models = self.granted_models.as_ref().map(|granted| {
+            let mut widened = (**granted).clone();
+            widened.extend(targets.into_iter().map(str::to_string));
+            Arc::new(widened)
+        });
         Self {
-            granted_pools: Some(Arc::new(pools)),
-            ..Self::for_system(sp)
+            allowed_models: None,
+            granted_models,
+            ..self.clone()
         }
     }
 
     /// Whether the calling token may use `model`. `true` for every caller
     /// without an allowlist, which is the default for every token.
     pub fn allows_model(&self, model: &str) -> bool {
-        match &self.allowed_models {
-            None => true,
-            Some(set) => set.contains(model),
-        }
+        let granted = self
+            .granted_models
+            .as_ref()
+            .is_none_or(|granted| granted.contains(model));
+        granted
+            && self
+                .allowed_models
+                .as_ref()
+                .is_none_or(|set| set.contains(model))
     }
 
     /// True when the caller carries a model allowlist at all — lets a handler
@@ -717,16 +728,14 @@ impl PoolAccess {
     /// without leaking which models exist to a caller that has no business
     /// knowing.
     pub fn is_model_restricted(&self) -> bool {
-        self.allowed_models.is_some()
+        self.allowed_models.is_some() || self.granted_models.is_some()
     }
 
     /// Whether the caller may see/route to `pool`: unrestricted pools are open
     /// to all; admins bypass; otherwise the caller must hold a listed group.
+    /// A system principal passes every pool: its model grants decide instead.
     pub fn allows(&self, pool: &Pool) -> bool {
-        if let Some(granted) = &self.granted_pools {
-            return granted.contains(&pool.name);
-        }
-        if self.is_admin || pool.allowed_groups.is_empty() {
+        if self.granted_models.is_some() || self.is_admin || pool.allowed_groups.is_empty() {
             return true;
         }
         pool.allowed_groups
@@ -1748,6 +1757,21 @@ impl UpstreamRegistry {
             .or_else(|| pool.voices.get(""))
             .cloned();
         Some((model, voice))
+    }
+
+    /// The voice the speech pool serving `model` maps `language` to (its
+    /// default voice when the language has none), if a speech pool serves
+    /// `model` and maps anything.
+    pub fn speech_voice(&self, model: &str, language: &str) -> Option<String> {
+        let d = self.data();
+        let pool = d.pools.values().find(|p| {
+            p.kind == PoolKind::Speech
+                && (p.configured_models.iter().any(|c| c == model) || p.serves_model(model))
+        })?;
+        pool.voices
+            .get(language)
+            .or_else(|| pool.voices.get(""))
+            .cloned()
     }
 
     /// Every distinct voice advertised by the speech pools `access` permits,
@@ -3570,7 +3594,7 @@ mod tests {
     }
 
     #[test]
-    fn a_system_principal_reaches_only_its_granted_pools_open_or_not() {
+    fn a_system_principal_reaches_only_its_granted_models_whatever_the_pool_groups() {
         use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
         let mut vip = pool_config(
             PoolKind::Chat,
@@ -3595,22 +3619,24 @@ mod tests {
             id: "p".into(),
             name: "ci".into(),
             grants: Arc::new(GrantSet::new(
-                grants.iter().map(|g| (GrantKind::Pool, g.to_string())),
+                grants.iter().map(|g| (GrantKind::Model, g.to_string())),
             )),
         };
 
         let nothing = PoolAccess::for_system(&principal(&[]));
         assert!(reg.all_models_for(&nothing).is_empty());
-        assert!(matches!(
-            reg.acquire_for_access("open-model", PoolKind::Chat, &nothing),
-            Err(RouteError::UnknownModel(_))
-        ));
+        assert!(
+            reg.acquire_for_access("open-model", PoolKind::Chat, &nothing)
+                .is_err(),
+            "an open pool is no grant"
+        );
 
-        let vip_only = PoolAccess::for_system(&principal(&["vip"]));
+        let vip_only = PoolAccess::for_system(&principal(&["vip-model"]));
         assert_eq!(reg.all_models_for(&vip_only), vec!["vip-model"]);
         assert!(
             reg.acquire_for_access("vip-model", PoolKind::Chat, &vip_only)
-                .is_ok()
+                .is_ok(),
+            "the grant replaces the pool's group rule"
         );
         assert!(
             reg.acquire_for_access("open-model", PoolKind::Chat, &vip_only)
@@ -3618,49 +3644,63 @@ mod tests {
         );
     }
 
-    /// The PII case: the same model on a self-hosted and a cloud pool, both
-    /// granted, and an agent whose spec names only the self-hosted one. A
-    /// route by model must never land on the cloud pool, and a listed pool
-    /// that is not granted stays out of reach.
     #[test]
-    fn an_agent_run_reaches_only_pools_both_granted_and_listed() {
+    fn an_agent_run_reaches_only_models_both_granted_and_listed() {
         use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
-        let pool = |b: &str| {
+        let reg = build(vec![(
+            "chat",
             pool_config(
                 PoolKind::Chat,
                 PickerStrategy::RoundRobin,
-                vec![backend(b, 16)],
-            )
-        };
-        let reg = build(vec![
-            ("self-hosted", pool("local-b")),
-            ("cloud", pool("cloud-b")),
-            ("spare", pool("spare-b")),
-        ]);
-        for p in ["self-hosted", "cloud", "spare"] {
-            seed_models(&reg, p, 0, &["shared-model"]);
-        }
+                vec![backend("b", 16)],
+            ),
+        )]);
+        seed_models(&reg, "chat", 0, &["main-model", "small-model", "spare-model"]);
         let principal = SystemPrincipal {
             id: "p".into(),
             name: "support".into(),
             grants: Arc::new(GrantSet::new(
-                ["self-hosted", "cloud"]
+                ["main-model", "small-model"]
                     .iter()
-                    .map(|g| (GrantKind::Pool, g.to_string())),
+                    .map(|g| (GrantKind::Model, g.to_string())),
             )),
         };
-        let run = PoolAccess::for_system_pools(&principal, ["self-hosted", "spare"]);
-        for _ in 0..6 {
-            let acquired = reg
-                .acquire_for_access("shared-model", PoolKind::Chat, &run)
-                .unwrap();
-            assert_eq!(acquired.backend().name, "local-b");
-        }
-        let nothing = PoolAccess::for_system_pools(&principal, ["spare"]);
+        let run = PoolAccess::for_system_models(&principal, ["main-model", "spare-model"]);
         assert!(
-            reg.acquire_for_access("shared-model", PoolKind::Chat, &nothing)
+            reg.acquire_for_access("main-model", PoolKind::Chat, &run)
+                .is_ok()
+        );
+        assert!(
+            reg.acquire_for_access("small-model", PoolKind::Chat, &run)
                 .is_err(),
-            "listing a pool is no grant"
+            "granted, but not this run's model"
+        );
+        assert!(
+            reg.acquire_for_access("spare-model", PoolKind::Chat, &run)
+                .is_err(),
+            "naming a model is no grant"
+        );
+    }
+
+    #[test]
+    fn an_automatic_route_target_widens_a_principal_by_exactly_the_target() {
+        use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+        let principal = SystemPrincipal {
+            id: "p".into(),
+            name: "support".into(),
+            grants: Arc::new(GrantSet::new([(GrantKind::Model, "auto".to_string())])),
+        };
+        let agent = PoolAccess::for_system(&principal).for_route_targets(["picked"]);
+        assert!(agent.allows_model("auto") && agent.allows_model("picked"));
+        assert!(!agent.allows_model("other"), "a target is no open door");
+
+        let token = PoolAccess {
+            allowed_models: Some(Arc::new(HashSet::from(["auto".to_string()]))),
+            ..PoolAccess::default()
+        };
+        assert!(
+            token.for_route_targets(["picked"]).allows_model("other"),
+            "a person's token allowlist stops at the route, as it always did"
         );
     }
 

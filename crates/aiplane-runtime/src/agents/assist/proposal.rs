@@ -319,7 +319,8 @@ pub fn changes_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "display": { "type": "string", "description": "the agent's name as visitors see it" },
-            "pool": { "type": "string", "description": "a chat pool from list_grantable `pools`" },
+            "model": { "type": "string",
+                       "description": "a chat model from list_grantable `models.chat`" },
             "task": { "type": "string" },
             "tone": tone_schema(),
             "scope": object(json!({

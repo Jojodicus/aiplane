@@ -983,7 +983,7 @@ impl AppState {
             role_ids,
             is_admin,
             allowed_models: None,
-            granted_pools: None,
+            granted_models: None,
         }
     }
 
@@ -1006,7 +1006,7 @@ impl AppState {
     }
 
     /// [`Self::pool_access_for`] for any acting principal: a system principal
-    /// reaches exactly its granted pools.
+    /// reaches exactly its granted models.
     pub fn pool_access_for_principal(
         &self,
         principal: &Principal,

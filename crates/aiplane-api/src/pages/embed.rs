@@ -536,7 +536,10 @@ pub async fn send_message(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(err) => return internal(err),
     }
 
-    let model = v.live.spec.main_pool().unwrap_or_default().to_string();
+    let spec = v.live.spec.agent().unwrap_or(AgentSpec::empty());
+    let model = aiplane_runtime::agents::defaults::main_model(&state, spec)
+        .await
+        .unwrap_or_default();
     if let Err(err) = chat::create_user_turn(&state.db, &session_id, &user_turn_id, text).await {
         return internal(err);
     }

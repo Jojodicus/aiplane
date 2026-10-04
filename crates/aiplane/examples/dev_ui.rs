@@ -782,7 +782,7 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
 
     let billing_spec = serde_json::json!({
         "main": {
-            "pool": "chat",
+            "model": "demo-model",
             "instructions": { "orchestration": "Explain the customer's open invoices." },
             "tools": []
         },
@@ -806,12 +806,13 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
     .await?
     .ok_or_else(|| anyhow::anyhow!("the dev billing agent already exists"))?;
     let billing_id = &billing.principal.id;
-    system_principals::add_grant(&state.db, billing_id, GrantKind::Pool, "chat", "dev").await?;
+    system_principals::add_grant(&state.db, billing_id, GrantKind::Model, "demo-model", "dev")
+        .await?;
     agents::publish(&state.db, billing_id, &billing_spec, "dev").await?;
 
     let spec = serde_json::json!({
         "main": {
-            "pool": "chat",
+            "model": "demo-model",
             "instructions": { "orchestration": "Answer visitors briefly and politely. \
                 Verify the visitor's email before forwarding an invoice question." },
             "tools": []
@@ -828,7 +829,7 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
         "profile": { "color": "#0b6bcb" },
         "publish": { "voice": {
             "input": true, "output": true,
-            "transcription_pool": "voice", "speech_pool": "speech"
+            "transcription_model": "demo-whisper", "speech_model": "demo-tts"
         } },
         "router": { "kind": "rules", "order": ["billing", "staff"] },
         "routes": {
@@ -860,10 +861,9 @@ async fn seed_embed_agent(state: &RamaState, erp_url: &str) -> anyhow::Result<()
     .await?
     .ok_or_else(|| anyhow::anyhow!("the dev embed agent already exists"))?;
     let id = &agent.principal.id;
-    system_principals::add_grant(&state.db, id, GrantKind::Pool, "chat", "dev").await?;
     system_principals::add_grant(&state.db, id, GrantKind::Connector, "erp", "dev").await?;
-    for voice_pool in ["voice", "speech"] {
-        system_principals::add_grant(&state.db, id, GrantKind::Pool, voice_pool, "dev").await?;
+    for model in ["demo-model", "demo-whisper", "demo-tts"] {
+        system_principals::add_grant(&state.db, id, GrantKind::Model, model, "dev").await?;
     }
     agents::publish(&state.db, id, &spec, "dev").await?;
     agent_responders::add(&state.db, id, SubjectKind::User, "eng", "dev").await?;

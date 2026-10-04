@@ -683,7 +683,7 @@ impl SessionDriver for OpenAiDriver {
                     aiplane_core::server::upstreams::PoolKind::Chat,
                 )
                 .unwrap_or(routing_model);
-            let access = policy.compaction_pools();
+            let access = policy.compaction_access();
             let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(
@@ -1038,7 +1038,7 @@ async fn run_one_turn(
         ..d.tool_ctx.clone()
     };
 
-    let access = policy.pools(d);
+    let access = policy.access(d);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;
@@ -1076,26 +1076,22 @@ async fn run_one_turn(
         "messages": &messages,
         "tools": if routing_has_tools { serde_json::json!([{}]) } else { serde_json::json!([]) },
     });
-    let automatic_decision = d
-        .state
-        .automatic_router
-        .select(
-            &ctx.model,
-            &routing_state,
-            &access,
-            Some(
-                aiplane_core::server::automatic_routing::AutomaticRouteAffinity {
-                    principal: d.tool_ctx.principal.subject_id(),
-                    session: &ctx.session_id,
-                },
-            ),
-        )
-        .await
-        .map_err(upstream_err)?;
-    let routing_model = automatic_decision
-        .as_ref()
-        .map(|decision| decision.effective_target.as_str())
-        .unwrap_or(&ctx.model);
+    let target = crate::server::model_route::route_target(
+        &d.state,
+        &ctx.model,
+        &routing_state,
+        &access,
+        Some(
+            aiplane_core::server::automatic_routing::AutomaticRouteAffinity {
+                principal: d.tool_ctx.principal.subject_id(),
+                session: &ctx.session_id,
+            },
+        ),
+    )
+    .await
+    .map_err(upstream_err)?;
+    let (routing_model, access, automatic_decision) =
+        (target.model.as_str(), target.access, target.decision);
     match crate::content_guard::evaluate_for_model(&d.state, &routing_state, routing_model, &access)
         .await
         .map_err(upstream_err)?

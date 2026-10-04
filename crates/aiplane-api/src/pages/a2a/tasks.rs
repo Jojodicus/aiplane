@@ -25,6 +25,7 @@ use aiplane_runtime::agents::embed::{
     self as embed_rt, Admission, Admitted, OpenedTurn, Refusal, TurnWork,
 };
 use aiplane_runtime::agents::resume::{AgentResume, AgentResumeError, ResumedBy, claim};
+use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::suspend::ResumeRefused;
 
@@ -363,7 +364,7 @@ async fn ensure_idle(call: &Call, session_id: &str) -> Result<(), RpcError> {
 }
 
 /// The version the context is pinned to (the live one for a new context)
-/// and the pool its main run's model comes from.
+/// and the model its main run uses.
 async fn turn_model(call: &Call, session_id: &str) -> Result<(i64, String), RpcError> {
     let state = &call.state;
     let agent = &call.served.agent.principal.id;
@@ -372,12 +373,17 @@ async fn turn_model(call: &Call, session_id: &str) -> Result<(i64, String), RpcE
         .map_err(RpcError::internal)?
         .and_then(|run| run.agent_version)
         .unwrap_or(call.served.live_version);
-    let model = state
+    let compiled = state
         .agent_specs
         .version(&state.db, agent, version)
         .await
-        .map_err(RpcError::internal)?
-        .and_then(|spec| spec.main_pool().map(str::to_string))
+        .map_err(RpcError::internal)?;
+    let spec = compiled
+        .as_deref()
+        .and_then(|c| c.agent().ok())
+        .unwrap_or(AgentSpec::empty());
+    let model = aiplane_runtime::agents::defaults::main_model(state, spec)
+        .await
         .unwrap_or_default();
     Ok((version, model))
 }

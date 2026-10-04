@@ -119,13 +119,9 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         Ok(value) => value,
         Err(response) => return response,
     };
-    let access = if automatic_decision.is_some() {
-        aiplane_core::server::upstreams::PoolAccess {
-            allowed_models: None,
-            ..access
-        }
-    } else {
-        access
+    let access = match &automatic_decision {
+        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        None => access,
     };
     if let Some(response) =
         proxy::enforce_content_guard(&state, &translated.body, &routing_model, &access).await
@@ -280,13 +276,9 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(value) => value,
         Err(response) => return response,
     };
-    let access = if automatic_decision.is_some() {
-        aiplane_core::server::upstreams::PoolAccess {
-            allowed_models: None,
-            ..access
-        }
-    } else {
-        access
+    let access = match &automatic_decision {
+        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        None => access,
     };
     let with_route =
         |response| proxy::with_automatic_route_headers(response, automatic_decision.as_ref());

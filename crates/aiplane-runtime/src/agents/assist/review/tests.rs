@@ -48,7 +48,7 @@ fn candidates() -> Candidates {
             id: "billing-agent".into(),
             name: "Billing".into(),
         }],
-        pools: vec!["main-pool".into(), "fast-pool".into()],
+        models: vec!["main-model".into(), "fast-model".into()],
     }
 }
 
@@ -62,7 +62,7 @@ struct World {
 impl World {
     fn new() -> Self {
         Self {
-            grants: GrantSet::new([(GrantKind::Pool, "main-pool".to_string())]),
+            grants: GrantSet::new([(GrantKind::Model, "main-model".to_string())]),
             agents: HashMap::from([
                 (AGENT.to_string(), false),
                 ("billing-agent".to_string(), true),
@@ -175,7 +175,7 @@ fn apply(base: &Value, steps: &Steps) -> Value {
 #[test]
 fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
     let w = World::new();
-    let base = json!({ "main": { "pool": "main-pool" } });
+    let base = json!({ "main": { "model": "main-model" } });
     let out = review(&good(), &base, &w.ctx());
     assert!(out.dropped.is_empty(), "{:#?}", out.dropped);
     let s = &out.steps;
@@ -226,7 +226,7 @@ fn a_good_proposal_maps_to_a_draft_that_passes_the_validator() {
         grants: &granted,
         agents: &w.agents,
         live_specs: &w.live,
-        voice_defaults: &Default::default(),
+        model_defaults: &Default::default(),
     };
     spec::check(&draft, &ctx, Stage::Draft).unwrap();
     spec::check(&draft, &ctx, Stage::Publish).unwrap();
@@ -587,10 +587,10 @@ fn the_schema_offers_exactly_the_managers_abilities_and_targets() {
 #[test]
 fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
     let w = World::new();
-    let base = json!({ "main": { "pool": "main-pool" } });
+    let base = json!({ "main": { "model": "main-model" } });
     let changes = json!({
         "display": "  Harald ",
-        "pool": "fast-pool",
+        "model": "fast-model",
         "task": "You answer questions about Acme orders.",
         "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
         "slots": [{ "name": "Order Number", "label": "The order number", "type": "text",
@@ -601,16 +601,16 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
     let out = apply_changes(&changes, &base, &w.ctx());
 
     assert_eq!(out.display.as_deref(), Some("Harald"));
-    assert_eq!(out.pool.as_deref(), Some("fast-pool"));
+    assert_eq!(out.model.as_deref(), Some("fast-model"));
     assert_eq!(
         out.grants,
         [
-            (GrantKind::Pool, "fast-pool".to_string()),
+            (GrantKind::Model, "fast-model".to_string()),
             (GrantKind::Tool, "get_current_timestamp".to_string()),
         ]
     );
     assert_eq!(out.draft["profile"]["display"], "Harald");
-    assert_eq!(out.draft["main"]["pool"], "fast-pool");
+    assert_eq!(out.draft["main"]["model"], "fast-model");
     assert_eq!(out.draft["main"]["tools"], json!(["get_current_timestamp"]));
     assert_eq!(out.draft["state"]["order_number"]["type"], "string");
     assert_eq!(
@@ -636,7 +636,7 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
         grants: &granted,
         agents: &w.agents,
         live_specs: &w.live,
-        voice_defaults: &Default::default(),
+        model_defaults: &Default::default(),
     };
     spec::check(&out.draft, &ctx, Stage::Draft).unwrap();
 }
@@ -648,7 +648,7 @@ fn an_architects_changes_become_the_draft_and_the_grants_it_needs() {
 #[test]
 fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() {
     let w = World::new();
-    let base = json!({ "main": { "pool": "main-pool" } });
+    let base = json!({ "main": { "model": "main-model" } });
     let changes = json!({
         "task": "You answer questions about Acme orders.",
         "slots": [
@@ -686,7 +686,7 @@ fn an_architects_hand_offs_and_slots_are_written_the_way_the_setup_reads_them() 
             grants: &w.grants,
             agents: &w.agents,
             live_specs: &w.live,
-            voice_defaults: &Default::default(),
+            model_defaults: &Default::default(),
         },
         Stage::Draft,
     )
@@ -741,7 +741,7 @@ fn a_hand_off_waiting_for_the_identity_keeps_it_when_the_proposal_brings_the_che
 #[test]
 fn a_new_detail_joins_the_gate_of_a_hand_off_waiting_for_every_detail() {
     let w = World::new();
-    let mut base = json!({ "main": { "pool": "main-pool" }, "state": {
+    let mut base = json!({ "main": { "model": "main-model" }, "state": {
         "company": { "type": "string", "max_length": 200, "set_by": ["llm"], "order": 0 } } });
     super::super::handoffs::write(
         &mut base,
@@ -774,18 +774,18 @@ fn a_new_detail_joins_the_gate_of_a_hand_off_waiting_for_every_detail() {
 #[test]
 fn an_architect_cannot_give_an_agent_what_the_person_may_not_grant() {
     let w = World::new();
-    let base = json!({ "main": { "pool": "main-pool" } });
+    let base = json!({ "main": { "model": "main-model" } });
     let changes = json!({
-        "pool": "admin-only-pool",
+        "model": "admin-only-model",
         "abilities": [{ "id": "run_in_sandbox", "why": "run code" }],
     });
     let out = apply_changes(&changes, &base, &w.ctx());
 
     assert!(out.grants.is_empty(), "{:?}", out.grants);
     assert_eq!(out.draft, base);
-    assert_eq!(out.pool, None);
+    assert_eq!(out.model, None);
     let steps: Vec<&str> = out.suggestion.dropped.iter().map(|d| d.step).collect();
-    assert_eq!(steps, ["pool", "abilities"]);
+    assert_eq!(steps, ["model", "abilities"]);
     assert!(
         out.suggestion.dropped[1]
             .reason

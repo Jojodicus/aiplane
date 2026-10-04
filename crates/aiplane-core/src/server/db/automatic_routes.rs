@@ -46,6 +46,15 @@ pub struct AutomaticRouteDecisionRow {
 }
 
 impl AutomaticRoute {
+    /// Every model the route may send a request to: its candidates, its
+    /// fallback and its selector.
+    pub fn members(&self) -> impl Iterator<Item = &str> {
+        self.candidates
+            .iter()
+            .map(|c| c.target.as_str())
+            .chain([self.fallback_target.as_str(), self.selector_model.as_str()])
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.alias.trim().is_empty() {
             return Err("automatic route alias must not be empty".into());

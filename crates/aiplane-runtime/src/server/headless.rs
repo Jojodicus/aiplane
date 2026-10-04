@@ -1168,7 +1168,7 @@ mod tests {
         let grants = tools
             .iter()
             .map(|tool| (GrantKind::Tool, *tool))
-            .chain([(GrantKind::Pool, "pool")]);
+            .chain([(GrantKind::Model, MODEL)]);
         for (kind, reference) in grants {
             sp::add_grant(&state.db, &row.id, kind, reference, "u1")
                 .await

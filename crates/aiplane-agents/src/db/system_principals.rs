@@ -545,7 +545,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            add_grant(&pool, &p.id, GrantKind::Pool, "chat", "alice")
+            add_grant(&pool, &p.id, GrantKind::Model, "chat", "alice")
                 .await
                 .unwrap()
         );
@@ -568,7 +568,7 @@ mod tests {
         );
         let loaded = load_active(&pool, &p.id).await.unwrap().unwrap();
         assert!(!loaded.grants.has(GrantKind::Tool, "time"));
-        assert!(loaded.grants.has(GrantKind::Pool, "chat"));
+        assert!(loaded.grants.has(GrantKind::Model, "chat"));
 
         let kinds: Vec<(String, Option<String>)> = agent_audit::for_principal(&pool, &p.id)
             .await
@@ -701,7 +701,7 @@ mod tests {
         let p = principal(&pool, "ci").await;
         let err = sqlx::query(
             "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at)
-             VALUES (?, 'model', 'x', 'a', '2026-01-01T00:00:00Z')",
+             VALUES (?, 'pool', 'x', 'a', '2026-01-01T00:00:00Z')",
         )
         .bind(&p.id)
         .execute(&pool)

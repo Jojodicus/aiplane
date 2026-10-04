@@ -2,18 +2,20 @@
 // Copyright (C) 2026 croit GmbH
 
 //! One model call whose answer is a JSON object of a given shape, on one
-//! pool ([`ask_json`]): the mechanism behind the route classifier
-//! ([`super::router::PoolClassifier`]), the topic guard
-//! ([`super::topic_guard`]) and the prompt assistant ([`super::assist`]).
+//! model ([`ask_json`]): the mechanism behind the route classifier
+//! ([`super::router::ModelClassifier`]), the topic guard
+//! ([`super::topic_guard`]), the evaluation judge
+//! ([`super::eval_judge`]) and the prompt assistant ([`super::assist`]).
 //!
 //! The answer is constrained twice: the request's `response_format` names
 //! the schema (for a choice, the allowed values as an enum), and the caller
 //! still checks what comes back in code, because a backend may ignore the
-//! format. The call reaches only the pool it is given, under the access it
-//! is given. Whose usage row it is, and where it is recorded, is the
-//! caller's: [`PoolChoice`] makes it a usage row of the agent's run (so it
-//! counts against the owner's budget and the pool's limits) and an
-//! `llm_exchange` in its activity log.
+//! format. The model is resolved the way a chat turn resolves it — an
+//! automatic route's alias by its selector ([`route_target`]) — and reached
+//! under the access it is given. Whose usage row it is, and where it is
+//! recorded, is the caller's: [`ModelCall`] makes it a usage row of the
+//! agent's run (so it counts against the owner's budget and the model's
+//! limits) and an `llm_exchange` in its activity log.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,8 +28,8 @@ use aiplane_core::server::run_chain::RunChain;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 use serde_json::{Value, json};
 
-use super::profile::pool_model;
 use crate::rama_server::state::RamaState;
+use crate::server::model_route::route_target;
 use crate::server::tools::ToolContext;
 
 const CHOICE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,10 +53,10 @@ pub struct Choice {
     pub tokens: u64,
 }
 
-/// A pool of an agent's, ready to be asked.
-pub struct PoolChoice {
+/// A model of an agent's, ready to be asked.
+pub struct ModelCall {
     state: Arc<RamaState>,
-    pool: String,
+    model: String,
     access: PoolAccess,
     principal: SystemPrincipal,
     run: Option<Arc<RunChain>>,
@@ -62,18 +64,19 @@ pub struct PoolChoice {
     log: ToolContext,
 }
 
-impl PoolChoice {
-    /// `principal`'s pool `pool`, asked on behalf of the run `log` belongs
-    /// to.
+impl ModelCall {
+    /// `principal`'s model `model`, asked on behalf of the run `log`
+    /// belongs to. It reaches the model only when the principal holds a
+    /// grant on it.
     pub fn new(
         state: Arc<RamaState>,
-        pool: &str,
+        model: &str,
         principal: &SystemPrincipal,
         log: &ToolContext,
     ) -> Self {
         Self {
-            access: PoolAccess::for_system_pools(principal, [pool]),
-            pool: pool.to_string(),
+            access: PoolAccess::for_system_models(principal, [model]),
+            model: model.to_string(),
             principal: principal.clone(),
             run: log.agent.as_ref().map(|a| a.chain().clone()),
             log: log.clone(),
@@ -81,15 +84,15 @@ impl PoolChoice {
         }
     }
 
-    pub fn pool(&self) -> &str {
-        &self.pool
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     pub async fn ask(&self, question: Question<'_>) -> Choice {
         let field = question.field;
         let exchange = ask_json(
             &self.state,
-            &self.pool,
+            &self.model,
             &self.access,
             &JsonQuestion {
                 instructions: question.instructions,
@@ -125,7 +128,6 @@ impl PoolChoice {
     ) {
         let mut detail = json!({
             "purpose": question.purpose,
-            "pool": self.pool,
             "model": exchange.model,
             "backend": exchange.backend,
             "request": exchange.request,
@@ -231,12 +233,12 @@ impl JsonExchange {
     }
 }
 
-/// Ask pool `pool`, under `access`, for a JSON object matching
+/// Ask model `model`, under `access`, for a JSON object matching
 /// `question.schema`. The schema is a request, not a guarantee — a backend
 /// may ignore `response_format` — so the caller still checks what it reads.
 pub async fn ask_json(
     state: &RamaState,
-    pool: &str,
+    model: &str,
     access: &PoolAccess,
     question: &JsonQuestion<'_>,
 ) -> JsonExchange {
@@ -250,31 +252,39 @@ pub async fn ask_json(
         latency_ms: 0,
         answer: Err(String::new()),
     };
-    exchange.answer = call(state, pool, access, question, &mut exchange).await;
+    exchange.answer = call(state, model, access, question, &mut exchange).await;
     exchange.latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     exchange
 }
 
 async fn call(
     state: &RamaState,
-    pool: &str,
+    model: &str,
     access: &PoolAccess,
     question: &JsonQuestion<'_>,
     exchange: &mut JsonExchange,
 ) -> Result<Value, String> {
-    let model = pool_model(state, pool, access)
-        .ok_or_else(|| format!("pool `{pool}` serves no model it may use"))?;
+    let messages = json!([
+        {"role": "system", "content": question.instructions},
+        {"role": "user", "content": question.input},
+    ]);
+    let target = route_target(
+        state,
+        model,
+        &json!({ "messages": messages, "tools": [] }),
+        access,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let acquired = state
         .upstreams
-        .route_access(&model, PoolKind::Chat, access)
+        .route_access(&target.model, PoolKind::Chat, &target.access)
         .map_err(|e| e.to_string())?;
     let backend = acquired.backend();
     let body = json!({
         "model": acquired.resolved_model(),
-        "messages": [
-            {"role": "system", "content": question.instructions},
-            {"role": "user", "content": question.input},
-        ],
+        "messages": messages,
         "temperature": question.temperature,
         "stream": false,
         // A reasoning model can spend the whole answer thinking and return no
@@ -285,7 +295,7 @@ async fn call(
             "json_schema": { "name": question.name, "strict": true, "schema": question.schema },
         },
     });
-    exchange.model = Some(model);
+    exchange.model = Some(target.model);
     exchange.backend = Some(backend.name.clone());
     exchange.request = body.clone();
     let mut req = state

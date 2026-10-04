@@ -11,12 +11,12 @@
 //! check it again. So a scenario that talks the model into proposing
 //! anything at all can at most produce an offer the manager sees.
 //!
-//! **A manager's call, not an agent run.** The call runs on a pool the
+//! **A manager's call, not an agent run.** The call runs on a model the
 //! manager may use, under the manager's own spend limits, and is a usage
 //! row of the manager's (`UsageSource::Chat`, like the rest of the session
 //! UI). It is in no conversation chain; the agent's own chain gets one
 //! `assist_suggested` event per call with who asked, the scenario (the
-//! manager's own words, kept for the audit), the pool, model, token counts
+//! manager's own words, kept for the audit), the model, token counts
 //! and which steps were offered or dropped.
 
 use std::time::Duration;
@@ -29,13 +29,13 @@ use aiplane_core::server::db::users::User;
 use aiplane_core::server::limits::LimitExceeded;
 use aiplane_core::server::principal::PrincipalKind;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
+use crate::server::model_choices;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::audit::{self, LogError};
-use super::pool_choice::{JsonExchange, JsonQuestion, ask_json};
-use super::profile::pool_model;
+use super::model_call::{JsonExchange, JsonQuestion, ask_json};
 use crate::rama_server::state::RamaState;
 
 pub mod handoffs;
@@ -114,9 +114,9 @@ pub struct Candidates {
     pub abilities: Vec<Ability>,
     pub knowledge: Vec<Knowledge>,
     pub agents: Vec<Target>,
-    /// The chat pools this manager may use and grant, for an architect's
-    /// model choice. The suggestion's schema does not offer a pool.
-    pub pools: Vec<String>,
+    /// The chat models this manager may use and grant, for an architect's
+    /// model choice. The suggestion's schema does not offer a model.
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]
@@ -142,13 +142,13 @@ pub enum AssistError {
     #[error("{0}")]
     Input(String),
     #[error(
-        "pool `{0}` is not a chat pool you may use — leave `pool` out to let the assistant pick \
-         one, or name one listed under `pools` in GET /api/v0/agent-resources"
+        "model `{0}` is not a chat model you may use — leave `model` out to let the assistant \
+         pick one, or name one listed under `models.chat` in GET /api/v0/agent-resources"
     )]
-    PoolNotAllowed(String),
+    ModelNotAllowed(String),
     #[error(
-        "none of the chat pools you may use serves a model right now, so the assistant cannot \
-         run — try again shortly, or ask an admin which pools your groups may use"
+        "none of the chat models you may use is served right now, so the assistant cannot run \
+         — try again shortly, or ask an admin which models your groups may use"
     )]
     NoModel,
     #[error(
@@ -163,7 +163,7 @@ pub enum AssistError {
         .0.retry_after_secs
     )]
     OverBudget(LimitExceeded),
-    #[error("the assistant's model call failed: {0} — try again, or pick another `pool`")]
+    #[error("the assistant's model call failed: {0} — try again, or pick another `model`")]
     Model(String),
     #[error(transparent)]
     Log(#[from] LogError),
@@ -195,7 +195,6 @@ fn rate_window(per: SignedDuration) -> String {
 pub struct Suggested {
     #[serde(flatten)]
     pub suggestion: Suggestion,
-    pub pool: String,
     pub model: String,
     pub usage: Value,
 }
@@ -205,7 +204,6 @@ pub struct ImprovedText {
     pub field: ImproveField,
     pub suggestion: String,
     pub why: String,
-    pub pool: String,
     pub model: String,
     pub usage: Value,
 }
@@ -216,7 +214,7 @@ pub struct SuggestRequest<'a> {
     pub template: Option<&'a str>,
     /// The draft the manager is editing: theirs, or the stored one.
     pub base: &'a Value,
-    pub pool: Option<&'a str>,
+    pub model: Option<&'a str>,
 }
 
 /// The manager asking, about which agent.
@@ -259,8 +257,8 @@ impl Asker<'_> {
                  template's id"
             )));
         }
-        let draft_pool = request.base.pointer("/main/pool").and_then(Value::as_str);
-        let (pool, access) = self.admit(request.pool, draft_pool).await?;
+        let draft_model = request.base.pointer("/main/model").and_then(Value::as_str);
+        let (model, access) = self.admit(request.model, draft_model).await?;
         let input = proposal::suggest_input(
             request.scenario,
             request.template,
@@ -269,7 +267,7 @@ impl Asker<'_> {
         );
         let exchange = ask_json(
             self.state,
-            &pool,
+            &model,
             &access,
             &JsonQuestion {
                 instructions: proposal::SUGGEST_INSTRUCTIONS,
@@ -296,12 +294,11 @@ impl Asker<'_> {
             detail["offered"] = json!(s.steps.offered());
             detail["dropped"] = json!(s.dropped);
         }
-        self.record(&pool, &exchange, detail).await?;
+        self.record(&exchange, detail).await?;
         let suggestion = suggestion.ok_or_else(|| model_error(&exchange))?;
         Ok(Suggested {
             suggestion,
-            pool,
-            model: exchange.model.clone().unwrap_or_default(),
+            model: exchange.model.clone().unwrap_or(model),
             usage: usage_of(&exchange),
         })
     }
@@ -311,16 +308,16 @@ impl Asker<'_> {
         &self,
         field: ImproveField,
         text: &str,
-        requested_pool: Option<&str>,
+        requested_model: Option<&str>,
         draft: &Value,
     ) -> Result<ImprovedText, AssistError> {
         require_text(text, "text", MAX_IMPROVE_CHARS)?;
-        let draft_pool = draft.pointer("/main/pool").and_then(Value::as_str);
-        let (pool, access) = self.admit(requested_pool, draft_pool).await?;
+        let draft_model = draft.pointer("/main/model").and_then(Value::as_str);
+        let (model, access) = self.admit(requested_model, draft_model).await?;
         let input = json!({ "field": proposal::improve_purpose(field), "text": text }).to_string();
         let exchange = ask_json(
             self.state,
-            &pool,
+            &model,
             &access,
             &JsonQuestion {
                 instructions: proposal::IMPROVE_INSTRUCTIONS,
@@ -349,7 +346,6 @@ impl Asker<'_> {
                     })
             });
         self.record(
-            &pool,
             &exchange,
             json!({
                 "action": "improve",
@@ -364,24 +360,21 @@ impl Asker<'_> {
             field,
             suggestion: improved.suggestion.trim().to_string(),
             why: improved.why.trim().to_string(),
-            pool,
-            model: exchange.model.clone().unwrap_or_default(),
+            model: exchange.model.clone().unwrap_or(model),
             usage: usage_of(&exchange),
         })
     }
 
-    /// The pool to ask, once the manager's rate and spend limits allow a
-    /// call: `requested` if they may use it, else the draft's `main.pool`
-    /// if they may, else the agents' chat default for them
-    /// ([`super::defaults::chat_pool`]: the admin's "Balanced" choice, else
-    /// the gateway's default chat model).
+    /// The model to ask, once the manager's rate and spend limits allow a
+    /// call: `requested` if they may use it, else the draft's `main.model`
+    /// if they may, else their default chat model ([`choose_model`]).
     async fn admit(
         &self,
         requested: Option<&str>,
-        draft_pool: Option<&str>,
+        draft_model: Option<&str>,
     ) -> Result<(String, PoolAccess), AssistError> {
         let access = self.state.pool_access_for(&self.user.roles);
-        let (pool, model) = choose_pool(self.state, &access, requested, draft_pool).await?;
+        let model = choose_model(self.state, &access, requested, draft_model).await?;
         let window = Window {
             scope: RateScope::Manager,
             rate: ASSIST_RATE,
@@ -403,7 +396,7 @@ impl Asker<'_> {
             )
             .await
             .map_err(AssistError::OverBudget)?;
-        Ok((pool, access))
+        Ok((model, access))
     }
 
     fn meter(&self, exchange: &JsonExchange) {
@@ -421,13 +414,7 @@ impl Asker<'_> {
         }
     }
 
-    async fn record(
-        &self,
-        pool: &str,
-        exchange: &JsonExchange,
-        mut detail: Value,
-    ) -> Result<(), AssistError> {
-        detail["pool"] = json!(pool);
+    async fn record(&self, exchange: &JsonExchange, mut detail: Value) -> Result<(), AssistError> {
         detail["model"] = json!(exchange.model);
         detail["usage"] = usage_of(exchange);
         detail["latency_ms"] = json!(exchange.latency_ms);
@@ -464,30 +451,31 @@ fn usage_of(exchange: &JsonExchange) -> Value {
     })
 }
 
-/// See [`Asker::admit`]; the pool and the model it would serve.
-pub async fn choose_pool(
+/// The chat model a manager with `access` asks: `requested` if it is one of
+/// the models they may use (the chat picker's list), else `draft_model` if
+/// it is, else the first of that list — the gateway's default chat model
+/// when they may use it.
+pub async fn choose_model(
     state: &RamaState,
     access: &PoolAccess,
     requested: Option<&str>,
-    draft_pool: Option<&str>,
-) -> Result<(String, String), AssistError> {
-    let with_model = |pool: &str| pool_model(state, pool, access).map(|m| (pool.to_string(), m));
-    if let Some(pool) = requested {
-        let usable = state
-            .upstreams
-            .pools()
-            .into_iter()
-            .any(|p| p.name == pool && p.kind == PoolKind::Chat && access.allows(&p));
-        if !usable {
-            return Err(AssistError::PoolNotAllowed(pool.to_string()));
-        }
-        return with_model(pool).ok_or(AssistError::NoModel);
-    }
-    if let Some(found) = draft_pool.and_then(with_model) {
-        return Ok(found);
-    }
-    super::defaults::chat_pool(state, access)
+    draft_model: Option<&str>,
+) -> Result<String, AssistError> {
+    let offered: Vec<String> = model_choices::offered(state, PoolKind::Chat, access)
         .await
-        .map(|d| (d.pool, d.model))
-        .ok_or(AssistError::NoModel)
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    let usable = |model: &str| offered.iter().any(|m| m == model);
+    if let Some(model) = requested {
+        return if usable(model) {
+            Ok(model.to_string())
+        } else {
+            Err(AssistError::ModelNotAllowed(model.to_string()))
+        };
+    }
+    if let Some(model) = draft_model.filter(|m| usable(m)) {
+        return Ok(model.to_string());
+    }
+    offered.into_iter().next().ok_or(AssistError::NoModel)
 }

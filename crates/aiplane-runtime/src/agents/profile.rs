@@ -28,9 +28,9 @@ use std::sync::Arc;
 
 use aiplane_agents::db::{agents as agents_db, system_principals as sp};
 use aiplane_core::server::db::{DbError, Pool};
-use aiplane_core::server::principal::SystemPrincipal;
+use aiplane_core::server::principal::{GrantKind, SystemPrincipal};
 use aiplane_core::server::run_chain::RunChain;
-use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
+use aiplane_core::server::upstreams::PoolAccess;
 use serde_json::{Value, json};
 use shared::api::ToolDef;
 
@@ -81,10 +81,15 @@ pub enum AgentRunError {
         message: String,
     },
     #[error(
-        "agent `{agent}` runs on pool `{pool}`, but no healthy backend of that pool serves a \
-         model it may use; check the pool's backends and the agent's pool grant"
+        "agent `{agent}` names no model and the gateway has no default chat model to run it \
+         on; set its model, or set a default chat model under Models & routing"
     )]
-    NoModel { agent: String, pool: String },
+    NoModel { agent: String },
+    #[error(
+        "agent `{agent}` runs on model `{model}`, but holds no grant on it; grant it the model \
+         (kind `model`) or pick one it holds"
+    )]
+    ModelNotGranted { agent: String, model: String },
     #[error("agent `{agent}` has no conversation `{session}`; start a new one instead")]
     UnknownSession { agent: String, session: String },
     #[error(
@@ -103,8 +108,8 @@ pub enum AgentRunError {
 #[derive(Clone)]
 pub struct RunOptions {
     pub now: state::Clock,
-    /// `None` classifies on the agent's pool (`router.pool`, else
-    /// `main.pool`). A seam because the classifier is the one model call the
+    /// `None` classifies with the agent's model (`router.model`, else the
+    /// main run's). A seam because the classifier is the one model call the
     /// router makes on its own: a caller can swap it for a test double, or a
     /// deterministic stand-in, without faking an upstream.
     pub classifier: Option<Arc<dyn RouteClassifier>>,
@@ -225,12 +230,19 @@ impl RunProfile {
         let parts = compiled.parts().map_err(|m| bad(m.to_string()))?;
         let spec = &parts.agent;
         let (schema, gates) = (parts.schema.clone(), parts.gates.clone());
-        let pool = spec
-            .main_pool()
-            .ok_or_else(|| bad("it names no `main.pool`".into()))?
-            .to_string();
+        let model = super::defaults::main_model(state, spec)
+            .await
+            .ok_or_else(|| AgentRunError::NoModel {
+                agent: principal.name.clone(),
+            })?;
+        if !principal.grants.has(GrantKind::Model, &model) {
+            return Err(AgentRunError::ModelNotGranted {
+                agent: principal.name.clone(),
+                model,
+            });
+        }
         let guard = match role {
-            Role::Main => TopicGuard::from_spec(spec, &pool),
+            Role::Main => TopicGuard::from_spec(spec, &model),
             Role::SubAgent { .. } => None,
         };
         let display = match spec.profile.display() {
@@ -241,11 +253,7 @@ impl RunProfile {
                 .filter(|d| !d.trim().is_empty())
                 .unwrap_or_else(|| principal.name.clone()),
         };
-        let pools = PoolAccess::for_system_pools(&principal, [pool.as_str()]);
-        let model = pool_model(state, &pool, &pools).ok_or_else(|| AgentRunError::NoModel {
-            agent: principal.name.clone(),
-            pool: pool.clone(),
-        })?;
+        let models = PoolAccess::for_system_models(&principal, [model.as_str()]);
         let finish = match &role {
             Role::Main => None,
             Role::SubAgent { .. } => {
@@ -291,7 +299,7 @@ impl RunProfile {
                 agent: spec.clone(),
                 schema: schema.clone(),
                 gates,
-                main_pool: pool,
+                main_model: model.clone(),
                 snapshot: snapshot.clone(),
             });
             if matches!(role, Role::Main)
@@ -320,7 +328,7 @@ impl RunProfile {
             permissions: Permissions::from_spec(spec),
             schema: (!schema.is_empty()).then_some(schema),
             snapshot,
-            pools,
+            models,
             spend: options.spend.clone(),
         };
         Ok(Self {
@@ -366,22 +374,6 @@ impl RunProfile {
     }
 }
 
-/// A model id a healthy backend of chat pool `pool` serves, if `access` may
-/// use that pool. The spec names a pool; a request names a model.
-pub fn pool_model(state: &RamaState, pool: &str, access: &PoolAccess) -> Option<String> {
-    let found = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .find(|p| p.name == pool && p.kind == PoolKind::Chat && access.allows(p))?;
-    found
-        .backends
-        .iter()
-        .filter(|b| b.is_available())
-        .flat_map(|b| b.models_snapshot())
-        .min()
-}
-
 /// The main agent's conversation pieces: what its system message reports.
 struct Conversation {
     schema: Arc<StateSchema>,
@@ -401,7 +393,7 @@ struct Synthetic {
 
 /// What an agent's spec puts in front of the model on every round of its run:
 /// the system message, the offered and synthetic tools, bound arguments and
-/// permissions, the conversation state, and the pools its model calls use.
+/// permissions, the conversation state, and the models its calls may use.
 /// Part of the run's [`AgentRun`].
 pub struct AgentSurface {
     brief: Brief,
@@ -414,7 +406,7 @@ pub struct AgentSurface {
     schema: Option<Arc<StateSchema>>,
     /// This turn's read of the conversation state; see [`StateSnapshot`].
     snapshot: Arc<StateSnapshot>,
-    pools: PoolAccess,
+    models: PoolAccess,
     spend: Option<Arc<SpendMeter>>,
 }
 
@@ -427,11 +419,11 @@ impl AgentSurface {
         }
     }
 
-    /// The pools this run's own model calls may use: `main.pool`, if the
-    /// principal holds a grant on it. The turn's rounds and the compaction
-    /// of its conversation both route through it.
-    pub fn pools(&self) -> &PoolAccess {
-        &self.pools
+    /// What this run's own model calls may use: its main model (and, for
+    /// an automatic route, what the route picks). The turn's rounds and the
+    /// compaction of its conversation both route through it.
+    pub fn models(&self) -> &PoolAccess {
+        &self.models
     }
 
     /// The tools offered this round: the spec's tools the principal is
@@ -749,7 +741,7 @@ mod tests {
             permissions: Permissions::default(),
             schema: None,
             snapshot: Arc::default(),
-            pools: PoolAccess::all(),
+            models: PoolAccess::all(),
             spend: None,
         }
     }

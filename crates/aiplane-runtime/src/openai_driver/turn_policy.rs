@@ -102,18 +102,18 @@ impl<'a> TurnPolicy<'a> {
         }
     }
 
-    /// The pools this turn's rounds may route to.
-    pub(super) fn pools(self, d: &OpenAiDriver) -> PoolAccess {
+    /// What this turn's rounds may route to.
+    pub(super) fn access(self, d: &OpenAiDriver) -> PoolAccess {
         match self.surface() {
-            Some(surface) => surface.pools().clone(),
+            Some(surface) => surface.models().clone(),
             None => d.state.pool_access_for_principal(&d.tool_ctx.principal),
         }
     }
 
-    /// The pools compacting this conversation may use.
-    pub(super) fn compaction_pools(self) -> PoolAccess {
+    /// What compacting this conversation may use.
+    pub(super) fn compaction_access(self) -> PoolAccess {
         self.surface()
-            .map_or_else(PoolAccess::all, |surface| surface.pools().clone())
+            .map_or_else(PoolAccess::all, |surface| surface.models().clone())
     }
 
     pub(super) fn budget(self, effort: Effort) -> Budget {

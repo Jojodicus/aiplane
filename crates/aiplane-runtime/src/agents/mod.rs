@@ -27,7 +27,7 @@ pub mod gate;
 pub mod human;
 pub mod inbox;
 pub mod output_filter;
-pub mod pool_choice;
+pub mod model_call;
 pub mod profile;
 pub mod resume;
 pub mod retention;

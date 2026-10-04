@@ -762,10 +762,9 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         Ok(value) => value,
         Err(response) => return response,
     };
-    let route_access = if automatic_decision.is_some() {
-        access_without_model_allowlist(&access)
-    } else {
-        access.clone()
+    let route_access = match &automatic_decision {
+        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        None => access.clone(),
     };
     if let Some(response) =
         enforce_content_guard(&state, &request_value, &routing_model, &route_access).await
@@ -1030,15 +1029,6 @@ fn record_selector_usage(state: &RamaState, user: &UserCtx, decision: &Automatic
         agent_id: None,
         chain: None,
     });
-}
-
-fn access_without_model_allowlist(
-    access: &aiplane_core::server::upstreams::PoolAccess,
-) -> aiplane_core::server::upstreams::PoolAccess {
-    aiplane_core::server::upstreams::PoolAccess {
-        allowed_models: None,
-        ..access.clone()
-    }
 }
 
 pub(crate) fn with_automatic_route_headers(
@@ -1933,10 +1923,9 @@ pub async fn list_models(State(state): State<Arc<RamaState>>, req: Request) -> R
     let access = state.pool_access_for_token(&user);
     let mut listed = state.upstreams.all_models_for(&access);
     if let Ok(routes) = aiplane_core::server::db::automatic_routes::all(&state.db).await {
-        let target_access = access_without_model_allowlist(&access);
         for route in routes {
             if access.allows_model(&route.alias)
-                && automatic_route_available(&state, &route, &target_access)
+                && automatic_route_available(&state, &route, &access)
                 && !listed.contains(&route.alias)
             {
                 listed.push(route.alias);
@@ -1985,7 +1974,7 @@ pub async fn retrieve_model(State(state): State<Arc<RamaState>>, req: Request) -
             .ok()
             .flatten()
             .is_some_and(|route| {
-                automatic_route_available(&state, &route, &access_without_model_allowlist(&access))
+                automatic_route_available(&state, &route, &access)
             })
     };
     if id.is_empty() || (!state.upstreams.knows_any_for(&id, &access) && !automatic) {
@@ -2006,7 +1995,11 @@ fn automatic_route_available(
 ) -> bool {
     state
         .upstreams
-        .resolve_model_for(&route.fallback_target, PoolKind::Chat, access)
+        .resolve_model_for(
+            &route.fallback_target,
+            PoolKind::Chat,
+            &access.for_route_targets(route.members()),
+        )
         .is_some()
 }
 
