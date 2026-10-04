@@ -52,17 +52,25 @@ Moving the RAG data directory does not move existing indexes. Review persistent 
 
 The Usage card enables per-request accounting, retention and display currency. The Limits card enables enforcement of rules from `/admin/limits`. Gateway settings control token/session lifetimes and impersonation. See [access management](access.md).
 
-The **content guard** checks request messages against the compliance area that a destination chat pool does not cover. A pool declared GDPR- and NDA-covered skips these checks. For a pool missing either declaration, AIplane sends the request messages to the configured **System One** guard model and checks the corresponding area.
+The **content guard** checks request messages for the compliance areas that the destination chat pool does not declare as covered. GDPR and NDA are independent checks. AIplane sends the request messages to the configured **System One** guard model, asking only about the uncovered area or areas:
 
-1. Configure a reachable System One pool and model.
-2. Review the guard model's own GDPR/NDA badges: the guard receives the content it evaluates.
-3. Enable the guard and begin in **Monitor** mode. This logs decisions; evaluation errors permit the request in monitor mode.
-4. Set separate GDPR and NDA actions: allow, confirm or deny.
-5. Choose **Enforce** to apply those actions. Evaluation failures in enforce mode return an error.
+| Destination pool declarations | Checks sent to the System One model |
+|---|---|
+| GDPR covered; NDA covered | Neither; the guard does not call its model |
+| GDPR not covered; NDA covered | GDPR only: possible personal data |
+| GDPR covered; NDA not covered | NDA only: possible confidential or NDA-protected information |
+| Neither covered | Both GDPR and NDA |
 
-The implementation uses a five-second guard request timeout and a match threshold of 0.5. When either matched policy is deny, denial takes precedence. Confirmation in browser chat requires a connected prompt receiver and an affirmative answer within three minutes. API requests cannot show that browser prompt and return a confirmation-required error.
+The System One model receives the request messages being evaluated. Choose a guard model and pool whose own provider arrangement is suitable for processing that content; its model picker shows the same separate GDPR and NDA coverage indicators. The pool flags are [operator declarations](models.md#pool-fields), not contract inspection or a compliance certification.
 
-These checks use model classification and operator pool declarations. They are not verification of provider contracts or a guarantee that a classifier detects every sensitive passage.
+1. Configure a reachable System One pool and model, and review the model's GDPR and NDA indicators for the content it will receive.
+2. Enable the guard and begin in **Monitor** mode. It records the checks and decisions but does not change request dispatch. If evaluation fails in monitor mode, the request proceeds and the failure is logged.
+3. Set the GDPR action and NDA action independently: **Allow**, **Confirm** or **Deny**. A matching classification reaches the action for that area; when both match, **Deny** takes precedence over **Confirm**, which takes precedence over **Allow**.
+4. Choose **Enforce** when the observed results and chosen actions are appropriate. In enforce mode, a guard evaluation failure returns an error and the destination model is not called.
+
+The classifier returns a score from 0 to 1 for each question; AIplane treats a score of **0.5 or higher** as a match. The guard request has a five-second timeout. A confirmation in browser chat needs a connected prompt receiver and an affirmative answer within three minutes. API requests cannot display that browser prompt and return a `content_confirmation_required` error instead.
+
+These checks use model classification and operator pool declarations. They are not verification of provider contracts or a guarantee that a classifier detects every sensitive passage. The declarations also do not establish legal compliance by themselves; operators remain responsible for evaluating provider terms and their organization's policies.
 
 ## Notifications and feedback
 

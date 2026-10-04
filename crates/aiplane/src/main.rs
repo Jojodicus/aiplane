@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Both spellings of a path the image also bakes a default for cannot be
     // honoured at once, and guessing wrong points the process at an empty data
-    // directory. Checked before anything reads a path. See docs/renaming.md.
+    // directory. Checked before anything reads a path. See docs/compatibility.md.
     if let Err(e) = srv::env::check_conflicts(srv::env::IMAGE_BAKED) {
         anyhow::bail!(e);
     }

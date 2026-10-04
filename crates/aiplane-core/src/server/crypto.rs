@@ -91,7 +91,7 @@ pub(crate) const LABEL: &[u8] = b"croit-aiplane/at-rest-encryption/v1";
 /// [`Crypto::open`] tries each in turn, so a database is readable no matter
 /// which release sealed it — including one that skipped the release where a
 /// label was retired. Nothing is ever removed from here without a breaking
-/// release that says so; see `docs/renaming.md`.
+/// release that says so; see `docs/compatibility.md`.
 ///
 /// * `croit-llm-gateway/at-rest-encryption/v1` — used until the project was
 ///   renamed to croit AIplane.

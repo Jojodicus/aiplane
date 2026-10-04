@@ -5,7 +5,7 @@
 # `VolumeName` still says `systemd-gateway`, deliberately: it is the name of
 # the volume that already exists on every host installed before the project
 # was renamed to croit AIplane, and changing it here would start a second,
-# empty one beside the database. See docs/renaming.md.
+# empty one beside the database. See docs/compatibility.md.
 
 [Volume]
 VolumeName=systemd-gateway

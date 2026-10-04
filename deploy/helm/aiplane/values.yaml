@@ -24,7 +24,7 @@
 # rename the StatefulSet, the Service and - the one that matters - the
 # PersistentVolumeClaim holding the database. Set `nameOverride: llm-gateway`
 # to keep every existing object name exactly as it was, or stay on the
-# republished legacy chart. See docs/renaming.md.
+# republished legacy chart. See docs/compatibility.md.
 nameOverride: ""
 fullnameOverride: ""
 
@@ -65,7 +65,7 @@ sessionKey:
   # Which key inside that Secret holds the value. Empty means
   # `AIPLANE_SESSION_KEY`. A Secret you created before the rename holds it
   # under `GATEWAY_SESSION_KEY` — name that here rather than rewriting the
-  # Secret, and the pod keeps starting. See docs/renaming.md.
+  # Secret, and the pod keeps starting. See docs/compatibility.md.
   existingSecretKey: ""
   # Or hand the value to Helm directly (it then lives in the release's own
   # Secret, which is fine — but you still have to back it up). Must be 64 hex

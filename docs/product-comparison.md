@@ -2,19 +2,19 @@
 
 This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI. It is maintained as a standalone product document; the README remains focused on AIplane.
 
-**Checked on 4 October 2026.** AIplane entries describe the repository version that contains this document. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
+**Checked on 4 October 2026.** AIplane entries describe the repository version that contains this document. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. For LiteLLM, ✅ means available in the open-source edition; 🟡 Enterprise means the capability requires a paid Enterprise license. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
 
 ## How to read the matrix
 
 | Mark | Meaning |
 |---|---|
 | ✅ | The feature is directly documented and available in the product. |
-| 🟡 | The feature exists with a material limitation, configuration prerequisite, external service, plugin, or edition dependency. Read the linked evidence. |
+| 🟡 | The feature exists with a material limitation, configuration prerequisite, external service, plugin, or edition dependency. For LiteLLM, the note identifies Enterprise-only capabilities. Read the linked evidence. |
 | ❌ | The reviewed product documentation explicitly says the feature is unavailable or the product surface does not provide it. This is a scoped product comparison, not a claim that no workaround exists. |
 | ⚪ | Not established by the reviewed sources. Treat this as unknown, not as a product gap. |
 | — | Not applicable to the product's role in this row. |
 
-“Partial” is not a score. It means that the feature's scope or operating conditions differ. A green mark does not mean the implementations are equivalent in quality, scale, security posture, or support. Enterprise-only capabilities are marked in the evidence notes where the source identifies them. The matrix compares documented product behavior, not marketing claims, and does not infer a feature from a protocol alone.
+“Partial” is not a score. It means that the feature's scope or operating conditions differ. A green LiteLLM mark means its OSS edition; it does not include Enterprise capabilities. A green mark does not mean the implementations are equivalent in quality, scale, security posture, or support. The matrix compares documented product behavior, not marketing claims, and does not infer a feature from a protocol alone.
 
 ## Product scope and model access
 
@@ -84,13 +84,16 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Feature | croit AIplane | LiteLLM | Open WebUI | Evidence |
 |---|:---:|:---:|:---:|---|
 | Multi-user access | ✅ | ✅ | ✅ | A8 L7 O5 |
-| OIDC single sign-on | ✅ | 🟡 | ✅ | A8 L29 O5 |
+| OIDC single sign-on | ✅ | 🟡 (free up to 5 users; Enterprise above that) | ✅ | A8 L29 O5 |
 | End-user local account/password sign-in | ❌ | — | ✅ | A8 O5 |
 | Basic username/password protection for the admin UI | ⚪ | ✅ | ✅ | L29 O5 |
 | LDAP authentication | ⚪ | ⚪ | ✅ | O5 |
-| SCIM user provisioning | ⚪ | 🟡 | ✅ | L29 O5 |
-| Map identity-provider groups to product permissions | ✅ | ✅ | ✅ | A8 L7 O5 |
-| Role-based access control | ✅ | ✅ | ✅ | A8 L7 O5 |
+| SCIM user provisioning | ⚪ | 🟡 Enterprise | ✅ | L29 O5 |
+| Identity-provider OIDC/JWT authentication | ✅ | 🟡 Enterprise | ✅ | A8 L29 O5 |
+| Map identity-provider groups to product permissions | ✅ | ⚪ | ✅ | A8 L7 O5 |
+| Basic global proxy roles and user/team/key controls | ✅ | ✅ OSS | ✅ | A8 L7 O5 L29 |
+| Organization/team-scoped delegated administrator roles | ✅ | 🟡 Enterprise | ⚪ | A8 L7 L29 O5 |
+| Fine-grained team-member permissions | ✅ | 🟡 Enterprise | ⚪ | A8 L7 L29 O5 |
 | Per-model access restrictions | ✅ | ✅ | ✅ | A8 L7 O5 |
 | Per-tool access restrictions | ✅ | ✅ | ✅ | A8 L7 O5 |
 | Per-agent access restrictions | ✅ | 🟡 | 🟡 | A9 L8 O5 |
@@ -106,7 +109,8 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Per-user usage limits | ✅ | ✅ | ⚪ | A8 L9 O6 |
 | Per-agent/system-principal limits | ✅ | 🟡 | ⚪ | A8 L9 |
 | Global usage limits | ✅ | ✅ | ⚪ | A8 L9 |
-| Per-model usage limits | ✅ | ✅ | ⚪ | A8 L9 |
+| Per-model usage limits | ✅ | ✅ (model-level controls) | ⚪ | A8 L9 |
+| Different model budgets for each virtual key | ⚪ | 🟡 Enterprise | ⚪ | L29 |
 | Usage reporting by user | ✅ | ✅ | ✅ | A8 L10 O6 |
 | Usage reporting by model | ✅ | ✅ | ✅ | A8 L10 O6 |
 | Usage reporting by API token | ✅ | ✅ | ⚪ | A8 L10 |
@@ -115,7 +119,9 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Unpriced usage is visibly identified | ✅ | 🟡 | ⚪ | A8 L10 |
 | GDPR coverage declaration per model pool | ✅ | ⚪ | ⚪ | A11 |
 | NDA coverage declaration per model pool | ✅ | ⚪ | ⚪ | A11 |
-| Content guard can monitor, confirm, or deny a request | ✅ | 🟡 | ⚪ | A11 L11 |
+| Content guard can monitor, confirm, or deny a request | ✅ | 🟡 (guardrail framework OSS; behavior varies) | ⚪ | A11 L11 L29 |
+| Built-in moderation callback integrations | 🟡 | 🟡 Enterprise for listed integrations | ⚪ | A11 L29 |
+| Guardrails scoped to individual keys or teams | ✅ | 🟡 Enterprise | ⚪ | A11 L29 |
 | Human approval before a tool action | ✅ | 🟡 | ⚪ | A12 L11 O7 |
 | Secure input collection during a workflow | ✅ | ⚪ | ⚪ | A12 |
 | Append-only agent activity records with integrity verification | ✅ | ⚪ | ⚪ | A13 |
@@ -266,7 +272,13 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Encrypted stored upstream credentials | ✅ | ✅ | 🟡 | A28 L24 O19 |
 | Browser session authentication | ✅ | ✅ | ✅ | A8 L7 O5 |
 | API credentials are not forwarded to the model provider | ✅ | ✅ | 🟡 | A3 L24 O19 |
-| Secret-manager integrations | 🟡 | ✅ | 🟡 | A28 L24 O19 |
+| Secret-manager integrations | 🟡 | 🟡 Enterprise | 🟡 | A28 L24 L29 O19 |
+| Automated rotation of virtual API keys | ⚪ | 🟡 Enterprise | ⚪ | L29 |
+| IP allowlists for gateway access | ⚪ | 🟡 Enterprise | ⚪ | L29 |
+| Public/private route access controls | ⚪ | 🟡 Enterprise | ⚪ | L29 |
+| Team-specific log routing and logging opt-out | ⚪ | 🟡 Enterprise | ⚪ | L29 |
+| Admin-operation audit logs | ⚪ | 🟡 Enterprise | ⚪ | L29 |
+| Multi-region deployment under one license | ⚪ | 🟡 Enterprise | ⚪ | L25 L29 |
 | Role/group-aware authorization on application APIs | ✅ | ✅ | ✅ | A8 L7 O5 |
 | Public agent visitor rate limiting | ✅ | ⚪ | ⚪ | A29 |
 | Per-user/model/token spend budgets | ✅ | ✅ | ⚪ | A8 L9 |
@@ -295,7 +307,7 @@ Browser control needs a narrow definition. AIplane's documented extension acts i
 
 The marks do not establish comparative performance, security quality, or total cost. Those require deployment-specific tests, threat models and pricing evidence. “No” applies only to the named capability and documented product surface; it does not mean the vendor could not add it or that an extension could not approximate it.
 
-AIplane's GDPR and NDA pool flags are operator declarations. They do not inspect a provider's contracts or certify compliance. LiteLLM's SSO, SCIM and some enterprise controls require its paid Enterprise license; Open WebUI's feature marks describe the documented self-hosted product and can still depend on configuration or connected services.
+AIplane's GDPR and NDA pool flags are operator declarations. They do not inspect a provider's contracts or certify compliance. LiteLLM OSS already includes virtual keys, user/team controls, budgets, spend tracking, routing, and request/response logging. Its SSO is free for up to five users; SCIM, organization/team-scoped delegated administration, team-member permission customization, model-specific budgets per key, selected built-in moderation integrations, key/team-scoped guardrails, secret managers, automated virtual-key rotation, IP allowlists, team-specific logging controls, and multi-region deployment are documented as Enterprise capabilities. This distinction matters: the matrix does not imply that LiteLLM has no access control in OSS; it separates baseline controls from paid enterprise governance. Open WebUI's feature marks describe the documented self-hosted product and can still depend on configuration or connected services.
 
 ## Evidence sources
 
@@ -308,34 +320,34 @@ AIplane sources link to this repository's user and operator documentation. LiteL
 | A1 | [Deployment guide](operations/deployment.md) |
 | A2 | [Chat guide](guide/chat.md) |
 | A3 | [HTTP API reference](reference/api.md) |
-| A4 | [Upstream model connections](upstreams.md) |
-| A5 | [Models and routing](admin/models.md), [upstream routing](upstreams.md) |
-| A6 | [Automatic routing](automatic-routing.md) |
-| A7 | [Upstream recovery and retries](upstreams.md#waiting-out-an-outage) |
+| A4 | [Models and routing](admin/models.md), [tool inventory](tools-inventory.md) |
+| A5 | [Models and routing](admin/models.md) |
+| A6 | [Models and routing](admin/models.md#create-an-automatic-route) |
+| A7 | [Fallbacks and temporary outages](admin/models.md#fallbacks-and-temporary-outages) |
 | A8 | [Access, tokens and limits](admin/access.md) |
 | A9 | [Agent builder](agent-guide/create.md), [agent permissions](agent-guide/permissions.md) |
-| A10 | [Knowledge collections](admin/knowledge.md), [RAG design and limits](fileshare-rag.md) |
+| A10 | [Knowledge collections](admin/knowledge.md), [tools and integrations](guide/tools-and-integrations.md), [tool inventory](tools-inventory.md) |
 | A11 | [Model settings](admin/models.md), [content guard settings](admin/settings.md#access-and-content-guard) |
 | A12 | [Approvals and handoffs](guide/automation-and-inbox.md), [agent decisions](agent-guide/run-observe.md) |
-| A13 | [Agent activity and run observation](agent-guide/run-observe.md), [activity log](agent-activity-log.md) |
+| A13 | [Agent runs and activity](agent-guide/run-observe.md) |
 | A14 | [Account, memory and usage](guide/account-and-usage.md) |
 | A15 | [Tools, integrations and skills](guide/tools-and-integrations.md), [tool inventory](tools-inventory.md) |
 | A16 | [Language picker](guide/getting-started.md#adjust-the-interface) |
-| A17 | [Browser control](browser-control.md) |
+| A17 | [Tools and integrations](guide/tools-and-integrations.md), [tool inventory](tools-inventory.md) |
 | A18 | [Files and canvas](guide/files-and-canvas.md) |
-| A19 | [OCR](ocr.md), [file conversion](file-conversions.md) |
-| A20 | [Tool contracts](reference/tools.md#read-the-web-and-inspect-networks) |
-| A21 | [Tool contracts](reference/tools.md#dynamic-integrations-skills-and-templates), [gateway tool access](tools-rbac.md) |
-| A22 | [Sandbox](sandbox.md), [sandboxed tools](reference/tools.md#use-the-sandbox-for-documents-spreadsheets-and-media) |
+| A19 | [System settings](admin/settings.md#chat-and-documents), [files and documents](guide/files-and-canvas.md), [tool inventory](tools-inventory.md) |
+| A20 | [Tools and integrations](guide/tools-and-integrations.md), [tool inventory](tools-inventory.md) |
+| A21 | [Tools and integrations](guide/tools-and-integrations.md), [integrations administration](admin/integrations.md) |
+| A22 | [System settings](admin/settings.md#tools-and-data-services), [deployment](operations/deployment.md) |
 | A23 | [Tool inventory](tools-inventory.md) |
-| A24 | [Voice and audio workflows](guide/tools-and-integrations.md) |
+| A24 | [Files and documents](guide/files-and-canvas.md), [tool inventory](tools-inventory.md) |
 | A25 | [Test and publish agents](agent-guide/test-publish.md) |
-| A26 | [Agent channels](agent-guide/run-observe.md), [A2A protocol](agent-a2a.md), [embedded agents](embed.md) |
-| A27 | [Schedules, webhooks and inbox](guide/automation-and-inbox.md), [agent runs](agent-runs.md) |
+| A26 | [Agent channels and external agents](agent-guide/run-observe.md), [agent test and publication](agent-guide/test-publish.md), [HTTP API reference](reference/api.md) |
+| A27 | [Schedules, webhooks and inbox](guide/automation-and-inbox.md), [agent runs and inbox](agent-guide/run-observe.md) |
 | A28 | [Operator settings](admin/settings.md), [environment reference](reference/environment.md) |
-| A29 | [Public agent visitors](agent-visitors.md) |
-| A30 | [Why Kubernetes uses one replica](kubernetes.md#why-one-replica) |
-| A31 | [Deployment options](operations/deployment.md), [Kubernetes](kubernetes.md) |
+| A29 | [Agent visitor lifetime, rates and retained data](agent-guide/run-observe.md#visitor-lifetime-rates-and-retained-data) |
+| A30 | [Deployment prerequisites and scaling](operations/deployment.md#production-prerequisites) |
+| A31 | [Deployment options](operations/deployment.md) |
 | A32 | [Backup and recovery](operations/backup-recovery.md) |
 | A33 | [Versioned installed documentation](documentation-system.md) |
 
@@ -370,6 +382,7 @@ AIplane sources link to this repository's user and operator documentation. LiteL
 | L27 | [Enterprise plans and support](https://docs.litellm.ai/docs/enterprise) |
 | L28 | [Supported API endpoints](https://docs.litellm.ai/docs/supported_endpoints) |
 | L29 | [Enterprise features and license requirements](https://docs.litellm.ai/docs/enterprise) |
+| L30 | [Role-based access controls, including OSS and Enterprise scopes](https://docs.litellm.ai/docs/proxy/access_control) |
 
 ### Open WebUI
 

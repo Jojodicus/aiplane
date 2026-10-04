@@ -13,6 +13,17 @@ You can send files without accompanying text. Dropping a directory is not suppor
 
 Attachment availability depends on the operator's storage configuration. How content reaches the model depends on its type and the configured processing: text can be included as text, images can be supplied to a vision-capable model, and other files can require file-reading or conversion tools. Attaching a file does not mean every selected model can understand its content directly. Ask the assistant to explain any extraction or conversion failure.
 
+### How common files are read
+
+| File | Typical path | What to expect |
+|---|---|---|
+| Text, Markdown, CSV, JSON and code | Read as text | The model receives the file's text, subject to attachment and context limits. |
+| Text-based PDF | Extract its text layer | Page layout and complex tables may not be preserved exactly. Large PDFs can be returned in page windows; check which pages were read and ask the assistant to continue when needed. |
+| Scanned PDF or image | A vision model can inspect rendered pages; if the operator enabled OCR, extracted text can also be supplied | OCR availability and page/size limits depend on the installation. Scanned pages may take longer to process. |
+| DOCX, PPTX and XLSX | Extract structured text, lists, tables and presentation notes | Embedded images are handled separately; use a vision-capable workflow when their visual content matters. |
+
+For a long file, ask for the relevant pages or sections when you do not need the entire document. The available tools and installation limits determine how much content can be read in one step. See [document and image tools](tools-and-integrations.md) and the [tool inventory](../tools-inventory.md) for the capabilities exposed to your account.
+
 Attachment chips in the transcript allow downloading. The owner can remove an attachment when no answer is streaming. Removing an attachment is a mutation of that message; it is not a way to retract material already processed by an upstream or copied elsewhere.
 
 ## Work with a document in the canvas

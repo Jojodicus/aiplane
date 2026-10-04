@@ -4,8 +4,9 @@ How AIplane indexes a company's file share — Nextcloud, ownCloud,
 OpenCloud, plain WebDAV, and whatever provider is registered next — and
 answers questions about it.
 
-This is the architecture doc. For the decisions behind it, and what is
-deliberately not built, see [`nextcloud-rag-plan.md`](nextcloud-rag-plan.md).
+For the operator workflow to create and maintain a collection, see
+[Knowledge collections](admin/knowledge.md). This page describes retrieval
+behavior and the current limits of each source.
 
 ## What it is for
 
@@ -747,6 +748,5 @@ against the documented API shapes, and the consent flow is integration-tested
 end to end, but no test has ever held a real Google access token. The first
 production connect is therefore the first real exercise of the token exchange
 and the export endpoints. The OCR sidecar, extraction model and reranker are
-likewise mocked to their documented contracts; the protocol assumptions are
-cited in
-[`nextcloud-rag-plan.md`](nextcloud-rag-plan.md#16-external-references).
+likewise mocked to their documented contracts; verify them against the actual
+services in the target deployment before relying on their output.

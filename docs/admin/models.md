@@ -34,7 +34,7 @@ The connection test distinguishes authentication failure, timeout, unreachable s
 
 ### Pool fields
 
-Choose the pool's purpose from the kinds offered by the server. The editor also configures backend membership, explicit pool models, allowed groups, offline fallback, compliance declarations and whether usage limits apply. Speech pools have language-to-voice mappings and an offered-voices list.
+Choose the pool's purpose from the kinds offered by the server. The editor also configures backend membership, explicit pool models, allowed groups, offline fallback, separate GDPR and NDA coverage declarations, and whether usage limits apply. Speech pools have language-to-voice mappings and an offered-voices list.
 
 | Selection strategy | Behavior |
 |---|---|
@@ -42,13 +42,27 @@ Choose the pool's purpose from the kinds offered by the server. The editor also 
 | `round_robin` | Distributes requests in rotation |
 | `prefix_affinity` | Keeps matching request prefixes on the same replica where practical, while avoiding overloaded replicas; requests with no usable prefix fall back to least-in-flight selection |
 
+The **System One** pool kind serves models for TypeSafe System One requests, including content checks and automatic-route selection. It is separate from the chat pool that receives the user's request; review both destinations' GDPR and NDA declarations when configuring those features.
+
 Prefix affinity is useful for self-hosted replicas with separate prompt-prefix caches. It is separate from an automatic route's session affinity: one chooses a backend replica, the other retains a selected model target.
 
-GDPR and NDA flags are operator declarations. They do not inspect the provider's contracts. Allowed groups govern pool access; configure them together with [group permissions](access.md). Review an offline fallback's availability and rights before relying on it.
+The **GDPR** and **NDA** flags describe separate properties of the provider arrangement. Set each one only when the applicable provider and service are covered for the data sent to that pool. These are operator declarations: AIplane does not inspect contracts, verify data residency, or certify compliance. The declarations are used by the [content guard](settings.md#access-and-content-guard) to decide which checks are needed before a request reaches a chat model. They do not grant access; allowed groups govern pool access, together with [group permissions](access.md). Review an offline fallback's availability, coverage and user access before relying on it.
 
 Backend and pool names can be changed through their editors. Deletion removes the configured resource; inspect and apply the resulting topology change. Do not overwrite another resource's name without reviewing the editor's explicit overwrite warning.
 
 Use a backend card's serving toggle to drain or re-enable it. The toggle changes admission immediately; inspect the live in-flight count when draining for maintenance. The upstream manager also has a fallback per pool kind for unknown-model requests. Changing that fallback is live immediately and is distinct from a pool's offline fallback or a feature's default model.
+
+### Fallbacks and temporary outages
+
+The three fallback choices answer different problems:
+
+| Setting | Used when | Example |
+|---|---|---|
+| Unknown-model fallback for a pool kind | A request names a model that is not known to that kind | A client still asks for a model name that was removed or renamed |
+| Offline fallback on a pool | The requested model is known, but no healthy backend in that pool can serve it | All replicas of a known model are restarting |
+| Feature default | A feature needs a model and the caller did not select one | The configured default transcription model |
+
+For a known model, AIplane skips unhealthy or drained backends and routes to a healthy sibling when one serves it. If no backend is available, it can hold the request and retry routing for the configured upstream-wait budget; the current default is 120 seconds. A backend connection failure or an upstream 502, 503 or 504 can also be retried against another eligible replica before any response has been sent. When the wait expires, API clients receive a retryable capacity error with `Retry-After`. An unknown model is not held waiting for capacity. An offline fallback can route around a complete pool outage immediately, so choose one only when its data-handling coverage and caller access are appropriate.
 
 ## Configure a model
 

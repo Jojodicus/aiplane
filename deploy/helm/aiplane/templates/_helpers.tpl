@@ -96,7 +96,7 @@ The chart's own Secret carries both spellings, so either answer works there.
 An operator who brought their own Secret from before the rename has it under
 `GATEWAY_SESSION_KEY`; `sessionKey.existingSecretKey` is how they say so,
 because `lookup` cannot be trusted to answer during `helm template` or a
-GitOps dry run. See docs/renaming.md.
+GitOps dry run. See docs/compatibility.md.
 */}}
 {{- define "aiplane.sessionSecretKey" -}}
 {{- .Values.sessionKey.existingSecretKey | default "AIPLANE_SESSION_KEY" -}}

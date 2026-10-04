@@ -4,7 +4,7 @@ This file is the canonical entry point for any AI agent (or new human contributo
 
 ## What this project is
 
-**croit AIplane** — a self-hosted AI infrastructure layer: one plane connecting applications and users to models, agents, tools and enterprise data. (It was called croit LLM Gateway until the rename; see [`docs/renaming.md`](docs/renaming.md). "The gateway" below still means the OpenAI-compatible proxy layer, which is one subsystem.)
+**croit AIplane** — a self-hosted AI infrastructure layer: one plane connecting applications and users to models, agents, tools and enterprise data. "The gateway" below means the OpenAI-compatible proxy layer, which is one subsystem.
 
 A single Rust binary (`aiplane`, built from the `gateway` crate) plus the supporting crates it lives on:
 
@@ -281,7 +281,6 @@ Start in [`docs/README.md`](docs/README.md) for the index. The topical docs:
 | Versioning + how a release is cut | [`docs/releases.md`](docs/releases.md) |
 | Running on Kubernetes (the Helm chart) | [`docs/kubernetes.md`](docs/kubernetes.md) |
 | Error handling — types, messages, OpenAI mapping | [`docs/errors.md`](docs/errors.md) |
-| What the rename from croit LLM Gateway changed, and what kept its old name on purpose | [`docs/renaming.md`](docs/renaming.md) |
 
 ## Working agreement for agents
 

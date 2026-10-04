@@ -31,7 +31,7 @@ Output-filter patterns identify values that need provenance checks in an answer.
 
 ## Use A2A
 
-Set `publish.a2a.enabled: true` in the agent spec and publish it to serve the public card at `/a2a/agents/<id>/agent-card.json`. A2A messaging at `/a2a/agents/<id>` requires a gateway-minted **system-principal** bearer token (`gws_…`) whose principal holds the `a2a_caller` grant for this agent. A person's API token, browser cookie or embed key cannot call this surface. The owner manages the system principal, its grant and token through the system-principals API.
+Enable A2A in the agent's publish settings and publish the version to serve its public card at `/a2a/agents/<id>/agent-card.json`. The **test and publish guide** explains the publish setting. A2A messaging at `/a2a/agents/<id>` requires a gateway-minted **system-principal** bearer token (`gws_…`) whose principal holds the `a2a_caller` grant for this agent. A person's API token, browser cookie or embed key cannot call this surface. To authorize a caller, create a system principal, grant it `a2a_caller` for this agent, and issue a token for that principal; the [HTTP API reference](../reference/api.md) lists the principal and A2A endpoints. The grant is scoped to this agent.
 
 The A2A surface supports message/task operations, streaming and cancellation through its implemented protocol. Keep context/task IDs from responses to continue or inspect the corresponding work. When integrating a remote agent route, configure its endpoint, authentication and task timeout in the agent spec, then test completion and failure handling. Outbound remote calls use the guarded network client; a URL that is refused must be corrected rather than bypassing the refusal.
 

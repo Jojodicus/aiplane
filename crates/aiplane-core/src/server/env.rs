@@ -12,7 +12,7 @@
 //! So each variable now has two spellings: `AIPLANE_*` is canonical and wins,
 //! `GATEWAY_*` still works and logs one deprecation warning per variable per
 //! process. The legacy names are removed only in a deliberate breaking
-//! release. See `docs/renaming.md`.
+//! release. See `docs/compatibility.md`.
 //!
 //! Every read of a gateway-owned variable goes through [`var`] / [`var_os`],
 //! so a new variable gets both spellings for free and no call site has to
@@ -46,7 +46,7 @@ fn warn_once(legacy: &str, canonical: &str) {
     if warned.insert(legacy.to_string()) {
         tracing::warn!(
             "${legacy} is the old name for ${canonical} and still works, but it is deprecated \
-             and will be removed in a future release — rename it (docs/renaming.md)"
+             and will be removed in a future release — rename it (docs/compatibility.md)"
         );
     }
 }
@@ -120,7 +120,7 @@ pub fn check_conflicts(names: &[&str]) -> Result<(), String> {
             return Err(format!(
                 "${name} and ${legacy} are both set to different values ({new:?} vs {old:?}). \
                  ${legacy} is the deprecated spelling and the two cannot both be honoured — \
-                 unset one of them (docs/renaming.md)"
+                 unset one of them (docs/compatibility.md)"
             ));
         }
     }

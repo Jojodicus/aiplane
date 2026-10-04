@@ -15,8 +15,10 @@ Category: **Access**.
 | `content_guard.enabled` | Boolean | Check only the compliance area the selected model pool does not cover. | No |
 | `content_guard.model` | Model (SystemOne pool) | System One model used for GDPR and NDA decisions. | No |
 | `content_guard.mode` | monitor, enforce | Monitor logs decisions; enforce applies the selected action. | No |
-| `content_guard.gdpr_action` | allow, confirm, deny | Action when personal data would be sent to a non-GDPR pool. | No |
-| `content_guard.nda_action` | allow, confirm, deny | Action when confidential content would be sent to a pool without NDA coverage. | No |
+| `content_guard.gdpr_action` | allow, confirm, deny | Independent action when the System One model classifies request content as personal data and the destination pool is not declared GDPR-covered. | No |
+| `content_guard.nda_action` | allow, confirm, deny | Independent action when the System One model classifies request content as confidential or NDA-protected and the destination pool is not declared NDA-covered. | No |
+
+The checks run only for compliance areas not declared covered by the destination chat pool. When both areas are uncovered, both questions are sent to the selected System One model. The model also receives the request messages, so assess its own pool declarations before selecting it. See [content guard setup and behavior](settings.md#access-and-content-guard).
 
 ### chat.ocr
 
