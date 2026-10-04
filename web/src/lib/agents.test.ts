@@ -189,7 +189,7 @@ test('a closed gate is said with the slot’s label, a condition without a slot 
 		'agents-gate-not-equal(slot=Topic,expected=“Lead”)'
 	);
 	assert.equal(gateHint({ path: '', slot: 'plan', kind: 'not_in', expected: ['a', 1], message: '' }, 'Plan', tr), 'agents-gate-not-in(slot=Plan,expected=“a”, 1)');
-	assert.equal(gateHint({ path: '', kind: 'denied', message: 'the classifier said no' }, 'x', tr), 'the classifier said no');
+	assert.equal(gateHint({ path: '', kind: 'unknown_route', message: 'there is no route `x`' }, 'x', tr), 'there is no route `x`');
 });
 
 test('a paused test turn says what it waits for', () => {

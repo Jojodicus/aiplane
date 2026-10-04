@@ -1479,15 +1479,12 @@ runs after the code gate passes and can only close the route.
 - **`RouteGates::from_spec(spec)`** holds each route's gate.
   `gate_status(route, input)` is `Open` or `Closed { missing }`; an unknown
   route is closed with `unknown_route`. A route is invoked through an
-  `OpenRoute`, which only `open` and `open_reviewed` construct and only for an
-  open gate, so dispatch (#88) cannot be reached around a closed one.
-- **Classifier seam.** `DenyClassifier::review(route, &[SlotView]) ->
-  Result<Verdict, String>` gets the model's view of the state, never trusted
-  values. `open_reviewed` consults it only after the code gate opened.
-  `Verdict::Deny` and an `Err` both close the route (`denied`); nothing it
-  returns can open a closed gate. There is no LLM implementation yet, only a
-  test double. *Decided, deferred:* the implementation will classify with the
-  agent's main model unless the spec names a model for it.
+  `OpenRoute`, which only `open` constructs and only for an open gate, so
+  dispatch (#88) cannot be reached around a closed one.
+- ~~**Classifier seam.** `DenyClassifier`~~ — removed in #120: it never had
+  an implementation and nothing called `open_reviewed`. A model check on what
+  the visitor asks is the topic guard (#115); another one would be a side call
+  (`server::side_call`) like it.
 - **Spec type checks.** On save and publish, each leaf must be able to hold:
   every `eq` and `in` value must pass the slot's own validator, and
   `provenance` must be in the slot's `set_by`. A route with a `bind` must have a
@@ -1502,8 +1499,7 @@ runs after the code gate passes and can only close the route.
     route needs one yet.
 - **Wired by #87.** `forward_request` calls `RouteGates`, returns
   `Closed.missing` to the model and writes a `route_decision` row
-  ([§3](#what-8788-built)). There is no `gate` SSE event yet, and nothing
-  calls `open_reviewed`: no spec key selects a `DenyClassifier` yet.
+  ([§3](#what-8788-built)). There is no `gate` SSE event yet.
 
 ### Value validation without a JSON-Schema crate
 
