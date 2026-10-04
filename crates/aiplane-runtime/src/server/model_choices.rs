@@ -117,7 +117,7 @@ fn route_choice(
     route: AutomaticRoute,
     access: &PoolAccess,
 ) -> Option<ModelChoice> {
-    let targets = access.for_route_targets(route.members());
+    let targets = access.for_route_targets(&route.alias, route.members());
     let chat = reachable(state, PoolKind::Chat, &targets);
     let selectors = reachable(state, PoolKind::SystemOne, &targets);
     let mut compliance = *chat.get(&route.fallback_target)?;

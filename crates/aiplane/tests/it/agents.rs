@@ -795,7 +795,11 @@ async fn an_admin_holds_write_on_every_agent_without_a_share() {
     assert_eq!(fx.publish(&fx.root, &id).await.0, StatusCode::CREATED);
     let (status, body) = fx.share(&fx.root, &id, "user", "bob", "write").await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    assert_eq!(fx.grant(&fx.root, &id, "model", "m").await, StatusCode::OK);
+    assert_eq!(
+        fx.grant(&fx.root, &id, "model", "m").await,
+        StatusCode::CREATED,
+        "an admin's regrant routes through every pool, no longer the manager's"
+    );
     let (status, _) = fx
         .send(
             Some(&fx.root),

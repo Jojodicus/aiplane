@@ -120,7 +120,9 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         Err(response) => return response,
     };
     let access = match &automatic_decision {
-        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
+        }
         None => access,
     };
     if let Some(response) =
@@ -277,7 +279,9 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         Err(response) => return response,
     };
     let access = match &automatic_decision {
-        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
+        }
         None => access,
     };
     let with_route =

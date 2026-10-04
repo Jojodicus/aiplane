@@ -117,6 +117,39 @@ pub async fn maybe_autocompact(
     }
 }
 
+/// The real model a conversation on `requested` compacts with, and the
+/// access to route it under. An alias resolves to its target — the context
+/// window keys on the model that ran, an alias carries no settings of its
+/// own. An automatic route compacts on the target it pinned for the session,
+/// else its fallback, under `access` widened by the route's members exactly
+/// as its turns are.
+pub async fn compaction_target(
+    state: &RamaState,
+    requested: &str,
+    subject: &str,
+    session_id: &str,
+    access: PoolAccess,
+) -> (String, PoolAccess) {
+    let (routing_model, access) = match state.automatic_router.route(requested).await {
+        Ok(Some(route)) => {
+            let target = state
+                .automatic_router
+                .session_target(requested, subject, session_id)
+                .unwrap_or_else(|| route.fallback_target.clone());
+            (
+                target,
+                access.for_route_targets(&route.alias, route.members()),
+            )
+        }
+        _ => (requested.to_string(), access),
+    };
+    let model = state
+        .upstreams
+        .resolve_model_for(&routing_model, PoolKind::Chat, &access)
+        .unwrap_or(routing_model);
+    (model, access)
+}
+
 /// Resolve the model's context window from `model_defaults`. `None` when the
 /// model has no row or no `context_window` set — the caller falls back to the
 /// global default. Keyed on the resolved real model id (the caller maps any

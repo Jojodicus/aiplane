@@ -131,6 +131,14 @@ impl AutomaticRouter {
         Ok(self.load_route(alias).await?.is_some())
     }
 
+    /// The automatic route named `alias`, if there is one.
+    pub async fn route(
+        &self,
+        alias: &str,
+    ) -> Result<Option<Arc<AutomaticRoute>>, AutomaticRoutingError> {
+        self.load_route(alias).await
+    }
+
     pub fn invalidate_alias(&self, alias: &str) {
         if let Ok(mut routes) = self.routes.lock() {
             routes.remove(alias);
@@ -176,7 +184,7 @@ impl AutomaticRouter {
             return Err(AutomaticRoutingError::AliasNotAllowed(alias.to_string()));
         }
 
-        let target_access = access.for_route_targets(route.members());
+        let target_access = access.for_route_targets(&route.alias, route.members());
         let requirements = RequestRequirements::from_state(state);
         let defaults_by_model: HashMap<String, _> =
             crate::server::db::model_defaults::all(&self.db)

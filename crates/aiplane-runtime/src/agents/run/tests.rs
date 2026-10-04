@@ -227,9 +227,36 @@ impl World {
         Self::build_with(pools, erp, metered, tools, db_path, Default::default()).await
     }
 
-    /// [`Self::build`] with the operator's `[agents]` settings.
+    /// [`Self::build`] with the operator's network settings.
     async fn build_with(
         pools: &[(&str, &str, &MockServer)],
+        erp: Option<&MockServer>,
+        metered: bool,
+        tools: crate::server::tools::ToolRegistry,
+        db_path: Option<&std::path::Path>,
+        network: aiplane_core::server::config::NetworkConfig,
+    ) -> Self {
+        Self::build_aliased(pools, &[], erp, metered, tools, db_path, network).await
+    }
+
+    /// [`Self::new`] whose pools' backends also answer to an alias:
+    /// `(pool, alias)`, the alias naming the pool's model.
+    async fn aliased(pools: &[(&str, &str, &MockServer)], aliases: &[(&str, &str)]) -> Self {
+        Self::build_aliased(
+            pools,
+            aliases,
+            None,
+            false,
+            base_tools(),
+            None,
+            Default::default(),
+        )
+        .await
+    }
+
+    async fn build_aliased(
+        pools: &[(&str, &str, &MockServer)],
+        aliases: &[(&str, &str)],
         erp: Option<&MockServer>,
         metered: bool,
         tools: crate::server::tools::ToolRegistry,
@@ -241,7 +268,16 @@ impl World {
                 .await
                 .unwrap();
         let mut configs = HashMap::new();
-        for (name, _, upstream) in pools {
+        for (name, model, upstream) in pools {
+            let alias = aliases
+                .iter()
+                .find(|(pool, _)| pool == name)
+                .map(|(_, alias)| {
+                    aiplane_core::server::upstreams::config::AliasSpec::Targets(HashMap::from([(
+                        alias.to_string(),
+                        model.to_string(),
+                    )]))
+                });
             configs.insert(
                 name.to_string(),
                 UpstreamPoolConfig {
@@ -255,7 +291,7 @@ impl World {
                     strategy: PickerStrategy::RoundRobin,
                     models: Vec::new(),
                     backend: vec![BackendConfig {
-                        alias: None,
+                        alias,
                         supports_edit: false,
                         enabled: true,
                         name: format!("{name}-backend"),
@@ -1580,6 +1616,124 @@ async fn an_agent_without_a_model_runs_on_the_gateway_default() {
     assert_eq!(reply.answer.as_deref(), Some("From the default."));
     assert_eq!(requests(&main).await[0]["model"], "main-model");
     assert!(requests(&other).await.is_empty());
+}
+
+/// An agent granted a backend alias runs on it: the turn resolves `fast` to
+/// the real id and routes that, which the alias grant authorises — and so
+/// does compacting the conversation.
+#[tokio::test]
+async fn an_agent_on_a_granted_alias_answers_and_compacts() {
+    let main = llm(vec![text("Via the alias.")]).await;
+    let world = World::aliased(
+        &[("chat-pool", "real-model", &main)],
+        &[("chat-pool", "fast")],
+    )
+    .await;
+    let agent = world.agent("aliased", &[(GrantKind::Model, "fast")]).await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": { "model": "fast", "instructions": { "orchestration": "Answer." } } }),
+        )
+        .await;
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Via the alias."), "{reply:?}");
+    assert_eq!(requests(&main).await[0]["model"], "real-model");
+
+    let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
+    let (model, access) = crate::server::compaction::compaction_target(
+        &world.state,
+        "fast",
+        &agent,
+        &reply.session_id,
+        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["fast"]),
+    )
+    .await;
+    assert_eq!(model, "real-model");
+    assert!(
+        world
+            .state
+            .upstreams
+            .route_access(&model, PoolKind::Chat, &access)
+            .is_ok(),
+        "compaction may route what the alias resolves to"
+    );
+}
+
+/// An automatic route whose fallback candidate is itself an alias: the
+/// agent holds a grant on the route only, and its turn and its compaction
+/// reach the candidate's real model.
+#[tokio::test]
+async fn an_agent_on_an_automatic_route_with_an_alias_candidate_answers_and_compacts() {
+    use aiplane_core::server::db::automatic_routes::{
+        self, AutomaticRoute, AutomaticRouteCandidate,
+    };
+    let main = llm(vec![text("Via the route.")]).await;
+    let other = llm(vec![text("leaked")]).await;
+    let world = World::aliased(
+        &[
+            ("chat-pool", "real-model", &main),
+            ("big-pool", "big-model", &other),
+        ],
+        &[("chat-pool", "fast")],
+    )
+    .await;
+    let candidate = |target: &str| AutomaticRouteCandidate {
+        key: target.into(),
+        target: target.into(),
+        description: target.into(),
+    };
+    automatic_routes::upsert(
+        world.db(),
+        &AutomaticRoute {
+            alias: "auto".into(),
+            selector_model: "no-selector".into(),
+            objective: "balanced".into(),
+            instructions: String::new(),
+            minimum_confidence: 0.5,
+            selector_timeout_ms: 1_000,
+            fallback_target: "fast".into(),
+            session_affinity: false,
+            session_ttl_seconds: 60,
+            rollout: "active".into(),
+            version: 0,
+            candidates: vec![candidate("fast"), candidate("big-model")],
+        },
+    )
+    .await
+    .unwrap();
+    let agent = world.agent("routed", &[(GrantKind::Model, "auto")]).await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": { "model": "auto", "instructions": { "orchestration": "Answer." } } }),
+        )
+        .await;
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Via the route."), "{reply:?}");
+    assert_eq!(requests(&main).await[0]["model"], "real-model");
+    assert!(
+        requests(&other).await.is_empty(),
+        "the selector failed: the fallback ran"
+    );
+
+    let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
+    let (model, access) = crate::server::compaction::compaction_target(
+        &world.state,
+        "auto",
+        &agent,
+        &reply.session_id,
+        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["auto"]),
+    )
+    .await;
+    assert_eq!(model, "real-model");
+    assert!(
+        world
+            .state
+            .upstreams
+            .route_access(&model, PoolKind::Chat, &access)
+            .is_ok()
+    );
 }
 
 fn turn<'a>(agent_id: &'a str, message: &'a str) -> AgentTurn<'a> {

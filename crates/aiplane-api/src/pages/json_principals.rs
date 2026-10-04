@@ -78,13 +78,19 @@ fn principal_json(p: &sp_db::PrincipalRow) -> Value {
     })
 }
 
-fn grant_json(g: &sp_db::GrantRow) -> Value {
-    json!({
+/// One grant as the API shows it; `pools` (a `model` grant's pools, `null`
+/// for every pool) only where it applies.
+pub(super) fn grant_json(g: &sp_db::GrantRow) -> Value {
+    let mut out = json!({
         "kind": g.kind.as_str(),
         "ref": g.reference,
         "granted_by": g.granted_by,
         "granted_at": g.granted_at,
-    })
+    });
+    if g.kind == GrantKind::Model {
+        out["pools"] = json!(g.pools);
+    }
+    out
 }
 
 fn token_json(t: &sp_db::SystemToken) -> Value {
@@ -410,9 +416,22 @@ pub(crate) async fn add_capped_grant(
             ),
         ));
     }
-    sp_db::add_grant(&state.db, principal_id, kind, reference, &manager.id)
-        .await
-        .map_err(internal)
+    let pools = match kind {
+        GrantKind::Model => grant_holding::model_grant_pools(state, manager, reference)
+            .await
+            .map_err(internal)?,
+        _ => None,
+    };
+    sp_db::add_scoped_grant(
+        &state.db,
+        principal_id,
+        kind,
+        reference,
+        pools.as_deref(),
+        &manager.id,
+    )
+    .await
+    .map_err(internal)
 }
 
 /// POST /api/v0/system-principals/{id}/grants/revoke — remove one grant. Any

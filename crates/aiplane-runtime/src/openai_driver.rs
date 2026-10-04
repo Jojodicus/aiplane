@@ -663,27 +663,14 @@ impl SessionDriver for OpenAiDriver {
         if result.is_ok() && !ctx.cancel.load(Ordering::SeqCst) {
             let state = self.state.clone();
             let session_id = ctx.session_id.clone();
-            // Resolve any alias to the real id so the context window (and thus the
-            // auto-compaction trigger) keys on the model that actually ran — an
-            // alias carries no settings of its own.
-            let routing_model = self
-                .state
-                .automatic_router
-                .session_target(
-                    &ctx.model,
-                    self.tool_ctx.principal.subject_id(),
-                    &ctx.session_id,
-                )
-                .unwrap_or_else(|| ctx.model.clone());
-            let model = self
-                .state
-                .upstreams
-                .resolve_model(
-                    &routing_model,
-                    aiplane_core::server::upstreams::PoolKind::Chat,
-                )
-                .unwrap_or(routing_model);
-            let access = policy.compaction_access();
+            let (model, access) = crate::server::compaction::compaction_target(
+                &self.state,
+                &ctx.model,
+                self.tool_ctx.principal.subject_id(),
+                &ctx.session_id,
+                policy.compaction_access(),
+            )
+            .await;
             let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(

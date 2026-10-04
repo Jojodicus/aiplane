@@ -183,7 +183,7 @@ That compile pass is the audit of every place identity matters.
 | Skills (`allowed_skills_for`, `read_skill`) | groups plus overlay | `grants[skill]` only |
 | MCP (`McpManager::layer_for_user`) | the user's connected per-user connectors plus global ones | `grants[connector]`, restricted to connectors with scope `global` or `agent`. `user_mcp` is never read |
 | RAG collections | `resource_allowed` | `grants[rag_collection]`. An empty `allowed_groups` does **not** count |
-| Models (`PoolAccess`) | pool `allowed_groups` plus the token allowlist | `grants[model]` only (`PoolAccess::granted_models`): every pool is open to it, only the granted names route; a granted automatic route also reaches its candidates, fallback and selector |
+| Models (`PoolAccess`) | pool `allowed_groups` plus the token allowlist | `grants[model]` only (`PoolAccess::granted_models`): each granted name routes only through the pools its grant records, as itself or as what a backend there resolves it to; a granted automatic route also reaches its candidates, fallback and selector through its pools |
 | Memory, personal skills, user tool prefs | yes | no access: `user_id()` is `None` |
 | Usage | `usage_events.user_id` | `usage_events.principal_kind = 'system'`, with the principal id in `user_id` |
 | Limits | subject `user`/`role`/`global` | subject `system`: an operator's cap on the agent, next to the owner's `publish.budget` ([§5](#what-92-built)) |
@@ -1779,10 +1779,11 @@ model rule, and retention.
   (`router.model`), the topic guard (`scope.classifier_model`) and the
   conversation's compaction summary. A sub-agent uses its own spec's model.
   Tools that call a model themselves (image generation) keep the principal's
-  model grants: the tool grant is what allows them. A grant names a model,
-  not a pool: a model name served by a self-hosted and a cloud pool reaches
-  both, as it does for a person picking it in the chat — an owner who needs
-  one of them for PII grants a name only that pool serves (a backend alias).
+  model grants: the tool grant is what allows them. A grant names a model
+  and records the pools the granting manager could use for it: a model name
+  served by a self-hosted pool and by a cloud pool restricted to a group the
+  manager is not in reaches only the self-hosted one, so a grant never takes
+  an agent where its manager's own chat could not go ([Models](#models)).
 - **Retention** (`agents::retention`, `db::agent_retention`). A sweeper runs
   at boot and every hour (`spawn_retention_sweeper`, started in `main.rs`).
   Per agent it deletes the conversations — root sessions it owns, visitor and
@@ -3388,17 +3389,36 @@ granted the new default stops with `ModelNotGranted` (`422
 agent_model_not_granted` in the test chat; voice answers `503`) until it is
 granted or the agent names a model.
 
+**Pools of a grant.** A `model` grant stores, in `principal_grants.pools`,
+the pools the granting manager may use that serve the name — for an automatic
+route, that serve any of its members (`grant_holding::model_grant_pools`,
+`UpstreamRegistry::pools_knowing`). The principal routes the name only
+through those pools, as a person's chat stays inside their groups' pools. An
+admin's grant stores `NULL`: every pool serving it, as an admin's own
+requests reach. Granting again replaces the pools (an admin's regrant widens
+a manager's to every pool; a manager's narrows an admin's to theirs); the
+grant persists like every other.
+
 **Access** (`PoolAccess::granted_models`). A system principal's access is its
-`model` grants: every pool is open to it (the grant replaces the pool's
-group rule, as the pool grant did), and only those names route. An agent run
+`model` grants, each with its pools: the grant replaces the pools' group
+rule, and a name routes only through its pools (`PoolAccess::reaches`).
+A granted backend alias authorises what a backend of one of its pools
+resolves it to, there and nowhere else — the turn resolves `fast` to the
+real id before it routes, and the conversation's compaction routes that id
+too. An agent run
 narrows that to the one model it uses (`PoolAccess::for_system_models`), and
 so do the topic guard, the route classifier, the evaluation judge and voice.
 Default deny: no `model` grant, no model. A granted automatic route is
 resolved like a chat turn (`server::model_route::route_target` →
 `AutomaticRouter::select`): the selector and candidates are reached under
 the access widened by the route's members (`PoolAccess::for_route_targets`
-over `AutomaticRoute::members`), and the chosen target is routed under the
-access widened by exactly that target. A person's token allowlist still stops
+over `AutomaticRoute::members`, each through the route grant's pools), and
+the chosen target is routed under the access widened by exactly that
+target; a candidate that is itself an alias reaches its target the same
+way. Compaction compacts on the target the route pinned for the session,
+else its fallback (`compaction::compaction_target`). The kind's unknown-model
+fallback (`[fallback].<kind>`) only applies to an agent when it is granted
+as well. A person's token allowlist still stops
 at the alias, as before.
 
 **Setup.** One picker per model key (`ModelPicker.svelte` over

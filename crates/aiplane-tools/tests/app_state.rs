@@ -231,7 +231,10 @@ mod token_gate_tests {
         assert!(access.role_ids.is_empty());
         assert_eq!(
             access.granted_models.as_deref(),
-            Some(&std::collections::HashSet::from(["qwen".to_string()]))
+            Some(&std::collections::HashMap::from([(
+                "qwen".to_string(),
+                None
+            )]))
         );
     }
 

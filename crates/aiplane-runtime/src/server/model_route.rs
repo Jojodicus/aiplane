@@ -41,7 +41,7 @@ pub async fn route_target(
     Ok(match decision {
         Some(decision) => RouteTarget {
             model: decision.effective_target.clone(),
-            access: access.for_route_targets([decision.effective_target.as_str()]),
+            access: access.for_route_targets(&decision.alias, [decision.effective_target.as_str()]),
             decision: Some(decision),
         },
         None => RouteTarget {

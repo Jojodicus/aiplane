@@ -660,12 +660,18 @@ pub struct PoolAccess {
     /// these models" means it.
     pub allowed_models: Option<Arc<HashSet<String>>>,
     /// A system principal's model grants: model ids, backend aliases and
-    /// automatic-route aliases. `Some` replaces the group rule entirely —
-    /// every pool is open to it, `is_admin` does not apply, and only these
-    /// names route ([`Self::allows_model`]). An empty set reaches nothing.
-    /// `None` for people, who go through their groups.
-    pub granted_models: Option<Arc<HashSet<String>>>,
+    /// automatic-route aliases, each with the pools it routes through
+    /// (`None`: every pool serving it). `Some` replaces the group rule
+    /// entirely — `is_admin` does not apply, and a granted name reaches only
+    /// its pools, there as itself or as what a backend of the pool resolves
+    /// it to ([`Self::reaches`]). An empty map reaches nothing. `None` for
+    /// people, who go through their groups.
+    pub granted_models: Option<Arc<ModelGrants>>,
 }
+
+/// A system principal's model grants, by name: the pools each routes
+/// through, `None` for every pool serving it.
+pub type ModelGrants = HashMap<String, Option<HashSet<String>>>;
 
 impl PoolAccess {
     /// Full access — used by internal callers that must see the whole topology
@@ -693,7 +699,13 @@ impl PoolAccess {
         let models = listed
             .into_iter()
             .filter(|m| sp.grants.has(GrantKind::Model, m))
-            .map(str::to_string)
+            .map(|m| {
+                let pools = sp
+                    .grants
+                    .model_pools(m)
+                    .map(|p| p.iter().cloned().collect());
+                (m.to_string(), pools)
+            })
             .collect();
         Self {
             role_ids: Vec::new(),
@@ -703,14 +715,32 @@ impl PoolAccess {
         }
     }
 
-    /// The access that routes an automatic route's chosen `targets`: the
-    /// calling token's allowlist no longer applies (it allowed the route's
-    /// alias, and the operator picked the targets), while a system
-    /// principal's grants are widened by exactly `targets` — never opened.
-    pub fn for_route_targets<'a>(&self, targets: impl IntoIterator<Item = &'a str>) -> Self {
+    /// The access that routes the `targets` automatic route `route` chose:
+    /// the calling token's allowlist no longer applies (it allowed the
+    /// route's alias, and the operator picked the targets), while a system
+    /// principal reaches each target only through the pools its grant on
+    /// `route` names — never more.
+    pub fn for_route_targets<'a>(
+        &self,
+        route: &str,
+        targets: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
         let granted_models = self.granted_models.as_ref().map(|granted| {
             let mut widened = (**granted).clone();
-            widened.extend(targets.into_iter().map(str::to_string));
+            if let Some(scope) = granted.get(route) {
+                for target in targets {
+                    let entry = widened
+                        .entry(target.to_string())
+                        .or_insert_with(|| Some(HashSet::new()));
+                    *entry = match (entry.take(), scope) {
+                        (Some(mut have), Some(add)) => {
+                            have.extend(add.iter().cloned());
+                            Some(have)
+                        }
+                        _ => None,
+                    };
+                }
+            }
             Arc::new(widened)
         });
         Self {
@@ -720,22 +750,25 @@ impl PoolAccess {
         }
     }
 
-    /// Whether the calling token may use `model`. `true` for every caller
-    /// without an allowlist, which is the default for every token.
+    /// Whether the caller may name `model` at all: the calling token's
+    /// allowlist and, for a system principal, its grants.
     pub fn allows_model(&self, model: &str) -> bool {
-        self.grants_model(model)
-            && self
-                .allowed_models
-                .as_ref()
-                .is_none_or(|set| set.contains(model))
+        self.grants_model(model) && self.allowlist_allows(model)
     }
 
-    /// Whether a system principal's grants cover `model`; `true` for people.
-    /// A model outside them is unknown to the principal, not "not allowed".
+    /// Whether the calling token's allowlist lets `model` through. `true`
+    /// for every caller without one, which is the default for every token.
+    pub fn allowlist_allows(&self, model: &str) -> bool {
+        self.allowed_models
+            .as_ref()
+            .is_none_or(|set| set.contains(model))
+    }
+
+    /// Whether a system principal's grants name `model`; `true` for people.
     pub fn grants_model(&self, model: &str) -> bool {
         self.granted_models
             .as_ref()
-            .is_none_or(|granted| granted.contains(model))
+            .is_none_or(|granted| granted.contains_key(model))
     }
 
     /// True when the caller carries a model allowlist at all — lets a handler
@@ -747,17 +780,50 @@ impl PoolAccess {
         self.allowed_models.is_some()
     }
 
-    /// Whether the caller may see/route to `pool`: unrestricted pools are open
+    /// Whether the caller may see `pool` at all: unrestricted pools are open
     /// to all; admins bypass; otherwise the caller must hold a listed group.
-    /// A system principal passes every pool: its model grants decide instead.
+    /// A system principal sees the pools its grants route through.
     pub fn allows(&self, pool: &Pool) -> bool {
-        if self.granted_models.is_some() || self.is_admin || pool.allowed_groups.is_empty() {
+        if let Some(granted) = &self.granted_models {
+            return granted.values().any(|pools| in_scope(pools, pool));
+        }
+        if self.is_admin || pool.allowed_groups.is_empty() {
             return true;
         }
         pool.allowed_groups
             .iter()
             .any(|g| self.role_ids.iter().any(|r| r == g))
     }
+
+    /// Whether the caller may route `model` on `pool` (the token allowlist
+    /// aside, which is checked once per request). A person: the pool's
+    /// groups. A system principal: a grant on `model` through `pool`, or a
+    /// grant through `pool` on a name a backend there resolves to `model` —
+    /// so a granted alias authorises its target, but only where it is the
+    /// alias's target.
+    pub fn reaches(&self, pool: &Pool, model: &str) -> bool {
+        let Some(granted) = &self.granted_models else {
+            return self.allows(pool);
+        };
+        if granted
+            .get(model)
+            .is_some_and(|pools| in_scope(pools, pool))
+        {
+            return true;
+        }
+        granted.iter().any(|(name, pools)| {
+            name != model
+                && in_scope(pools, pool)
+                && pool
+                    .backends
+                    .iter()
+                    .any(|b| b.resolve(name).as_deref() == Some(model))
+        })
+    }
+}
+
+fn in_scope(pools: &Option<HashSet<String>>, pool: &Pool) -> bool {
+    pools.as_ref().is_none_or(|p| p.contains(&pool.name))
 }
 
 /// What the running registry is serving right now — the "before" side of the
@@ -1624,7 +1690,7 @@ impl UpstreamRegistry {
         for backend in data
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .flat_map(|p| p.backends.iter())
             // `is_available` for the same reason `Pool::serves_model` uses it:
             // a drained backend takes no traffic, so it should not decide how
@@ -1864,9 +1930,9 @@ impl UpstreamRegistry {
     /// True if a pool of *any* kind that `access` permits knows `model`. Backs
     /// the per-user `GET /v1/models/{id}`.
     pub fn knows_any_for(&self, model: &str, access: &PoolAccess) -> bool {
-        access.allows_model(model)
+        access.allowlist_allows(model)
             && self.data().pools.values().any(|p| {
-                !Self::is_internal_kind(p.kind) && access.allows(p) && p.knows_model(model)
+                !Self::is_internal_kind(p.kind) && access.reaches(p, model) && p.knows_model(model)
             })
     }
 
@@ -1951,6 +2017,9 @@ impl UpstreamRegistry {
                 // Alias names inherit the pool's compliance flags, same as the
                 // real ids — clients pick either, so both must carry the warning.
                 for id in backend.listed_models() {
+                    if !access.reaches(pool, &id) {
+                        continue;
+                    }
                     let entry = merged.entry(id).or_default();
                     // AND the flags: clear only where every serving pool is clear.
                     entry.gdpr &= pool.compliance.gdpr;
@@ -1971,6 +2040,20 @@ impl UpstreamRegistry {
             .pools
             .values()
             .any(|p| p.kind == kind && p.knows_model(model))
+    }
+
+    /// The pools `access` may use that know any of `models`, by name and
+    /// sorted: what a model grant made by that caller routes through.
+    pub fn pools_knowing(&self, models: &[&str], access: &PoolAccess) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .data()
+            .pools
+            .values()
+            .filter(|p| access.allows(p) && models.iter().any(|m| p.knows_model(m)))
+            .map(|p| p.name.clone())
+            .collect();
+        names.sort();
+        names
     }
 
     /// True if any pool of *any* kind knows `model`. Backs `GET
@@ -2054,11 +2137,11 @@ impl UpstreamRegistry {
         // it has to keep behaving exactly as it does for an unrestricted
         // caller — 404, with the kind's fallback still applying — rather than
         // becoming an allowlist error that suppresses the fallback.
-        if !access.allows_model(model) {
-            let known = access.grants_model(model)
-                && d.pools
-                    .values()
-                    .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+        if !access.allowlist_allows(model) {
+            let known = d
+                .pools
+                .values()
+                .any(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
@@ -2069,7 +2152,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.serves_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.serves_model(model))
         {
             return pool
                 .acquire_for_model_affine(model, affinity)
@@ -2081,7 +2164,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.knows_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model))
         {
             return Err(RouteError::Acquire(AcquireError::NoHealthyBackend {
                 pool: pool.name.clone(),
@@ -2222,11 +2305,11 @@ impl UpstreamRegistry {
         access: &PoolAccess,
     ) -> Result<String, RouteError> {
         let d = self.data();
-        if !access.allows_model(model) {
-            let known = access.grants_model(model)
-                && d.pools
-                    .values()
-                    .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+        if !access.allowlist_allows(model) {
+            let known = d
+                .pools
+                .values()
+                .any(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
@@ -2236,7 +2319,7 @@ impl UpstreamRegistry {
         if let Some(id) = d
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .find_map(|p| p.resolve_healthy(model))
         {
             return Ok(id);
@@ -2244,7 +2327,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.knows_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model))
         {
             return Err(RouteError::Acquire(AcquireError::NoHealthyBackend {
                 pool: pool.name.clone(),
@@ -2275,7 +2358,7 @@ impl UpstreamRegistry {
         self.data()
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .find_map(|p| p.resolve_healthy(model))
     }
 
@@ -2296,7 +2379,7 @@ impl UpstreamRegistry {
             .data()
             .pools
             .values()
-            .filter(|pool| pool.kind == kind && access.allows(pool))
+            .filter(|pool| pool.kind == kind && access.reaches(pool, model))
             .flat_map(|pool| pool.backends.iter())
             .filter(|backend| backend.is_available())
             .filter_map(|backend| backend.resolve(model))
@@ -3756,25 +3839,169 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_automatic_route_target_widens_a_principal_by_exactly_the_target() {
+    fn principal_on(
+        grants: &[(&str, Option<&[&str]>)],
+    ) -> crate::server::principal::SystemPrincipal {
         use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
-        let principal = SystemPrincipal {
+        let set = GrantSet::new(
+            grants
+                .iter()
+                .map(|(m, _)| (GrantKind::Model, (*m).to_string())),
+        )
+        .with_model_pools(grants.iter().filter_map(|(m, pools)| {
+            pools.map(|p| {
+                (
+                    (*m).to_string(),
+                    p.iter().map(|s| (*s).to_string()).collect(),
+                )
+            })
+        }));
+        SystemPrincipal {
             id: "p".into(),
-            name: "support".into(),
-            grants: Arc::new(GrantSet::new([(GrantKind::Model, "auto".to_string())])),
-        };
-        let agent = PoolAccess::for_system(&principal).for_route_targets(["picked"]);
+            name: "agent".into(),
+            grants: Arc::new(set),
+        }
+    }
+
+    #[test]
+    fn an_automatic_route_target_reaches_only_the_routes_pools() {
+        let reg = build(vec![
+            (
+                "open",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("open-b", 16)],
+                ),
+            ),
+            (
+                "vip",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("vip-b", 16)],
+                ),
+            ),
+        ]);
+        seed_models(&reg, "open", 0, &["picked"]);
+        seed_models(&reg, "vip", 0, &["picked", "other"]);
+        let agent = PoolAccess::for_system(&principal_on(&[("auto", Some(&["open"]))]))
+            .for_route_targets("auto", ["picked"]);
         assert!(agent.allows_model("auto") && agent.allows_model("picked"));
         assert!(!agent.allows_model("other"), "a target is no open door");
+        for _ in 0..4 {
+            let acquired = reg
+                .acquire_for_access("picked", PoolKind::Chat, &agent)
+                .unwrap();
+            assert_eq!(
+                acquired.backend().name,
+                "open-b",
+                "never the route's other pool"
+            );
+        }
+        let ungranted =
+            PoolAccess::for_system(&principal_on(&[])).for_route_targets("auto", ["picked"]);
+        assert!(
+            !ungranted.allows_model("picked"),
+            "a route not granted widens nothing"
+        );
 
         let token = PoolAccess {
             allowed_models: Some(Arc::new(HashSet::from(["auto".to_string()]))),
             ..PoolAccess::default()
         };
         assert!(
-            token.for_route_targets(["picked"]).allows_model("other"),
+            token
+                .for_route_targets("auto", ["picked"])
+                .allows_model("other"),
             "a person's token allowlist stops at the route, as it always did"
+        );
+    }
+
+    /// The same model on an open and a group-restricted pool: a grant made
+    /// by a manager outside the group names only the open pool, and the
+    /// principal never lands on the other; an unscoped (admin) grant reaches
+    /// both.
+    #[test]
+    fn a_model_grant_routes_only_through_the_pools_it_names() {
+        let mut vip = pool_config(
+            PoolKind::Chat,
+            PickerStrategy::RoundRobin,
+            vec![backend("vip-b", 16)],
+        );
+        vip.allowed_groups = vec!["vip".into()];
+        let reg = build(vec![
+            (
+                "open",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("open-b", 16)],
+                ),
+            ),
+            ("vip", vip),
+        ]);
+        seed_models(&reg, "open", 0, &["gpt-4o"]);
+        seed_models(&reg, "vip", 0, &["gpt-4o"]);
+        let scoped = PoolAccess::for_system(&principal_on(&[("gpt-4o", Some(&["open"]))]));
+        let mut seen = HashSet::new();
+        for _ in 0..8 {
+            let acquired = reg
+                .acquire_for_access("gpt-4o", PoolKind::Chat, &scoped)
+                .unwrap();
+            seen.insert(acquired.backend().name.clone());
+        }
+        assert_eq!(seen, HashSet::from(["open-b".to_string()]));
+
+        let admin = PoolAccess::for_system(&principal_on(&[("gpt-4o", None)]));
+        let pool = |name: &str| reg.pools().into_iter().find(|p| p.name == name).unwrap();
+        assert!(admin.reaches(&pool("vip"), "gpt-4o") && admin.reaches(&pool("open"), "gpt-4o"));
+        assert!(!scoped.reaches(&pool("vip"), "gpt-4o"));
+    }
+
+    /// A granted backend alias authorises the id it resolves to, where it
+    /// resolves to it: the turn resolves `fast` to the real id first and
+    /// routes that.
+    #[test]
+    fn a_granted_alias_authorises_its_target_on_its_own_pools() {
+        let reg = build(vec![
+            (
+                "chat",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend_alias("a", targets(&[("fast", "Qwen/Qwen3")]))],
+                ),
+            ),
+            (
+                "other",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("b", 16)],
+                ),
+            ),
+        ]);
+        seed_models(&reg, "chat", 0, &["Qwen/Qwen3"]);
+        seed_models(&reg, "other", 0, &["Qwen/Qwen3"]);
+        let agent = PoolAccess::for_system(&principal_on(&[("fast", Some(&["chat", "other"]))]));
+        let real = reg
+            .resolve_model_for("fast", PoolKind::Chat, &agent)
+            .expect("the alias resolves");
+        assert_eq!(real, "Qwen/Qwen3");
+        for _ in 0..4 {
+            let acquired = reg
+                .acquire_for_access(&real, PoolKind::Chat, &agent)
+                .unwrap();
+            assert_eq!(
+                acquired.backend().name,
+                "a",
+                "only where `fast` resolves to it"
+            );
+        }
+        assert!(
+            reg.acquire_for_access("other-model", PoolKind::Chat, &agent)
+                .is_err()
         );
     }
 

@@ -36,6 +36,9 @@ pub struct GrantRow {
     pub reference: String,
     pub granted_by: String,
     pub granted_at: Timestamp,
+    /// For a `model` grant: the pools it routes through; `None` for every
+    /// pool serving it.
+    pub pools: Option<Vec<String>>,
 }
 
 /// A token row without its hash — nothing outside the auth lookup needs it.
@@ -224,7 +227,7 @@ pub async fn disable(pool: &Pool, id: &str, actor_id: &str) -> Result<bool, DbEr
 
 pub async fn grants(pool: &Pool, principal_id: &str) -> Result<Vec<GrantRow>, DbError> {
     let rows = sqlx::query(
-        "SELECT kind, ref, granted_by, granted_at FROM principal_grants
+        "SELECT kind, ref, granted_by, granted_at, pools FROM principal_grants
           WHERE principal_id = ? ORDER BY kind, ref",
     )
     .bind(principal_id)
@@ -241,13 +244,22 @@ pub async fn grants(pool: &Pool, principal_id: &str) -> Result<Vec<GrantRow>, Db
                 reference: row.try_get("ref")?,
                 granted_by: row.try_get("granted_by")?,
                 granted_at: super::parse_ts(row.try_get("granted_at")?, "granted_at")?,
+                pools: row
+                    .try_get::<Option<String>, _>("pools")?
+                    .map(|text| {
+                        serde_json::from_str(&text).map_err(|e| DbError::Decode {
+                            column: "pools",
+                            source: e.into(),
+                        })
+                    })
+                    .transpose()?,
             })
         })
         .collect()
 }
 
-/// Add one grant. `Ok(false)` when it was already held — nothing changes and
-/// nothing is audited.
+/// Add one grant, not narrowed to pools. `Ok(false)` when it was already
+/// held — nothing changes and nothing is audited.
 pub async fn add_grant(
     pool: &Pool,
     principal_id: &str,
@@ -255,31 +267,50 @@ pub async fn add_grant(
     reference: &str,
     actor_id: &str,
 ) -> Result<bool, DbError> {
+    add_scoped_grant(pool, principal_id, kind, reference, None, actor_id).await
+}
+
+/// Add one grant; a `model` grant routes only through `pools` (`None`:
+/// every pool serving it). Granting it again replaces its pools. `Ok(false)`
+/// when it was already held exactly so — nothing changes and nothing is
+/// audited.
+pub async fn add_scoped_grant(
+    pool: &Pool,
+    principal_id: &str,
+    kind: GrantKind,
+    reference: &str,
+    pools: Option<&[String]>,
+    actor_id: &str,
+) -> Result<bool, DbError> {
+    let pools = pools.map(|p| json!(p).to_string());
     let mut tx = WriteTx::begin(pool).await?;
-    let inserted = sqlx::query(
-        "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(principal_id, kind, ref) DO NOTHING",
+    let changed = sqlx::query(
+        "INSERT INTO principal_grants (principal_id, kind, ref, granted_by, granted_at, pools)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(principal_id, kind, ref) DO UPDATE
+            SET pools = excluded.pools, granted_by = excluded.granted_by,
+                granted_at = excluded.granted_at
+          WHERE principal_grants.pools IS NOT excluded.pools",
     )
     .bind(principal_id)
     .bind(kind.as_str())
     .bind(reference)
     .bind(actor_id)
     .bind(Timestamp::now().to_string())
+    .bind(&pools)
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    if inserted == 0 {
+    if changed == 0 {
         return Ok(false);
+    }
+    let mut detail = json!({ "kind": kind.as_str(), "ref": reference });
+    if let Some(pools) = &pools {
+        detail["pools"] = serde_json::from_str(pools).unwrap_or_default();
     }
     agent_audit::append(
         &mut tx,
-        agent_audit::NewEvent::new(
-            AuditKind::GrantAdded,
-            principal_id,
-            json!({ "kind": kind.as_str(), "ref": reference }),
-        )
-        .by(Some(actor_id)),
+        agent_audit::NewEvent::new(AuditKind::GrantAdded, principal_id, detail).by(Some(actor_id)),
     )
     .await?;
     tx.commit().await?;
@@ -327,12 +358,22 @@ pub async fn load_active(pool: &Pool, id: &str) -> Result<Option<SystemPrincipal
         return Ok(None);
     };
     let grants = grants(pool, id).await?;
+    let scoped: Vec<(String, std::collections::BTreeSet<String>)> = grants
+        .iter()
+        .filter(|g| g.kind == GrantKind::Model)
+        .filter_map(|g| {
+            g.pools
+                .as_ref()
+                .map(|p| (g.reference.clone(), p.iter().cloned().collect()))
+        })
+        .collect();
     Ok(Some(SystemPrincipal {
         id: row.id,
         name: row.name,
-        grants: std::sync::Arc::new(GrantSet::new(
-            grants.into_iter().map(|g| (g.kind, g.reference)),
-        )),
+        grants: std::sync::Arc::new(
+            GrantSet::new(grants.into_iter().map(|g| (g.kind, g.reference)))
+                .with_model_pools(scoped),
+        ),
     }))
 }
 
@@ -528,6 +569,64 @@ mod tests {
         .unwrap();
         assert!(second.is_none());
         assert_eq!(get(&pool, &first.id).await.unwrap().unwrap().display, "CI");
+    }
+
+    #[tokio::test]
+    async fn a_model_grant_keeps_its_pools_and_a_regrant_replaces_them() {
+        let pool = pool().await;
+        let p = principal(&pool, "ci").await;
+        let open = ["open".to_string()];
+        assert!(
+            add_scoped_grant(
+                &pool,
+                &p.id,
+                GrantKind::Model,
+                "gpt-4o",
+                Some(&open),
+                "alice"
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            !add_scoped_grant(&pool, &p.id, GrantKind::Model, "gpt-4o", Some(&open), "bob")
+                .await
+                .unwrap(),
+            "the same grant again changes nothing"
+        );
+        let loaded = load_active(&pool, &p.id).await.unwrap().unwrap();
+        assert_eq!(
+            loaded
+                .grants
+                .model_pools("gpt-4o")
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            ["open"]
+        );
+        let both = ["open".to_string(), "vip".to_string()];
+        assert!(
+            add_scoped_grant(
+                &pool,
+                &p.id,
+                GrantKind::Model,
+                "gpt-4o",
+                Some(&both),
+                "root"
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            grants(&pool, &p.id).await.unwrap()[0].pools,
+            Some(both.to_vec())
+        );
+        add_scoped_grant(&pool, &p.id, GrantKind::Model, "gpt-4o", None, "root")
+            .await
+            .unwrap();
+        let loaded = load_active(&pool, &p.id).await.unwrap().unwrap();
+        assert!(loaded.grants.has(GrantKind::Model, "gpt-4o"));
+        assert_eq!(loaded.grants.model_pools("gpt-4o"), None, "every pool");
     }
 
     #[tokio::test]

@@ -30,13 +30,16 @@ CREATE TABLE system_principals (
 -- Default deny: a principal holds exactly these rows. `granted_by` is audit
 -- only, not a foreign key, so a manager leaving does not take the grant along.
 -- `a2a_caller`: may call the agent `ref` over A2A. `a2a_agent`: may reach the
--- external agent whose card URL is `ref`.
+-- external agent whose card URL is `ref`. `pools`, for a `model` grant only:
+-- the JSON array of pools it routes through (those the granting manager could
+-- use for it); NULL routes through every pool serving it (an admin's grant).
 CREATE TABLE principal_grants (
     principal_id TEXT NOT NULL REFERENCES system_principals(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL CHECK (kind IN ('tool', 'connector', 'skill', 'rag_collection', 'model', 'a2a_caller', 'a2a_agent')),
     ref          TEXT NOT NULL,
     granted_by   TEXT NOT NULL,
     granted_at   TEXT NOT NULL,
+    pools        TEXT,
     PRIMARY KEY (principal_id, kind, ref)
 ) STRICT;
 

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agents::{self as agents_db, Access};
-use aiplane_core::server::db::{DbError, mcp_catalog, rag as rag_db, users};
+use aiplane_core::server::db::{DbError, automatic_routes, mcp_catalog, rag as rag_db, users};
 use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
@@ -151,6 +151,29 @@ pub async fn holds(
         }
     };
     Ok(held)
+}
+
+/// The pools a `model` grant `user` makes routes through: those they may use
+/// that serve `model` — for an automatic route, any of its members. `None`
+/// for an admin, whose grant routes through every pool serving it, as their
+/// own requests do.
+pub async fn model_grant_pools(
+    state: &RamaState,
+    user: &users::User,
+    model: &str,
+) -> Result<Option<Vec<String>>, DbError> {
+    if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) {
+        return Ok(None);
+    }
+    let route = automatic_routes::get(&state.db, model).await?;
+    let names: Vec<&str> = match &route {
+        Some(route) => route.members().collect(),
+        None => vec![model],
+    };
+    Ok(Some(state.upstreams.pools_knowing(
+        &names,
+        &state.pool_access_for(&user.roles),
+    )))
 }
 
 /// The choice named `model` among the models of every kind an agent can use

@@ -432,14 +432,7 @@ pub async fn detail(State(state): State<Arc<RamaState>>, req: Request) -> Respon
     v["publish_issues"] = json!(publish_issues);
     v["grants"] = grants
         .iter()
-        .map(|g| {
-            json!({
-                "kind": g.kind.as_str(),
-                "ref": g.reference,
-                "granted_by": g.granted_by,
-                "granted_at": g.granted_at,
-            })
-        })
+        .map(super::json_principals::grant_json)
         .collect();
     v["shares"] = shares.iter().map(share_json).collect();
     v["audit"] = audit

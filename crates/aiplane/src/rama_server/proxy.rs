@@ -763,7 +763,9 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         Err(response) => return response,
     };
     let route_access = match &automatic_decision {
-        Some(decision) => access.for_route_targets([decision.effective_target.as_str()]),
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
+        }
         None => access.clone(),
     };
     if let Some(response) =
@@ -1996,7 +1998,7 @@ fn automatic_route_available(
         .resolve_model_for(
             &route.fallback_target,
             PoolKind::Chat,
-            &access.for_route_targets(route.members()),
+            &access.for_route_targets(&route.alias, route.members()),
         )
         .is_some()
 }

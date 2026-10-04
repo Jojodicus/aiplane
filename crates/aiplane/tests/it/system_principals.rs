@@ -321,7 +321,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
     );
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "pool", 0, &["model-a", "model-b"]);
-    common::seed_pool_models(&registry, "vip", 0, &["model-vip"]);
+    common::seed_pool_models(&registry, "vip", 0, &["model-vip", "model-a"]);
     common::seed_pool_models(&registry, "selector", 0, &["picker"]);
 
     let rbac = Arc::new(Resolver::empty());
@@ -1210,6 +1210,62 @@ async fn a_model_grant_is_capped_at_the_models_and_routes_the_manager_may_use() 
         status,
         StatusCode::CREATED,
         "an admin may use every member: {body}"
+    );
+}
+
+/// Whether principal `id`'s grants reach `model-a` on pool `pool_name`.
+async fn reaches(fx: &Fixture, id: &str, pool_name: &str) -> bool {
+    let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, id)
+        .await
+        .unwrap()
+        .unwrap();
+    let pool = fx
+        .state
+        .upstreams
+        .pools()
+        .into_iter()
+        .find(|p| p.name == pool_name)
+        .unwrap();
+    upstreams::PoolAccess::for_system(&principal).reaches(&pool, "model-a")
+}
+
+/// `model-a` is served by the open pool and by `vip`, which the manager is
+/// not in: the manager's grant records the open pool only, and the principal
+/// never reaches `vip` with it; an admin's grant names no pools and reaches
+/// both.
+#[tokio::test]
+async fn a_model_grant_routes_only_through_the_pools_its_manager_could_use() {
+    let fx = fixture().await;
+    let id = fx.create(&fx.manager, "ci").await;
+    let (status, body) = fx.grant(&fx.manager, &id, "model", "model-a").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, shown) = fx
+        .get(&fx.manager, &format!("/api/v0/system-principals/{id}"))
+        .await;
+    let grant = shown["principal"]["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["ref"] == "model-a")
+        .cloned()
+        .unwrap();
+    assert_eq!(grant["pools"], json!(["pool"]), "{shown}");
+
+    assert!(reaches(&fx, &id, "pool").await);
+    assert!(
+        !reaches(&fx, &id, "vip").await,
+        "the manager could not use `vip`"
+    );
+
+    let (status, body) = fx.grant(&fx.admin, &id, "model", "model-a").await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a regrant replaces the pools: {body}"
+    );
+    assert!(
+        reaches(&fx, &id, "vip").await && reaches(&fx, &id, "pool").await,
+        "an admin's grant reaches every pool"
     );
 }
 
