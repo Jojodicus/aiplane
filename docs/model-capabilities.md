@@ -41,6 +41,10 @@ When a tool result contains image content and the primary model's `vision = fals
 3. Emits a visible info banner in the chat: *"The selected model (X) has no vision support.
    Using Y to describe the image and attaching the text description instead."*
 
+Only a declared `vision = false` triggers it. A model whose vision is unknown (`None`)
+gets the image as sent: the banner's claim would be unsupported, and auto-learning turns
+`None` into `false` once the model has refused an image, after which the fallback applies.
+
 ## DB topology tables
 
 Migration `0042_upstream_config_db.sql` created:
