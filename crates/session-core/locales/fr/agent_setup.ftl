@@ -128,15 +128,7 @@ agents-setup-strict-hint = Avant chaque réponse, un petit modèle vérifie si l
 agents-setup-strict-needs = Une garde stricte des sujets nécessite au moins un sujet et une réponse pour les autres sujets.
 agents-setup-scope-try = Essayez dans l’onglet « Essayer » : le chat de test montre le verdict de la garde pour chaque message.
 agents-setup-abilities-lead = Que peut utiliser l’agent ? Les accès nécessaires sont accordés automatiquement, dans la limite de vos propres droits.
-agents-setup-knowledge = Connaissances
-agents-setup-knowledge-desc = Répond à partir de la base de connaissances « { $name } ».
 agents-setup-knowledge-no-search = Vous n’avez pas vous-même accès à la recherche de connaissances ; vous ne pouvez donc pas l’attribuer à l’agent. Demandez à un admin.
-agents-setup-abilities = Capacités
-agents-setup-connector-desc = { $count ->
-    [one] Via le connecteur « { $name } » ({ $count } outil).
-   *[other] Via le connecteur « { $name } » ({ $count } outils).
-}
-agents-setup-skill-desc = Suit les instructions de la compétence « { $name } ».
 agents-setup-locked = Accordé par quelqu’un d’autre
 agents-setup-locked-hint = Vous ne disposez pas vous-même de cet accès et ne pouvez donc pas le modifier. Demandez à un admin.
 agents-setup-kept-live = Toujours accordé, car la version publiée l’utilise.
@@ -313,6 +305,3 @@ agents-setup-ready-recommended-pill = Prêt, avec des recommandations
 agents-setup-test-save-all = Tout enregistrer comme tests
 agents-setup-proposing = Un paramétrage est en cours de rédaction à partir de votre description. Cela prend généralement de 20 à 40 secondes.
 agents-setup-abilities-search = Rechercher des capacités
-agents-setup-abilities-none-found = Aucune capacité ne correspond à votre recherche.
-agents-setup-abilities-show-all = Afficher toutes les capacités ({ $count })
-agents-setup-abilities-none-chosen = La plupart des agents n’ont besoin d’aucune autre capacité. Recherchez-en une ci-dessus ou affichez-les toutes.

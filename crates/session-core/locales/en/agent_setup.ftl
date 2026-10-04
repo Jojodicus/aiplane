@@ -127,15 +127,7 @@ agents-setup-strict-hint = Before every answer a small model checks whether the 
 agents-setup-strict-needs = A strict topic guard needs at least one topic and an answer for other topics.
 agents-setup-scope-try = Try it in the “Try it” tab: the test chat shows the topic guard’s verdict for every message.
 agents-setup-abilities-lead = What may the agent use? The access it needs is granted automatically, as far as you hold it yourself.
-agents-setup-knowledge = Knowledge
-agents-setup-knowledge-desc = Answers from the knowledge base “{ $name }”.
 agents-setup-knowledge-no-search = You may not use the knowledge search yourself, so you cannot give it to the agent. Ask an admin.
-agents-setup-abilities = Abilities
-agents-setup-connector-desc = { $count ->
-    [one] Through the “{ $name }” connector ({ $count } tool).
-   *[other] Through the “{ $name }” connector ({ $count } tools).
-}
-agents-setup-skill-desc = Follows the instructions of the skill “{ $name }”.
 agents-setup-locked = Granted by someone else
 agents-setup-locked-hint = You do not hold this yourself, so you cannot change it. Ask an admin.
 agents-setup-kept-live = Still granted, because the published version uses it.
@@ -312,6 +304,3 @@ agents-setup-ready-recommended-pill = Ready, with recommendations
 agents-setup-test-save-all = Save all as tests
 agents-setup-proposing = Drafting a setup from your description. This usually takes 20 to 40 seconds.
 agents-setup-abilities-search = Search abilities
-agents-setup-abilities-none-found = No ability matches your search.
-agents-setup-abilities-show-all = Show all abilities ({ $count })
-agents-setup-abilities-none-chosen = Most agents need no further abilities. Search for one above, or show them all.

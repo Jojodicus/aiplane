@@ -211,7 +211,7 @@ test('details round-trip; a fresh row takes its key from its label, managed and 
 	const back = readSlots(throughEditor(spec));
 	assert.deepEqual(back, [
 		{ key: 'email', label: 'E-mail', kind: 'email', values: [] },
-		{ key: 'legacy', label: 'Legacy', kind: 'custom', values: [] },
+		{ key: 'legacy', label: 'legacy', kind: 'custom', values: [] },
 		{ key: 'customer_number', label: 'Customer number', kind: 'customer_number', values: [] },
 		{ key: 'plan', label: 'Plan', kind: 'choice', values: ['basic', 'pro'] }
 	], 'the order the person gave survives the server sorting the keys');
@@ -676,12 +676,12 @@ test('a proposed tone selects its chips by id and keeps only the rest as free te
 	assert.equal(suggestedTone({ chips: ['brief'], language: null, response: '' }, { ...current, language: 'fr' }).language, 'fr');
 });
 
-test('a slot is named by its label, the managed ones from the catalog', () => {
-	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
+test('a slot is named by its label, the managed ones from the catalog, the rest by their key as it is', () => {
+	const spec: Spec = { state: { speicher_groesse: { type: 'string', description: 'Speichergröße' }, firma_name: { type: 'string' }, topic: { type: 'enum', description: 'What the request is about.' } } };
 	assert.equal(slotLabel(spec, 'speicher_groesse', tr), 'Speichergröße');
-	assert.equal(slotLabel(spec, 'firma', tr), 'Firma');
+	assert.equal(slotLabel(spec, 'firma_name', tr), 'firma_name');
 	assert.equal(slotLabel(spec, 'topic', tr), '«agents-slot-label-topic»');
-	assert.equal(slotLabel(spec, 'gone', tr), 'Gone');
+	assert.equal(slotLabel(spec, 'gone', tr), 'gone');
 });
 
 test('details keep the order they were given, and unordered slots follow by name', () => {

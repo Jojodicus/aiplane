@@ -63,12 +63,6 @@ export function unique(name: string, taken: Iterable<string>): string {
 	}
 }
 
-/** `customer_number` → `Customer number`, for a slot that has no description. */
-export function humanize(key: string): string {
-	const words = key.replace(/_/g, ' ').trim();
-	return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
 /* ---- task & tone ---------------------------------------------------- */
 
 export const TONES = ['friendly', 'factual', 'casual', 'brief', 'detailed', 'formal', 'informal'] as const;
@@ -504,7 +498,7 @@ export function readSlots(spec: Spec): SlotRow[] {
 		.sort(([a, da], [b, db]) => position(da) - position(db) || a.localeCompare(b))
 		.map(([key, def]) => ({
 			key,
-			label: typeof def?.description === 'string' && def.description ? def.description : humanize(key),
+			label: typeof def?.description === 'string' && def.description ? def.description : key,
 			kind: slotKind(def),
 			values: Array.isArray(def?.values) ? def.values.map(String) : []
 		}));
@@ -516,11 +510,11 @@ const MANAGED_LABELS: Record<string, string> = {
 	[VERIFIED_SLOT]: 'agents-slot-label-verified'
 };
 
-/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key made readable. */
+/** A slot as the details step names it: its label, the hand-off and identity slots by name, else its key. */
 export function slotLabel(spec: Spec, key: string, tr: (key: string) => string): string {
 	if (MANAGED_LABELS[key]) return tr(MANAGED_LABELS[key]);
 	const description = spec?.state?.[key]?.description;
-	return typeof description === 'string' && description.trim() ? description.trim() : humanize(key);
+	return typeof description === 'string' && description.trim() ? description.trim() : key;
 }
 
 /** The key a row is saved under; a fresh row's follows its label. */

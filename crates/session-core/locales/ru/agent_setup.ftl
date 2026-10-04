@@ -134,17 +134,7 @@ agents-setup-strict-hint = Перед каждым ответом небольш
 agents-setup-strict-needs = Строгому стражу тем нужны хотя бы одна тема и ответ на другие темы.
 agents-setup-scope-try = Попробуйте на вкладке «Попробовать»: тестовый чат показывает решение стража для каждого сообщения.
 agents-setup-abilities-lead = Чем может пользоваться агент? Нужные доступы выдаются автоматически, насколько они есть у вас самих.
-agents-setup-knowledge = Знания
-agents-setup-knowledge-desc = Отвечает из базы знаний «{ $name }».
 agents-setup-knowledge-no-search = Вам самим недоступен поиск по знаниям, поэтому вы не можете дать его агенту. Обратитесь к администратору.
-agents-setup-abilities = Возможности
-agents-setup-connector-desc = { $count ->
-    [one] Через коннектор «{ $name }» ({ $count } инструмент).
-    [few] Через коннектор «{ $name }» ({ $count } инструмента).
-    [many] Через коннектор «{ $name }» ({ $count } инструментов).
-   *[other] Через коннектор «{ $name }» ({ $count } инструмента).
-}
-agents-setup-skill-desc = Следует инструкциям навыка «{ $name }».
 agents-setup-locked = Выдано кем-то другим
 agents-setup-locked-hint = У вас самих этого нет, поэтому изменить это вы не можете. Обратитесь к администратору.
 agents-setup-kept-live = Доступ сохранён, потому что его использует опубликованная версия.
@@ -327,6 +317,3 @@ agents-setup-ready-recommended-pill = Готов, есть рекомендац�
 agents-setup-test-save-all = Сохранить все как тесты
 agents-setup-proposing = Настройка составляется по вашему описанию. Обычно это занимает от 20 до 40 секунд.
 agents-setup-abilities-search = Поиск возможностей
-agents-setup-abilities-none-found = Нет возможностей, подходящих под ваш запрос.
-agents-setup-abilities-show-all = Показать все возможности ({ $count })
-agents-setup-abilities-none-chosen = Большинству агентов дополнительные возможности не нужны. Найдите нужную через поиск выше или покажите все.

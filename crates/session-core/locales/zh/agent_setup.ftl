@@ -125,14 +125,7 @@ agents-setup-strict-hint = 每次回答前，一个小模型会检查问题是�
 agents-setup-strict-needs = 严格的主题守卫至少需要一个主题和一条针对其他主题的回复。
 agents-setup-scope-try = 在“试用”标签页中试一试：测试聊天会显示主题守卫对每条消息的判定。
 agents-setup-abilities-lead = 智能体可以使用什么？所需的访问权限会在你本人权限范围内自动授予。
-agents-setup-knowledge = 知识
-agents-setup-knowledge-desc = 根据知识库“{ $name }”回答。
 agents-setup-knowledge-no-search = 你自己无权使用知识搜索，因此无法分配给智能体。请联系管理员。
-agents-setup-abilities = 能力
-agents-setup-connector-desc = { $count ->
-   *[other] 通过连接器“{ $name }”（{ $count } 个工具）。
-}
-agents-setup-skill-desc = 遵循技能“{ $name }”的说明。
 agents-setup-locked = 由他人授予
 agents-setup-locked-hint = 你本人没有这项权限，因此无法更改。请联系管理员。
 agents-setup-kept-live = 仍然保留授权，因为已发布的版本在使用它。
@@ -306,6 +299,3 @@ agents-setup-ready-recommended-pill = 就绪，附带建议
 agents-setup-test-save-all = 全部保存为测试
 agents-setup-proposing = 正在根据您的描述起草设置，通常需要 20 到 40 秒。
 agents-setup-abilities-search = 搜索能力
-agents-setup-abilities-none-found = 没有符合搜索条件的能力。
-agents-setup-abilities-show-all = 显示全部能力（{ $count }）
-agents-setup-abilities-none-chosen = 大多数智能体不需要更多能力。可在上方搜索，或显示全部。

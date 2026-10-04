@@ -128,15 +128,7 @@ agents-setup-strict-hint = Vor jeder Antwort prüft ein kleines Modell, ob die F
 agents-setup-strict-needs = Ein strenger Themen-Wächter braucht mindestens ein Thema und eine Antwort für andere Themen.
 agents-setup-scope-try = Probieren Sie es unter „Ausprobieren“ aus: Der Test-Chat zeigt für jede Nachricht das Urteil des Themen-Wächters.
 agents-setup-abilities-lead = Was darf der Agent nutzen? Die nötigen Zugriffe werden automatisch vergeben, soweit Sie sie selbst haben.
-agents-setup-knowledge = Wissen
-agents-setup-knowledge-desc = Antwortet aus der Wissensdatenbank „{ $name }“.
 agents-setup-knowledge-no-search = Sie dürfen die Wissenssuche selbst nicht nutzen und können sie dem Agenten deshalb nicht geben. Fragen Sie einen Admin.
-agents-setup-abilities = Fähigkeiten
-agents-setup-connector-desc = { $count ->
-    [one] Über den Connector „{ $name }“ ({ $count } Werkzeug).
-   *[other] Über den Connector „{ $name }“ ({ $count } Werkzeuge).
-}
-agents-setup-skill-desc = Folgt den Anweisungen des Skills „{ $name }“.
 agents-setup-locked = Von jemand anderem vergeben
 agents-setup-locked-hint = Sie haben das selbst nicht und können es deshalb nicht ändern. Fragen Sie einen Admin.
 agents-setup-kept-live = Bleibt vergeben, weil die veröffentlichte Version es nutzt.
@@ -313,6 +305,3 @@ agents-setup-ready-recommended-pill = Bereit, mit Empfehlungen
 agents-setup-test-save-all = Alle als Tests speichern
 agents-setup-proposing = Aus Ihrer Beschreibung wird eine Einrichtung entworfen. Das dauert meist 20 bis 40 Sekunden.
 agents-setup-abilities-search = Fähigkeiten suchen
-agents-setup-abilities-none-found = Keine Fähigkeit passt zu Ihrer Suche.
-agents-setup-abilities-show-all = Alle Fähigkeiten anzeigen ({ $count })
-agents-setup-abilities-none-chosen = Die meisten Agenten brauchen keine weiteren Fähigkeiten. Suchen Sie oben gezielt danach oder lassen Sie sich alle anzeigen.
