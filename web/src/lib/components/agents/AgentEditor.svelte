@@ -44,7 +44,7 @@
 					{:else if section.id === 'state'}
 						<StateSlotsForm bind:spec {issues} />
 					{:else if section.id === 'routes'}
-						<RoutesForm bind:spec {issues} {agents} pools={granted.pools} />
+						<RoutesForm bind:spec {issues} {agents} models={granted.models} />
 					{:else}
 						<SettingsForm bind:spec {issues} />
 					{/if}

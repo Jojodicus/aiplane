@@ -35,7 +35,7 @@ async fn spending_llm(deltas: Vec<Value>, tokens: u64) -> MockServer {
 fn worker_spec() -> Value {
     json!({
         "main": {
-            "pool": "worker-pool",
+            "model": "worker-model",
             "instructions": { "orchestration": "Draft what the task asks for." },
             "budget": { "rounds": 4 }
         },
@@ -47,7 +47,7 @@ fn worker_spec() -> Value {
 fn critic_spec(schema: Value) -> Value {
     json!({
         "main": {
-            "pool": "critic-pool",
+            "model": "critic-model",
             "instructions": { "orchestration": "Review the result against the task." },
             "budget": { "rounds": 4 }
         },
@@ -67,7 +67,7 @@ fn main_spec(worker: &str, critic: &str, extra: Value) -> Value {
     }
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Collect the request, then call forward_request." },
             "budget": { "rounds": 6 }
         },
@@ -119,17 +119,17 @@ async fn run_loop(
     )
     .await;
     let writer = world
-        .agent("writer", &[(GrantKind::Pool, "worker-pool")])
+        .agent("writer", &[(GrantKind::Model, "worker-model")])
         .await;
     world.publish(&writer, &worker_spec()).await;
     let reviewer = world
-        .agent("reviewer", &[(GrantKind::Pool, "critic-pool")])
+        .agent("reviewer", &[(GrantKind::Model, "critic-model")])
         .await;
     world
         .publish(&reviewer, &critic_spec(verdict_schema()))
         .await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     let spec = main_spec(&writer, &reviewer, extra);
     assert_eq!(world.issues(&support, &spec).await, []);
@@ -341,17 +341,17 @@ async fn the_test_chat_debug_view_shows_every_iteration() {
     )
     .await;
     let writer = world
-        .agent("writer", &[(GrantKind::Pool, "worker-pool")])
+        .agent("writer", &[(GrantKind::Model, "worker-model")])
         .await;
     world.publish(&writer, &worker_spec()).await;
     let reviewer = world
-        .agent("reviewer", &[(GrantKind::Pool, "critic-pool")])
+        .agent("reviewer", &[(GrantKind::Model, "critic-model")])
         .await;
     world
         .publish(&reviewer, &critic_spec(verdict_schema()))
         .await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     let draft_spec = main_spec(&writer, &reviewer, json!({}));
     let since = jiff::Timestamp::now();
@@ -421,11 +421,11 @@ async fn the_validator_refuses_a_critic_without_an_acceptance_field_and_loops_ba
     let main = llm(vec![text("unused")]).await;
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
     let writer = world
-        .agent("writer", &[(GrantKind::Pool, "support-pool")])
+        .agent("writer", &[(GrantKind::Model, "support-model")])
         .await;
     world.publish(&writer, &worker_spec()).await;
     let lax = world
-        .agent("lax", &[(GrantKind::Pool, "support-pool")])
+        .agent("lax", &[(GrantKind::Model, "support-model")])
         .await;
     world
         .publish(
@@ -435,7 +435,7 @@ async fn the_validator_refuses_a_critic_without_an_acceptance_field_and_loops_ba
         )
         .await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
 
     let issues = world
@@ -469,7 +469,7 @@ async fn the_validator_refuses_a_critic_without_an_acceptance_field_and_loops_ba
 
     // A critic that routes back to the main agent closes a cycle.
     let routing_back = world
-        .agent("routing-back", &[(GrantKind::Pool, "support-pool")])
+        .agent("routing-back", &[(GrantKind::Model, "support-model")])
         .await;
     let mut back = critic_spec(verdict_schema());
     back["state"] = json!({ "issue": { "type": "string", "set_by": ["llm"] } });

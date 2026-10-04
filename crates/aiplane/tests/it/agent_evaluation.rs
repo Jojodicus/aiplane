@@ -128,7 +128,7 @@ fn finish_script() -> Vec<Value> {
 fn support_spec(tech: &str, billing: &str, extra_publish: Value) -> Value {
     json!({
         "main": {
-            "pool": "main-pool",
+            "model": "main-model",
             "instructions": { "orchestration": "Find the issue, then forward it." },
             "budget": { "rounds": 6 }
         },
@@ -282,7 +282,7 @@ impl Fx {
 
     async fn sub_agent(&self, name: &str, spec: Value) -> String {
         let id = self.create(name).await;
-        self.grant(&id, "pool", "tech-pool").await;
+        self.grant(&id, "model", "tech-model").await;
         self.save_draft(&id, spec).await;
         let (status, body) = self.publish(&id).await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -295,16 +295,16 @@ impl Fx {
         let tech = self
             .sub_agent(
                 &format!("tech{suffix}"),
-                json!({ "main": { "pool": "tech-pool",
+                json!({ "main": { "model": "tech-model",
                     "instructions": { "orchestration": "Solve it." } }, "finish": finish }),
             )
             .await;
         let billing = self.create(&format!("billing{suffix}")).await;
-        self.grant(&billing, "pool", "tech-pool").await;
+        self.grant(&billing, "model", "tech-model").await;
         self.grant(&billing, "tool", "get_current_timestamp").await;
         self.save_draft(
             &billing,
-            json!({ "main": { "pool": "tech-pool",
+            json!({ "main": { "model": "tech-model",
                 "instructions": { "orchestration": "Answer the invoice question." },
                 "tools": ["get_current_timestamp"],
                 "tool_resources": { "get_current_timestamp": {
@@ -316,7 +316,7 @@ impl Fx {
         assert_eq!(status, StatusCode::CREATED, "{body}");
 
         let support = self.create(&format!("support{suffix}")).await;
-        self.grant(&support, "pool", "main-pool").await;
+        self.grant(&support, "model", "main-model").await;
         self.save_draft(&support, support_spec(&tech, &billing, publish_settings))
             .await;
         support
@@ -554,7 +554,7 @@ async fn the_output_filter_outcome_is_an_expectation() {
             Method::PUT,
             &format!("/api/v0/agents/{}/draft", fx.support),
             Some(json!({ "spec": {
-                "main": { "pool": "main-pool",
+                "main": { "model": "main-model",
                           "instructions": { "orchestration": "Answer." } },
                 "publish": { "output_filter": {
                     "patterns": { "invoice": "RE-\\d{6}" }, "action": "withhold" } }
@@ -696,7 +696,7 @@ async fn publishing_is_blocked_until_the_suite_is_green_for_this_draft_when_the_
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let (_, detail) = fx.get(&format!("/api/v0/agents/{guarded}")).await;
-    let mut draft = detail["draft_spec"].clone();
+    let mut draft = detail["agent"]["draft_spec"].clone();
     draft["main"]["instructions"]["response"] = json!("Be brief.");
     fx.save_draft(&guarded, draft).await;
     let (status, body) = fx.publish(&guarded).await;

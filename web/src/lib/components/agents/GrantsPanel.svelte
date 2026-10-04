@@ -16,7 +16,7 @@
 		onchanged: () => void | Promise<void>;
 	} = $props();
 
-	let kind = $state<GrantKind>('pool');
+	let kind = $state<GrantKind>('model');
 	let ref = $state('');
 	let error = $state<string | null>(null);
 	let busy = $state(false);
@@ -24,8 +24,8 @@
 	const options = $derived.by((): { value: string; label: string }[] => {
 		if (!resources) return [];
 		switch (kind) {
-			case 'pool':
-				return resources.pools.map((v) => ({ value: v, label: v }));
+			case 'model':
+				return [...new Set(Object.values(resources.models ?? {}).flatMap((list) => list.map((m) => m.id)))].map((v) => ({ value: v, label: v }));
 			case 'tool':
 				return resources.tools.map((v) => ({ value: v.id, label: v.name }));
 			case 'connector':

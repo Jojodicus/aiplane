@@ -14,8 +14,9 @@
 //!   `tool_resource` must not silently leave a tool unbound. Types, enums,
 //!   durations, origins and regexes are checked; the `finish` schema goes
 //!   through [`FinishContract::new`], the run-time validator itself.
-//! - **Grants.** Every pool, tool, connector and skill the spec names must be
-//!   granted to this agent's principal. The spec cannot widen what the
+//! - **Grants.** Every model, tool, connector and skill the spec names must be
+//!   granted to this agent's principal — and on publish, so must the
+//!   gateway's default model an unset model key runs on. The spec cannot widen what the
 //!   principal holds; it can only pick from it.
 //! - **References.** Sub-agents are named by agent id and must exist (and, on
 //!   publish, be live). Gate leaves, templates and `set_by` entries must name
@@ -92,16 +93,17 @@ pub struct SpecContext<'a> {
     /// Every published agent's live spec, by id: the sub-agent graph the
     /// cycle, depth and bind-reach checks walk.
     pub live_specs: &'a HashMap<String, Value>,
-    /// What a voice direction without a pool of its own would run on.
-    pub voice_defaults: &'a VoiceDefaults,
+    /// What an unset model key runs on.
+    pub model_defaults: &'a ModelDefaults,
 }
 
-/// The pool each `publish.voice` direction falls back to when the spec names
-/// none: the pool of the gateway's default model for it among the agent's
-/// grants (`agents::defaults::granted_default`), `None` when no granted pool
-/// serves one.
+/// The gateway's default model of each kind
+/// (`server::model_choices::gateway_default`): what `main.model` and a
+/// `publish.voice` direction run on when the spec names none. `None` when
+/// the gateway serves no model of that kind.
 #[derive(Debug, Clone, Default)]
-pub struct VoiceDefaults {
+pub struct ModelDefaults {
+    pub chat: Option<String>,
     pub transcription: Option<String>,
     pub speech: Option<String>,
 }
@@ -119,9 +121,9 @@ const TOP_KEYS: &[&str] = &[
     "publish",
 ];
 const PROFILE_KEYS: &[&str] = &["display", "avatar", "color"];
-const SCOPE_KEYS: &[&str] = &["topics", "refusal", "strict", "classifier_pool"];
+const SCOPE_KEYS: &[&str] = &["topics", "refusal", "strict", "classifier_model"];
 const MAIN_KEYS: &[&str] = &[
-    "pool",
+    "model",
     "instructions",
     "tools",
     "skills",
@@ -159,7 +161,7 @@ const SLOT_TYPES: &[&str] = &[
     "string", "email", "enum", "integer", "number", "boolean", "subject",
 ];
 
-const ROUTER_KEYS: &[&str] = &["kind", "pool", "order"];
+const ROUTER_KEYS: &[&str] = &["kind", "model", "order"];
 const ROUTER_KINDS: &[&str] = &["rules", "classifier"];
 const ROUTE_KEYS: &[&str] = &[
     "description",
@@ -195,8 +197,8 @@ const VOICE_KEYS: &[&str] = &[
     "input",
     "output",
     "voice",
-    "speech_pool",
-    "transcription_pool",
+    "speech_model",
+    "transcription_model",
 ];
 const RATE_SCOPES: &[&str] = &["visitor", "ip"];
 const RATE_KEYS: &[&str] = &["max", "per"];
@@ -673,7 +675,7 @@ impl<'a> Check<'a> {
             Some(v) => self.main(v),
             None if self.stage == Stage::Publish => self.issue(
                 "main",
-                "a published agent needs `main` with a `pool` and its instructions",
+                "a published agent needs `main` with its instructions",
             ),
             None => {}
         }
@@ -754,10 +756,10 @@ impl<'a> Check<'a> {
             }
             None => false,
         };
-        if let Some(pool) = map.get("classifier_pool")
-            && let Some(name) = self.string(pool, "scope.classifier_pool")
+        if let Some(model) = map.get("classifier_model")
+            && let Some(name) = self.string(model, "scope.classifier_model")
         {
-            self.require_grant("scope.classifier_pool", GrantKind::Pool, name, "pool");
+            self.require_grant("scope.classifier_model", GrantKind::Model, name, "model");
         }
         if strict && topics == 0 {
             self.issue(
@@ -779,19 +781,14 @@ impl<'a> Check<'a> {
         let Some(map) = self.object(v, "main", MAIN_KEYS) else {
             return;
         };
-        match map.get("pool") {
-            Some(pool) => {
-                if let Some(name) = self.string(pool, "main.pool") {
-                    self.require_grant("main.pool", GrantKind::Pool, name, "pool");
-                }
-            }
-            None if self.stage == Stage::Publish => self.issue(
-                "main.pool",
-                "a published agent needs a pool to run on — set `main.pool` to one of its pool \
-                 grants",
-            ),
-            None => {}
-        }
+        let chat_default = self.ctx.model_defaults.chat.as_deref();
+        self.model_or_default(
+            map.get("model"),
+            "main.model",
+            chat_default,
+            ("the agent", "chat"),
+            "in the setup's \"Task & tone\" step choose its model (that grants it)",
+        );
         self.instructions(map.get("instructions"));
 
         let mut tools = BTreeSet::new();
@@ -1156,15 +1153,16 @@ impl<'a> Check<'a> {
                 None
             }
         };
-        match map.get("pool") {
-            Some(pool) => {
-                if let Some(name) = self.string(pool, "router.pool") {
-                    self.require_grant("router.pool", GrantKind::Pool, name, "pool");
+        match map.get("model") {
+            Some(model) => {
+                if let Some(name) = self.string(model, "router.model") {
+                    self.require_grant("router.model", GrantKind::Model, name, "model");
                 }
             }
             None if kind.as_deref() == Some("classifier") => self.issue(
-                "router.pool",
-                "a `classifier` router needs a `pool` to classify with",
+                "router.model",
+                "a `classifier` router needs a `model` to classify with — name one of the \
+                 agent's model grants",
             ),
             None => {}
         }
@@ -1663,9 +1661,9 @@ impl<'a> Check<'a> {
         }
     }
 
-    /// `publish.voice`: each direction that is on runs on a pool the agent
-    /// was granted — the one named here, else the pool of the gateway's
-    /// default model for it. A published agent must have one of the two.
+    /// `publish.voice`: each direction that is on runs on the model named
+    /// here, else on the gateway's default model for it — one the agent
+    /// must hold a grant on before it is published.
     fn voice(&mut self, v: &Value) {
         let Some(map) = self.object(v, "publish.voice", VOICE_KEYS) else {
             return;
@@ -1688,43 +1686,85 @@ impl<'a> Check<'a> {
         {
             self.issue(
                 "publish.voice.voice",
-                "must not be blank — name one of the speech pool's voices, or remove it to use \
-                 the pool's default for the visitor's language",
+                "must not be blank — name one of the speech model's voices, or remove it to use \
+                 its default for the visitor's language",
             );
         }
-        let defaults = self.ctx.voice_defaults;
+        let defaults = self.ctx.model_defaults;
         for (key, wanted, fallback, (direction, kind)) in [
             (
-                "transcription_pool",
+                "transcription_model",
                 input,
-                &defaults.transcription,
+                defaults.transcription.as_deref(),
                 ("voice input", "speech-recognition"),
             ),
             (
-                "speech_pool",
+                "speech_model",
                 output,
-                &defaults.speech,
+                defaults.speech.as_deref(),
                 ("voice output", "speech-output"),
             ),
         ] {
             let path = join("publish.voice", key);
-            match map.get(key) {
-                Some(x) => {
-                    if let Some(pool) = self.string(x, &path) {
-                        self.require_grant(&path, GrantKind::Pool, pool, "pool");
-                    }
-                }
-                None if wanted && fallback.is_none() && self.stage == Stage::Publish => self.issue(
+            if wanted {
+                self.model_or_default(
+                    map.get(key),
                     &path,
-                    format!(
-                        "{direction} is on, but the agent was granted no {kind} pool, so \
-                             neither a pool named here nor the gateway's default model can serve \
-                             it — in the setup's \"Website\" step choose one (that grants it), \
-                             or switch {direction} off"
+                    fallback,
+                    (direction, kind),
+                    &format!(
+                        "in the setup's \"Website\" step choose its model (that grants it), or \
+                         switch {direction} off"
                     ),
-                ),
-                None => {}
+                );
+            } else if let Some(x) = map.get(key)
+                && let Some(model) = self.string(x, &path)
+            {
+                self.require_grant(&path, GrantKind::Model, model, "model");
             }
+        }
+    }
+
+    /// A model key (`main.model`, a voice direction's): the model it names
+    /// must be granted; unset, it runs on the gateway's default model of its
+    /// `kind`, which on publish must exist and be granted. `what` is what
+    /// runs on it, `fix` how the owner makes it run.
+    fn model_or_default(
+        &mut self,
+        named: Option<&Value>,
+        path: &str,
+        default: Option<&str>,
+        (what, kind): (&str, &str),
+        fix: &str,
+    ) {
+        if let Some(x) = named {
+            if let Some(model) = self.string(x, path) {
+                self.require_grant(path, GrantKind::Model, model, "model");
+            }
+            return;
+        }
+        if self.stage != Stage::Publish {
+            return;
+        }
+        match default {
+            None => self.issue(
+                path,
+                format!(
+                    "{what} names no model and the gateway has no default {kind} model to run \
+                     {what} on — {fix}"
+                ),
+            ),
+            Some(model) if !self.ctx.grants.has(GrantKind::Model, model) => {
+                let hint = self.grant_hint(GrantKind::Model.as_str(), model);
+                self.issue(
+                    path,
+                    format!(
+                        "{what} names no model, so it runs on the gateway's default {kind} \
+                         model `{model}`, which is not granted to this agent — {fix}, or {hint}"
+                    ),
+                );
+            }
+            Some(_) => {}
         }
     }
 }
@@ -1740,8 +1780,8 @@ mod tests {
 
     fn grants() -> GrantSet {
         GrantSet::new([
-            (GrantKind::Pool, "chat".to_string()),
-            (GrantKind::Pool, "small".to_string()),
+            (GrantKind::Model, "chat".to_string()),
+            (GrantKind::Model, "small".to_string()),
             (GrantKind::Tool, "rag_search".to_string()),
             (GrantKind::Connector, "erp".to_string()),
             (GrantKind::Skill, "brand".to_string()),
@@ -1766,7 +1806,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &HashMap::new(),
-                voice_defaults: &Default::default(),
+                model_defaults: &Default::default(),
             },
             stage,
         )
@@ -1785,10 +1825,10 @@ mod tests {
                 "topics": ["croit products", "Ceph storage"],
                 "refusal": "I can only help with croit products and Ceph storage.",
                 "strict": true,
-                "classifier_pool": "small"
+                "classifier_model": "small"
             },
             "main": {
-                "pool": "chat",
+                "model": "chat",
                 "instructions": {
                     "orchestration": "Collect name, email and issue before forwarding.",
                     "response": "Friendly, short, in the visitor's language."
@@ -1817,7 +1857,7 @@ mod tests {
                          "email_slot": "email", "writes": { "verified": "result" },
                          "max_attempts": 5, "code_ttl": "10m" }
             },
-            "router": { "kind": "classifier", "pool": "small" },
+            "router": { "kind": "classifier", "model": "small" },
             "routes": {
                 "billing": {
                     "when": { "all": [
@@ -1858,14 +1898,14 @@ mod tests {
             grants: &grants,
             agents: &agents,
             live_specs: &live,
-            voice_defaults: &Default::default(),
+            model_defaults: &Default::default(),
         };
         let typed = super::check(&full(), &ctx, Stage::Publish).expect("the layout is valid");
-        assert_eq!(typed.main_pool(), Some("chat"));
+        assert_eq!(typed.main_model(), Some("chat"));
         let scope = typed.scope.as_ref().expect("the layout declares a scope");
         assert!(scope.strict);
         assert_eq!(scope.topics, ["croit products", "Ceph storage"]);
-        assert_eq!(scope.classifier_pool.as_deref(), Some("small"));
+        assert_eq!(scope.classifier_model.as_deref(), Some("small"));
         assert_eq!(typed.main.budget.budget().rounds(), 12);
         assert!(matches!(
             &typed.routes["billing"].target,
@@ -1908,14 +1948,14 @@ mod tests {
     }
 
     #[test]
-    fn a_scope_is_checked_for_its_shape_and_its_classifier_pool_grant() {
+    fn a_scope_is_checked_for_its_shape_and_its_classifier_model_grant() {
         let issues = check(
             json!({ "scope": {
                 "topic": [],
                 "topics": ["Ceph", "Ceph", " "],
                 "refusal": 3,
                 "strict": "yes",
-                "classifier_pool": "gpu-big"
+                "classifier_model": "gpu-big"
             } }),
             Stage::Draft,
         );
@@ -1927,7 +1967,7 @@ mod tests {
                 "scope.topics[2]",
                 "scope.refusal",
                 "scope.strict",
-                "scope.classifier_pool"
+                "scope.classifier_model"
             ]
         );
         assert!(issues[5].message.contains("not granted"), "{issues:?}");
@@ -1940,7 +1980,7 @@ mod tests {
         assert_eq!(paths(&check(json!({}), Stage::Publish)), ["main"]);
         assert_eq!(
             paths(&check(json!({ "main": {} }), Stage::Publish)),
-            ["main.pool", "main.instructions"]
+            ["main.model", "main.instructions"]
         );
     }
 
@@ -1972,10 +2012,10 @@ mod tests {
     }
 
     #[test]
-    fn an_ungranted_tool_pool_skill_or_connector_is_rejected_with_the_grant_to_make() {
+    fn an_ungranted_model_tool_skill_or_connector_is_rejected_with_the_grant_to_make() {
         let issues = check(
             json!({ "main": {
-                "pool": "gpu-big",
+                "model": "gpu-big",
                 "tools": ["send_email", "mcp__crm__find", "rag_search"],
                 "skills": ["legal"]
             } }),
@@ -1984,7 +2024,7 @@ mod tests {
         assert_eq!(
             paths(&issues),
             [
-                "main.pool",
+                "main.model",
                 "main.tools[0]",
                 "main.tools[1]",
                 "main.skills[0]"
@@ -2656,7 +2696,7 @@ mod tests {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &live_specs,
-                voice_defaults: &Default::default(),
+                model_defaults: &Default::default(),
             },
             stage,
         )
@@ -2756,7 +2796,7 @@ mod tests {
             paths(&check(spec.clone(), Stage::Draft)),
             ["router.order[2]", "router.order[1]"]
         );
-        spec["router"] = json!({ "kind": "classifier", "pool": "small", "order": ["r"] });
+        spec["router"] = json!({ "kind": "classifier", "model": "small", "order": ["r"] });
         assert_eq!(paths(&check(spec, Stage::Draft)), ["router.order"]);
     }
 
@@ -2878,7 +2918,7 @@ mod tests {
                 "main.budget.rounds",
                 "main.budget.seconds",
                 "main.budget.tokens",
-                "router.pool",
+                "router.model",
                 "finish.schema",
                 "on_tool_unavailable",
                 "publish.origins[0]",
@@ -2913,11 +2953,11 @@ mod tests {
     }
 
     #[test]
-    fn voice_settings_are_checked_and_their_pools_must_be_granted() {
+    fn voice_settings_are_checked_and_their_models_must_be_granted() {
         let ok = check(
             json!({ "publish": { "voice": {
                 "input": true, "output": true, "voice": "alloy",
-                "speech_pool": "chat", "transcription_pool": "small"
+                "speech_model": "chat", "transcription_model": "small"
             } } }),
             Stage::Draft,
         );
@@ -2926,7 +2966,7 @@ mod tests {
         let issues = check(
             json!({ "publish": { "voice": {
                 "input": "yes", "output": true, "voice": " ",
-                "speech_pool": "cloud-tts", "transcription_pool": 3, "loud": true
+                "speech_model": "cloud-tts", "transcription_model": 3, "loud": true
             } } }),
             Stage::Draft,
         );
@@ -2936,8 +2976,8 @@ mod tests {
                 "publish.voice.loud",
                 "publish.voice.input",
                 "publish.voice.voice",
-                "publish.voice.transcription_pool",
-                "publish.voice.speech_pool"
+                "publish.voice.transcription_model",
+                "publish.voice.speech_model"
             ]
         );
         assert!(
@@ -2947,54 +2987,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_published_voice_direction_names_the_pool_it_runs_on() {
-        let mut spec = full();
-        spec["publish"]["voice"] = json!({ "input": true, "output": true });
-        assert!(check(spec.clone(), Stage::Draft).is_empty());
-        let issues = check(spec, Stage::Publish);
-        assert_eq!(
-            paths(&issues),
-            [
-                "publish.voice.transcription_pool",
-                "publish.voice.speech_pool"
-            ]
-        );
-
-        let mut off = full();
-        off["publish"]["voice"] = json!({ "input": false, "output": false });
-        assert_eq!(check(off, Stage::Publish), []);
+    fn check_with(spec: &Value, defaults: &ModelDefaults) -> Vec<SpecIssue> {
+        let grants = grants();
+        let agents = agents();
+        validate(
+            spec,
+            &SpecContext {
+                agent_id: SELF,
+                grants: &grants,
+                agents: &agents,
+                live_specs: &HashMap::new(),
+                model_defaults: defaults,
+            },
+            Stage::Publish,
+        )
     }
 
     #[test]
-    fn a_voice_direction_without_a_pool_runs_on_the_granted_default_or_names_the_step() {
+    fn an_unset_model_runs_on_the_gateway_default_which_must_be_granted() {
+        let mut spec = full();
+        spec["main"].as_object_mut().unwrap().remove("model");
+        assert!(check(spec.clone(), Stage::Draft).is_empty());
+
+        let none = check_with(&spec, &ModelDefaults::default());
+        assert_eq!(paths(&none), ["main.model"]);
+        assert!(
+            none[0].message.contains("no default chat model"),
+            "{none:?}"
+        );
+
+        let ungranted = check_with(
+            &spec,
+            &ModelDefaults {
+                chat: Some("gpu-big".into()),
+                ..ModelDefaults::default()
+            },
+        );
+        assert_eq!(paths(&ungranted), ["main.model"]);
+        assert!(
+            ungranted[0]
+                .message
+                .contains("default chat model `gpu-big`")
+                && ungranted[0].message.contains("\"kind\": \"model\""),
+            "{}",
+            ungranted[0].message
+        );
+
+        let granted = ModelDefaults {
+            chat: Some("chat".into()),
+            ..ModelDefaults::default()
+        };
+        assert_eq!(check_with(&spec, &granted), []);
+    }
+
+    #[test]
+    fn a_published_voice_direction_runs_on_a_granted_model() {
         let mut spec = full();
         spec["publish"]["voice"] = json!({ "input": true, "output": true });
+        assert!(check(spec.clone(), Stage::Draft).is_empty());
         let issues = check(spec.clone(), Stage::Publish);
+        assert_eq!(
+            paths(&issues),
+            [
+                "publish.voice.transcription_model",
+                "publish.voice.speech_model"
+            ]
+        );
         assert!(
             issues[0].message.contains("\"Website\" step"),
             "{}",
             issues[0].message
         );
 
-        let grants = grants();
-        let agents = agents();
-        let defaults = VoiceDefaults {
+        let defaults = ModelDefaults {
+            chat: None,
             transcription: Some("small".into()),
-            speech: None,
+            speech: Some("cloud-tts".into()),
         };
-        let issues = validate(
-            &spec,
-            &SpecContext {
-                agent_id: SELF,
-                grants: &grants,
-                agents: &agents,
-                live_specs: &HashMap::new(),
-                voice_defaults: &defaults,
-            },
-            Stage::Publish,
-        );
-        assert_eq!(paths(&issues), ["publish.voice.speech_pool"]);
+        let issues = check_with(&spec, &defaults);
+        assert_eq!(paths(&issues), ["publish.voice.speech_model"]);
+        assert!(issues[0].message.contains("`cloud-tts`"), "{issues:?}");
+
+        spec["publish"]["voice"]["speech_model"] = json!("chat");
+        assert_eq!(check_with(&spec, &defaults), []);
+
+        let mut off = full();
+        off["publish"]["voice"] = json!({ "input": false, "output": false });
+        assert_eq!(check(off, Stage::Publish), []);
     }
 
     #[test]

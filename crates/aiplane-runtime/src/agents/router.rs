@@ -39,7 +39,7 @@ use super::a2a_client::Dispatch as A2aDispatch;
 use super::bind::render_task;
 use super::gate::{GateInput, GateStatus, OpenRoute, RouteGates};
 use super::human::{answered, hand_off, human_routes};
-use super::pool_choice::{PoolChoice, Question};
+use super::model_call::{ModelCall, Question};
 use super::profile::{Role, RunOptions, RunProfile};
 use super::spec::AgentSpec;
 use super::spec::model::{A2aRouteSpec, Route, RouteTarget, RouterConfig, RouterKind};
@@ -82,7 +82,9 @@ pub struct RouterSpec {
     pub agent: Arc<AgentSpec>,
     pub schema: Arc<StateSchema>,
     pub gates: Arc<RouteGates>,
-    pub main_pool: String,
+    /// The main run's model: what the classifier asks when `router.model`
+    /// is unset.
+    pub main_model: String,
     pub snapshot: Arc<StateSnapshot>,
 }
 
@@ -173,7 +175,7 @@ impl ForwardRequest {
         let view = state.view(&self.spec.schema);
         let picked = match &self.options.classifier {
             Some(classifier) => classifier.pick(&choices, &view).await,
-            None => self.pool_classifier(ctx).pick(&choices, &view).await,
+            None => self.model_classifier(ctx).pick(&choices, &view).await,
         }
         .map_err(|e| {
             format!(
@@ -193,14 +195,14 @@ impl ForwardRequest {
         }
     }
 
-    fn pool_classifier(&self, ctx: &ToolContext) -> PoolClassifier {
-        let pool = self
+    fn model_classifier(&self, ctx: &ToolContext) -> ModelClassifier {
+        let model = self
             .router()
-            .and_then(|r| r.pool.as_deref())
-            .unwrap_or(&self.spec.main_pool);
-        PoolClassifier(PoolChoice::new(
+            .and_then(|r| r.model.as_deref())
+            .unwrap_or(&self.spec.main_model);
+        ModelClassifier(ModelCall::new(
             self.state.clone(),
-            pool,
+            model,
             &self.spec.principal,
             ctx,
         ))
@@ -646,14 +648,14 @@ impl Tool for ForwardRequest {
     }
 }
 
-/// The classifier that asks a model of the agent's pool, constrained to the
-/// open route names ([`PoolChoice`]). It reaches only that pool, and its call
-/// is a usage row of the agent's run, so it counts against the owner's
+/// The classifier that asks one of the agent's models, constrained to the
+/// open route names ([`ModelCall`]). It reaches only that model, and its
+/// call is a usage row of the agent's run, so it counts against the owner's
 /// budget.
-pub struct PoolClassifier(PoolChoice);
+pub struct ModelClassifier(ModelCall);
 
 #[async_trait]
-impl RouteClassifier for PoolClassifier {
+impl RouteClassifier for ModelClassifier {
     async fn pick(&self, choices: &[RouteChoice], view: &[SlotView]) -> Result<String, String> {
         let names: Vec<&str> = choices.iter().map(|c| c.name.as_str()).collect();
         self.0

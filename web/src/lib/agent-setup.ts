@@ -16,7 +16,9 @@
  * structured system prompt it ends up in (`docs/agents.md` "What #115
  * built"). Text a person reads comes from the catalogs.
  */
-import type { AgentError, AgentResources, Grant, Spec, SpecIssue } from './agents.ts';
+import type { AgentError, AgentResources, Grant, ModelDefaults, ModelKind, Spec, SpecIssue } from './agents.ts';
+import { modelSelectOptions } from './model-option.ts';
+import type { SearchOption } from './searchable-select.ts';
 import templates from './agent-templates.json' with { type: 'json' };
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the spec is open-ended JSON */
@@ -106,7 +108,8 @@ export interface Basics {
 	language: Language;
 	/** Lines of the response instructions no chip stands for, kept as written. */
 	extra: string;
-	pool: string;
+	/** `main.model`; `''` runs the agent on the gateway's default chat model. */
+	model: string;
 }
 
 export function readBasics(spec: Spec): Basics {
@@ -129,7 +132,7 @@ export function readBasics(spec: Spec): Basics {
 		tones: TONES.filter((t) => tones.includes(t)),
 		language,
 		extra: extra.join('\n').trim(),
-		pool: String(spec.main?.pool ?? '')
+		model: String(spec.main?.model ?? '')
 	};
 }
 
@@ -149,24 +152,61 @@ export function writeBasics(spec: Spec, b: Basics): void {
 	spec.main.instructions ??= {};
 	spec.main.instructions.orchestration = b.task;
 	spec.main.instructions.response = responseText(b);
-	if (b.pool) spec.main.pool = b.pool;
-	else delete spec.main.pool;
+	if (b.model) spec.main.model = b.model;
+	else delete spec.main.model;
 }
 
 /* ---- model choice --------------------------------------------------- */
 
-export const TIERS = ['fast', 'balanced', 'thorough'] as const;
-export type Tier = (typeof TIERS)[number];
-export type Tiers = Record<Tier, string | null>;
-
-/** Which of the admin-mapped choices `pool` is, if any. */
-export function tierOf(pool: string, tiers: Tiers | undefined): Tier | null {
-	if (!pool || !tiers) return null;
-	return TIERS.find((t) => tiers[t] === pool) ?? null;
+/**
+ * A model picker's options: the gateway default first (`labels.empty`, value
+ * `''`, left out when `null`), then what the manager may grant of `kind`, then
+ * the models the agent holds that no list of the manager's names and the one
+ * `named` now — those keep their place, though the manager could not grant
+ * them again.
+ */
+export function modelPickerOptions(
+	kind: ModelKind,
+	named: string,
+	held: string[],
+	resources: AgentResources | null | undefined,
+	labels: { empty: string | null; gdpr: string; nda: string }
+): SearchOption[] {
+	const options: SearchOption[] = labels.empty === null ? [] : [{ value: '', label: labels.empty }];
+	options.push(...modelSelectOptions(resources?.models?.[kind] ?? [], labels));
+	const listedAnywhere = (id: string) => Object.values(resources?.models ?? {}).some((list) => list.some((m) => m.id === id));
+	for (const id of [...held.filter((h) => !listedAnywhere(h)), named]) {
+		if (id && !options.some((o) => o.value === id)) options.push({ value: id, label: id });
+	}
+	return options;
 }
 
-export function hasTiers(tiers: Tiers | undefined): boolean {
-	return !!tiers && TIERS.some((t) => !!tiers[t]);
+/** The model whose grant a choice of `chosen` stages: it, or for `''` the gateway default when the manager may grant it. */
+export function modelGrantFor(kind: ModelKind, chosen: string, resources: AgentResources | null | undefined): string | null {
+	if (chosen) return chosen;
+	const fallback = resources?.defaults?.[kind];
+	return fallback && (resources?.models?.[kind] ?? []).some((m) => m.id === fallback) ? fallback : null;
+}
+
+/** The gateway default an unset key runs on when the agent holds no grant on it and the manager cannot give it one; `null` otherwise. */
+export function defaultOutOfReach(kind: ModelKind, named: string, held: string[], resources: AgentResources | null | undefined): string | null {
+	const fallback = resources?.defaults?.[kind];
+	if (named || !fallback || held.includes(fallback) || modelGrantFor(kind, '', resources)) return null;
+	return fallback;
+}
+
+/** Every model `spec` runs on: the ones it names, and the gateway defaults its unset keys fall back to. */
+export function modelsInUse(spec: Spec | null, defaults: ModelDefaults | null | undefined): string[] {
+	if (!spec) return [];
+	const voice = spec.publish?.voice ?? {};
+	const used = [
+		spec.main?.model || defaults?.chat,
+		spec.scope?.classifier_model,
+		spec.router?.model,
+		voice.transcription_model || (voice.input === true ? defaults?.transcription : null),
+		voice.speech_model || (voice.output === true ? defaults?.speech : null)
+	];
+	return [...new Set(used.filter((m): m is string => typeof m === 'string' && !!m))];
 }
 
 /* ---- scope (#115) ---------------------------------------------------- */
@@ -188,8 +228,8 @@ export function readScope(spec: Spec): Scope {
 
 export function writeScope(spec: Spec, s: Scope): void {
 	const topics = s.topics.map((t) => t.trim()).filter(Boolean);
-	const keep = spec.scope?.classifier_pool ? { classifier_pool: spec.scope.classifier_pool } : {};
-	if (!topics.length && !s.refusal.trim() && !s.strict && !keep.classifier_pool) {
+	const keep = spec.scope?.classifier_model ? { classifier_model: spec.scope.classifier_model } : {};
+	if (!topics.length && !s.refusal.trim() && !s.strict && !keep.classifier_model) {
 		delete spec.scope;
 		return;
 	}
@@ -331,18 +371,12 @@ export function setKnowledge(spec: Spec, names: string[], canList: boolean): voi
 }
 
 /** Whether the published version still relies on a grant, so revoking it would break the live agent. */
-export function liveUses(live: Spec | null, kind: string, ref: string): boolean {
+export function liveUses(live: Spec | null, kind: string, ref: string, defaults?: ModelDefaults | null): boolean {
 	if (!live) return false;
 	const used = tools(live);
 	switch (kind) {
-		case 'pool':
-			return (
-				live.main?.pool === ref ||
-				live.scope?.classifier_pool === ref ||
-				live.router?.pool === ref ||
-				live.publish?.voice?.speech_pool === ref ||
-				live.publish?.voice?.transcription_pool === ref
-			);
+		case 'model':
+			return modelsInUse(live, defaults).includes(ref);
 		case 'tool':
 			return used.includes(ref);
 		case 'connector':
@@ -878,14 +912,14 @@ export function writeColor(spec: Spec, color: string): void {
 	}
 }
 
-/** `publish.voice`: what visitors may say and hear, and the pool each runs on. */
+/** `publish.voice`: what visitors may say and hear, and the model each runs on (`''`: the gateway default). */
 export interface Voice {
 	input: boolean;
 	output: boolean;
-	/** `''` for the speech pool's default voice for the visitor's language. */
+	/** `''` for the speech model's default voice for the visitor's language. */
 	voice: string;
-	transcriptionPool: string;
-	speechPool: string;
+	transcriptionModel: string;
+	speechModel: string;
 }
 
 export function readVoice(spec: Spec): Voice {
@@ -894,8 +928,8 @@ export function readVoice(spec: Spec): Voice {
 		input: v.input === true,
 		output: v.output === true,
 		voice: typeof v.voice === 'string' ? v.voice : '',
-		transcriptionPool: typeof v.transcription_pool === 'string' ? v.transcription_pool : '',
-		speechPool: typeof v.speech_pool === 'string' ? v.speech_pool : ''
+		transcriptionModel: typeof v.transcription_model === 'string' ? v.transcription_model : '',
+		speechModel: typeof v.speech_model === 'string' ? v.speech_model : ''
 	};
 }
 
@@ -904,8 +938,8 @@ export function writeVoice(spec: Spec, v: Voice): void {
 	if (v.input) out.input = true;
 	if (v.output) out.output = true;
 	if (v.voice.trim()) out.voice = v.voice.trim();
-	if (v.transcriptionPool) out.transcription_pool = v.transcriptionPool;
-	if (v.speechPool) out.speech_pool = v.speechPool;
+	if (v.transcriptionModel) out.transcription_model = v.transcriptionModel;
+	if (v.speechModel) out.speech_model = v.speechModel;
 	if (Object.keys(out).length) {
 		spec.publish ??= {};
 		spec.publish.voice = out;
@@ -917,44 +951,19 @@ export function writeVoice(spec: Spec, v: Voice): void {
 	}
 }
 
-/** The pools a voice direction that is on still needs before the agent can be published. */
-export function voiceMissing(v: Voice): Array<'transcription' | 'speech'> {
-	const missing: Array<'transcription' | 'speech'> = [];
-	if (v.input && !v.transcriptionPool) missing.push('transcription');
-	if (v.output && !v.speechPool) missing.push('speech');
+/** The directions that are on with neither a model named nor a gateway default to run on. */
+export function voiceMissing(v: Voice, defaults: ModelDefaults | null | undefined): VoiceKind[] {
+	const missing: VoiceKind[] = [];
+	if (v.input && !v.transcriptionModel && !defaults?.transcription) missing.push('transcription');
+	if (v.output && !v.speechModel && !defaults?.speech) missing.push('speech');
 	return missing;
 }
 
 export type VoiceKind = 'transcription' | 'speech';
 
-/** Whether the manager can offer this direction at all: they hold a pool of its kind, or one is named already. */
+/** Whether the manager can offer this direction at all: they may grant a model of its kind, or one is named already. */
 export function voiceOffered(kind: VoiceKind, named: string, resources: AgentResources | null | undefined): boolean {
-	return !!named || (resources?.voice_pools?.[kind]?.length ?? 0) > 0;
-}
-
-/**
- * The pool a voice direction starts on when it is switched on: the one
- * already named, else the pool of the gateway's default model for it, else
- * the first the manager holds. `grant` says the pool still has to be staged
- * for granting. `null` when the manager holds none — the step explains
- * instead of offering a switch that publishing would refuse.
- */
-export function voicePoolOnSwitch(
-	kind: VoiceKind,
-	named: string,
-	resources: AgentResources | null | undefined
-): { pool: string; grant: boolean } | null {
-	if (named) return { pool: named, grant: false };
-	const held = resources?.voice_pools?.[kind] ?? [];
-	const preferred = resources?.defaults?.[kind]?.pool;
-	const pool = preferred && held.includes(preferred) ? preferred : held[0];
-	return pool ? { pool, grant: true } : null;
-}
-
-/** The chat pool a new agent starts on: the gateway's default chat model's pool, when the manager holds it. */
-export function defaultChatPool(resources: AgentResources | null | undefined): string | null {
-	const pool = resources?.defaults?.chat?.pool;
-	return pool && (resources?.pools ?? []).includes(pool) ? pool : null;
+	return !!named || (resources?.models?.[kind]?.length ?? 0) > 0;
 }
 
 /* ---- errors --------------------------------------------------------- */
@@ -1010,7 +1019,7 @@ export function templateSpec(key: TemplateKey, tr: (key: string) => string): Spe
 export function applyTemplate(spec: Spec, key: TemplateKey, tr: (key: string) => string): Spec {
 	const next = templateSpec(key, tr);
 	if (spec.profile?.display) next.profile = { ...(next.profile ?? {}), display: spec.profile.display };
-	if (spec.main?.pool) next.main = { ...(next.main ?? {}), pool: spec.main.pool };
+	if (spec.main?.model) next.main = { ...(next.main ?? {}), model: spec.main.model };
 	return next;
 }
 
@@ -1018,7 +1027,7 @@ export function applyTemplate(spec: Spec, key: TemplateKey, tr: (key: string) =>
 export function isBlank(spec: Spec): boolean {
 	const s = clone(spec);
 	if (s.profile) delete s.profile.display;
-	if (s.main) delete s.main.pool;
+	if (s.main) delete s.main.model;
 	const empty = (v: unknown): boolean =>
 		v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0) ||
 		(typeof v === 'object' && !Array.isArray(v) && Object.values(v as object).every(empty));
@@ -1042,7 +1051,7 @@ export interface Todo {
 export function stepForPath(path: string): StepKey | null {
 	const head = (prefixes: string[]) => prefixes.some((p) => path === p || path.startsWith(`${p}.`) || path.startsWith(`${p}[`));
 	if (head(['profile.color', 'publish.voice'])) return 'site';
-	if (head(['main.pool', 'main.instructions', 'profile'])) return 'basics';
+	if (head(['main.model', 'main.instructions', 'profile'])) return 'basics';
 	if (head(['scope'])) return 'scope';
 	if (head(['main.tools', 'main.skills', 'main.tool_resources'])) return 'abilities';
 	if (head(['verifiers', `state.${VERIFIED_SLOT}`])) return 'identity';
@@ -1052,10 +1061,10 @@ export function stepForPath(path: string): StepKey | null {
 	return null;
 }
 
-export function checklist(spec: Spec, publishIssues: SpecIssue[] = []): Todo[] {
+export function checklist(spec: Spec, publishIssues: SpecIssue[] = [], defaults?: ModelDefaults | null): Todo[] {
 	const todos: Todo[] = [];
 	const basics = readBasics(spec);
-	if (!basics.pool) todos.push({ step: 'basics', key: 'agents-setup-todo-model', blocking: true });
+	if (!basics.model && !defaults?.chat) todos.push({ step: 'basics', key: 'agents-setup-todo-model', blocking: true });
 	if (!basics.task.trim()) todos.push({ step: 'basics', key: 'agents-setup-todo-task', blocking: true });
 	if (strictIncomplete(readScope(spec))) todos.push({ step: 'scope', key: 'agents-setup-strict-needs', blocking: true });
 	const identity = identityMissing(spec);
@@ -1089,7 +1098,7 @@ export type SectionStatus = 'open' | 'done' | 'optional';
 export function sectionStatus(step: StepKey, spec: Spec, todos: Todo[]): SectionStatus {
 	if (todos.some((t) => t.step === step)) return 'open';
 	const configured: Partial<Record<StepKey, boolean>> = {
-		basics: !!readBasics(spec).task.trim() && !!spec.main?.pool,
+		basics: !!readBasics(spec).task.trim(),
 		scope: readScope(spec).topics.length > 0,
 		abilities: tools(spec).length > 0 || skills(spec).length > 0,
 		slots: readSlots(spec).length > 0,
@@ -1120,8 +1129,8 @@ export function summary(step: StepKey, spec: Spec, ctx: SummaryContext): string 
 	switch (step) {
 		case 'basics': {
 			const b = readBasics(spec);
-			const tier = tierOf(b.pool, ctx.resources?.tiers);
-			const model = tier ? tr(`agents-setup-model-${tier}`) : b.pool ? humanize(b.pool.replace(/-/g, '_')) : tr('agents-setup-sum-model-none');
+			const fallback = ctx.resources?.defaults?.chat;
+			const model = b.model || (fallback ? tr('agents-setup-model-default', { model: fallback }) : tr('agents-setup-sum-model-none'));
 			const task = b.task.trim() ? clip(b.task.trim().split('\n')[0]) : tr('agents-setup-sum-no-task');
 			return tr('agents-setup-sum-basics', { task, model });
 		}

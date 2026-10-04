@@ -491,58 +491,12 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
     };
     // Session path: access is exactly the user's group grant.
     let access = state.pool_access_for(&user.roles);
-    let mut models: Vec<(String, aiplane_core::server::upstreams::Compliance)> =
-        state.upstreams.models_with_compliance_for_kind_for(
-            aiplane_core::server::upstreams::PoolKind::Chat,
-            &access,
-        );
-    let mut automatic_targets: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    if let Ok(routes) = aiplane_core::server::db::automatic_routes::all(&state.db).await {
-        let chat_compliance: std::collections::HashMap<_, _> = models.iter().cloned().collect();
-        let selector_compliance: std::collections::HashMap<_, _> = state
-            .upstreams
-            .models_with_compliance_for_kind_for(
-                aiplane_core::server::upstreams::PoolKind::SystemOne,
-                &access,
-            )
-            .into_iter()
-            .collect();
-        for route in routes {
-            let Some(fallback) = chat_compliance.get(&route.fallback_target) else {
-                continue;
-            };
-            let mut compliance = *fallback;
-            if let Some(selector) = selector_compliance.get(&route.selector_model) {
-                compliance.gdpr &= selector.gdpr;
-                compliance.nda &= selector.nda;
-            } else {
-                compliance.gdpr = false;
-                compliance.nda = false;
-            }
-            for candidate in &route.candidates {
-                if let Some(candidate_compliance) = chat_compliance.get(&candidate.target) {
-                    compliance.gdpr &= candidate_compliance.gdpr;
-                    compliance.nda &= candidate_compliance.nda;
-                }
-            }
-            if !models.iter().any(|(name, _)| name == &route.alias) {
-                automatic_targets.insert(
-                    route.alias.clone(),
-                    route
-                        .candidates
-                        .iter()
-                        .map(|candidate| candidate.target.clone())
-                        .collect(),
-                );
-                models.push((route.alias, compliance));
-            }
-        }
-        models.sort_by(|left, right| left.0.cmp(&right.0));
-    }
-    use aiplane_core::server::feature_defaults::{self, Feature};
-    let configured = feature_defaults::get(&state.db, Feature::Chat).await;
-    feature_defaults::promote(configured.as_deref(), &mut models, |m| m.0.as_str());
+    let models = aiplane_runtime::server::model_choices::offered(
+        &state,
+        aiplane_core::server::upstreams::PoolKind::Chat,
+        &access,
+    )
+    .await;
     // Whether the composer's effort control does anything for each model.
     //
     // It is a select that has always been rendered the same for every model,
@@ -567,7 +521,7 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
             .collect();
     let listed: Vec<_> = models
         .into_iter()
-        .map(|(id, compliance)| {
+        .map(|choice| {
             // Aliases are listed as models of their own (`default`, `fast`,
             // …), and an alias name says nothing about the family behind it.
             // The turn resolves the alias to its real upstream id *before*
@@ -576,18 +530,19 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
             // out on a name like `default` while the request path happily
             // sends Qwen's `enable_thinking`, which is the same disagreement
             // between UI and wire this whole field exists to prevent.
-            let targets = automatic_targets.get(&id).cloned().unwrap_or_else(|| {
-                vec![
+            let targets = match choice.route {
+                Some(route) => route.candidates,
+                None => vec![
                     state
                         .upstreams
                         .resolve_model_for(
-                            &id,
+                            &choice.id,
                             aiplane_core::server::upstreams::PoolKind::Chat,
                             &access,
                         )
-                        .unwrap_or_else(|| id.clone()),
-                ]
-            });
+                        .unwrap_or_else(|| choice.id.clone()),
+                ],
+            };
             let reasoning = targets.iter().any(|target| {
                 let dialect = state
                     .upstreams
@@ -604,9 +559,9 @@ pub async fn chat_models(State(state): State<Arc<RamaState>>, req: Request) -> R
                 ) != aiplane_core::server::reasoning::ReasoningStyle::None
             });
             json!({
-                "id": id,
-                "gdpr": compliance.gdpr,
-                "nda": compliance.nda,
+                "id": choice.id,
+                "gdpr": choice.compliance.gdpr,
+                "nda": choice.compliance.nda,
                 "reasoning": reasoning,
             })
         })
@@ -628,13 +583,15 @@ pub async fn transcription_models(State(state): State<Arc<RamaState>>, req: Requ
         }
     };
     let access = state.pool_access_for(&user.roles);
-    let mut models = state.upstreams.models_for_kind_for(
+    let models: Vec<String> = aiplane_runtime::server::model_choices::offered(
+        &state,
         aiplane_core::server::upstreams::PoolKind::Transcription,
         &access,
-    );
-    use aiplane_core::server::feature_defaults::{self, Feature};
-    let configured = feature_defaults::get(&state.db, Feature::Transcription).await;
-    feature_defaults::promote(configured.as_deref(), &mut models, |model| model.as_str());
+    )
+    .await
+    .into_iter()
+    .map(|choice| choice.id)
+    .collect();
     let speech_available = !state
         .upstreams
         .models_for_kind_for(aiplane_core::server::upstreams::PoolKind::Speech, &access)

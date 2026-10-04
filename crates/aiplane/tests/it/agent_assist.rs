@@ -325,8 +325,8 @@ async fn a_suggestion_offers_checked_steps_and_writes_nothing() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["pool"], "assist-pool");
     assert_eq!(body["model"], "assist-model");
+    assert!(body.get("pool").is_none(), "{body}");
     assert_eq!(body["usage"]["total_tokens"], 700);
     let steps = &body["steps"];
     assert_eq!(
@@ -603,14 +603,12 @@ async fn the_assistant_asks_the_model_not_to_think() {
     );
 }
 
-/// Without a pool in the request or the draft, the assistant runs on the
-/// agents' chat default: the admin's "Balanced" choice (#116) when set, else
-/// the pool of the gateway's default chat model (Models & routing → Default
-/// models), which itself falls back to the first model served.
+/// Without a model in the request or the draft, the assistant runs on the
+/// gateway's default chat model (Models & routing → Default models), which
+/// itself falls back to the first model the manager may use.
 #[tokio::test]
-async fn without_a_pool_the_assistant_follows_the_gateway_default_chat_model() {
+async fn without_a_model_the_assistant_follows_the_gateway_default_chat_model() {
     use aiplane_core::server::feature_defaults::{self, Feature};
-    use aiplane_core::server::settings;
 
     let fx = fixture(answer(
         &json!({ "suggestion": "Better.", "why": "Clearer." }),
@@ -620,10 +618,9 @@ async fn without_a_pool_the_assistant_follows_the_gateway_default_chat_model() {
         .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
         .await;
     assert_eq!(
-        body["pool"], "assist-pool",
+        body["model"], "assist-model",
         "no default: the first model served"
     );
-    assert_eq!(body["model"], "assist-model");
 
     feature_defaults::set(&fx.state.db, Feature::Chat, Some("balanced-model"))
         .await
@@ -633,27 +630,18 @@ async fn without_a_pool_the_assistant_follows_the_gateway_default_chat_model() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        body["pool"], "zz-balanced",
+        body["model"], "balanced-model",
         "the gateway's default chat model"
     );
-    assert_eq!(body["model"], "balanced-model");
 
-    settings::store(
-        &fx.state.db,
-        &fx.state.crypto,
-        &[("agents.pool_balanced".into(), "assist-pool".into())],
-    )
-    .await
-    .unwrap();
-    fx.state.reload_settings().await;
     let (status, body) = fx
-        .improve(&fx.alice, json!({ "field": "task", "text": "help" }))
+        .improve(
+            &fx.alice,
+            json!({ "field": "task", "text": "help", "model": "assist-model" }),
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body["pool"], "assist-pool",
-        "an admin's Balanced choice wins"
-    );
+    assert_eq!(body["model"], "assist-model", "a model asked for wins");
 }
 
 #[tokio::test]
@@ -715,9 +703,9 @@ async fn bad_input_and_missing_rights_are_refused_before_the_model_is_asked() {
         ),
         (
             &fx.alice,
-            json!({ "scenario": "shop", "pool": "nope" }),
+            json!({ "scenario": "shop", "model": "nope" }),
             StatusCode::FORBIDDEN,
-            "assist_pool_not_allowed",
+            "assist_model_not_allowed",
         ),
         (
             &fx.plain,

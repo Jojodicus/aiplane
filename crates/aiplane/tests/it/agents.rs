@@ -7,8 +7,8 @@
 //!
 //! Two managers (`alice`, `bob`) hold `can_manage_agents` through the
 //! `managers` group; `plain` holds nothing but the default group, which grants
-//! the time tool and leaves the pool open to everyone — so every manager holds
-//! both and can grant them to an agent. `root` is an admin.
+//! the time tool and leaves the pool serving model `m` open to everyone — so every
+//! manager holds both and can grant them to an agent. `root` is an admin.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -124,7 +124,7 @@ pub(crate) async fn fixture_with_pools(
     for p in registry.pools() {
         if let Some(models) = served.get(&p.name) {
             p.backends[0].set_models(models.iter().cloned().collect());
-        } else if upstream.is_some() {
+        } else {
             p.backends[0].set_models(["m".to_string()].into());
         }
     }
@@ -271,12 +271,12 @@ impl Fx {
         .await
     }
 
-    /// An agent with the pool and the time tool granted and a publishable
+    /// An agent with the model and the time tool granted and a publishable
     /// draft that uses both.
     pub(crate) async fn runnable(&self, name: &str) -> String {
         let id = self.create(&self.alice, name).await;
         assert_eq!(
-            self.grant(&self.alice, &id, "pool", "pool").await,
+            self.grant(&self.alice, &id, "model", "m").await,
             StatusCode::CREATED
         );
         assert_eq!(
@@ -302,7 +302,7 @@ impl Fx {
 pub(crate) fn spec(orchestration: &str) -> Value {
     json!({
         "main": {
-            "pool": "pool",
+            "model": "m",
             "instructions": { "orchestration": orchestration },
             "tools": [TIME]
         }
@@ -422,7 +422,7 @@ async fn an_agent_is_invisible_to_a_manager_without_a_share() {
         );
     }
     assert_eq!(
-        fx.grant(&fx.bob, &id, "pool", "pool").await,
+        fx.grant(&fx.bob, &id, "model", "m").await,
         StatusCode::NOT_FOUND
     );
     let (_, principals) = fx.get(&fx.bob, "/api/v0/system-principals").await;
@@ -438,9 +438,9 @@ async fn a_spec_naming_an_ungranted_tool_is_rejected_with_the_grant_to_make() {
     assert_eq!(body["error"]["code"], "invalid_agent_spec");
     let issues = body["error"]["issues"].as_array().unwrap();
     let paths: Vec<&str> = issues.iter().map(|i| i["path"].as_str().unwrap()).collect();
-    assert_eq!(paths, ["main.pool", "main.tools[0]"]);
+    assert_eq!(paths, ["main.model", "main.tools[0]"]);
     let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("pool `pool` is not granted"), "{message}");
+    assert!(message.contains("model `m` is not granted"), "{message}");
     assert!(
         issues[1]["message"].as_str().unwrap().contains(&format!(
             "POST /api/v0/system-principals/{id}/grants {{\"kind\": \"tool\", \"ref\": \"{TIME}\"}}"
@@ -455,7 +455,7 @@ async fn a_spec_naming_an_ungranted_tool_is_rejected_with_the_grant_to_make() {
     assert_eq!(body["error"]["issues"][0]["path"], "main.tool_resorces");
 
     assert_eq!(
-        fx.grant(&fx.alice, &id, "pool", "pool").await,
+        fx.grant(&fx.alice, &id, "model", "m").await,
         StatusCode::CREATED
     );
     assert_eq!(
@@ -631,7 +631,7 @@ async fn a_read_share_shows_the_agent_but_does_not_allow_changing_it() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        fx.grant(&fx.bob, &id, "pool", "pool").await,
+        fx.grant(&fx.bob, &id, "model", "m").await,
         StatusCode::FORBIDDEN
     );
     assert_eq!(
@@ -796,8 +796,9 @@ async fn an_admin_holds_write_on_every_agent_without_a_share() {
     let (status, body) = fx.share(&fx.root, &id, "user", "bob", "write").await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(
-        fx.grant(&fx.root, &id, "pool", "pool").await,
-        StatusCode::OK
+        fx.grant(&fx.root, &id, "model", "m").await,
+        StatusCode::OK,
+        "held already; an admin's regrant widens it to every pool"
     );
     let (status, _) = fx
         .send(

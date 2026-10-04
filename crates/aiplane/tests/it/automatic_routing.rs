@@ -514,3 +514,238 @@ async fn a_token_can_grant_the_virtual_alias_without_granting_its_internals() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// An agent whose spec names `model`, granted `granted`, on the automatic
+/// route fixture's pools; its live version answers through the real driver.
+async fn routed_agent(
+    state: &aiplane::rama_server::RamaState,
+    model: &str,
+    granted: &[&str],
+) -> String {
+    use aiplane_agents::db::{agents, system_principals};
+    use aiplane_core::server::principal::GrantKind;
+    common::seed_session(state, "owner", "owner@example.com").await;
+    let spec = json!({ "main": {
+        "model": model,
+        "instructions": { "orchestration": "Answer." }
+    } })
+    .to_string();
+    let row = agents::create(
+        &state.db,
+        &system_principals::NewPrincipal {
+            name: "routed",
+            display: "Routed",
+            description: "",
+        },
+        &spec,
+        "owner",
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let id = row.principal.id;
+    for model in granted {
+        system_principals::add_grant(&state.db, &id, GrantKind::Model, model, "owner")
+            .await
+            .unwrap();
+    }
+    agents::publish(&state.db, &id, &spec, "owner")
+        .await
+        .unwrap()
+        .unwrap();
+    id
+}
+
+async fn mount_streaming_answer(upstream: &MockServer, answer: &str) {
+    let sse = format!(
+        "data: {}\n\ndata: [DONE]\n\n",
+        json!({"choices": [{"index": 0, "delta": {"content": answer}}]})
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream"))
+        .mount(upstream)
+        .await;
+}
+
+fn agent_turn(agent_id: &str) -> aiplane_runtime::agents::run::AgentTurn<'_> {
+    aiplane_runtime::agents::run::AgentTurn {
+        agent_id,
+        session_id: None,
+        message: "Fix this Rust lifetime",
+        visitor_id: None,
+        lang: None,
+    }
+}
+
+/// An agent granted an automatic route runs on it like a chat does: the
+/// selector picks the candidate, and the turn goes to that model, which the
+/// grant on the route covers.
+#[tokio::test]
+async fn an_agent_granted_an_automatic_route_answers_through_the_selected_candidate() {
+    let upstream = MockServer::start().await;
+    mount_selector(&upstream, 0.92).await;
+    mount_streaming_answer(&upstream, "Routed answer.").await;
+    let state = common::state_with_automatic_route_pools(&upstream.uri()).await;
+    automatic_routes::upsert(&state.db, &route("active", 0.7))
+        .await
+        .unwrap();
+    let agent = routed_agent(&state, "default", &["default"]).await;
+
+    let reply =
+        aiplane_runtime::agents::run::run_turn(&std::sync::Arc::new(state), agent_turn(&agent))
+            .await
+            .unwrap();
+
+    assert_eq!(reply.answer.as_deref(), Some("Routed answer."), "{reply:?}");
+    let chat: Vec<Value> = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/chat/completions")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(chat.len(), 1, "{chat:?}");
+    assert_eq!(chat[0]["model"], "expert-model", "the selector's choice");
+}
+
+/// A grant on one of the route's candidates is no grant on the route.
+#[tokio::test]
+async fn an_agent_naming_a_route_it_holds_no_grant_on_does_not_run() {
+    let upstream = MockServer::start().await;
+    mount_selector(&upstream, 0.92).await;
+    mount_streaming_answer(&upstream, "leaked").await;
+    let state = common::state_with_automatic_route_pools(&upstream.uri()).await;
+    automatic_routes::upsert(&state.db, &route("active", 0.7))
+        .await
+        .unwrap();
+    let agent = routed_agent(&state, "default", &["fast-model"]).await;
+
+    let err =
+        aiplane_runtime::agents::run::run_turn(&std::sync::Arc::new(state), agent_turn(&agent))
+            .await
+            .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            aiplane_runtime::agents::profile::AgentRunError::ModelNotGranted { ref model, .. }
+                if model == "default"
+        ),
+        "{err}"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+/// The agent builder offers the models the manager may grant: an automatic
+/// route only when they may use every model it reaches. The chat picker
+/// keeps listing a route whose fallback they reach, as it always did.
+#[tokio::test]
+async fn agent_resources_offer_only_the_automatic_routes_a_manager_may_use_whole() {
+    use aiplane_core::server::db::{gateway_groups, users};
+    use aiplane_core::server::feature_defaults::{self, Feature};
+    use aiplane_core::server::upstreams::{self, PickerStrategy, PoolKind, UpstreamPoolConfig};
+    use std::collections::HashMap;
+
+    let upstream = MockServer::start().await;
+    let pool = |kind: PoolKind, groups: &[&str]| UpstreamPoolConfig {
+        voices: Default::default(),
+        offer_voices: Vec::new(),
+        allowed_groups: groups.iter().map(|g| g.to_string()).collect(),
+        fallback_offline: None,
+        compliance: Default::default(),
+        enforce_limits: true,
+        kind,
+        strategy: PickerStrategy::RoundRobin,
+        models: Vec::new(),
+        backend: vec![common::mock_backend("b", &upstream.uri())],
+    };
+    let pools = HashMap::from([
+        ("chat".to_string(), pool(PoolKind::Chat, &[])),
+        ("vip".to_string(), pool(PoolKind::Chat, &["vip"])),
+        ("selector".to_string(), pool(PoolKind::SystemOne, &[])),
+    ]);
+    let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
+    common::seed_pool_models(&registry, "chat", 0, &["fast-model", "expert-model"]);
+    common::seed_pool_models(&registry, "vip", 0, &["vip-model"]);
+    common::seed_pool_models(&registry, "selector", 0, &["jev-model"]);
+    let db = aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+        .await
+        .unwrap();
+    let state = common::state_from_registry(db, registry);
+    automatic_routes::upsert(&state.db, &route("active", 0.7))
+        .await
+        .unwrap();
+    let mut vip_route = route("active", 0.7);
+    vip_route.alias = "vip-auto".into();
+    vip_route.candidates[1].target = "vip-model".into();
+    automatic_routes::upsert(&state.db, &vip_route)
+        .await
+        .unwrap();
+    feature_defaults::set(&state.db, Feature::Chat, Some("expert-model"))
+        .await
+        .unwrap();
+    gateway_groups::upsert_group(&state.db, "managers", "", false, false)
+        .await
+        .unwrap();
+    gateway_groups::set_can_manage_agents(&state.db, "managers", true)
+        .await
+        .unwrap();
+    gateway_groups::set_mappings_for_group(&state.db, "managers", &["managers".into()])
+        .await
+        .unwrap();
+    state.reload_rbac().await;
+    let now = jiff::Timestamp::now();
+    users::upsert(
+        &state.db,
+        &users::User {
+            id: "alice".into(),
+            email: "alice@example.com".into(),
+            name: None,
+            roles: vec!["managers".into()],
+            created_at: now,
+            updated_at: now,
+            timezone: None,
+            speech_voice: None,
+        },
+    )
+    .await
+    .unwrap();
+    let session = state.sessions.create("alice").await.unwrap();
+    let cookie = state.sessions.sign(&session.id);
+    let app = common::app(state);
+    let get = |uri: &str| {
+        Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header("cookie", format!("id={cookie}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let ids = |body: &Value, list: &str| -> Vec<String> {
+        body.pointer(list)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("no {list}: {body}"))
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let resp = app.serve(get("/api/v0/agent-resources")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(
+        ids(&body, "/models/chat"),
+        ["expert-model", "default", "fast-model"],
+        "the default first; `vip-auto` would hand on `vip-model`"
+    );
+    assert_eq!(body["defaults"]["chat"], "expert-model");
+
+    let resp = app.serve(get("/api/v0/models")).await.unwrap();
+    let body: Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert!(
+        ids(&body, "/models").contains(&"vip-auto".to_string()),
+        "the chat picker lists a route whose fallback the person reaches: {body}"
+    );
+}

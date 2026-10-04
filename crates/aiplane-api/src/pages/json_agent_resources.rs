@@ -10,16 +10,14 @@
 //! authority: a resource that changed between listing and granting is still
 //! refused there, with its reason.
 //!
-//! `tiers` names the pool behind each of the setup assistant's model choices
-//! (`[agents] pool_fast/_balanced/_thorough`, set by an admin), whether or not
-//! the caller holds it: the assistant says why a choice it cannot grant is
-//! unavailable instead of hiding it. The choice exists only when an admin set
-//! one of them; "Balanced" left unset is the chat default below.
+//! `models` lists, per kind (chat, transcription, speech), the models the
+//! caller may use — the chat picker's list (`server::model_choices`), minus
+//! any automatic route whose candidates or selector they may not use, since
+//! granting the route would hand those on.
 //!
-//! `defaults` names the pool (and model) the gateway's admin "Default
-//! models" resolve to among the pools the caller holds — what the setup
-//! preselects for a new agent's chat pool and for a voice direction switched
-//! on. Being held, each is one the grant route accepts.
+//! `defaults` names the gateway's default model of each kind (Models &
+//! routing → Default models): what an agent's unset model key runs on.
+//! Whether the caller may grant it is whether `models` lists it.
 
 use std::sync::Arc;
 
@@ -31,11 +29,11 @@ use super::json_principals::require_agent_manager;
 use super::{internal, json_ok};
 use aiplane_core::server::db::users::User;
 use aiplane_core::server::db::{mcp_catalog, rag as rag_db};
-use aiplane_core::server::feature_defaults::{self, Feature, PoolDefault};
+use aiplane_core::server::feature_defaults::Feature;
 use aiplane_core::server::upstreams::PoolKind;
 use aiplane_runtime::agents::assist::Ability;
-use aiplane_runtime::agents::defaults;
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::server::model_choices::{self, ModelChoice, gateway_default};
 
 const MCP_TOOL_PREFIX: &str = aiplane_runtime::server::tools::mcp::MCP_ID_PREFIX;
 
@@ -78,23 +76,26 @@ pub(super) async fn grantable_collections(
         .collect())
 }
 
-/// The pools of `kind` `user` may use, by name.
-fn usable_pools(state: &RamaState, user: &User, kind: PoolKind) -> Vec<String> {
+/// The models of `kind` `user` may grant: the ones they may use, an
+/// automatic route only when they may use every model it reaches.
+pub(super) async fn grantable_models(
+    state: &RamaState,
+    user: &User,
+    kind: PoolKind,
+) -> Vec<ModelChoice> {
     let access = state.pool_access_for(&user.roles);
-    let mut names: Vec<String> = state
-        .upstreams
-        .pools()
-        .into_iter()
-        .filter(|p| p.kind == kind && access.allows(p))
-        .map(|p| p.name.clone())
-        .collect();
-    names.sort();
-    names
+    let mut choices = model_choices::offered(state, kind, &access).await;
+    choices.retain(ModelChoice::grantable);
+    choices
 }
 
-/// The chat pools `user` may use, by name.
-pub(super) fn usable_chat_pools(state: &RamaState, user: &User) -> Vec<String> {
-    usable_pools(state, user, PoolKind::Chat)
+/// The chat models `user` may grant, by name.
+pub(super) async fn grantable_chat_models(state: &RamaState, user: &User) -> Vec<String> {
+    grantable_models(state, user, PoolKind::Chat)
+        .await
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
 }
 
 pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Response {
@@ -113,13 +114,19 @@ pub async fn resources(State(state): State<Arc<RamaState>>, req: Request) -> Res
 pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Value, Response> {
     let role_ids = state.rbac.role_ids_for(&user.roles);
     let is_admin = state.rbac.is_admin(&role_ids);
-    let access = state.pool_access_for(&user.roles);
-    let pools = usable_chat_pools(state, user);
-    // `publish.voice` names one of each for the embed widget.
-    let voice_pools = json!({
-        "speech": usable_pools(state, user, PoolKind::Speech),
-        "transcription": usable_pools(state, user, PoolKind::Transcription),
-    });
+    let mut models = serde_json::Map::new();
+    for (key, kind) in [
+        ("chat", PoolKind::Chat),
+        ("transcription", PoolKind::Transcription),
+        ("speech", PoolKind::Speech),
+    ] {
+        let listed: Vec<Value> = grantable_models(state, user, kind)
+            .await
+            .into_iter()
+            .map(|c| json!({ "id": c.id, "gdpr": c.compliance.gdpr, "nda": c.compliance.nda }))
+            .collect();
+        models.insert(key.into(), Value::Array(listed));
+    }
 
     let grantable = state.grantable_tool_ids();
     let tools: Vec<_> = grantable_tools(state, &role_ids)
@@ -166,47 +173,14 @@ pub(super) async fn resources_for(state: &RamaState, user: &User) -> Result<Valu
         .map(|c| json!({ "id": c.id, "name": c.name }))
         .collect();
 
-    let chat_default = defaults::chat_pool(state, &access).await;
-    let transcription_default = feature_defaults::default_pool(
-        &state.db,
-        &state.upstreams,
-        Feature::Transcription,
-        &access,
-    )
-    .await;
-    let speech_default =
-        feature_defaults::default_pool(&state.db, &state.upstreams, Feature::Speech, &access).await;
-    let pool_default =
-        |d: Option<PoolDefault>| d.map(|d| json!({ "pool": d.pool, "model": d.model }));
     let defaults = json!({
-        "chat": pool_default(chat_default.clone()),
-        "transcription": pool_default(transcription_default),
-        "speech": pool_default(speech_default),
+        "chat": gateway_default(state, Feature::Chat).await,
+        "transcription": gateway_default(state, Feature::Transcription).await,
+        "speech": gateway_default(state, Feature::Speech).await,
     });
 
-    let config = state.config();
-    let agents = &config.agents;
-    let tiers = if [
-        &agents.pool_fast,
-        &agents.pool_balanced,
-        &agents.pool_thorough,
-    ]
-    .iter()
-    .any(|p| p.is_some())
-    {
-        json!({
-            "fast": agents.pool_fast,
-            "balanced": agents.pool_balanced.clone().or(chat_default.map(|d| d.pool)),
-            "thorough": agents.pool_thorough,
-        })
-    } else {
-        json!({ "fast": null, "balanced": null, "thorough": null })
-    };
-
     Ok(json!({
-        "pools": pools,
-        "voice_pools": voice_pools,
-        "tiers": tiers,
+        "models": models,
         "defaults": defaults,
         "tools": tools,
         "connectors": connectors,

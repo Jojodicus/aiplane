@@ -68,7 +68,7 @@ async fn lookup_agent_says(action: &str, rounds: Vec<Value>, message: &str) -> A
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Tool, LOOKUP),
                 (GrantKind::Tool, ECHO),
             ],
@@ -79,7 +79,7 @@ async fn lookup_agent_says(action: &str, rounds: Vec<Value>, message: &str) -> A
             &agent,
             &json!({
                 "main": {
-                    "pool": "support-pool",
+                    "model": "support-model",
                     "instructions": { "orchestration": "Look invoices up, then answer." },
                     "tools": [LOOKUP, ECHO],
                     "budget": { "rounds": 6 }

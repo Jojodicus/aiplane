@@ -9,16 +9,16 @@
 	 * the sub-agent it opens: the gate is the security boundary, the router
 	 * only picks among routes whose gate already holds.
 	 */
-	let { spec = $bindable(), issues, agents, pools }: {
+	let { spec = $bindable(), issues, agents, models }: {
 		spec: Spec;
 		issues: SpecIssue[];
 		agents: AgentSummary[];
-		pools: string[];
+		models: string[];
 	} = $props();
 </script>
 
 <div class="space-y-4">
-	<RouterFields bind:spec {issues} {pools} />
+	<RouterFields bind:spec {issues} {models} />
 
 	{#each Object.keys(spec.routes) as name (spec.routes[name])}
 		<div class="card card-border">

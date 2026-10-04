@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use aiplane_agents::db::system_principals;
-use aiplane_core::server::feature_defaults::PoolDefault;
+use aiplane_core::server::principal::GrantKind;
 use aiplane_features::server::vad;
 use aiplane_runtime::agents::defaults::{self, VoiceDirection};
 use aiplane_runtime::agents::spec::AgentSpec;
@@ -82,31 +82,34 @@ fn voice_unavailable(message: &str) -> Response {
     )
 }
 
-/// The pool and model a direction that is on runs on for this agent: the
-/// one its spec names, else the gateway's default among its grants. When
-/// none resolves (an admin changed the defaults or the grants after
-/// publishing) the visitor is told voice is unavailable.
+/// The model a direction that is on runs on for this agent: the one its
+/// spec names, else the gateway's default. When there is none, or the agent
+/// holds no grant on it (an admin changed the defaults or the grants after
+/// publishing), the visitor is told voice is unavailable.
 async fn voice_target(
     state: &RamaState,
     principal: &aiplane_core::server::principal::SystemPrincipal,
     voice: &VoiceSpec,
     direction: VoiceDirection,
     message: &str,
-) -> Result<PoolDefault, Response> {
-    defaults::voice_pool(state, principal, voice, direction)
-        .await
-        .ok_or_else(|| {
+) -> Result<String, Response> {
+    let model = defaults::voice_model(state, voice, direction).await;
+    match model {
+        Some(model) if principal.grants.has(GrantKind::Model, &model) => Ok(model),
+        model => {
             tracing::warn!(
                 agent = %principal.id,
                 ?direction,
-                "no pool granted to the agent serves this voice direction — name one in \
-                 publish.voice, or grant the pool of the gateway's default model"
+                ?model,
+                "the agent holds no grant on a model for this voice direction — name one it \
+                 holds in publish.voice, or grant it the gateway's default model"
             );
-            voice_unavailable(message)
-        })
+            Err(voice_unavailable(message))
+        }
+    }
 }
 
-/// The agent's principal, with the grants its pools are checked against.
+/// The agent's principal, with the grants its models are checked against.
 async fn agent_principal(
     state: &RamaState,
     v: &Visitor,

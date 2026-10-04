@@ -10,15 +10,17 @@
 //! authentication time ([`capped_to_minter`], from `require_bearer`). It is
 //! the same rule that decides the person's own access to each resource.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use aiplane_agents::db::agents::{self as agents_db, Access};
-use aiplane_core::server::db::{DbError, mcp_catalog, rag as rag_db, users};
+use aiplane_core::server::db::{DbError, automatic_routes, mcp_catalog, rag as rag_db, users};
 use aiplane_core::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
 
 use crate::rama_server::state::RamaState;
+use crate::server::model_choices::{self, ModelChoice};
 use crate::server::tools::mcp::MCP_ID_PREFIX;
 
 /// Why a grant could not be judged held: the resource does not exist, the
@@ -110,16 +112,13 @@ pub async fn holds(
                 .rbac
                 .resource_allowed(&role_ids, &collection.allowed_groups)
         }
-        GrantKind::Pool => {
-            let Some(pool) = state
-                .upstreams
-                .pools()
-                .into_iter()
-                .find(|p| p.name == reference)
-            else {
-                return Err(missing(format!("pool `{reference}`")));
-            };
-            state.pool_access_for(&user.roles).allows(&pool)
+        GrantKind::Model => {
+            if offers(state, &PoolAccess::all(), reference).await.is_none() {
+                return Err(missing(format!("model `{reference}`")));
+            }
+            offers(state, &state.pool_access_for(&user.roles), reference)
+                .await
+                .is_some_and(|choice| choice.grantable())
         }
         GrantKind::A2aCaller => {
             // Letting another platform call an agent is a change to that
@@ -154,6 +153,73 @@ pub async fn holds(
     Ok(held)
 }
 
+/// The pools a `model` grant `user` makes routes through: every pool of the
+/// model's kind they may use — for an automatic route, of chat and selector
+/// models — whether it serves the model right now or not, so a pool that is
+/// down or not probed yet when the grant is made still counts once it serves
+/// it. Routing takes those that serve it at request time. `None` for an
+/// admin, whose grant routes through every pool serving it, as their own
+/// requests do.
+pub async fn model_grant_pools(
+    state: &RamaState,
+    user: &users::User,
+    model: &str,
+) -> Result<Option<Vec<String>>, DbError> {
+    if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) {
+        return Ok(None);
+    }
+    let kinds = match automatic_routes::get(&state.db, model).await? {
+        Some(_) => vec![PoolKind::Chat, PoolKind::SystemOne],
+        None => kinds_of(state, model).await,
+    };
+    Ok(Some(state.upstreams.pools_of_kinds(
+        &kinds,
+        &state.pool_access_for(&user.roles),
+    )))
+}
+
+/// The kinds of model `model` is offered as anywhere on the gateway.
+async fn kinds_of(state: &RamaState, model: &str) -> Vec<PoolKind> {
+    let mut kinds = Vec::new();
+    for kind in GRANTABLE_KINDS {
+        if model_choices::offered(state, kind, &PoolAccess::all())
+            .await
+            .iter()
+            .any(|c| c.id == model)
+        {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+/// The choice named `model` among the models of every kind an agent can use
+/// that `access` may pick (`server::model_choices`).
+async fn offers(state: &RamaState, access: &PoolAccess, model: &str) -> Option<ModelChoice> {
+    for kind in GRANTABLE_KINDS {
+        if let Some(found) = model_choices::offered(state, kind, access)
+            .await
+            .into_iter()
+            .find(|c| c.id == model)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The kinds of model a model grant can name: every kind a request can
+/// route to by name — an agent's chat, voice and image tools, a principal
+/// token's `/v1` calls. OCR and reranking are the gateway's own.
+const GRANTABLE_KINDS: [PoolKind; 6] = [
+    PoolKind::Chat,
+    PoolKind::Transcription,
+    PoolKind::Speech,
+    PoolKind::Image,
+    PoolKind::Embedding,
+    PoolKind::SystemOne,
+];
+
 /// `principal` as a token minted by user `minted_by` may use it: every grant
 /// when the minter is an admin today, otherwise only the grants the minter
 /// holds today — none once the minter is gone. A grant whose resource is
@@ -173,18 +239,38 @@ pub async fn capped_to_minter(
         return Ok(principal);
     }
     let mut kept = Vec::new();
+    let mut pools = Vec::new();
     for (kind, reference) in principal.grants.iter() {
         match holds(state, &minter, kind, reference).await {
-            Ok(true) => kept.push((kind, reference.to_string())),
+            Ok(true) => {}
             Ok(false)
             | Err(HoldRefusal::Missing(_))
             | Err(HoldRefusal::Invalid(_))
-            | Err(HoldRefusal::AdminOnly(_)) => {}
+            | Err(HoldRefusal::AdminOnly(_)) => continue,
             Err(HoldRefusal::Db(err)) => return Err(err),
         }
+        if kind == GrantKind::Model {
+            // The minter's own pools for it, narrowed further to the
+            // grant's: a token never reaches a pool its minter could not use
+            // or the grant does not name. None left, no grant.
+            let mine: BTreeSet<String> = model_grant_pools(state, &minter, reference)
+                .await?
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let reach: BTreeSet<String> = match principal.grants.model_pools(reference) {
+                Some(granted) => granted.intersection(&mine).cloned().collect(),
+                None => mine,
+            };
+            if reach.is_empty() {
+                continue;
+            }
+            pools.push((reference.to_string(), reach));
+        }
+        kept.push((kind, reference.to_string()));
     }
     Ok(SystemPrincipal {
-        grants: Arc::new(GrantSet::new(kept)),
+        grants: Arc::new(GrantSet::new(kept).with_model_pools(pools)),
         ..principal
     })
 }

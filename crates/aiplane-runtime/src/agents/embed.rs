@@ -58,7 +58,7 @@ pub const DEFAULT_IP_RATE: Rate = Rate {
 
 /// `publish.budget` of a spec as limits over the month: what the owner lets
 /// the agent's conversations spend. None by default: an owner who sets no
-/// budget relies on the operator's limits on the agent and its pools.
+/// budget relies on the operator's limits on the agent and its models.
 pub fn owner_budget(spec: &AgentSpec) -> Vec<EffectiveLimit> {
     let monthly = |dimension, value: Option<f64>| {
         value.filter(|v| *v > 0.0).map(|value| EffectiveLimit {

@@ -131,7 +131,7 @@ async fn erp() -> (MockServer, Arc<Mutex<Vec<(String, Value)>>>) {
 fn verified_spec() -> Value {
     json!({
         "main": {
-            "pool": "pool",
+            "model": "m",
             "instructions": { "orchestration": "Verify the visitor, then help." },
             "tools": [TIME]
         },

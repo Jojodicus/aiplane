@@ -3,7 +3,7 @@
     "instructions": {
       "orchestration": "You answer questions about Acme orders."
     },
-    "pool": "main-pool"
+    "model": "main-model"
   },
   "router": {
     "kind": "rules",

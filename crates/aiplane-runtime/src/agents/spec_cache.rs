@@ -45,7 +45,7 @@ pub(crate) struct SpecParts {
     pub schema: Arc<StateSchema>,
     pub gates: Arc<RouteGates>,
     /// Kept apart from the rest so a run reports the failures it checks
-    /// first (`main.pool`, `finish.schema`) before a broken filter.
+    /// first (`finish.schema`) before a broken filter.
     pub output_filter: Result<Option<OutputFilter>, String>,
 }
 
@@ -70,11 +70,6 @@ impl CompiledSpec {
     /// The typed spec, or why the stored one does not read as one.
     pub fn agent(&self) -> Result<&AgentSpec, &str> {
         self.parts().map(|p| &*p.agent)
-    }
-
-    /// The pool the main run's model comes from (`main.pool`).
-    pub fn main_pool(&self) -> Option<&str> {
-        self.agent().ok()?.main_pool()
     }
 
     /// The built parts, or why the spec cannot run (phrased to follow "cannot
@@ -260,8 +255,8 @@ mod tests {
         (db, row.principal.id)
     }
 
-    fn spec(pool: &str) -> String {
-        json!({ "main": { "pool": pool } }).to_string()
+    fn spec(model: &str) -> String {
+        json!({ "main": { "model": model } }).to_string()
     }
 
     #[tokio::test]
@@ -275,7 +270,7 @@ mod tests {
         let pinned = cache.version(&db, &id, 1).await.unwrap().unwrap();
         let recent = cache.live_recent(&db, &id).await.unwrap().unwrap();
         assert!(Arc::ptr_eq(&first, &pinned) && Arc::ptr_eq(&first, &recent));
-        assert_eq!(first.main_pool(), Some("chat"));
+        assert_eq!(first.agent().unwrap().main_model(), Some("chat"));
         assert!(first.parts().is_ok());
         assert!(cache.version(&db, &id, 9).await.unwrap().is_none());
     }

@@ -104,7 +104,9 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
     // Resolve aliases + the unknown-model fallback once, up front. This is
     // what makes `claude-sonnet-4-6` (a name no self-hosted backend serves)
     // route to whatever the operator aliased it to.
-    let access = state.pool_access_for_token(&user);
+    let access = state
+        .pool_access_for_token(&user)
+        .for_request(&requested_model);
     let (routing_model, automatic_decision) = match proxy::resolve_automatic_chat_route(
         &state,
         &user,
@@ -119,13 +121,11 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         Ok(value) => value,
         Err(response) => return response,
     };
-    let access = if automatic_decision.is_some() {
-        aiplane_core::server::upstreams::PoolAccess {
-            allowed_models: None,
-            ..access
+    let access = match &automatic_decision {
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
         }
-    } else {
-        access
+        None => access,
     };
     if let Some(response) =
         proxy::enforce_content_guard(&state, &translated.body, &routing_model, &access).await
@@ -187,6 +187,7 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
             state,
             user,
             real_model.clone(),
+            access,
             parts.headers,
             client_ip,
             request_body,
@@ -265,7 +266,9 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
     }
     let requested_model = translated.model.clone();
 
-    let access = state.pool_access_for_token(&user);
+    let access = state
+        .pool_access_for_token(&user)
+        .for_request(&requested_model);
     let (routing_model, automatic_decision) = match proxy::resolve_automatic_chat_route(
         &state,
         &user,
@@ -280,13 +283,11 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(value) => value,
         Err(response) => return response,
     };
-    let access = if automatic_decision.is_some() {
-        aiplane_core::server::upstreams::PoolAccess {
-            allowed_models: None,
-            ..access
+    let access = match &automatic_decision {
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
         }
-    } else {
-        access
+        None => access,
     };
     let with_route =
         |response| proxy::with_automatic_route_headers(response, automatic_decision.as_ref());

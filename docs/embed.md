@@ -44,9 +44,9 @@ stylesheet still wins (see [Styling](#styling)).
 ## Voice
 
 When the agent's owner switches it on (`publish.voice`, the builder's
-*Website* step), the widget offers the following. Each runs on the pool the
-spec names, or else on the pool of the gateway's default transcription or
-speech model among the agent's grants:
+*Website* step), the widget offers the following. Each runs on the model the
+spec names, or else on the gateway's default transcription or speech model —
+either way one the agent holds a grant on:
 
 - **A microphone.** Hold it while speaking, or click once to start and
   again to stop (Enter or Space work too). What was said appears in the
@@ -66,7 +66,7 @@ size and length of the audio. Voice calls count against the same visitor
 rate limits and the owner's budget as messages.
 
 Voice needs a secure page (`https://`, or `localhost`) and, on the
-gateway, a transcription and a speech pool granted to the agent. If your
+gateway, a transcription and a speech model granted to the agent. If your
 site sends a `Permissions-Policy`, allow `microphone` for your own origin.
 
 ## Verification codes

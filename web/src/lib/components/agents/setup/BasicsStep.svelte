@@ -1,29 +1,28 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
 	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
 	import type { Spec } from '$lib/agents';
 	import {
 		ANSWER_LANGUAGES,
-		TIERS,
 		TONES,
-		defaultChatPool,
-		hasTiers,
-		humanize,
+		defaultOutOfReach,
+		modelGrantFor,
+		modelsInUse,
 		readBasics,
 		responseText,
 		suggestedTone,
-		tierOf,
 		writeBasics,
-		type AnswerLanguage,
-		type Tier
+		type AnswerLanguage
 	} from '$lib/agent-setup';
+	import ModelPicker from '../ModelPicker.svelte';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
 	import { LOCALE_NAMES, t } from '$lib/i18n.svelte';
 	import ImproveText from './ImproveText.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 
-	/** Task & tone: name, what the agent does, how it sounds, which language, how thorough (its pool). */
+	/** Task & tone: name, what the agent does, how it sounds, which language, and the model it runs on. */
 	let { spec = $bindable() }: { spec: Spec } = $props();
 	const ws = useWorkspace();
 
@@ -37,33 +36,31 @@
 		model.language = mode === 'visitor' ? 'visitor' : mode === 'fixed' ? fixedLanguage : null;
 	}
 
-	const tiers = $derived(ws.resources?.tiers);
-	const mapped = $derived(hasTiers(tiers));
-	const tierOptions = $derived(TIERS.filter((tier) => !!tiers?.[tier]).map((tier) => ({ value: tier, label: t(`agents-setup-model-${tier}`) })));
-	const grantedPools = $derived(ws.grants.filter((g) => g.kind === 'pool').map((g) => g.ref));
-	const poolOptions = $derived([...new Set([...(ws.resources?.pools ?? []), ...grantedPools, ...(model.pool ? [model.pool] : [])])]);
-	const holdable = (pool: string) => (ws.resources?.pools ?? []).includes(pool) || grantedPools.includes(pool);
+	const heldModels = $derived(ws.grants.filter((g) => g.kind === 'model').map((g) => g.ref));
+	const fallback = $derived(ws.resources?.defaults?.chat ?? null);
+	const unheldDefault = $derived(defaultOutOfReach('chat', model.model, heldModels, ws.resources));
+	const nothingToPick = $derived(!fallback && !model.model && !heldModels.length && !(ws.resources?.models?.chat?.length ?? 0));
 
-	let modelError = $state<string | null>(null);
-
-	function choosePool(pool: string, label: string) {
-		modelError = null;
-		if (!pool || pool === model.pool) return;
-		if (!holdable(pool)) {
-			modelError = t('agents-setup-model-unavailable', { choice: label });
-			return;
-		}
-		const previous = model.pool;
-		ws.stageGrant('pool', pool);
-		model.pool = pool;
-		if (previous) ws.stageRevoke('pool', previous);
+	/** Stage the grant of what the agent will run on; what it ran on before is staged for revoking unless the spec still uses it. Both are made on save. */
+	function chooseModel(next: string) {
+		if (next === model.model) return;
+		const previous = model.model || fallback;
+		model.model = next;
+		const grant = modelGrantFor('chat', next, ws.resources);
+		if (grant) ws.stageGrant('model', grant);
+		const after = { ...$state.snapshot(spec), main: { ...(spec.main ?? {}), model: next || undefined } };
+		if (previous && previous !== grant && !modelsInUse(after, ws.resources?.defaults).includes(previous)) ws.stageRevoke('model', previous);
 	}
-	const tierLabel = (tier: Tier) => t(`agents-setup-model-${tier}`);
 
-	/** A new agent starts on the gateway's default chat model, staged for granting like any choice. */
+	/** An agent on the default starts with the default's grant staged, like any choice. */
+	let started = false;
 	$effect(() => {
-		const start = defaultChatPool(ws.resources);
-		if (start && !model.pool && ws.writable) choosePool(start, start);
+		if (started || !ws.resources || !ws.writable) return;
+		started = true;
+		untrack(() => {
+			const grant = model.model ? null : modelGrantFor('chat', '', ws.resources);
+			if (grant) ws.stageGrant('model', grant);
+		});
 	});
 
 	/** A proposed or improved tone is a response text; read it back into chips, language and the rest. */
@@ -165,30 +162,21 @@
 
 	<div class="flex flex-col gap-2">
 		<span class="font-semibold">{t('agents-setup-model')}</span>
-		{#if mapped}
-			<span class="text-sm text-base-content/60">{t('agents-setup-model-hint')}</span>
-			<SegmentedControl
-				label={t('agents-setup-model')}
-				options={tierOptions}
-								bind:value={() => tierOf(model.pool, tiers) ?? ('' as Tier), (tier) => choosePool(tiers?.[tier] ?? '', tierLabel(tier))}
-			/>
-			{#if model.pool && !tierOf(model.pool, tiers)}
-				<span class="text-sm text-base-content/60">{t('agents-setup-model-custom', { pool: humanize(model.pool.replace(/-/g, '_')) })}</span>
-			{/if}
-		{:else if poolOptions.length}
-			<span class="text-sm text-base-content/60">{t('agents-setup-model-unmapped')}</span>
-			<select
-				class="select w-full max-w-sm"
-				aria-label={t('agents-setup-model-pool')}
-								value={model.pool}
-				onchange={(e) => choosePool(e.currentTarget.value, e.currentTarget.value)}
-			>
-				<option value="" disabled>{t('agents-pick')}</option>
-				{#each poolOptions as pool (pool)}<option value={pool}>{humanize(pool.replace(/-/g, '_'))}</option>{/each}
-			</select>
-		{:else}
+		<span class="text-sm text-base-content/60">{t('agents-setup-model-hint')}</span>
+		{#if nothingToPick}
 			<div class="alert alert-warning text-sm"><span>{t('agents-setup-model-none')}</span></div>
+		{:else}
+			<ModelPicker
+				kind="chat"
+				value={model.model}
+				held={heldModels}
+				resources={ws.resources}
+				emptyLabel={fallback ? t('agents-setup-model-default', { model: fallback }) : null}
+				ariaLabel={t('agents-setup-model')}
+				disabled={!ws.writable}
+				onchange={chooseModel}
+			/>
 		{/if}
-		{#if modelError}<div class="alert alert-error text-sm" role="alert"><span>{modelError}</span></div>{/if}
+		{#if unheldDefault}<div class="alert alert-warning text-sm" role="alert"><span>{t('agents-setup-model-default-unheld', { model: unheldDefault })}</span></div>{/if}
 	</div>
 </div>

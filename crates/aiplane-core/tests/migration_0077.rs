@@ -685,7 +685,7 @@ async fn a_grant_has_a_known_kind() {
         ("connector", "jira"),
         ("skill", "letters"),
         ("rag_collection", "7"),
-        ("pool", "chat"),
+        ("model", "qwen"),
         ("a2a_caller", "support"),
         (
             "a2a_agent",
@@ -697,7 +697,7 @@ async fn a_grant_has_a_known_kind() {
             .unwrap_or_else(|e| panic!("{kind}: {e}"));
     }
     assert!(
-        grant(&pool, "ci", "model", "x").await.is_err(),
+        grant(&pool, "ci", "pool", "chat").await.is_err(),
         "the CHECK holds"
     );
 }
@@ -707,7 +707,7 @@ async fn grants_cascade_from_their_principal() {
     let pool = fresh().await;
     for p in ["ci", "support"] {
         add_principal(&pool, p).await;
-        grant(&pool, p, "pool", "chat").await.unwrap();
+        grant(&pool, p, "model", "qwen").await.unwrap();
     }
     exec(&pool, "DELETE FROM system_principals WHERE id = 'ci'").await;
     assert_eq!(

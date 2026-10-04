@@ -26,7 +26,7 @@ import {
 
 const spec = (): Spec =>
 	ensureShape({
-		main: { pool: 'chat', tools: ['rag_search'], skills: ['brand'] },
+		main: { model: 'chat', tools: ['rag_search'], skills: ['brand'] },
 		state: { issue: { type: 'enum', values: ['billing'], set_by: ['llm'] } },
 		routes: {
 			billing: { when: { slot: 'issue', eq: 'billing' }, agent: 'a1', task: 't' },
@@ -105,7 +105,7 @@ test('server issue paths map to the node that shows them', () => {
 	const s = spec();
 	const cases: [string, string | null][] = [
 		['main.tools[0]', 'main'],
-		['main.pool', 'main'],
+		['main.model', 'main'],
 		['state.issue.values', 'main'],
 		['router.order', 'main'],
 		['routes.billing', 'route:billing'],
@@ -128,7 +128,7 @@ test('server issue paths map to the node that shows them', () => {
 
 test('issuesByNode groups the issues and ignores those no node shows', () => {
 	const by = issuesByNode(spec(), [
-		{ path: 'main.pool', message: 'a' },
+		{ path: 'main.model', message: 'a' },
 		{ path: 'main.tools[0]', message: 'b' },
 		{ path: 'routes.billing.when.slot', message: 'c' },
 		{ path: 'publish.origins', message: 'd' }
@@ -146,8 +146,8 @@ test('verifiers are summarised by id and kind', () => {
 });
 
 test('summaries and gate descriptions', () => {
-	assert.deepEqual(summarizeMain(spec()), { pool: 'chat', tools: 1, skills: 1, slots: ['issue'], verifiers: [] });
-	assert.deepEqual(summarizeMain({}), { pool: '', tools: 0, skills: 0, slots: [], verifiers: [] });
+	assert.deepEqual(summarizeMain(spec()), { model: 'chat', tools: 1, skills: 1, slots: ['issue'], verifiers: [] });
+	assert.deepEqual(summarizeMain({}), { model: '', tools: 0, skills: 0, slots: [], verifiers: [] });
 	assert.equal(describeCond({ slot: 'issue', eq: 'billing' }, 'set'), 'issue = billing');
 	assert.equal(describeCond({ slot: 'issue', in: ['a', 'b'] }, 'set'), 'issue ∈ [a, b]');
 	assert.equal(describeCond({ slot: 'v', provenance: 'verifier:otp', max_age: '15m' }, 'is set'), 'v is set @verifier:otp ≤ 15m');

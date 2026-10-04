@@ -63,6 +63,9 @@ fn run_error(err: AgentRunError) -> Response {
             (StatusCode::UNPROCESSABLE_ENTITY, "agent_not_runnable")
         }
         AgentRunError::NoModel { .. } => (StatusCode::SERVICE_UNAVAILABLE, "agent_no_model"),
+        AgentRunError::ModelNotGranted { .. } => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "agent_model_not_granted")
+        }
         AgentRunError::Db(_) | AgentRunError::Mismatched(_) => return internal(err),
     };
     json_error(status, code, &err.to_string())

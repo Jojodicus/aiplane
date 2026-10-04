@@ -27,7 +27,7 @@ use super::{bad_request, internal, json_error, json_ok, no_content, not_found, r
 use aiplane_agents::db::agent_tests::{self as tests_db, CaseBody, CaseResult, TestCase};
 use aiplane_agents::db::agents::{self as agents_db, Access};
 use aiplane_runtime::agents::eval::{self, EvalIssue, RubricJudge};
-use aiplane_runtime::agents::eval_judge::PoolJudge;
+use aiplane_runtime::agents::eval_judge::ModelJudge;
 use aiplane_runtime::agents::profile::RunOptions;
 use aiplane_runtime::agents::spec::AgentSpec;
 use aiplane_runtime::rama_server::state::RamaState;
@@ -302,7 +302,7 @@ pub async fn run(State(state): State<Arc<RamaState>>, req: Request) -> Response 
     let started_at = Timestamp::now();
     let options = RunOptions::default();
     let judge = match AgentSpec::from_value(&spec) {
-        Ok(typed) => PoolJudge::for_agent(state.clone(), id, &typed).await,
+        Ok(typed) => ModelJudge::for_agent(state.clone(), id, &typed).await,
         Err(_) => None,
     };
     let mut results = Vec::with_capacity(cases.len());

@@ -747,7 +747,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
     // ones through.
     // Per-user pool access: a model served only by pools this caller can't
     // reach routes as `UnknownModel` → 404, identical to a nonexistent model.
-    let access = state.pool_access_for_token(&user);
+    let access = state.pool_access_for_token(&user).for_request(&model);
     let (routing_model, automatic_decision) = match resolve_automatic_chat_route(
         &state,
         &user,
@@ -762,10 +762,11 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         Ok(value) => value,
         Err(response) => return response,
     };
-    let route_access = if automatic_decision.is_some() {
-        access_without_model_allowlist(&access)
-    } else {
-        access.clone()
+    let route_access = match &automatic_decision {
+        Some(decision) => {
+            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
+        }
+        None => access.clone(),
     };
     if let Some(response) =
         enforce_content_guard(&state, &request_value, &routing_model, &route_access).await
@@ -834,6 +835,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
             state.clone(),
             user.clone(),
             real_model.clone(),
+            route_access.clone(),
             parts.headers.clone(),
             client_ip.clone(),
             request_body,
@@ -1030,15 +1032,6 @@ fn record_selector_usage(state: &RamaState, user: &UserCtx, decision: &Automatic
         agent_id: None,
         chain: None,
     });
-}
-
-fn access_without_model_allowlist(
-    access: &aiplane_core::server::upstreams::PoolAccess,
-) -> aiplane_core::server::upstreams::PoolAccess {
-    aiplane_core::server::upstreams::PoolAccess {
-        allowed_models: None,
-        ..access.clone()
-    }
 }
 
 pub(crate) fn with_automatic_route_headers(
@@ -1933,10 +1926,9 @@ pub async fn list_models(State(state): State<Arc<RamaState>>, req: Request) -> R
     let access = state.pool_access_for_token(&user);
     let mut listed = state.upstreams.all_models_for(&access);
     if let Ok(routes) = aiplane_core::server::db::automatic_routes::all(&state.db).await {
-        let target_access = access_without_model_allowlist(&access);
         for route in routes {
             if access.allows_model(&route.alias)
-                && automatic_route_available(&state, &route, &target_access)
+                && automatic_route_available(&state, &route, &access)
                 && !listed.contains(&route.alias)
             {
                 listed.push(route.alias);
@@ -1984,9 +1976,7 @@ pub async fn retrieve_model(State(state): State<Arc<RamaState>>, req: Request) -
             .await
             .ok()
             .flatten()
-            .is_some_and(|route| {
-                automatic_route_available(&state, &route, &access_without_model_allowlist(&access))
-            })
+            .is_some_and(|route| automatic_route_available(&state, &route, &access))
     };
     if id.is_empty() || (!state.upstreams.knows_any_for(&id, &access) && !automatic) {
         return model_not_found_response(&id);
@@ -2006,7 +1996,11 @@ fn automatic_route_available(
 ) -> bool {
     state
         .upstreams
-        .resolve_model_for(&route.fallback_target, PoolKind::Chat, access)
+        .resolve_model_for(
+            &route.fallback_target,
+            PoolKind::Chat,
+            &access.for_route_targets(&route.alias, route.members()),
+        )
         .is_some()
 }
 
@@ -2786,6 +2780,7 @@ pub(crate) async fn stream_with_tools(
     state: Arc<RamaState>,
     user: UserCtx,
     model: String,
+    access: aiplane_core::server::upstreams::PoolAccess,
     client_headers: HeaderMap,
     client_ip: Option<String>,
     mut request_body: Value,
@@ -2826,8 +2821,9 @@ pub(crate) async fn stream_with_tools(
         obj.insert("stream".into(), Value::Bool(true));
     }
 
-    // Resolved once, then shared by routing and the tool loop.
-    let access = state.pool_access_for_token(&user);
+    // The handler's access, which resolved `model`: shared by routing and
+    // the tool loop, so every round may route what the requested name (an
+    // alias, an automatic route's target) resolved to.
     let tool_ctx = proxy_tool_ctx(
         &state,
         user.principal.clone(),

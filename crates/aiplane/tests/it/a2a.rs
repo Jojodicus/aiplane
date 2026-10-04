@@ -307,7 +307,7 @@ fn spec_with(tools: &[&str], publish: Value) -> Value {
     let mut publish = publish;
     publish["a2a"] = json!({ "enabled": true });
     json!({ "main": {
-        "pool": "pool",
+        "model": "m",
         "instructions": { "orchestration": "Help the caller." },
         "tools": tools
     }, "publish": publish })

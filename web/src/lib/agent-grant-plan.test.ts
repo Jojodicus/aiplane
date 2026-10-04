@@ -5,10 +5,10 @@ import type { Grant } from './agents.ts';
 import { emptyPlan, isEmpty, plannedGrants, stageGrant, stageRevoke } from './agent-grant-plan.ts';
 
 const g = (kind: Grant['kind'], ref: string): Grant => ({ kind, ref, granted_by: 'admin', granted_at: '' });
-const held = [g('pool', 'chat'), g('tool', 'search_web')];
+const held = [g('model', 'chat'), g('tool', 'search_web')];
 
 test('staging a grant does nothing for one already held, and adds it once otherwise', () => {
-	let plan = stageGrant(emptyPlan(), held, { kind: 'pool', ref: 'chat' });
+	let plan = stageGrant(emptyPlan(), held, { kind: 'model', ref: 'chat' });
 	assert.ok(isEmpty(plan));
 	plan = stageGrant(plan, held, { kind: 'tool', ref: 'rag_search' });
 	plan = stageGrant(plan, held, { kind: 'tool', ref: 'rag_search' });
@@ -17,8 +17,8 @@ test('staging a grant does nothing for one already held, and adds it once otherw
 });
 
 test('switching off a staged grant withdraws it instead of revoking anything', () => {
-	const staged = stageGrant(emptyPlan(), held, { kind: 'pool', ref: 'large' });
-	const { plan, kept } = stageRevoke(staged, held, null, { kind: 'pool', ref: 'large' });
+	const staged = stageGrant(emptyPlan(), held, { kind: 'model', ref: 'large' });
+	const { plan, kept } = stageRevoke(staged, held, null, { kind: 'model', ref: 'large' });
 	assert.ok(isEmpty(plan));
 	assert.equal(kept, false);
 });
@@ -28,7 +28,7 @@ test('a held grant is revoked on save, unless the published version uses it', ()
 	assert.deepEqual(plan.revoke, [{ kind: 'tool', ref: 'search_web' }]);
 	assert.deepEqual(plannedGrants(held, plan).map((x) => x.ref), ['chat']);
 
-	const live = { main: { pool: 'chat', tools: ['search_web'] } };
+	const live = { main: { model: 'chat', tools: ['search_web'] } };
 	const keep = stageRevoke(emptyPlan(), held, live, { kind: 'tool', ref: 'search_web' });
 	assert.ok(isEmpty(keep.plan));
 	assert.equal(keep.kept, true);

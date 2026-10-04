@@ -227,9 +227,36 @@ impl World {
         Self::build_with(pools, erp, metered, tools, db_path, Default::default()).await
     }
 
-    /// [`Self::build`] with the operator's `[agents]` settings.
+    /// [`Self::build`] with the operator's network settings.
     async fn build_with(
         pools: &[(&str, &str, &MockServer)],
+        erp: Option<&MockServer>,
+        metered: bool,
+        tools: crate::server::tools::ToolRegistry,
+        db_path: Option<&std::path::Path>,
+        network: aiplane_core::server::config::NetworkConfig,
+    ) -> Self {
+        Self::build_aliased(pools, &[], erp, metered, tools, db_path, network).await
+    }
+
+    /// [`Self::new`] whose pools' backends also answer to an alias:
+    /// `(pool, alias)`, the alias naming the pool's model.
+    async fn aliased(pools: &[(&str, &str, &MockServer)], aliases: &[(&str, &str)]) -> Self {
+        Self::build_aliased(
+            pools,
+            aliases,
+            None,
+            false,
+            base_tools(),
+            None,
+            Default::default(),
+        )
+        .await
+    }
+
+    async fn build_aliased(
+        pools: &[(&str, &str, &MockServer)],
+        aliases: &[(&str, &str)],
         erp: Option<&MockServer>,
         metered: bool,
         tools: crate::server::tools::ToolRegistry,
@@ -241,7 +268,16 @@ impl World {
                 .await
                 .unwrap();
         let mut configs = HashMap::new();
-        for (name, _, upstream) in pools {
+        for (name, model, upstream) in pools {
+            let alias = aliases
+                .iter()
+                .find(|(pool, _)| pool == name)
+                .map(|(_, alias)| {
+                    aiplane_core::server::upstreams::config::AliasSpec::Targets(HashMap::from([(
+                        alias.to_string(),
+                        model.to_string(),
+                    )]))
+                });
             configs.insert(
                 name.to_string(),
                 UpstreamPoolConfig {
@@ -255,7 +291,7 @@ impl World {
                     strategy: PickerStrategy::RoundRobin,
                     models: Vec::new(),
                     backend: vec![BackendConfig {
-                        alias: None,
+                        alias,
                         supports_edit: false,
                         enabled: true,
                         name: format!("{name}-backend"),
@@ -385,7 +421,7 @@ impl World {
                 grants: &grants,
                 agents: &agents,
                 live_specs: &live_specs,
-                voice_defaults: &Default::default(),
+                model_defaults: &Default::default(),
             },
             Stage::Publish,
         )
@@ -403,7 +439,7 @@ impl World {
 fn billing_spec(rounds: u32) -> Value {
     json!({
         "main": {
-            "pool": "billing-pool",
+            "model": "billing-model",
             "instructions": { "orchestration": "Look up the customer's invoices and explain them." },
             "tools": [INVOICES],
             "tool_resources": { INVOICES: { "bind": { "customer_id": "route.customer" } } },
@@ -417,7 +453,7 @@ fn billing_spec(rounds: u32) -> Value {
 fn support_spec(billing: &str) -> Value {
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": {
                 "orchestration": "Find out what the visitor needs, then call forward_request.",
                 "response": "Answer briefly."
@@ -530,7 +566,7 @@ async fn support_example_scripted(
         .agent(
             "billing",
             &[
-                (GrantKind::Pool, "billing-pool"),
+                (GrantKind::Model, "billing-model"),
                 (GrantKind::Connector, "erp"),
                 (GrantKind::Tool, INVOICES),
             ],
@@ -542,7 +578,7 @@ async fn support_example_scripted(
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Connector, "erp"),
             ],
         )
@@ -770,7 +806,7 @@ async fn every_routing_step_is_audited_with_the_call_chain() {
 fn helper_spec(rounds: u32) -> Value {
     json!({
         "main": {
-            "pool": "helper-pool",
+            "model": "helper-model",
             "instructions": { "orchestration": "Solve the technical question." },
             "budget": { "rounds": rounds }
         },
@@ -784,7 +820,7 @@ fn helper_spec(rounds: u32) -> Value {
 fn triage_spec(helper: &str, router: Value) -> Value {
     json!({
         "main": {
-            "pool": "support-pool",
+            "model": "support-model",
             "instructions": { "orchestration": "Triage, then call forward_request." },
             "budget": { "rounds": 8 }
         },
@@ -834,22 +870,22 @@ async fn the_model_can_never_select_a_closed_route() {
     )
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     world.publish(&helper_id, &helper_spec(4)).await;
     let support = world
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
-                (GrantKind::Pool, "router-pool"),
+                (GrantKind::Model, "support-model"),
+                (GrantKind::Model, "router-model"),
                 (GrantKind::Connector, "erp"),
             ],
         )
         .await;
     let spec = triage_spec(
         &helper_id,
-        json!({"kind": "classifier", "pool": "router-pool"}),
+        json!({"kind": "classifier", "model": "router-model"}),
     );
     assert_eq!(world.issues(&support, &spec).await, []);
     world.publish(&support, &spec).await;
@@ -927,14 +963,14 @@ async fn a_rules_router_dispatches_the_first_open_route_in_its_order() {
     )
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     world.publish(&helper_id, &helper_spec(4)).await;
     let support = world
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
+                (GrantKind::Model, "support-model"),
                 (GrantKind::Connector, "erp"),
             ],
         )
@@ -986,14 +1022,14 @@ async fn a_forward_in_the_round_that_sets_its_slot_sees_the_slot() {
         )
         .await;
         let helper_id = world
-            .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+            .agent("helper", &[(GrantKind::Model, "helper-model")])
             .await;
         world.publish(&helper_id, &helper_spec(4)).await;
         let support = world
             .agent(
                 "support",
                 &[
-                    (GrantKind::Pool, "support-pool"),
+                    (GrantKind::Model, "support-model"),
                     (GrantKind::Connector, "erp"),
                 ],
             )
@@ -1062,11 +1098,11 @@ async fn each_sub_agent_spends_its_own_budget() {
     )
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     world.publish(&helper_id, &helper_spec(2)).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     let mut spec = triage_spec(&helper_id, json!({"kind": "rules"}));
     spec["main"]["budget"] = json!({"rounds": 3});
@@ -1126,11 +1162,11 @@ async fn a_sub_agents_result_reaches_the_main_agent_screened_as_data() {
     )
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     world.publish(&helper_id, &helper_spec(4)).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     world
         .publish(&support, &triage_spec(&helper_id, json!({"kind": "rules"})))
@@ -1181,10 +1217,10 @@ async fn a_sub_agent_that_routes_back_to_its_caller_is_refused() {
     )
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     let mut support_spec = triage_spec(&helper_id, json!({"kind": "rules"}));
     // Routable itself, so the only thing refusing the loop is the chain.
@@ -1237,7 +1273,7 @@ async fn a_closed_gate_lists_what_each_route_is_missing() {
     let main = llm(vec![call("fwd", "forward_request", json!({})), text("ok")]).await;
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
     let support = world
-        .agent("support", &[(GrantKind::Pool, "support-pool")])
+        .agent("support", &[(GrantKind::Model, "support-model")])
         .await;
     world
         .publish(&support, &triage_spec("nobody", json!({"kind": "rules"})))
@@ -1273,7 +1309,7 @@ async fn a_run_on_an_unpublished_or_unknown_agent_is_refused_with_the_reason() {
     let main = llm(vec![text("ok")]).await;
     let world = World::new(&[("support-pool", "support-model", &main)], None).await;
     let draft = world
-        .agent("draft", &[(GrantKind::Pool, "support-pool")])
+        .agent("draft", &[(GrantKind::Model, "support-model")])
         .await;
     let turn = |id: &'static str| AgentTurn {
         agent_id: id,
@@ -1401,22 +1437,22 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
     ])
     .await;
     let helper_id = world
-        .agent("helper", &[(GrantKind::Pool, "helper-pool")])
+        .agent("helper", &[(GrantKind::Model, "helper-model")])
         .await;
     world.publish(&helper_id, &helper_spec(4)).await;
     let support = world
         .agent(
             "support",
             &[
-                (GrantKind::Pool, "support-pool"),
-                (GrantKind::Pool, "router-pool"),
+                (GrantKind::Model, "support-model"),
+                (GrantKind::Model, "router-model"),
                 (GrantKind::Connector, "erp"),
             ],
         )
         .await;
     let spec = triage_spec(
         &helper_id,
-        json!({"kind": "classifier", "pool": "router-pool"}),
+        json!({"kind": "classifier", "model": "router-model"}),
     );
     world.publish(&support, &spec).await;
     run_turn(
@@ -1474,11 +1510,10 @@ async fn every_call_of_a_conversation_is_charged_to_the_main_agent() {
     assert_eq!(chain["frames"][1]["name"], "helper");
 }
 
-/// An owner picks the pool for PII reasons: the same model is also served by
-/// a second pool the agent is granted, but its spec names only the first. No
-/// round may reach the second, however the model name routes.
+/// An agent granted two models runs on the one its spec names, and no
+/// round reaches the other.
 #[tokio::test]
-async fn an_agent_run_uses_only_the_pool_its_spec_names() {
+async fn an_agent_run_uses_only_the_model_its_spec_names() {
     let local = llm(vec![
         call("t1", "company_echo", json!({"message": "a"})),
         call("t2", "company_echo", json!({"message": "b"})),
@@ -1488,8 +1523,8 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
     let cloud = llm(vec![text("leaked")]).await;
     let world = World::new(
         &[
-            ("local-pool", "shared-model", &local),
-            ("cloud-pool", "shared-model", &cloud),
+            ("local-pool", "local-model", &local),
+            ("cloud-pool", "cloud-model", &cloud),
         ],
         None,
     )
@@ -1498,39 +1533,217 @@ async fn an_agent_run_uses_only_the_pool_its_spec_names() {
         .agent(
             "private",
             &[
-                (GrantKind::Pool, "local-pool"),
-                (GrantKind::Pool, "cloud-pool"),
+                (GrantKind::Model, "local-model"),
+                (GrantKind::Model, "cloud-model"),
                 (GrantKind::Tool, "company_echo"),
             ],
         )
         .await;
     let spec = json!({
         "main": {
-            "pool": "local-pool",
+            "model": "local-model",
             "instructions": { "orchestration": "Echo twice, then answer." },
             "tools": ["company_echo"],
             "budget": { "rounds": 6 }
         }
     });
     world.publish(&agent, &spec).await;
-    let reply = run_turn(
+    let reply = run_turn(&world.state, turn(&agent, "Go.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Done."), "{reply:?}");
+    let sent = requests(&local).await;
+    assert_eq!(sent.len(), 3);
+    assert!(sent.iter().all(|r| r["model"] == "local-model"));
+    assert!(
+        requests(&cloud).await.is_empty(),
+        "a granted model the spec does not name is never used"
+    );
+}
+
+/// No model grant, no model: the run refuses with the grant to make
+/// instead of reaching the model the spec names.
+#[tokio::test]
+async fn an_agent_without_a_grant_on_its_model_does_not_run() {
+    let main = llm(vec![text("leaked")]).await;
+    let world = World::new(&[("main-pool", "main-model", &main)], None).await;
+    let agent = world.agent("ungranted", &[]).await;
+    let spec = json!({ "main": {
+        "model": "main-model",
+        "instructions": { "orchestration": "Answer." }
+    } });
+    world.publish(&agent, &spec).await;
+    let err = run_turn(&world.state, turn(&agent, "Hi."))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, AgentRunError::ModelNotGranted { ref model, .. } if model == "main-model"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("kind `model`"), "{err}");
+    assert!(requests(&main).await.is_empty());
+}
+
+/// An unset `main.model` runs on the gateway's default chat model — when
+/// the agent holds a grant on it.
+#[tokio::test]
+async fn an_agent_without_a_model_runs_on_the_gateway_default() {
+    let main = llm(vec![text("From the default.")]).await;
+    let other = llm(vec![text("leaked")]).await;
+    let world = World::new(
+        &[
+            ("main-pool", "main-model", &main),
+            ("other-pool", "a-model", &other),
+        ],
+        None,
+    )
+    .await;
+    aiplane_core::server::feature_defaults::set(
+        world.db(),
+        aiplane_core::server::feature_defaults::Feature::Chat,
+        Some("main-model"),
+    )
+    .await
+    .unwrap();
+    let agent = world
+        .agent("defaulted", &[(GrantKind::Model, "main-model")])
+        .await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": { "instructions": { "orchestration": "Answer." } } }),
+        )
+        .await;
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("From the default."));
+    assert_eq!(requests(&main).await[0]["model"], "main-model");
+    assert!(requests(&other).await.is_empty());
+}
+
+/// An agent granted a backend alias runs on it: the turn resolves `fast` to
+/// the real id and routes that, which the alias grant authorises — and so
+/// does compacting the conversation.
+#[tokio::test]
+async fn an_agent_on_a_granted_alias_answers_and_compacts() {
+    let main = llm(vec![text("Via the alias.")]).await;
+    let world = World::aliased(
+        &[("chat-pool", "real-model", &main)],
+        &[("chat-pool", "fast")],
+    )
+    .await;
+    let agent = world.agent("aliased", &[(GrantKind::Model, "fast")]).await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": { "model": "fast", "instructions": { "orchestration": "Answer." } } }),
+        )
+        .await;
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Via the alias."), "{reply:?}");
+    assert_eq!(requests(&main).await[0]["model"], "real-model");
+
+    let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
+    let (model, access) = crate::server::compaction::compaction_target(
         &world.state,
-        AgentTurn {
-            agent_id: &agent,
-            session_id: None,
-            message: "Go.",
-            visitor_id: None,
-            lang: None,
+        "fast",
+        &agent,
+        &reply.session_id,
+        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["fast"]),
+    )
+    .await;
+    assert_eq!(model, "real-model");
+    assert!(
+        world
+            .state
+            .upstreams
+            .route_access(&model, PoolKind::Chat, &access)
+            .is_ok(),
+        "compaction may route what the alias resolves to"
+    );
+}
+
+/// An automatic route whose fallback candidate is itself an alias: the
+/// agent holds a grant on the route only, and its turn and its compaction
+/// reach the candidate's real model.
+#[tokio::test]
+async fn an_agent_on_an_automatic_route_with_an_alias_candidate_answers_and_compacts() {
+    use aiplane_core::server::db::automatic_routes::{
+        self, AutomaticRoute, AutomaticRouteCandidate,
+    };
+    let main = llm(vec![text("Via the route.")]).await;
+    let other = llm(vec![text("leaked")]).await;
+    let world = World::aliased(
+        &[
+            ("chat-pool", "real-model", &main),
+            ("big-pool", "big-model", &other),
+        ],
+        &[("chat-pool", "fast")],
+    )
+    .await;
+    let candidate = |target: &str| AutomaticRouteCandidate {
+        key: target.into(),
+        target: target.into(),
+        description: target.into(),
+    };
+    automatic_routes::upsert(
+        world.db(),
+        &AutomaticRoute {
+            alias: "auto".into(),
+            selector_model: "no-selector".into(),
+            objective: "balanced".into(),
+            instructions: String::new(),
+            minimum_confidence: 0.5,
+            selector_timeout_ms: 1_000,
+            fallback_target: "fast".into(),
+            session_affinity: false,
+            session_ttl_seconds: 60,
+            rollout: "active".into(),
+            version: 0,
+            candidates: vec![candidate("fast"), candidate("big-model")],
         },
     )
     .await
     .unwrap();
-    assert_eq!(reply.answer.as_deref(), Some("Done."), "{reply:?}");
-    assert_eq!(requests(&local).await.len(), 3);
+    let agent = world.agent("routed", &[(GrantKind::Model, "auto")]).await;
+    world
+        .publish(
+            &agent,
+            &json!({ "main": { "model": "auto", "instructions": { "orchestration": "Answer." } } }),
+        )
+        .await;
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
+    assert_eq!(reply.answer.as_deref(), Some("Via the route."), "{reply:?}");
+    assert_eq!(requests(&main).await[0]["model"], "real-model");
     assert!(
-        requests(&cloud).await.is_empty(),
-        "a granted pool the spec does not name is never used"
+        requests(&other).await.is_empty(),
+        "the selector failed: the fallback ran"
     );
+
+    let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
+    let (model, access) = crate::server::compaction::compaction_target(
+        &world.state,
+        "auto",
+        &agent,
+        &reply.session_id,
+        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["auto"]),
+    )
+    .await;
+    assert_eq!(model, "real-model");
+    assert!(
+        world
+            .state
+            .upstreams
+            .route_access(&model, PoolKind::Chat, &access)
+            .is_ok()
+    );
+}
+
+fn turn<'a>(agent_id: &'a str, message: &'a str) -> AgentTurn<'a> {
+    AgentTurn {
+        agent_id,
+        session_id: None,
+        message,
+        visitor_id: None,
+        lang: None,
+    }
 }
 
 mod a2a;

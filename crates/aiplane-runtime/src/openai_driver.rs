@@ -663,27 +663,14 @@ impl SessionDriver for OpenAiDriver {
         if result.is_ok() && !ctx.cancel.load(Ordering::SeqCst) {
             let state = self.state.clone();
             let session_id = ctx.session_id.clone();
-            // Resolve any alias to the real id so the context window (and thus the
-            // auto-compaction trigger) keys on the model that actually ran — an
-            // alias carries no settings of its own.
-            let routing_model = self
-                .state
-                .automatic_router
-                .session_target(
-                    &ctx.model,
-                    self.tool_ctx.principal.subject_id(),
-                    &ctx.session_id,
-                )
-                .unwrap_or_else(|| ctx.model.clone());
-            let model = self
-                .state
-                .upstreams
-                .resolve_model(
-                    &routing_model,
-                    aiplane_core::server::upstreams::PoolKind::Chat,
-                )
-                .unwrap_or(routing_model);
-            let access = policy.compaction_pools();
+            let (model, access) = crate::server::compaction::compaction_target(
+                &self.state,
+                &ctx.model,
+                self.tool_ctx.principal.subject_id(),
+                &ctx.session_id,
+                policy.compaction_access(),
+            )
+            .await;
             let log = crate::agents::audit::RunLog::of(&self.tool_ctx);
             tokio::spawn(async move {
                 crate::server::compaction::maybe_autocompact(
@@ -1038,7 +1025,19 @@ async fn run_one_turn(
         ..d.tool_ctx.clone()
     };
 
-    let access = policy.pools(d);
+    let access = policy.access(d);
+    // A system principal names a model it holds a grant on; the ids the turn
+    // then resolves that name to are the gateway's own resolution.
+    if !access.grants_model(&ctx.model) {
+        return Err(TurnError::Upstream {
+            message: format!(
+                "model `{}` is not granted to this principal; grant it (kind `model`) or pick \
+                 one it holds",
+                ctx.model
+            ),
+        });
+    }
+    let access = access.for_request(&ctx.model);
     let turns = chat::list_turns(&d.state.db, &ctx.session_id)
         .await
         .map_err(persist_err("list_turns", &ctx.assistant_turn_id))?;
@@ -1076,26 +1075,22 @@ async fn run_one_turn(
         "messages": &messages,
         "tools": if routing_has_tools { serde_json::json!([{}]) } else { serde_json::json!([]) },
     });
-    let automatic_decision = d
-        .state
-        .automatic_router
-        .select(
-            &ctx.model,
-            &routing_state,
-            &access,
-            Some(
-                aiplane_core::server::automatic_routing::AutomaticRouteAffinity {
-                    principal: d.tool_ctx.principal.subject_id(),
-                    session: &ctx.session_id,
-                },
-            ),
-        )
-        .await
-        .map_err(upstream_err)?;
-    let routing_model = automatic_decision
-        .as_ref()
-        .map(|decision| decision.effective_target.as_str())
-        .unwrap_or(&ctx.model);
+    let target = crate::server::model_route::route_target(
+        &d.state,
+        &ctx.model,
+        &routing_state,
+        &access,
+        Some(
+            aiplane_core::server::automatic_routing::AutomaticRouteAffinity {
+                principal: d.tool_ctx.principal.subject_id(),
+                session: &ctx.session_id,
+            },
+        ),
+    )
+    .await
+    .map_err(upstream_err)?;
+    let (routing_model, access, automatic_decision) =
+        (target.model.as_str(), target.access, target.decision);
     match crate::content_guard::evaluate_for_model(&d.state, &routing_state, routing_model, &access)
         .await
         .map_err(upstream_err)?

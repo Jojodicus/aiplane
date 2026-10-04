@@ -20,10 +20,10 @@ fn website_spec(strict: bool) -> Value {
             "topics": ["croit products", "Ceph storage"],
             "refusal": REFUSAL,
             "strict": strict,
-            "classifier_pool": "guard-pool"
+            "classifier_model": "guard-model"
         },
         "main": {
-            "pool": "website-pool",
+            "model": "website-model",
             "instructions": {
                 "orchestration": "Answer questions about croit and Ceph.",
                 "response": "Friendly and short."
@@ -74,8 +74,8 @@ async fn website(spec: Value, main: &MockServer, guard: &MockServer, metered: bo
         .agent(
             "website",
             &[
-                (GrantKind::Pool, "website-pool"),
-                (GrantKind::Pool, "guard-pool"),
+                (GrantKind::Model, "website-model"),
+                (GrantKind::Model, "guard-model"),
             ],
         )
         .await;
@@ -150,7 +150,7 @@ async fn an_off_topic_question_gets_the_refusal_and_never_reaches_the_main_model
     let decisions = site.events(AuditKind::ScopeDecision).await;
     assert_eq!(decisions.len(), 1, "{decisions:?}");
     assert_eq!(decisions[0]["verdict"], "out_of_scope");
-    assert_eq!(decisions[0]["pool"], "guard-pool");
+    assert_eq!(decisions[0]["model"], "guard-model");
     let exchanges = site.events(AuditKind::LlmExchange).await;
     assert_eq!(exchanges.len(), 1, "only the guard's call: {exchanges:?}");
     assert_eq!(exchanges[0]["purpose"], "scope_guard");
@@ -305,15 +305,15 @@ async fn a_routed_sub_agent_is_never_guarded() {
     )
     .await;
     let mut spec = website_spec(true);
-    spec["main"]["pool"] = json!("sub-pool");
+    spec["main"]["model"] = json!("sub-model");
     spec["finish"] = json!({ "schema": { "type": "object", "required": ["answer"],
                                          "properties": { "answer": { "type": "string" } } } });
     let id = world
         .agent(
             "helper",
             &[
-                (GrantKind::Pool, "sub-pool"),
-                (GrantKind::Pool, "guard-pool"),
+                (GrantKind::Model, "sub-model"),
+                (GrantKind::Model, "guard-model"),
             ],
         )
         .await;

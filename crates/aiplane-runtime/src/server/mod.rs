@@ -8,6 +8,8 @@ pub mod comfyui_tool;
 pub mod compaction;
 pub mod grant_holding;
 pub mod headless;
+pub mod model_choices;
+pub mod model_route;
 pub mod scheduled;
 pub mod state;
 pub mod tools;

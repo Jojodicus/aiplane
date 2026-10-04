@@ -32,6 +32,7 @@ use super::config::{
     BackendConfig, Compliance, FallbackConfig, PickerStrategy, PoolKind, UpstreamPoolConfig,
 };
 use super::profile::{BackendProfile, Detected};
+use crate::server::principal::GrantKind;
 
 /// One model a caller may use, with what a person choosing it needs to know:
 /// which kind of endpoint serves it, where its data goes, and — for an alias —
@@ -606,7 +607,7 @@ pub struct Pool {
     pub enforce_limits: bool,
     /// Language → voice-id map (speech pools only). See
     /// [`UpstreamPoolConfig::voices`] / [`UpstreamPoolConfig::voice_for_language`].
-    pub voices: std::collections::HashMap<String, String>,
+    pub voices: Arc<std::collections::HashMap<String, String>>,
     /// Voices this pool offers users to choose from, in the operator's order
     /// (speech pools only). See [`UpstreamPoolConfig::offer_voices`] — this is
     /// the menu, `voices` is the resolution.
@@ -658,12 +659,24 @@ pub struct PoolAccess {
     /// chosen by whoever issued it, and an admin's token that says "only
     /// these models" means it.
     pub allowed_models: Option<Arc<HashSet<String>>>,
-    /// A system principal's pool grants. `Some` replaces the group rule
-    /// entirely: only the named pools are reachable, an empty `allowed_groups`
-    /// does not count as open, and `is_admin` does not apply. `None` for
+    /// A system principal's model grants: model ids, backend aliases and
+    /// automatic-route aliases, each with the pools it routes through
+    /// (`None`: every pool serving it). `Some` replaces the group rule
+    /// entirely — `is_admin` does not apply, and a granted name reaches only
+    /// its pools, there as itself or as what a backend of the pool resolves
+    /// it to ([`Self::reaches`]). An empty map reaches nothing. `None` for
     /// people, who go through their groups.
-    pub granted_pools: Option<Arc<HashSet<String>>>,
+    pub granted_models: Option<Arc<ModelGrants>>,
+    /// Whether a system principal's granted alias also authorises what a
+    /// backend resolves it to. Off for a name a caller sends: that name must
+    /// be granted itself. On only where the gateway resolves a granted name
+    /// on its own ([`Self::resolving`]).
+    pub expand_aliases: bool,
 }
+
+/// A system principal's model grants, by name: the pools each routes
+/// through, `None` for every pool serving it.
+pub type ModelGrants = HashMap<String, Option<HashSet<String>>>;
 
 impl PoolAccess {
     /// Full access — used by internal callers that must see the whole topology
@@ -673,69 +686,139 @@ impl PoolAccess {
             role_ids: Vec::new(),
             is_admin: true,
             allowed_models: None,
-            granted_pools: None,
+            granted_models: None,
+            expand_aliases: false,
         }
     }
 
-    /// The access of a system principal: its pool grants and nothing else.
+    /// The access of a system principal: its model grants and nothing else.
     pub fn for_system(sp: &crate::server::principal::SystemPrincipal) -> Self {
-        let pools = sp
-            .grants
-            .refs(crate::server::principal::GrantKind::Pool)
-            .map(str::to_string)
+        Self::for_system_models(sp, sp.grants.refs(GrantKind::Model))
+    }
+
+    /// [`Self::for_system`], narrowed to `listed`: an agent run reaches only
+    /// the models its spec names *and* its principal was granted.
+    pub fn for_system_models<'a>(
+        sp: &crate::server::principal::SystemPrincipal,
+        listed: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let models = listed
+            .into_iter()
+            .filter(|m| sp.grants.has(GrantKind::Model, m))
+            .map(|m| {
+                let pools = sp
+                    .grants
+                    .model_pools(m)
+                    .map(|p| p.iter().cloned().collect());
+                (m.to_string(), pools)
+            })
             .collect();
         Self {
             role_ids: Vec::new(),
             is_admin: false,
             allowed_models: None,
-            granted_pools: Some(Arc::new(pools)),
+            granted_models: Some(Arc::new(models)),
+            expand_aliases: false,
         }
     }
 
-    /// [`Self::for_system`], narrowed to `listed`: an agent run reaches only
-    /// the pools its spec names *and* its principal was granted. Narrowing
-    /// by pool, not by model, matters because routing goes by model: one
-    /// model name served by a self-hosted and a cloud pool would otherwise
-    /// reach both whenever both are granted.
-    pub fn for_system_pools<'a>(
-        sp: &crate::server::principal::SystemPrincipal,
-        listed: impl IntoIterator<Item = &'a str>,
+    /// The access that routes the `targets` automatic route `route` chose:
+    /// the calling token's allowlist no longer applies (it allowed the
+    /// route's alias, and the operator picked the targets), while a system
+    /// principal reaches each target only through the pools its grant on
+    /// `route` names — never more.
+    pub fn for_route_targets<'a>(
+        &self,
+        route: &str,
+        targets: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        let listed: HashSet<&str> = listed.into_iter().collect();
-        let pools = sp
-            .grants
-            .refs(crate::server::principal::GrantKind::Pool)
-            .filter(|p| listed.contains(p))
-            .map(str::to_string)
-            .collect();
+        let granted_models = self.granted_models.as_ref().map(|granted| {
+            let mut widened = (**granted).clone();
+            if let Some(scope) = granted.get(route) {
+                for target in targets {
+                    let entry = widened
+                        .entry(target.to_string())
+                        .or_insert_with(|| Some(HashSet::new()));
+                    *entry = match (entry.take(), scope) {
+                        (Some(mut have), Some(add)) => {
+                            have.extend(add.iter().cloned());
+                            Some(have)
+                        }
+                        _ => None,
+                    };
+                }
+            }
+            Arc::new(widened)
+        });
         Self {
-            granted_pools: Some(Arc::new(pools)),
-            ..Self::for_system(sp)
+            allowed_models: None,
+            granted_models,
+            expand_aliases: true,
+            ..self.clone()
         }
     }
 
-    /// Whether the calling token may use `model`. `true` for every caller
-    /// without an allowlist, which is the default for every token.
-    pub fn allows_model(&self, model: &str) -> bool {
-        match &self.allowed_models {
-            None => true,
-            Some(set) => set.contains(model),
+    /// This access for a request naming `model`: [`Self::resolving`] when the
+    /// caller may name it, so the ids the gateway resolves it to route;
+    /// unchanged otherwise, so a name the caller holds no grant on stays
+    /// unknown to it.
+    #[must_use]
+    pub fn for_request(&self, model: &str) -> Self {
+        if self.grants_model(model) {
+            self.resolving()
+        } else {
+            self.clone()
         }
+    }
+
+    /// This access, for routing what the gateway itself resolved from a
+    /// name the caller was allowed: the id a turn resolved a granted alias
+    /// to, the model a conversation compacts with. A granted alias then
+    /// authorises its target on the pools it resolves there.
+    #[must_use]
+    pub fn resolving(&self) -> Self {
+        Self {
+            expand_aliases: true,
+            ..self.clone()
+        }
+    }
+
+    /// Whether the caller may name `model` at all: the calling token's
+    /// allowlist and, for a system principal, its grants.
+    pub fn allows_model(&self, model: &str) -> bool {
+        self.grants_model(model) && self.allowlist_allows(model)
+    }
+
+    /// Whether the calling token's allowlist lets `model` through. `true`
+    /// for every caller without one, which is the default for every token.
+    pub fn allowlist_allows(&self, model: &str) -> bool {
+        self.allowed_models
+            .as_ref()
+            .is_none_or(|set| set.contains(model))
+    }
+
+    /// Whether a system principal's grants name `model`; `true` for people.
+    pub fn grants_model(&self, model: &str) -> bool {
+        self.granted_models
+            .as_ref()
+            .is_none_or(|granted| granted.contains_key(model))
     }
 
     /// True when the caller carries a model allowlist at all — lets a handler
     /// tell "this model does not exist" from "this token may not use it"
     /// without leaking which models exist to a caller that has no business
-    /// knowing.
+    /// knowing. A system principal's grants do not count: a model it was
+    /// not granted is unknown to it, as a pool outside a person's groups is.
     pub fn is_model_restricted(&self) -> bool {
         self.allowed_models.is_some()
     }
 
-    /// Whether the caller may see/route to `pool`: unrestricted pools are open
+    /// Whether the caller may see `pool` at all: unrestricted pools are open
     /// to all; admins bypass; otherwise the caller must hold a listed group.
+    /// A system principal sees the pools its grants route through.
     pub fn allows(&self, pool: &Pool) -> bool {
-        if let Some(granted) = &self.granted_pools {
-            return granted.contains(&pool.name);
+        if let Some(granted) = &self.granted_models {
+            return granted.values().any(|pools| in_scope(pools, pool));
         }
         if self.is_admin || pool.allowed_groups.is_empty() {
             return true;
@@ -744,6 +827,37 @@ impl PoolAccess {
             .iter()
             .any(|g| self.role_ids.iter().any(|r| r == g))
     }
+
+    /// Whether the caller may route `model` on `pool` (the token allowlist
+    /// aside, which is checked once per request). A person: the pool's
+    /// groups. A system principal: a grant on `model` through `pool`, or —
+    /// when resolving ([`Self::resolving`]) — a grant through `pool` on a
+    /// name a backend there resolves to `model`, so a granted alias
+    /// authorises its target only where it is the alias's target.
+    pub fn reaches(&self, pool: &Pool, model: &str) -> bool {
+        let Some(granted) = &self.granted_models else {
+            return self.allows(pool);
+        };
+        if granted
+            .get(model)
+            .is_some_and(|pools| in_scope(pools, pool))
+        {
+            return true;
+        }
+        self.expand_aliases
+            && granted.iter().any(|(name, pools)| {
+                name != model
+                    && in_scope(pools, pool)
+                    && pool
+                        .backends
+                        .iter()
+                        .any(|b| b.resolve(name).as_deref() == Some(model))
+            })
+    }
+}
+
+fn in_scope(pools: &Option<HashSet<String>>, pool: &Pool) -> bool {
+    pools.as_ref().is_none_or(|p| p.contains(&pool.name))
 }
 
 /// What the running registry is serving right now — the "before" side of the
@@ -818,7 +932,7 @@ impl Pool {
             backends,
             compliance: cfg.compliance,
             enforce_limits: cfg.enforce_limits,
-            voices: cfg.voices.clone(),
+            voices: Arc::new(cfg.voices.clone()),
             offer_voices: cfg.offer_voices.clone(),
             configured_models: cfg.models.clone(),
             fallback_offline: cfg.fallback_offline.clone(),
@@ -922,6 +1036,7 @@ impl Pool {
                 return Ok(Acquired {
                     backend: Arc::clone(backend),
                     resolved_model,
+                    voices: Arc::clone(&self.voices),
                 });
             }
         }
@@ -1201,6 +1316,8 @@ pub struct Acquired {
     /// write into the forwarded body's `model` field. Equal to the requested
     /// model for a direct hit; the alias's target when routed via an alias.
     resolved_model: String,
+    /// The language → voice map of the pool the slot is in (speech pools).
+    voices: Arc<std::collections::HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for Acquired {
@@ -1214,6 +1331,17 @@ impl std::fmt::Debug for Acquired {
 }
 
 impl Acquired {
+    /// The voice the acquired backend's pool speaks `language` in (its
+    /// default voice when the language has none). What a synthesis on this
+    /// slot should ask for when the caller names no voice: it is the voice
+    /// this backend is configured with, wherever routing landed.
+    pub fn voice_for(&self, language: &str) -> Option<&str> {
+        self.voices
+            .get(language)
+            .or_else(|| self.voices.get(""))
+            .map(String::as_str)
+    }
+
     pub fn backend(&self) -> &Backend {
         &self.backend
     }
@@ -1610,7 +1738,7 @@ impl UpstreamRegistry {
         for backend in data
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .flat_map(|p| p.backends.iter())
             // `is_available` for the same reason `Pool::serves_model` uses it:
             // a drained backend takes no traffic, so it should not decide how
@@ -1835,9 +1963,9 @@ impl UpstreamRegistry {
     /// True if a pool of *any* kind that `access` permits knows `model`. Backs
     /// the per-user `GET /v1/models/{id}`.
     pub fn knows_any_for(&self, model: &str, access: &PoolAccess) -> bool {
-        access.allows_model(model)
+        access.allowlist_allows(model)
             && self.data().pools.values().any(|p| {
-                !Self::is_internal_kind(p.kind) && access.allows(p) && p.knows_model(model)
+                !Self::is_internal_kind(p.kind) && access.reaches(p, model) && p.knows_model(model)
             })
     }
 
@@ -1922,6 +2050,9 @@ impl UpstreamRegistry {
                 // Alias names inherit the pool's compliance flags, same as the
                 // real ids — clients pick either, so both must carry the warning.
                 for id in backend.listed_models() {
+                    if !access.reaches(pool, &id) {
+                        continue;
+                    }
                     let entry = merged.entry(id).or_default();
                     // AND the flags: clear only where every serving pool is clear.
                     entry.gdpr &= pool.compliance.gdpr;
@@ -1942,6 +2073,20 @@ impl UpstreamRegistry {
             .pools
             .values()
             .any(|p| p.kind == kind && p.knows_model(model))
+    }
+
+    /// The pools of `kinds` `access` may use, by name and sorted — served
+    /// models aside: what a model grant made by that caller routes through.
+    pub fn pools_of_kinds(&self, kinds: &[PoolKind], access: &PoolAccess) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .data()
+            .pools
+            .values()
+            .filter(|p| kinds.contains(&p.kind) && access.allows(p))
+            .map(|p| p.name.clone())
+            .collect();
+        names.sort();
+        names
     }
 
     /// True if any pool of *any* kind knows `model`. Backs `GET
@@ -2025,11 +2170,11 @@ impl UpstreamRegistry {
         // it has to keep behaving exactly as it does for an unrestricted
         // caller — 404, with the kind's fallback still applying — rather than
         // becoming an allowlist error that suppresses the fallback.
-        if !access.allows_model(model) {
+        if !access.allowlist_allows(model) {
             let known = d
                 .pools
                 .values()
-                .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+                .any(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
@@ -2040,7 +2185,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.serves_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.serves_model(model))
         {
             return pool
                 .acquire_for_model_affine(model, affinity)
@@ -2052,7 +2197,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.knows_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model))
         {
             return Err(RouteError::Acquire(AcquireError::NoHealthyBackend {
                 pool: pool.name.clone(),
@@ -2193,11 +2338,11 @@ impl UpstreamRegistry {
         access: &PoolAccess,
     ) -> Result<String, RouteError> {
         let d = self.data();
-        if !access.allows_model(model) {
+        if !access.allowlist_allows(model) {
             let known = d
                 .pools
                 .values()
-                .any(|p| p.kind == kind && access.allows(p) && p.knows_model(model));
+                .any(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model));
             return Err(if known {
                 RouteError::ModelNotAllowed(model.to_string())
             } else {
@@ -2207,7 +2352,7 @@ impl UpstreamRegistry {
         if let Some(id) = d
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .find_map(|p| p.resolve_healthy(model))
         {
             return Ok(id);
@@ -2215,7 +2360,7 @@ impl UpstreamRegistry {
         if let Some(pool) = d
             .pools
             .values()
-            .find(|p| p.kind == kind && access.allows(p) && p.knows_model(model))
+            .find(|p| p.kind == kind && access.reaches(p, model) && p.knows_model(model))
         {
             return Err(RouteError::Acquire(AcquireError::NoHealthyBackend {
                 pool: pool.name.clone(),
@@ -2246,7 +2391,7 @@ impl UpstreamRegistry {
         self.data()
             .pools
             .values()
-            .filter(|p| p.kind == kind && access.allows(p))
+            .filter(|p| p.kind == kind && access.reaches(p, model))
             .find_map(|p| p.resolve_healthy(model))
     }
 
@@ -2267,7 +2412,7 @@ impl UpstreamRegistry {
             .data()
             .pools
             .values()
-            .filter(|pool| pool.kind == kind && access.allows(pool))
+            .filter(|pool| pool.kind == kind && access.reaches(pool, model))
             .flat_map(|pool| pool.backends.iter())
             .filter(|backend| backend.is_available())
             .filter_map(|backend| backend.resolve(model))
@@ -3634,7 +3779,7 @@ mod tests {
     }
 
     #[test]
-    fn a_system_principal_reaches_only_its_granted_pools_open_or_not() {
+    fn a_system_principal_reaches_only_its_granted_models_whatever_the_pool_groups() {
         use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
         let mut vip = pool_config(
             PoolKind::Chat,
@@ -3659,22 +3804,24 @@ mod tests {
             id: "p".into(),
             name: "ci".into(),
             grants: Arc::new(GrantSet::new(
-                grants.iter().map(|g| (GrantKind::Pool, g.to_string())),
+                grants.iter().map(|g| (GrantKind::Model, g.to_string())),
             )),
         };
 
         let nothing = PoolAccess::for_system(&principal(&[]));
         assert!(reg.all_models_for(&nothing).is_empty());
-        assert!(matches!(
-            reg.acquire_for_access("open-model", PoolKind::Chat, &nothing),
-            Err(RouteError::UnknownModel(_))
-        ));
+        assert!(
+            reg.acquire_for_access("open-model", PoolKind::Chat, &nothing)
+                .is_err(),
+            "an open pool is no grant"
+        );
 
-        let vip_only = PoolAccess::for_system(&principal(&["vip"]));
+        let vip_only = PoolAccess::for_system(&principal(&["vip-model"]));
         assert_eq!(reg.all_models_for(&vip_only), vec!["vip-model"]);
         assert!(
             reg.acquire_for_access("vip-model", PoolKind::Chat, &vip_only)
-                .is_ok()
+                .is_ok(),
+            "the grant replaces the pool's group rule"
         );
         assert!(
             reg.acquire_for_access("open-model", PoolKind::Chat, &vip_only)
@@ -3682,50 +3829,248 @@ mod tests {
         );
     }
 
-    /// The PII case: the same model on a self-hosted and a cloud pool, both
-    /// granted, and an agent whose spec names only the self-hosted one. A
-    /// route by model must never land on the cloud pool, and a listed pool
-    /// that is not granted stays out of reach.
     #[test]
-    fn an_agent_run_reaches_only_pools_both_granted_and_listed() {
+    fn an_agent_run_reaches_only_models_both_granted_and_listed() {
         use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
-        let pool = |b: &str| {
+        let reg = build(vec![(
+            "chat",
             pool_config(
                 PoolKind::Chat,
+                PickerStrategy::RoundRobin,
+                vec![backend("b", 16)],
+            ),
+        )]);
+        seed_models(
+            &reg,
+            "chat",
+            0,
+            &["main-model", "small-model", "spare-model"],
+        );
+        let principal = SystemPrincipal {
+            id: "p".into(),
+            name: "support".into(),
+            grants: Arc::new(GrantSet::new(
+                ["main-model", "small-model"]
+                    .iter()
+                    .map(|g| (GrantKind::Model, g.to_string())),
+            )),
+        };
+        let run = PoolAccess::for_system_models(&principal, ["main-model", "spare-model"]);
+        assert!(
+            reg.acquire_for_access("main-model", PoolKind::Chat, &run)
+                .is_ok()
+        );
+        assert!(
+            reg.acquire_for_access("small-model", PoolKind::Chat, &run)
+                .is_err(),
+            "granted, but not this run's model"
+        );
+        assert!(
+            reg.acquire_for_access("spare-model", PoolKind::Chat, &run)
+                .is_err(),
+            "naming a model is no grant"
+        );
+    }
+
+    fn principal_on(
+        grants: &[(&str, Option<&[&str]>)],
+    ) -> crate::server::principal::SystemPrincipal {
+        use crate::server::principal::{GrantKind, GrantSet, SystemPrincipal};
+        let set = GrantSet::new(
+            grants
+                .iter()
+                .map(|(m, _)| (GrantKind::Model, (*m).to_string())),
+        )
+        .with_model_pools(grants.iter().filter_map(|(m, pools)| {
+            pools.map(|p| {
+                (
+                    (*m).to_string(),
+                    p.iter().map(|s| (*s).to_string()).collect(),
+                )
+            })
+        }));
+        SystemPrincipal {
+            id: "p".into(),
+            name: "agent".into(),
+            grants: Arc::new(set),
+        }
+    }
+
+    #[test]
+    fn an_automatic_route_target_reaches_only_the_routes_pools() {
+        let reg = build(vec![
+            (
+                "open",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("open-b", 16)],
+                ),
+            ),
+            (
+                "vip",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("vip-b", 16)],
+                ),
+            ),
+        ]);
+        seed_models(&reg, "open", 0, &["picked"]);
+        seed_models(&reg, "vip", 0, &["picked", "other"]);
+        let agent = PoolAccess::for_system(&principal_on(&[("auto", Some(&["open"]))]))
+            .for_route_targets("auto", ["picked"]);
+        assert!(agent.allows_model("auto") && agent.allows_model("picked"));
+        assert!(!agent.allows_model("other"), "a target is no open door");
+        for _ in 0..4 {
+            let acquired = reg
+                .acquire_for_access("picked", PoolKind::Chat, &agent)
+                .unwrap();
+            assert_eq!(
+                acquired.backend().name,
+                "open-b",
+                "never the route's other pool"
+            );
+        }
+        let ungranted =
+            PoolAccess::for_system(&principal_on(&[])).for_route_targets("auto", ["picked"]);
+        assert!(
+            !ungranted.allows_model("picked"),
+            "a route not granted widens nothing"
+        );
+
+        let token = PoolAccess {
+            allowed_models: Some(Arc::new(HashSet::from(["auto".to_string()]))),
+            ..PoolAccess::default()
+        };
+        assert!(
+            token
+                .for_route_targets("auto", ["picked"])
+                .allows_model("other"),
+            "a person's token allowlist stops at the route, as it always did"
+        );
+    }
+
+    /// The same model on an open and a group-restricted pool: a grant made
+    /// by a manager outside the group names only the open pool, and the
+    /// principal never lands on the other; an unscoped (admin) grant reaches
+    /// both.
+    #[test]
+    fn a_model_grant_routes_only_through_the_pools_it_names() {
+        let mut vip = pool_config(
+            PoolKind::Chat,
+            PickerStrategy::RoundRobin,
+            vec![backend("vip-b", 16)],
+        );
+        vip.allowed_groups = vec!["vip".into()];
+        let reg = build(vec![
+            (
+                "open",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("open-b", 16)],
+                ),
+            ),
+            ("vip", vip),
+        ]);
+        seed_models(&reg, "open", 0, &["gpt-4o"]);
+        seed_models(&reg, "vip", 0, &["gpt-4o"]);
+        let scoped = PoolAccess::for_system(&principal_on(&[("gpt-4o", Some(&["open"]))]));
+        let mut seen = HashSet::new();
+        for _ in 0..8 {
+            let acquired = reg
+                .acquire_for_access("gpt-4o", PoolKind::Chat, &scoped)
+                .unwrap();
+            seen.insert(acquired.backend().name.clone());
+        }
+        assert_eq!(seen, HashSet::from(["open-b".to_string()]));
+
+        let admin = PoolAccess::for_system(&principal_on(&[("gpt-4o", None)]));
+        let pool = |name: &str| reg.pools().into_iter().find(|p| p.name == name).unwrap();
+        assert!(admin.reaches(&pool("vip"), "gpt-4o") && admin.reaches(&pool("open"), "gpt-4o"));
+        assert!(!scoped.reaches(&pool("vip"), "gpt-4o"));
+    }
+
+    /// A granted backend alias authorises the id it resolves to, where it
+    /// resolves to it: the turn resolves `fast` to the real id first and
+    /// routes that.
+    #[test]
+    fn a_granted_alias_authorises_its_target_on_its_own_pools() {
+        let reg = build(vec![
+            (
+                "chat",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend_alias("a", targets(&[("fast", "Qwen/Qwen3")]))],
+                ),
+            ),
+            (
+                "other",
+                pool_config(
+                    PoolKind::Chat,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("b", 16)],
+                ),
+            ),
+        ]);
+        seed_models(&reg, "chat", 0, &["Qwen/Qwen3"]);
+        seed_models(&reg, "other", 0, &["Qwen/Qwen3"]);
+        let caller = PoolAccess::for_system(&principal_on(&[("fast", Some(&["chat", "other"]))]));
+        assert!(
+            reg.acquire_for_access("Qwen/Qwen3", PoolKind::Chat, &caller)
+                .is_err(),
+            "a caller naming the target itself holds no grant on it"
+        );
+        let agent = caller.resolving();
+        let real = reg
+            .resolve_model_for("fast", PoolKind::Chat, &agent)
+            .expect("the alias resolves");
+        assert_eq!(real, "Qwen/Qwen3");
+        for _ in 0..4 {
+            let acquired = reg
+                .acquire_for_access(&real, PoolKind::Chat, &agent)
+                .unwrap();
+            assert_eq!(
+                acquired.backend().name,
+                "a",
+                "only where `fast` resolves to it"
+            );
+        }
+        assert!(
+            reg.acquire_for_access("other-model", PoolKind::Chat, &agent)
+                .is_err()
+        );
+    }
+
+    /// Two speech pools serve the same model with different voices: the
+    /// voice comes from the pool whose backend the synthesis acquired.
+    #[test]
+    fn a_synthesis_speaks_in_the_voice_of_the_pool_it_landed_on() {
+        let speech = |b: &str, voice: &str| UpstreamPoolConfig {
+            voices: HashMap::from([("de".to_string(), voice.to_string())]),
+            ..pool_config(
+                PoolKind::Speech,
                 PickerStrategy::RoundRobin,
                 vec![backend(b, 16)],
             )
         };
         let reg = build(vec![
-            ("self-hosted", pool("local-b")),
-            ("cloud", pool("cloud-b")),
-            ("spare", pool("spare-b")),
+            ("one", speech("one-b", "anna")),
+            ("two", speech("two-b", "bernd")),
         ]);
-        for p in ["self-hosted", "cloud", "spare"] {
-            seed_models(&reg, p, 0, &["shared-model"]);
-        }
-        let principal = SystemPrincipal {
-            id: "p".into(),
-            name: "support".into(),
-            grants: Arc::new(GrantSet::new(
-                ["self-hosted", "cloud"]
-                    .iter()
-                    .map(|g| (GrantKind::Pool, g.to_string())),
-            )),
-        };
-        let run = PoolAccess::for_system_pools(&principal, ["self-hosted", "spare"]);
-        for _ in 0..6 {
+        seed_models(&reg, "one", 0, &["tts"]);
+        seed_models(&reg, "two", 0, &["tts"]);
+        for (scope, backend, voice) in [("one", "one-b", "anna"), ("two", "two-b", "bernd")] {
+            let access = PoolAccess::for_system(&principal_on(&[("tts", Some(&[scope]))]));
             let acquired = reg
-                .acquire_for_access("shared-model", PoolKind::Chat, &run)
+                .acquire_for_access("tts", PoolKind::Speech, &access)
                 .unwrap();
-            assert_eq!(acquired.backend().name, "local-b");
+            assert_eq!(acquired.backend().name, backend);
+            assert_eq!(acquired.voice_for("de"), Some(voice));
+            assert_eq!(acquired.voice_for("fr"), None);
         }
-        let nothing = PoolAccess::for_system_pools(&principal, ["spare"]);
-        assert!(
-            reg.acquire_for_access("shared-model", PoolKind::Chat, &nothing)
-                .is_err(),
-            "listing a pool is no grant"
-        );
     }
 
     /// The allowlist has to bind at the same seam pool groups bind at:

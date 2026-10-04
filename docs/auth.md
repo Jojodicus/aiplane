@@ -140,8 +140,9 @@ integration, and (later) every agent. Design: [`agents.md`](agents.md#1-principa
   `gwk_` only in `tokens`. A forged prefix swap never authenticates.
 - **What it resolves to.** `UserCtx.principal = Principal::System` with the
   grants loaded once per request and capped at the token's minter (below, reused for at most 30 s). `tools_enabled` is always on — the grants are
-  the policy — and there is no model allowlist; pools are its `pool` grants.
-- **Default deny.** A new principal has no rights at all, not even a pool:
+  the policy — and there is no model allowlist; its models are its `model`
+  grants.
+- **Default deny.** A new principal has no rights at all, not even a model:
   until one is granted, `/v1/chat/completions` answers 404 for every model. See
   [`tools-rbac.md`](tools-rbac.md#system-principals) for what each grant kind
   unlocks.
@@ -202,8 +203,10 @@ that moment*, by the same check as a new grant
 (`aiplane_runtime::server::grant_holding::capped_to_minter`): a grant added
 to the principal later that the minter does not hold is not usable through
 that token, a grant the minter has since lost stops working through it, and a
-minter who is gone leaves the token with no grants at all. A token an admin
-minted is uncapped while the minter is an admin. *Chosen* over checking only
+minter who is gone leaves the token with no grants at all. A model grant
+kept this way routes only through the pools of the model's kind the minter
+may use, intersected with the grant's own pools (none left, no grant). A
+token an admin minted is uncapped while the minter is an admin. *Chosen* over checking only
 at issue time: the principal can be granted more after a token exists — by
 an admin, or by another manager with a share — and a manager's token must
 never become a way to use what that manager could not hand out. The

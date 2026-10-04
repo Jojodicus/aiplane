@@ -1125,13 +1125,13 @@ mod tests {
             id: "u".into(),
             roles: vec![],
         };
-        assert!(r.principal_resource_allowed(&user, GrantKind::Pool, "chat", &[]));
-        assert!(!r.principal_resource_allowed(&system_with(&[]), GrantKind::Pool, "chat", &[]));
-        let granted = system_with(&[(GrantKind::Pool, "chat")]);
-        assert!(r.principal_resource_allowed(&granted, GrantKind::Pool, "chat", &[]));
+        assert!(r.principal_resource_allowed(&user, GrantKind::Model, "chat", &[]));
+        assert!(!r.principal_resource_allowed(&system_with(&[]), GrantKind::Model, "chat", &[]));
+        let granted = system_with(&[(GrantKind::Model, "chat")]);
+        assert!(r.principal_resource_allowed(&granted, GrantKind::Model, "chat", &[]));
         assert!(r.principal_resource_allowed(
             &granted,
-            GrantKind::Pool,
+            GrantKind::Model,
             "chat",
             &["nobody".into()]
         ));

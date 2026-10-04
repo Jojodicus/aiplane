@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 use super::json_agents::guard_principal;
 use super::{bad_request, internal, json_error, json_ok, no_content, not_found, raw_path_segment};
 use aiplane_agents::db::agents::{self as agents_db, Access};
+use aiplane_agents::db::system_principals::GrantChange;
 use aiplane_agents::db::{agent_audit, system_principals as sp_db};
 use aiplane_core::server::auth::token;
 use aiplane_core::server::db::users;
@@ -78,13 +79,19 @@ fn principal_json(p: &sp_db::PrincipalRow) -> Value {
     })
 }
 
-fn grant_json(g: &sp_db::GrantRow) -> Value {
-    json!({
+/// One grant as the API shows it; `pools` (a `model` grant's pools, `null`
+/// for every pool) only where it applies.
+pub(super) fn grant_json(g: &sp_db::GrantRow) -> Value {
+    let mut out = json!({
         "kind": g.kind.as_str(),
         "ref": g.reference,
         "granted_by": g.granted_by,
         "granted_at": g.granted_at,
-    })
+    });
+    if g.kind == GrantKind::Model {
+        out["pools"] = json!(g.pools);
+    }
+    out
 }
 
 fn token_json(t: &sp_db::SystemToken) -> Value {
@@ -352,14 +359,16 @@ fn kind_label(kind: GrantKind) -> &'static str {
         GrantKind::Connector => "connector",
         GrantKind::Skill => "skill",
         GrantKind::RagCollection => "RAG collection",
-        GrantKind::Pool => "pool",
+        GrantKind::Model => "model",
         GrantKind::A2aCaller => "A2A caller",
         GrantKind::A2aAgent => "A2A agent",
     }
 }
 
 /// POST /api/v0/system-principals/{id}/grants — add one grant, capped at
-/// what the caller holds right now.
+/// what the caller holds right now: `{kind, ref, added, widened}`. `201`
+/// when it is new; `200` otherwise, with `widened` true when a `model` grant
+/// now reaches more pools (a regrant never narrows one).
 pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let manager = require_agent_manager!(state, req);
     let p = match principal_at(&state, &req, &manager, 1, Access::Write).await {
@@ -374,30 +383,35 @@ pub async fn grant(State(state): State<Arc<RamaState>>, req: Request) -> Respons
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let added = match add_capped_grant(&state, &manager, &p.id, kind, reference).await {
-        Ok(added) => added,
+    let change = match add_capped_grant(&state, &manager, &p.id, kind, reference).await {
+        Ok(change) => change,
         Err(resp) => return resp,
     };
+    let added = change == GrantChange::Added;
     json_ok(
         if added {
             StatusCode::CREATED
         } else {
             StatusCode::OK
         },
-        json!({ "kind": kind.as_str(), "ref": reference, "added": added }),
+        json!({
+            "kind": kind.as_str(),
+            "ref": reference,
+            "added": added,
+            "widened": change == GrantChange::Widened,
+        }),
     )
 }
 
 /// Grant `kind` `reference` to principal `principal_id` (whose access the
 /// caller already checked), capped at what `manager` holds right now.
-/// Whether the grant is new.
 pub(crate) async fn add_capped_grant(
     state: &RamaState,
     manager: &users::User,
     principal_id: &str,
     kind: GrantKind,
     reference: &str,
-) -> Result<bool, Response> {
+) -> Result<GrantChange, Response> {
     if !manager_holds(state, manager, kind, reference).await? {
         return Err(json_error(
             StatusCode::FORBIDDEN,
@@ -410,9 +424,22 @@ pub(crate) async fn add_capped_grant(
             ),
         ));
     }
-    sp_db::add_grant(&state.db, principal_id, kind, reference, &manager.id)
-        .await
-        .map_err(internal)
+    let pools = match kind {
+        GrantKind::Model => grant_holding::model_grant_pools(state, manager, reference)
+            .await
+            .map_err(internal)?,
+        _ => None,
+    };
+    sp_db::add_scoped_grant(
+        &state.db,
+        principal_id,
+        kind,
+        reference,
+        pools.as_deref(),
+        &manager.id,
+    )
+    .await
+    .map_err(internal)
 }
 
 /// POST /api/v0/system-principals/{id}/grants/revoke — remove one grant. Any
@@ -523,10 +550,10 @@ mod tests {
         };
         assert!(parse_grant(&body("tool", "*")).is_err());
         assert!(parse_grant(&body("skill", "brand*")).is_err());
-        assert!(parse_grant(&body("model", "gpt")).is_err());
+        assert!(parse_grant(&body("pool", "chat")).is_err());
         assert!(parse_grant(&body("tool", "  ")).is_err());
-        let ok = body("pool", " chat ");
-        assert_eq!(parse_grant(&ok).unwrap(), (GrantKind::Pool, "chat"));
+        let ok = body("model", " qwen ");
+        assert_eq!(parse_grant(&ok).unwrap(), (GrantKind::Model, "qwen"));
     }
 
     #[test]

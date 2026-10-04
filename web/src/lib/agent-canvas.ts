@@ -140,7 +140,8 @@ export function issuesByNode(spec: Spec, issues: SpecIssue[]): Map<string, SpecI
 /* ---- summaries ------------------------------------------------------- */
 
 export interface MainSummary {
-	pool: string;
+	/** `main.model`; `''` for the gateway default. */
+	model: string;
 	tools: number;
 	skills: number;
 	slots: string[];
@@ -150,7 +151,7 @@ export interface MainSummary {
 
 export function summarizeMain(spec: Spec): MainSummary {
 	return {
-		pool: spec.main?.pool ?? '',
+		model: spec.main?.model ?? '',
 		tools: (spec.main?.tools ?? []).length,
 		skills: (spec.main?.skills ?? []).length,
 		slots: Object.keys(spec.state ?? {}),

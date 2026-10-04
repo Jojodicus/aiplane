@@ -2,9 +2,10 @@
 	import { splitList, type Spec, type SpecIssue } from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 	import FieldIssues from './FieldIssues.svelte';
+	import ModelPicker from './ModelPicker.svelte';
 
 	/** The router: `rules` (first open route in order) or a `classifier` over the routes whose gate holds. */
-	let { spec = $bindable(), issues, pools }: { spec: Spec; issues: SpecIssue[]; pools: string[] } = $props();
+	let { spec = $bindable(), issues, models }: { spec: Spec; issues: SpecIssue[]; models: string[] } = $props();
 
 	const router = $derived(spec.router ?? {});
 
@@ -27,14 +28,20 @@
 		<FieldIssues {issues} path="router.kind" />
 	</label>
 	{#if router.kind === 'classifier'}
-		<label class="flex flex-col gap-1">
-			<span class="label-text">{t('agents-router-pool')}</span>
-			<select class="select w-48" value={router.pool ?? ''} onchange={(e) => setRouter('pool', e.currentTarget.value)}>
-				<option value="">{t('agents-router-pool-main')}</option>
-				{#each pools as pool (pool)}<option value={pool}>{pool}</option>{/each}
-			</select>
-			<FieldIssues {issues} path="router.pool" />
-		</label>
+		<div class="flex flex-col gap-1">
+			<span class="label-text">{t('agents-router-model')}</span>
+			<ModelPicker
+				kind="chat"
+				value={router.model ?? ''}
+				held={models}
+				resources={null}
+				emptyLabel={t('agents-router-model-main')}
+				ariaLabel={t('agents-router-model')}
+				class="w-56"
+				onchange={(model) => setRouter('model', model)}
+			/>
+			<FieldIssues {issues} path="router.model" />
+		</div>
 	{/if}
 	{#if router.kind === 'rules'}
 		<label class="flex min-w-60 flex-col gap-1">
