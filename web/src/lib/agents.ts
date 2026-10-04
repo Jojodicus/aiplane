@@ -146,8 +146,15 @@ export interface GrantableItem extends CapabilityItem {
 }
 
 /** The items granted by `kind`. */
-export function grantable(resources: AgentResources | null | undefined, kind: GrantableKind): GrantableItem[] {
+export function grantable(resources: Pick<AgentResources, 'items'> | null | undefined, kind: GrantableKind): GrantableItem[] {
 	return (resources?.items ?? []).filter((item) => item.grant.kind === kind);
+}
+
+/** The references a grant of `kind` may name, by title; an item granting several adds the reference itself, so no two read alike. */
+export function grantOptions(resources: Pick<AgentResources, 'items'> | null | undefined, kind: GrantableKind): { value: string; label: string }[] {
+	return grantable(resources, kind).flatMap((item) =>
+		item.grant.refs.map((ref) => ({ value: ref, label: item.grant.refs.length > 1 ? `${item.title}: ${ref}` : item.title }))
+	);
 }
 
 /** A tool id as its catalog entry names it; the id itself when the manager holds no such tool. */

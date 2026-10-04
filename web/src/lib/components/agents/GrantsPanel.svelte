@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GRANT_KINDS, agentsApi, grantable, type AgentResources, type AgentError, type Grant, type GrantKind } from '$lib/agents';
+	import { GRANT_KINDS, agentsApi, grantOptions, type AgentResources, type AgentError, type Grant, type GrantKind } from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 
 	/**
@@ -27,7 +27,7 @@
 			case 'model':
 				return [...new Set(Object.values(resources.models ?? {}).flatMap((list) => list.map((m) => m.id)))].map((v) => ({ value: v, label: v }));
 			default:
-				return grantable(resources, kind).flatMap((item) => item.grant.refs.map((ref) => ({ value: ref, label: item.title })));
+				return grantOptions(resources, kind);
 		}
 	});
 
