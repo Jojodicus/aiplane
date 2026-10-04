@@ -221,7 +221,7 @@ constraint is why a handful of test-support helpers (`ToolContext::for_test`,
 The `/api/v0` JSON handlers the SPA calls — everything the deleted page stack used
 to render server-side, now answering JSON instead. `pages/mod.rs` carries the
 shared helpers every handler uses — `require_session_json` / `require_admin_json`
-(the 401/403 gates) and `json_ok` / `json_error` (the response envelope) — and
+(the 401/403 gates) and `json_ok` / `json_error` / `json_error_with` (the response envelope, the last with extra fields such as a validator's `issues`) — and
 re-exports the handlers the router mounts.
 `chat/` is a directory module for the multi-conversation chat (`json_api.rs` for
 the endpoints and the event stream, `title.rs` for auto-titling); `json_admin.rs`,

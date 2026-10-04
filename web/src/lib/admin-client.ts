@@ -11,8 +11,7 @@ export async function adminJson<T>(path: string, init?: RequestInit): Promise<T>
 		return await request<T>(path, init);
 	} catch (err) {
 		if (err instanceof ApiError) {
-			const detail = err.message.split(' — ')[1];
-			throw new Error(detail || err.message);
+			throw new Error(err.serverMessage ?? (err.detail || err.message));
 		}
 		throw err;
 	}

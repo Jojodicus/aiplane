@@ -66,7 +66,7 @@ test('a 422 invalid_agent_spec becomes a list of path-keyed issues', () => {
 			issues: [{ path: 'main.model', message: 'bad' }]
 		}
 	});
-	const parsed = parseSpecError(new ApiError(422, `422 Unprocessable Entity — ${body}`, 'invalid_agent_spec'));
+	const parsed = parseSpecError(new ApiError(422, `422 Unprocessable Entity — ${body}`, undefined, undefined, body));
 	assert.equal(parsed.status, 422);
 	assert.equal(parsed.code, 'invalid_agent_spec');
 	assert.deepEqual(parsed.issues, [{ path: 'main.model', message: 'bad' }]);
@@ -75,7 +75,7 @@ test('a 422 invalid_agent_spec becomes a list of path-keyed issues', () => {
 
 test('other failures keep the server message and carry no issues', () => {
 	const body = JSON.stringify({ error: { message: 'you can read this agent', code: 'agent_write_required' } });
-	const parsed = parseSpecError(new ApiError(403, `403 Forbidden — ${body}`, 'agent_write_required'));
+	const parsed = parseSpecError(new ApiError(403, `403 Forbidden — ${body}`, undefined, undefined, body));
 	assert.equal(parsed.code, 'agent_write_required');
 	assert.equal(parsed.message, 'you can read this agent');
 	assert.deepEqual(parsed.issues, []);

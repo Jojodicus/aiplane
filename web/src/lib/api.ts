@@ -137,20 +137,45 @@ export class ApiError extends Error {
 	readonly code?: string;
 	/** Seconds from a `Retry-After` header, when a refusal (a `429`) sent one. */
 	readonly retryAfter?: number;
-	constructor(status: number, message: string, code?: string, retryAfter?: number) {
+	/** The response body as it came, when there was one. */
+	readonly detail?: string;
+	/** The envelope's own sentence (`error.message`), when the body was one. */
+	readonly serverMessage?: string;
+	/**
+	 * A validator's per-field findings (`error.issues`): an agent spec's or a
+	 * test case's. Empty for every other refusal.
+	 */
+	readonly issues: ApiIssue[];
+	constructor(status: number, message: string, code?: string, retryAfter?: number, detail?: string) {
 		super(message);
+		const envelope = errorEnvelope(detail);
 		this.status = status;
-		this.code = code;
+		this.code = code ?? envelope?.code;
 		this.retryAfter = retryAfter;
+		this.detail = detail;
+		this.serverMessage = envelope?.message;
+		this.issues = envelope?.issues ?? [];
 	}
 }
 
-/** Pull `error.code` out of a gateway error envelope; undefined for anything else. */
-function errorCode(detail: string): string | undefined {
+/** One finding of a validator, at a path into what was sent. */
+export interface ApiIssue {
+	path: string;
+	message: string;
+}
+
+/** The gateway's error envelope (`{error: {message, code, issues?}}`) out of a body; undefined for anything else. */
+function errorEnvelope(detail: string | undefined): { code?: string; message?: string; issues?: ApiIssue[] } | undefined {
+	if (!detail) return undefined;
 	try {
-		const parsed: unknown = JSON.parse(detail);
-		const code = (parsed as { error?: { code?: unknown } })?.error?.code;
-		return typeof code === 'string' ? code : undefined;
+		const error = (JSON.parse(detail) as { error?: unknown })?.error;
+		if (!error || typeof error !== 'object') return undefined;
+		const { code, message, issues } = error as { code?: unknown; message?: unknown; issues?: unknown };
+		return {
+			code: typeof code === 'string' ? code : undefined,
+			message: typeof message === 'string' ? message : undefined,
+			issues: Array.isArray(issues) ? (issues as ApiIssue[]) : undefined
+		};
 	} catch {
 		return undefined;
 	}
@@ -173,8 +198,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
-			errorCode(detail),
-			Number.isFinite(retry) && retry > 0 ? retry : undefined
+			undefined,
+			Number.isFinite(retry) && retry > 0 ? retry : undefined,
+			detail
 		);
 	}
 	if (res.status === 204) return undefined as T;

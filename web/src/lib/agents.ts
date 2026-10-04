@@ -13,17 +13,14 @@ import type { ActivityPage, Verification } from './agent-activity.ts';
 import type { InboxContext } from './inbox.ts';
 import type { AgentAnalytics } from './agent-analytics.ts';
 import type { CaseBody, TestCase, TestRun, TestsListing } from './agent-tests.ts';
-import { ApiError, request, type CapabilityItem } from './api.ts';
+import { ApiError, request, type ApiIssue, type CapabilityItem } from './api.ts';
 import type { ChatModelOption } from './model-option.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is open-ended JSON */
 export type Spec = Record<string, any>;
 
 /** One problem the server found in a spec, at a dotted/indexed path such as `main.tools[0]`. */
-export interface SpecIssue {
-	path: string;
-	message: string;
-}
+export type SpecIssue = ApiIssue;
 
 export interface AgentSummary {
 	id: string;
@@ -290,32 +287,18 @@ export interface AgentError {
 	retryAfter?: number;
 }
 
-/**
- * Read the gateway's error envelope out of a failed call. `request` folds the
- * body into the message after ` — `; the envelope is where the code, the
- * human message and the validator's `issues` live.
- */
+/** A failed agent call as the agent views show it: the envelope `ApiError` already read. */
 export function parseSpecError(err: unknown): AgentError {
 	if (!(err instanceof ApiError)) {
 		return { status: 0, message: err instanceof Error ? err.message : String(err), issues: [] };
 	}
-	const at = err.message.indexOf(' — ');
-	const detail = at >= 0 ? err.message.slice(at + 3) : '';
-	try {
-		const envelope = JSON.parse(detail)?.error;
-		if (envelope && typeof envelope === 'object') {
-			return {
-				status: err.status,
-				code: typeof envelope.code === 'string' ? envelope.code : err.code,
-				message: typeof envelope.message === 'string' ? envelope.message : err.message,
-				issues: Array.isArray(envelope.issues) ? envelope.issues : [],
-				retryAfter: err.retryAfter
-			};
-		}
-	} catch {
-		// not an envelope; fall through to the raw message
-	}
-	return { status: err.status, code: err.code, message: err.message, issues: [], retryAfter: err.retryAfter };
+	return {
+		status: err.status,
+		code: err.code,
+		message: err.serverMessage ?? err.message,
+		issues: err.issues,
+		retryAfter: err.retryAfter
+	};
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
