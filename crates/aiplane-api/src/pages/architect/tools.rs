@@ -26,11 +26,11 @@ use super::super::json_principals::add_capped_grant;
 use aiplane_agents::db::agents::{Access, AgentRow, DraftChange};
 use aiplane_agents::db::architect_sessions;
 use aiplane_core::server::db::users::User;
-use aiplane_core::server::principal::GrantKind;
 use aiplane_core::server::feature_defaults::Feature;
-use aiplane_runtime::server::model_choices::gateway_default;
+use aiplane_core::server::principal::GrantKind;
 use aiplane_runtime::agents::assist::{ReviewContext, apply_changes, changes_schema};
 use aiplane_runtime::rama_server::state::RamaState;
+use aiplane_runtime::server::model_choices::gateway_default;
 use aiplane_runtime::server::tools::{Tool, ToolContext, ToolError, ToolFuture};
 
 /// The largest refusal body read back into a tool error.

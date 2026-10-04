@@ -3011,7 +3011,10 @@ mod tests {
 
         let none = check_with(&spec, &ModelDefaults::default());
         assert_eq!(paths(&none), ["main.model"]);
-        assert!(none[0].message.contains("no default chat model"), "{none:?}");
+        assert!(
+            none[0].message.contains("no default chat model"),
+            "{none:?}"
+        );
 
         let ungranted = check_with(
             &spec,
@@ -3022,7 +3025,9 @@ mod tests {
         );
         assert_eq!(paths(&ungranted), ["main.model"]);
         assert!(
-            ungranted[0].message.contains("default chat model `gpu-big`")
+            ungranted[0]
+                .message
+                .contains("default chat model `gpu-big`")
                 && ungranted[0].message.contains("\"kind\": \"model\""),
             "{}",
             ungranted[0].message

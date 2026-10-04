@@ -1512,9 +1512,7 @@ async fn an_agent_run_uses_only_the_model_its_spec_names() {
         }
     });
     world.publish(&agent, &spec).await;
-    let reply = run_turn(&world.state, turn(&agent, "Go."))
-        .await
-        .unwrap();
+    let reply = run_turn(&world.state, turn(&agent, "Go.")).await.unwrap();
     assert_eq!(reply.answer.as_deref(), Some("Done."), "{reply:?}");
     let sent = requests(&local).await;
     assert_eq!(sent.len(), 3);
@@ -1578,9 +1576,7 @@ async fn an_agent_without_a_model_runs_on_the_gateway_default() {
             &json!({ "main": { "instructions": { "orchestration": "Answer." } } }),
         )
         .await;
-    let reply = run_turn(&world.state, turn(&agent, "Hi."))
-        .await
-        .unwrap();
+    let reply = run_turn(&world.state, turn(&agent, "Hi.")).await.unwrap();
     assert_eq!(reply.answer.as_deref(), Some("From the default."));
     assert_eq!(requests(&main).await[0]["model"], "main-model");
     assert!(requests(&other).await.is_empty());

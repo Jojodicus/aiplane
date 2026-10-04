@@ -223,7 +223,9 @@ mod tests {
         let own_model = json!({ "topics": ["Ceph"], "refusal": "Only Ceph.", "strict": true,
                                "classifier_model": "small" });
         assert_eq!(
-            TopicGuard::from_spec(&spec(own_model), "main").unwrap().model,
+            TopicGuard::from_spec(&spec(own_model), "main")
+                .unwrap()
+                .model,
             "small"
         );
 

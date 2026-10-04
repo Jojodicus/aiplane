@@ -76,7 +76,7 @@ fn text(s: &str) -> Value {
 fn handoff_spec() -> Value {
     json!({
         "main": {
-            "pool": "pool",
+            "model": "m",
             "instructions": { "orchestration": "Hand refunds to a person." },
             "tools": [TIME]
         },

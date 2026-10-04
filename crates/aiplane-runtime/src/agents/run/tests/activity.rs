@@ -613,8 +613,10 @@ async fn an_agent_conversations_compaction_summary_is_an_exchange_of_its_log() {
         .await
         .unwrap();
     let principal = sp::load_active(world.db(), &agent).await.unwrap().unwrap();
-    let access =
-        aiplane_core::server::upstreams::PoolAccess::for_system_models(&principal, ["support-model"]);
+    let access = aiplane_core::server::upstreams::PoolAccess::for_system_models(
+        &principal,
+        ["support-model"],
+    );
 
     crate::server::compaction::maybe_autocompact(
         &world.state,
@@ -673,9 +675,10 @@ async fn the_rubric_judges_exchange_is_logged_in_the_case_conversation() {
         "model": "support-model", "instructions": { "orchestration": "Answer." }
     } }))
     .unwrap();
-    let judge = crate::agents::eval_judge::ModelJudge::for_agent(world.state.clone(), &agent, &spec)
-        .await
-        .expect("a judge on the agent's model");
+    let judge =
+        crate::agents::eval_judge::ModelJudge::for_agent(world.state.clone(), &agent, &spec)
+            .await
+            .expect("a judge on the agent's model");
     let verdict = crate::agents::eval::RubricJudge::judge(
         &judge,
         "greets",

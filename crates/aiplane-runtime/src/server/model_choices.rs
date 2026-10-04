@@ -112,7 +112,11 @@ fn reachable(state: &AppState, kind: PoolKind, access: &PoolAccess) -> HashMap<S
         .collect()
 }
 
-fn route_choice(state: &AppState, route: AutomaticRoute, access: &PoolAccess) -> Option<ModelChoice> {
+fn route_choice(
+    state: &AppState,
+    route: AutomaticRoute,
+    access: &PoolAccess,
+) -> Option<ModelChoice> {
     let targets = access.for_route_targets(route.members());
     let chat = reachable(state, PoolKind::Chat, &targets);
     let selectors = reachable(state, PoolKind::SystemOne, &targets);
@@ -207,7 +211,11 @@ mod tests {
             ("selector", "picker"),
             ("stt", "whisper"),
         ] {
-            let found = registry.pools().into_iter().find(|p| p.name == name).unwrap();
+            let found = registry
+                .pools()
+                .into_iter()
+                .find(|p| p.name == name)
+                .unwrap();
             found.backends[0].set_models(HashSet::from([model.to_string()]));
         }
         let candidate = |target: &str| AutomaticRouteCandidate {
@@ -304,7 +312,11 @@ mod tests {
                 )),
             })
         };
-        assert!(offered(&state, PoolKind::Chat, &agent(&[])).await.is_empty());
+        assert!(
+            offered(&state, PoolKind::Chat, &agent(&[]))
+                .await
+                .is_empty()
+        );
         assert_eq!(
             ids(&offered(&state, PoolKind::Chat, &agent(&["vip-model"])).await),
             ["vip-model"]

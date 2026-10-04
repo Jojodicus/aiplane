@@ -85,7 +85,7 @@ async fn sent(server: &MockServer) -> Vec<Value> {
 
 fn spec_with(tools: &[&str]) -> Value {
     json!({ "main": {
-        "pool": "pool",
+        "model": "m",
         "instructions": { "orchestration": "Help the visitor." },
         "tools": tools
     } })

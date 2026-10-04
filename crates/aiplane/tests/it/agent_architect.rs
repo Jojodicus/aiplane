@@ -296,7 +296,7 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
             "c4",
             "update_agent_draft",
             json!({ "agent_id": "harald", "changes": {
-                "pool": "pool",
+                "model": "arch-model",
                 "task": "You answer questions about Acme orders.",
                 "abilities": [{ "id": "get_current_timestamp", "why": "delivery times" }],
                 "slots": [{ "name": "order", "label": "Order number", "type": "text",
@@ -349,7 +349,7 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
     let updated = output(&turn, 3);
     assert_eq!(
         updated["changed"],
-        json!(["pool", "task", "abilities", "slots"])
+        json!(["model", "task", "abilities", "slots"])
     );
     let revision = updated["revision"].as_i64().expect("an undoable revision");
     let refused = turn.tool_calls[4]
@@ -370,7 +370,7 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
         "the architect cannot publish"
     );
     let draft = &harald["draft_spec"];
-    assert_eq!(draft["main"]["pool"], "pool");
+    assert_eq!(draft["main"]["model"], "arch-model");
     assert_eq!(draft["main"]["tools"], json!(["get_current_timestamp"]));
     assert_eq!(draft["state"]["order"]["type"], "string");
     let mut grants: Vec<String> = harald["grants"]
@@ -382,7 +382,10 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
     grants.sort();
     assert_eq!(
         grants,
-        ["\"pool\":\"pool\"", "\"tool\":\"get_current_timestamp\""],
+        [
+            "\"model\":\"arch-model\"",
+            "\"tool\":\"get_current_timestamp\""
+        ],
         "nothing the person lacks was granted"
     );
 
@@ -440,13 +443,13 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
     assert_eq!(status, StatusCode::OK, "{restored}");
     assert_eq!(
         restored["draft_spec"],
-        json!({ "profile": { "display": "Harald" }, "main": { "pool": "pool" } }),
-        "back to the draft the create left, on the default chat pool"
+        json!({ "profile": { "display": "Harald" } }),
+        "back to the draft the create left, on the gateway's default chat model"
     );
     assert_eq!(
         restored["revoked"],
         json!([{ "kind": "tool", "ref": "get_current_timestamp" }]),
-        "the undone change's tool goes, the pool the restored draft runs on stays"
+        "the undone change's tool goes, the default model the restored draft runs on stays"
     );
     assert!(
         restored["revision"].is_i64(),
@@ -465,7 +468,7 @@ async fn a_scripted_conversation_plans_creates_updates_and_tests_a_draft() {
             )
         })
         .collect();
-    assert_eq!(grants, ["pool:pool"]);
+    assert_eq!(grants, ["model:arch-model"]);
     let events = fx
         .get(&format!(
             "/api/v0/agents/{id}/activity?kind=agent_draft_updated,grant_removed"

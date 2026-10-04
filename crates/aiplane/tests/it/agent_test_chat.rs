@@ -241,12 +241,12 @@ impl Fx {
         body["agent"]["id"].as_str().unwrap().to_string()
     }
 
-    async fn grant_pool(&self, id: &str, pool: &str) {
+    async fn grant_model(&self, id: &str, model: &str) {
         let (status, body) = self
             .post(
                 &self.alice,
                 &format!("/api/v0/system-principals/{id}/grants"),
-                json!({ "kind": "pool", "ref": pool }),
+                json!({ "kind": "model", "ref": model }),
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -284,10 +284,10 @@ impl Fx {
     /// agent whose draft routes to it.
     async fn support(&self, orchestration: &str) -> (String, String) {
         let tech = self.create("tech", None).await;
-        self.grant_pool(&tech, "tech-pool").await;
+        self.grant_model(&tech, "tech-model").await;
         self.save_draft(
             &tech,
-            json!({ "main": { "pool": "tech-pool",
+            json!({ "main": { "model": "tech-model",
                 "instructions": { "orchestration": "Solve the technical issue." } },
                 "finish": { "schema": { "type": "object", "required": ["answer"],
                     "properties": { "answer": { "type": "string" } } } } }),
@@ -296,7 +296,7 @@ impl Fx {
         self.publish(&tech).await;
 
         let support = self.create("support", None).await;
-        self.grant_pool(&support, "main-pool").await;
+        self.grant_model(&support, "main-model").await;
         self.save_draft(&support, support_spec(&tech, orchestration))
             .await;
         (support, tech)
@@ -306,7 +306,7 @@ impl Fx {
 fn support_spec(tech: &str, orchestration: &str) -> Value {
     json!({
         "main": {
-            "pool": "main-pool",
+            "model": "main-model",
             "instructions": { "orchestration": orchestration },
             "budget": { "rounds": 6 }
         },
@@ -399,12 +399,12 @@ async fn a_draft_that_was_never_published_answers_with_the_manager_debug_view() 
 async fn the_debug_view_shows_the_topic_guards_verdict() {
     let (fx, _tech_llm) = fixture(vec![text("Diesel engines …")], tech_script()).await;
     let website = fx.create("website", None).await;
-    fx.grant_pool(&website, "main-pool").await;
-    fx.grant_pool(&website, "guard-pool").await;
+    fx.grant_model(&website, "main-model").await;
+    fx.grant_model(&website, "guard-model").await;
     let mut spec = json!({
-        "main": { "pool": "main-pool",
+        "main": { "model": "main-model",
                   "instructions": { "orchestration": "Answer questions about Ceph." } },
-        "scope": { "topics": ["Ceph storage"], "strict": true, "classifier_pool": "guard-pool" }
+        "scope": { "topics": ["Ceph storage"], "strict": true, "classifier_model": "guard-model" }
     });
     let (status, body) = fx
         .send(
@@ -502,7 +502,7 @@ async fn a_second_turn_continues_the_conversation_and_keeps_its_state() {
 }
 
 #[tokio::test]
-async fn an_unknown_session_empty_message_and_ungranted_pool_say_what_to_fix() {
+async fn an_unknown_session_empty_message_and_ungranted_model_say_what_to_fix() {
     let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
     let (support, _) = fx.support("x").await;
 
@@ -522,8 +522,8 @@ async fn an_unknown_session_empty_message_and_ungranted_pool_say_what_to_fix() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let bare = fx.create("bare", None).await;
-    fx.grant_pool(&bare, "tech-pool").await;
-    fx.save_draft(&bare, json!({ "main": { "pool": "tech-pool" } }))
+    fx.grant_model(&bare, "tech-model").await;
+    fx.save_draft(&bare, json!({ "main": { "model": "tech-model" } }))
         .await;
     let (status, _) = fx.turn(&fx.alice, &bare, json!({ "message": "hi" })).await;
     assert_eq!(status, StatusCode::OK);
@@ -532,18 +532,17 @@ async fn an_unknown_session_empty_message_and_ungranted_pool_say_what_to_fix() {
         .post(
             &fx.alice,
             &format!("/api/v0/system-principals/{bare}/grants/revoke"),
-            json!({ "kind": "pool", "ref": "tech-pool" }),
+            json!({ "kind": "model", "ref": "tech-model" }),
         )
         .await;
     assert!(status.is_success(), "{status} {body}");
     let (status, body) = fx.turn(&fx.alice, &bare, json!({ "message": "hi" })).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-    assert_eq!(body["error"]["code"], "agent_no_model");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], "agent_model_not_granted");
+    let message = body["error"]["message"].as_str().unwrap();
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("tech-pool")
+        message.contains("tech-model") && message.contains("kind `model`"),
+        "{message}"
     );
 }
 
@@ -596,13 +595,13 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
-    let pools: Vec<&str> = body["pools"]
+    let models: Vec<&str> = body["models"]["chat"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(Value::as_str)
+        .filter_map(|m| m["id"].as_str())
         .collect();
-    assert_eq!(pools, ["guard-pool", "main-pool", "tech-pool"]);
+    assert_eq!(models, ["guard-model", "main-model", "tech-model"]);
     let tools: Vec<&str> = body["tools"]
         .as_array()
         .unwrap()
@@ -617,58 +616,6 @@ async fn the_builder_is_offered_exactly_what_the_manager_could_grant() {
         .send(&fx.plain, Method::GET, "/api/v0/agent-resources", None)
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn resources_name_the_pool_behind_each_model_choice_an_admin_mapped() {
-    use aiplane_core::server::settings;
-
-    let (fx, _tech_llm) = fixture(vec![text("ok")], tech_script()).await;
-    let (status, body) = fx
-        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body["tiers"],
-        json!({ "fast": null, "balanced": null, "thorough": null })
-    );
-
-    settings::store(
-        &fx.state.db,
-        &fx.state.crypto,
-        &[
-            ("agents.pool_fast".into(), "guard-pool".into()),
-            ("agents.pool_balanced".into(), "main-pool".into()),
-        ],
-    )
-    .await
-    .unwrap();
-    fx.state.reload_settings().await;
-
-    let (_, body) = fx
-        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
-        .await;
-    assert_eq!(
-        body["tiers"],
-        json!({ "fast": "guard-pool", "balanced": "main-pool", "thorough": null })
-    );
-
-    settings::store(
-        &fx.state.db,
-        &fx.state.crypto,
-        &[("agents.pool_balanced".into(), String::new())],
-    )
-    .await
-    .unwrap();
-    fx.state.reload_settings().await;
-    let (_, body) = fx
-        .send(&fx.alice, Method::GET, "/api/v0/agent-resources", None)
-        .await;
-    assert!(body["tiers"]["balanced"].is_string(), "{body}");
-    assert_eq!(
-        body["tiers"]["balanced"], body["defaults"]["chat"]["pool"],
-        "an unset Balanced is the gateway's default chat model: {body}"
-    );
 }
 
 /// The setup assistant's starter templates (`web/src/lib/agent-templates.json`)

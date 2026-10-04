@@ -122,11 +122,11 @@ impl Fixture {
         )
     }
 
-    /// A principal `manager` created that may call the chat pool and
-    /// nothing else.
-    async fn principal_with_pool(&self, name: &str) -> (String, String) {
+    /// A principal `manager` created that may call `model-a` and nothing
+    /// else.
+    async fn principal_with_model(&self, name: &str) -> (String, String) {
         let id = self.create(&self.manager, name).await;
-        let (status, body) = self.grant(&self.manager, &id, "pool", "pool").await;
+        let (status, body) = self.grant(&self.manager, &id, "model", "model-a").await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         let (bearer, _) = self.token(&self.manager, &id).await;
         (id, bearer)
@@ -312,9 +312,17 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
         "vip".to_string(),
         chat_pool(&upstream.uri(), vec!["vipgroup".into()]),
     );
+    pools.insert(
+        "selector".to_string(),
+        UpstreamPoolConfig {
+            kind: PoolKind::SystemOne,
+            ..chat_pool(&upstream.uri(), vec![])
+        },
+    );
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
-    common::seed_pool_models(&registry, "pool", 0, &["model-a"]);
+    common::seed_pool_models(&registry, "pool", 0, &["model-a", "model-b"]);
     common::seed_pool_models(&registry, "vip", 0, &["model-vip"]);
+    common::seed_pool_models(&registry, "selector", 0, &["picker"]);
 
     let rbac = Arc::new(Resolver::empty());
     let skills = Arc::new(SkillStore::with_registry(
@@ -481,7 +489,7 @@ async fn the_fixture_offers_people_tools_skills_and_connectors() {
 #[tokio::test]
 async fn a_fresh_principal_is_offered_no_tools_connectors_or_skills() {
     let fx = fixture().await;
-    let (_, bearer) = fx.principal_with_pool("ci").await;
+    let (_, bearer) = fx.principal_with_model("ci").await;
     let sent = json!([{"role": "user", "content": "hi"}]);
 
     assert_eq!(fx.chat(&bearer).await, StatusCode::OK);
@@ -495,7 +503,7 @@ async fn a_fresh_principal_is_offered_no_tools_connectors_or_skills() {
 }
 
 #[tokio::test]
-async fn a_principal_without_a_pool_grant_cannot_reach_an_open_pool() {
+async fn a_principal_without_a_model_grant_cannot_reach_an_open_pool() {
     let fx = fixture().await;
     let id = fx.create(&fx.admin, "ci").await;
     let (bearer, _) = fx.token(&fx.admin, &id).await;
@@ -506,7 +514,7 @@ async fn a_principal_without_a_pool_grant_cannot_reach_an_open_pool() {
 #[tokio::test]
 async fn after_granting_one_tool_exactly_that_tool_is_offered() {
     let fx = fixture().await;
-    let (id, bearer) = fx.principal_with_pool("ci").await;
+    let (id, bearer) = fx.principal_with_model("ci").await;
     let (status, body) = fx.grant(&fx.manager, &id, "tool", TIME).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
@@ -517,7 +525,7 @@ async fn after_granting_one_tool_exactly_that_tool_is_offered() {
 #[tokio::test]
 async fn a_granted_global_connector_never_exposes_a_persons_connection() {
     let fx = fixture().await;
-    let (id, bearer) = fx.principal_with_pool("ci").await;
+    let (id, bearer) = fx.principal_with_model("ci").await;
     let (status, body) = fx.grant(&fx.admin, &id, "connector", GLOBAL).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
@@ -573,7 +581,7 @@ async fn a_per_user_connector_cannot_be_granted_and_is_ignored_if_present() {
 async fn a_grant_beyond_the_managers_own_rights_is_refused_naming_the_resource() {
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
-    for (kind, reference) in [("tool", "company_echo"), ("pool", "vip")] {
+    for (kind, reference) in [("tool", "company_echo"), ("model", "model-vip")] {
         let (status, body) = fx.grant(&fx.manager, &id, kind, reference).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{kind} {reference}: {body}");
         assert_eq!(body["error"]["code"], "grant_exceeds_manager");
@@ -589,7 +597,7 @@ async fn a_grant_beyond_the_managers_own_rights_is_refused_naming_the_resource()
     // What the manager does hold goes through.
     let (status, _) = fx.grant(&fx.manager, &id, "skill", "brand").await;
     assert_eq!(status, StatusCode::CREATED);
-    let (status, _) = fx.grant(&fx.manager, &id, "pool", "pool").await;
+    let (status, _) = fx.grant(&fx.manager, &id, "model", "model-a").await;
     assert_eq!(status, StatusCode::CREATED);
     let (_, detail) = fx
         .get(&fx.manager, &format!("/api/v0/system-principals/{id}"))
@@ -609,7 +617,7 @@ async fn a_person_without_agent_management_cannot_create_or_configure() {
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, body) = fx.grant(&fx.plain, &id, "pool", "pool").await;
+    let (status, body) = fx.grant(&fx.plain, &id, "model", "model-a").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(
         body["error"]["message"]
@@ -632,7 +640,7 @@ async fn a_person_without_agent_management_cannot_create_or_configure() {
         (format!("/api/v0/system-principals/{id}/disable"), json!({})),
         (
             format!("/api/v0/system-principals/{id}/grants/revoke"),
-            json!({"kind": "pool", "ref": "pool"}),
+            json!({"kind": "model", "ref": "model-a"}),
         ),
     ] {
         assert_eq!(
@@ -674,7 +682,7 @@ async fn grants_survive_the_granting_manager_losing_rights_and_leaving() {
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
     assert_eq!(
-        fx.grant(&fx.manager, &id, "pool", "pool").await.0,
+        fx.grant(&fx.manager, &id, "model", "model-a").await.0,
         StatusCode::CREATED
     );
     assert_eq!(
@@ -713,7 +721,7 @@ async fn a_managers_token_is_capped_at_the_managers_current_rights() {
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
     assert_eq!(
-        fx.grant(&fx.manager, &id, "pool", "pool").await.0,
+        fx.grant(&fx.manager, &id, "model", "model-a").await.0,
         StatusCode::CREATED
     );
     let (managers, _) = fx.token(&fx.manager, &id).await;
@@ -742,7 +750,7 @@ async fn a_managers_token_is_capped_at_the_managers_current_rights() {
 async fn a_reused_cap_never_outlives_a_revoked_grant_or_a_minters_lost_right() {
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
-    fx.grant(&fx.manager, &id, "pool", "pool").await;
+    fx.grant(&fx.manager, &id, "model", "model-a").await;
     fx.grant(&fx.manager, &id, "tool", TIME).await;
     let (managers, _) = fx.token(&fx.manager, &id).await;
     assert_eq!(fx.chat(&managers).await, StatusCode::OK);
@@ -905,7 +913,7 @@ async fn an_agent_run_gets_none_of_its_owners_connectors_memory_or_skills() {
     assert!(persons.contains("brand"), "{persons}");
     let personal_hits_before = fx.personal_mcp_hits.load(Ordering::SeqCst);
 
-    let (id, _) = fx.principal_with_pool("support-website").await;
+    let (id, _) = fx.principal_with_model("support-website").await;
     let (status, body) = fx.grant(&fx.admin, &id, "tool", TIME).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let principal = aiplane_agents::db::system_principals::load_active(&fx.state.db, &id)
@@ -1063,7 +1071,7 @@ async fn a_system_token_is_never_accepted_as_a_user_token_or_the_other_way() {
 #[tokio::test]
 async fn usage_rows_name_the_principal_not_a_user() {
     let fx = fixture_with_usage(true).await;
-    let (id, bearer) = fx.principal_with_pool("ci").await;
+    let (id, bearer) = fx.principal_with_model("ci").await;
     assert_eq!(fx.chat(&bearer).await, StatusCode::OK);
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
 
@@ -1106,10 +1114,7 @@ async fn names_are_slugs_and_unique() {
     assert_eq!(names, ["support-website"]);
 }
 
-#[tokio::test]
-async fn a_system_principal_lists_only_the_models_of_its_granted_pools() {
-    let fx = fixture().await;
-    let (_, bearer) = fx.principal_with_pool("ci").await;
+async fn listed_models(fx: &Fixture, bearer: &str) -> Vec<String> {
     let req = Request::builder()
         .method(Method::GET)
         .uri("/v1/models")
@@ -1117,14 +1122,95 @@ async fn a_system_principal_lists_only_the_models_of_its_granted_pools() {
         .body(Body::empty())
         .unwrap();
     let (status, body) = fx.send(req).await;
-    assert_eq!(status, StatusCode::OK);
-    let ids: Vec<&str> = body["data"]
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["data"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|m| m["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["model-a"]);
+        .map(|m| m["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A model grant is the whole rule: the principal lists and reaches the
+/// models it was granted — one in a pool only `vipgroup` may use, too —
+/// and no other model, however open its pool.
+#[tokio::test]
+async fn a_system_principal_lists_only_the_models_of_its_granted_models() {
+    let fx = fixture().await;
+    let (id, bearer) = fx.principal_with_model("ci").await;
+    assert_eq!(listed_models(&fx, &bearer).await, ["model-a"]);
+
+    assert_eq!(
+        fx.grant(&fx.admin, &id, "model", "model-vip").await.0,
+        StatusCode::CREATED
+    );
+    let (admins, _) = fx.token(&fx.admin, &id).await;
+    assert_eq!(listed_models(&fx, &admins).await, ["model-a", "model-vip"]);
+}
+
+async fn upsert_route(fx: &Fixture, alias: &str, candidates: &[&str]) {
+    use aiplane_core::server::db::automatic_routes::{
+        self, AutomaticRoute, AutomaticRouteCandidate,
+    };
+    automatic_routes::upsert(
+        &fx.state.db,
+        &AutomaticRoute {
+            alias: alias.into(),
+            selector_model: "picker".into(),
+            objective: "balanced".into(),
+            instructions: String::new(),
+            minimum_confidence: 0.5,
+            selector_timeout_ms: 1_000,
+            fallback_target: candidates[0].into(),
+            session_affinity: false,
+            session_ttl_seconds: 3_600,
+            rollout: "active".into(),
+            version: 0,
+            candidates: candidates
+                .iter()
+                .map(|c| AutomaticRouteCandidate {
+                    key: c.to_string(),
+                    target: c.to_string(),
+                    description: c.to_string(),
+                })
+                .collect(),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A manager grants a model only when they may use it: a model id or an
+/// automatic route whose fallback, candidates and selector they may all
+/// use. A route that would hand on a model of a pool they cannot reach is
+/// refused like that model; a name the gateway does not serve is missing.
+#[tokio::test]
+async fn a_model_grant_is_capped_at_the_models_and_routes_the_manager_may_use() {
+    let fx = fixture().await;
+    upsert_route(&fx, "auto-open", &["model-a", "model-b"]).await;
+    upsert_route(&fx, "auto-vip", &["model-a", "model-vip"]).await;
+    let id = fx.create(&fx.manager, "ci").await;
+
+    for held in ["model-a", "auto-open"] {
+        let (status, body) = fx.grant(&fx.manager, &id, "model", held).await;
+        assert_eq!(status, StatusCode::CREATED, "{held}: {body}");
+    }
+    for beyond in ["model-vip", "auto-vip"] {
+        let (status, body) = fx.grant(&fx.manager, &id, "model", beyond).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{beyond}: {body}");
+        assert_eq!(body["error"]["code"], "grant_exceeds_manager");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains(&format!("`{beyond}`")), "{message}");
+    }
+    let (status, body) = fx.grant(&fx.manager, &id, "model", "no-such-model").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body) = fx.grant(&fx.admin, &id, "model", "auto-vip").await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "an admin may use every member: {body}"
+    );
 }
 
 const AGENT: &str = "erp";
@@ -1246,8 +1332,8 @@ async fn no_person_ever_sees_an_agent_connector_admin_included() {
 async fn a_granted_principal_uses_an_agent_connector_an_ungranted_one_does_not() {
     let fx = fixture().await;
     agent_connector(&fx, &[]).await;
-    let (granted, granted_bearer) = fx.principal_with_pool("granted").await;
-    let (_, other_bearer) = fx.principal_with_pool("other").await;
+    let (granted, granted_bearer) = fx.principal_with_model("granted").await;
+    let (_, other_bearer) = fx.principal_with_model("other").await;
     let (status, body) = fx.grant(&fx.manager, &granted, "connector", AGENT).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
@@ -1314,7 +1400,7 @@ async fn only_the_creator_or_an_admin_manages_a_principal_that_is_not_an_agent()
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
     assert_eq!(
-        fx.grant(&fx.manager, &id, "pool", "pool").await.0,
+        fx.grant(&fx.manager, &id, "model", "model-a").await.0,
         StatusCode::CREATED
     );
     let (_, token_id) = fx.token(&fx.manager, &id).await;
@@ -1339,7 +1425,7 @@ async fn only_the_creator_or_an_admin_manages_a_principal_that_is_not_an_agent()
         ),
         (
             format!("/api/v0/system-principals/{id}/grants/revoke"),
-            json!({"kind": "pool", "ref": "pool"}),
+            json!({"kind": "model", "ref": "model-a"}),
         ),
         (
             format!("/api/v0/system-principals/{id}/tokens/{token_id}/revoke"),
@@ -1387,7 +1473,7 @@ async fn only_the_creator_or_an_admin_manages_a_principal_that_is_not_an_agent()
 async fn issuing_a_token_needs_every_grant_the_principal_holds() {
     let fx = fixture().await;
     let id = fx.create(&fx.manager, "ci").await;
-    for (kind, reference) in [("pool", "pool"), ("tool", TIME)] {
+    for (kind, reference) in [("model", "model-a"), ("tool", TIME)] {
         assert_eq!(
             fx.grant(&fx.manager, &id, kind, reference).await.0,
             StatusCode::CREATED

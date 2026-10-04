@@ -21,6 +21,7 @@
 
 use std::time::Duration;
 
+use crate::server::model_choices;
 use aiplane_agents::db::agent_audit::{AuditKind, NewEvent};
 use aiplane_agents::rates::{self, Counter, Rate, RateExceeded, RateScope, Window};
 use aiplane_core::server::db::DbError;
@@ -29,7 +30,6 @@ use aiplane_core::server::db::users::User;
 use aiplane_core::server::limits::LimitExceeded;
 use aiplane_core::server::principal::PrincipalKind;
 use aiplane_core::server::upstreams::{PoolAccess, PoolKind};
-use crate::server::model_choices;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use serde_json::{Value, json};

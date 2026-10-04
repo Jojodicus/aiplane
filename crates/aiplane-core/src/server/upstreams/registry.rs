@@ -726,9 +726,10 @@ impl PoolAccess {
     /// True when the caller carries a model allowlist at all — lets a handler
     /// tell "this model does not exist" from "this token may not use it"
     /// without leaking which models exist to a caller that has no business
-    /// knowing.
+    /// knowing. A system principal's grants do not count: a model it was
+    /// not granted is unknown to it, as a pool outside a person's groups is.
     pub fn is_model_restricted(&self) -> bool {
-        self.allowed_models.is_some() || self.granted_models.is_some()
+        self.allowed_models.is_some()
     }
 
     /// Whether the caller may see/route to `pool`: unrestricted pools are open
@@ -3655,7 +3656,12 @@ mod tests {
                 vec![backend("b", 16)],
             ),
         )]);
-        seed_models(&reg, "chat", 0, &["main-model", "small-model", "spare-model"]);
+        seed_models(
+            &reg,
+            "chat",
+            0,
+            &["main-model", "small-model", "spare-model"],
+        );
         let principal = SystemPrincipal {
             id: "p".into(),
             name: "support".into(),

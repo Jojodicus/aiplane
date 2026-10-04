@@ -34,7 +34,7 @@ use aiplane_core::server::db::{gateway_groups, users};
 use aiplane_core::server::principal::{GrantKind, GrantSet};
 use aiplane_runtime::agents::defaults;
 use aiplane_runtime::agents::spec::{
-    self, AgentSpec, SpecContext, SpecIssue, Stage, ModelDefaults,
+    self, AgentSpec, ModelDefaults, SpecContext, SpecIssue, Stage,
 };
 use aiplane_runtime::rama_server::state::RamaState;
 

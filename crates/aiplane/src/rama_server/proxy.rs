@@ -1973,9 +1973,7 @@ pub async fn retrieve_model(State(state): State<Arc<RamaState>>, req: Request) -
             .await
             .ok()
             .flatten()
-            .is_some_and(|route| {
-                automatic_route_available(&state, &route, &access)
-            })
+            .is_some_and(|route| automatic_route_available(&state, &route, &access))
     };
     if id.is_empty() || (!state.upstreams.knows_any_for(&id, &access) && !automatic) {
         return model_not_found_response(&id);
