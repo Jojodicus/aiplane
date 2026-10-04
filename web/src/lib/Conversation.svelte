@@ -1110,7 +1110,6 @@
 				class="textarea textarea-ghost min-h-11 max-h-48 flex-1 resize-none focus:outline-none"
 				rows="1"
 				placeholder={t('chat-render-composer-placeholder')}
-				disabled={paused !== null}
 				bind:value={draft}
 				onkeydown={onKeydown}
 				onpaste={onPaste}
