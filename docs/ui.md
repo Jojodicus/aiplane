@@ -106,6 +106,11 @@ The chat route is bounded to the viewport. Its transcript and canvas scroll
 independently, while the composer stays visible as a full-width footer beneath
 both regions; the document itself must not become the chat scroll container.
 
+The conversation header carries the chat model, voice model and spoken-reply
+voice selectors at every width: inline beside the actions from `sm` up, on a
+full-width row of their own beneath them below it. It is one set of controls,
+not a mobile copy, so the options and the selected model are the same on both.
+
 ### Bounded viewport
 
 A page that is a conversation fills the window rather than scrolling as a
