@@ -30,9 +30,9 @@ use rand::TryRng;
 use aiplane_core::server::crypto::Crypto;
 use aiplane_core::server::db::push_subscriptions::{self, PushSubscription};
 use aiplane_core::server::db::{self, DbError, Pool};
-use session_core::i18n::Lang;
 use aiplane_core::server::net_guard::{IpClass, classify_host};
 use aiplane_core::server::outbound_guard::{self, Pinned, Policy};
+use session_core::i18n::Lang;
 
 /// `app_settings` key holding the sealed VAPID private scalar.
 const VAPID_PRIVATE_KEY_SETTING: &str = "push.vapid.private";

@@ -46,7 +46,9 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(check_card_url("http://127.0.0.1:4000/.well-known/agent-card.json", false).is_err());
+        assert!(
+            check_card_url("http://127.0.0.1:4000/.well-known/agent-card.json", false).is_err()
+        );
         assert!(check_card_url("https://localhost:4000/card", false).is_err());
         assert!(check_card_url("http://127.0.0.1:4000/.well-known/agent-card.json", true).is_ok());
         assert!(check_card_url("http://localhost:4000/card", true).is_ok());

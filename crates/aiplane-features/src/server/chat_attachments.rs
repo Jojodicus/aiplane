@@ -1298,7 +1298,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(nothing.is_none(), "a delete that removed nothing reclaims nothing");
+        assert!(
+            nothing.is_none(),
+            "a delete that removed nothing reclaims nothing"
+        );
 
         delete_reclaiming(&pool, Some(&cfg), &doomed, async {
             chat_db::delete_turns_from_seq(&pool, "s1", 1)

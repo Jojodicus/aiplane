@@ -494,7 +494,11 @@ async fn responders_and_channels_are_managed_with_a_share_and_a_url_is_never_sho
         "a manager is told who can point a channel into the network: {body}"
     );
     let (status, body) = fx.post(&fx.root, &format!("{base}/channels"), relay).await;
-    assert_eq!(status, StatusCode::CREATED, "an admin's relay is the operator's: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "an admin's relay is the operator's: {body}"
+    );
     let relay_id = body["channel"]["id"].as_str().unwrap().to_string();
     let (status, _) = fx
         .send(

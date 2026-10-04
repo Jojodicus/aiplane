@@ -7,8 +7,8 @@
 use serde_json::json;
 
 use super::host_jwt::{ClaimMap, HostJwt, KeySource, check_jwks_url};
-use crate::agents::spec::secrets::{HOST_JWT_SECRET, seal_spec_secrets};
 use super::*;
+use crate::agents::spec::secrets::{HOST_JWT_SECRET, seal_spec_secrets};
 use crate::server::tools::tool_content_parts;
 
 fn typed(spec: &Value) -> AgentSpec {

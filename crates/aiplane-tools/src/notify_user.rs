@@ -148,14 +148,12 @@ impl Tool for NotifyUser {
                 url: url.clone(),
                 tag,
             };
-            let reached = push::send_to_user(
-                push.sender(),
-                &ctx.db,
-                ctx.person(self.id())?,
-                |_| message.clone(),
-            )
-            .await
-            .map_err(|e| ToolError::Failed(format!("reading push subscriptions: {e}")))?;
+            let reached =
+                push::send_to_user(push.sender(), &ctx.db, ctx.person(self.id())?, |_| {
+                    message.clone()
+                })
+                .await
+                .map_err(|e| ToolError::Failed(format!("reading push subscriptions: {e}")))?;
             if reached.subscriptions == 0 {
                 return Err(ToolError::Failed(
                     "the user has no device subscribed to notifications, so this could not \

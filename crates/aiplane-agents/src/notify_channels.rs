@@ -309,8 +309,12 @@ mod tests {
             .is_ok()
         );
         assert!(
-            validate_webhook_url(ChannelKind::Slack, "ftp://relay.internal/x", Reach::Operator)
-                .is_err()
+            validate_webhook_url(
+                ChannelKind::Slack,
+                "ftp://relay.internal/x",
+                Reach::Operator
+            )
+            .is_err()
         );
         assert!(
             validate_webhook_url(

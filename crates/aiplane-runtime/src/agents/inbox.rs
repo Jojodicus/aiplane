@@ -428,9 +428,7 @@ async fn push(
 /// today, not the day it was made.
 pub fn channel_reach(state: &RamaState, configured_by: Option<&users::User>) -> Reach {
     match configured_by {
-        Some(user) if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) => {
-            Reach::Operator
-        }
+        Some(user) if state.rbac.is_admin(&state.rbac.role_ids_for(&user.roles)) => Reach::Operator,
         _ => Reach::Guarded {
             allow_private: state.config().network.allow_private_networks,
         },

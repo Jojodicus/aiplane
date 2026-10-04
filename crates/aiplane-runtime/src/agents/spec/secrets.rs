@@ -58,10 +58,7 @@ pub fn seal_spec_secrets(
     crypto: &Crypto,
 ) -> Result<(), String> {
     for slot in slots {
-        let Some(entries) = spec
-            .get_mut(slot.collection)
-            .and_then(Value::as_object_mut)
-        else {
+        let Some(entries) = spec.get_mut(slot.collection).and_then(Value::as_object_mut) else {
             continue;
         };
         for entry in entries.values_mut() {

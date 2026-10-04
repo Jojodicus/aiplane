@@ -97,7 +97,8 @@ async fn delete_idle_conversations(
         let doomed: Vec<Doomed<'_>> = conversation.sessions().map(Doomed::session).collect();
         let delete =
             agent_retention::delete_conversation(pool, agent_id, &conversation, idle_before);
-        if let Some(reclaim) = chat_attachments::delete_reclaiming(pool, s3, &doomed, delete).await?
+        if let Some(reclaim) =
+            chat_attachments::delete_reclaiming(pool, s3, &doomed, delete).await?
         {
             reclaim.now().await;
             swept.conversations += 1;
@@ -378,7 +379,10 @@ mod tests {
         deleted.sort();
         assert_eq!(
             deleted,
-            ["/b/chat/sub-upload/receipt.pdf", "/b/chat/upload/invoice.pdf"]
+            [
+                "/b/chat/sub-upload/receipt.pdf",
+                "/b/chat/upload/invoice.pdf"
+            ]
         );
     }
 

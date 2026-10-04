@@ -18,8 +18,8 @@ use super::a2a::{Peer, TOKEN, completed, finish_schema};
 use super::suspend::{answer, every_stored_text, staff, visitor_says};
 use super::verifiers::{ALICE, CODE, erp};
 use super::*;
-use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 
 const VISITOR: &str = "My March invoice is wrong and I want to know about my warranty.";
 const QUESTION: &str = "May we refund the duplicate charge on RE-1?";

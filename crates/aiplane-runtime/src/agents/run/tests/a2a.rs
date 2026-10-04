@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use super::suspend::{answer, every_stored_text};
 use super::*;
-use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use crate::agents::resume::{AgentResume, ResumedBy, claim, run_claimed};
+use crate::agents::spec::secrets::{SPEC_SECRETS, seal_spec_secrets};
 use aiplane_core::server::config::NetworkConfig;
 use session_core::db::{Decision, SuspensionKind};
 use session_core::i18n::Lang;
@@ -471,9 +471,8 @@ async fn a_loopback_peer_is_refused_unless_the_operator_allows_private_networks(
     seal_spec_secrets(&mut spec, SPEC_SECRETS, &world.state.crypto).unwrap();
     let issues = world.issues(&agent, &spec).await;
     assert!(
-        issues
-            .iter()
-            .any(|i| i.path.ends_with("card_url") && i.message.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS")),
+        issues.iter().any(|i| i.path.ends_with("card_url")
+            && i.message.contains("AIPLANE_ALLOW_PRIVATE_NETWORKS")),
         "publishing is refused for the reason the run would refuse it: {issues:?}"
     );
     // Published while the operator still allowed private networks.

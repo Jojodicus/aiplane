@@ -437,7 +437,10 @@ mod tests {
                 open(&doc["verifiers"]["site"]["secret_sealed"]).as_deref(),
                 Some("jwt-secret")
             );
-            assert_eq!(doc["verifiers"]["site"]["issuer"], "https://www.example.com");
+            assert_eq!(
+                doc["verifiers"]["site"]["issuer"],
+                "https://www.example.com"
+            );
         }
         assert_eq!(legacy_sealed_values(&pool, &now).await.unwrap(), 0);
     }
