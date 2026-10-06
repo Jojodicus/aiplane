@@ -718,6 +718,10 @@ jobs:
           # so docker/login-action would not help it.
           echo "$GITHUB_TOKEN" | mise x helm@3.19.0 -- helm registry login ghcr.io \
             --username "${{ github.actor }}" --password-stdin
+          # cosign reads Docker's credential store, which neither helm's login
+          # above nor any other step of this job fills.
+          echo "$GITHUB_TOKEN" | cosign login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
           # helm push prints the pushed manifest's digest; the chart is signed
           # by that digest like the images, keyless (see the container job).
           push_and_sign() {
