@@ -103,6 +103,10 @@ all stamped with the same number:
 | OCR sidecar | `ghcr.io/croit/aiplane-ocr-sidecar` |
 | Helm chart | `oci://ghcr.io/croit/charts/aiplane` |
 
+Each of them is signed keyless with cosign by the job that pushed it, by
+digest, under the workflow identity of `ci.yml` and the pushed ref; see
+[Verify images](operations/deployment.md#verify-images).
+
 A **tag** build makes one more thing: a [GitHub Release][gh-releases] entry,
 written by the `github release` job once every publishing job above it has
 succeeded. That ordering is the point — the Releases page is what a human reads

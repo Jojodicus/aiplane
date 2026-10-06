@@ -292,7 +292,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Backup and recovery guide | ✅ | 🟡 | 🟡 | A32 L25 O20 |
 | Version-matched documentation served inside the installation | ✅ | ⚪ | ⚪ | A33 |
 | `llms.txt` and full Markdown manual exports | ✅ | ⚪ | ⚪ | A33 |
-| Signed container image verification documented | ⚪ | ✅ | ⚪ | L26 |
+| Signed container image verification documented | ✅ | ✅ | ⚪ | A35 L26 |
 | Published enterprise support/SLA offering | ⚪ | ✅ | ⚪ | L27 |
 
 ## What the comparison says
@@ -351,6 +351,7 @@ AIplane sources link to this repository's user and operator documentation. LiteL
 | A32 | [Backup and recovery](operations/backup-recovery.md) |
 | A33 | [Versioned installed documentation](documentation-system.md) |
 | A34 | [Monitoring](operations/monitoring.md), [Prometheus metrics settings](admin/settings.md#prometheus-metrics) |
+| A35 | [Verify images](operations/deployment.md#verify-images), [what a build publishes](releases.md#what-a-build-publishes) |
 
 ### LiteLLM
 
