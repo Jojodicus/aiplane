@@ -14,14 +14,28 @@ use std::net::IpAddr;
 
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error(
     "`{entry}` is not an IP address or CIDR network (e.g. `10.0.0.0/8`, `192.0.2.7`, \
-     `fd00::/8`): {reason}"
+     `fd00::/8`): {fault}"
 )]
 pub struct InvalidNetwork {
     pub entry: String,
-    pub reason: String,
+    pub fault: NetworkFault,
+}
+
+/// What is wrong with an entry. A type rather than a sentence, so the
+/// settings editor can say it in the operator's language.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum NetworkFault {
+    #[error("the prefix length is not a number")]
+    PrefixNotNumber,
+    #[error("the address does not parse")]
+    AddressDoesNotParse,
+    #[error("an IPv4-mapped network needs a prefix of 96 or more")]
+    MappedPrefixTooShort,
+    #[error("the prefix length exceeds {max}")]
+    PrefixTooLong { max: u8 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +46,9 @@ struct Network {
 
 impl Network {
     fn parse(entry: &str) -> Result<Self, InvalidNetwork> {
-        let invalid = |reason: &str| InvalidNetwork {
+        let invalid = |fault: NetworkFault| InvalidNetwork {
             entry: entry.to_string(),
-            reason: reason.to_string(),
+            fault,
         };
         let (host, prefix) = match entry.split_once('/') {
             Some((host, prefix)) => (
@@ -42,14 +56,14 @@ impl Network {
                 Some(
                     prefix
                         .parse::<u8>()
-                        .map_err(|_| invalid("the prefix length is not a number"))?,
+                        .map_err(|_| invalid(NetworkFault::PrefixNotNumber))?,
                 ),
             ),
             None => (entry, None),
         };
         let written: IpAddr = host
             .parse()
-            .map_err(|_| invalid("the address does not parse"))?;
+            .map_err(|_| invalid(NetworkFault::AddressDoesNotParse))?;
         let addr = written.to_canonical();
         let max = if addr.is_ipv4() { 32 } else { 128 };
         let prefix = match prefix {
@@ -58,11 +72,11 @@ impl Network {
             // matched in their IPv4 form, so the network must be too.
             Some(p) if addr.is_ipv4() && written.is_ipv6() => p
                 .checked_sub(96)
-                .ok_or_else(|| invalid("an IPv4-mapped network needs a prefix of 96 or more"))?,
+                .ok_or_else(|| invalid(NetworkFault::MappedPrefixTooShort))?,
             Some(p) => p,
         };
         if prefix > max {
-            return Err(invalid(&format!("the prefix length exceeds {max}")));
+            return Err(invalid(NetworkFault::PrefixTooLong { max }));
         }
         Ok(Self { addr, prefix })
     }
@@ -195,16 +209,17 @@ mod tests {
 
     #[test]
     fn a_bad_entry_is_refused_with_the_entry_named() {
-        for bad in [
-            "10.0.0.0/33",
-            "fd00::/129",
-            "nope",
-            "10.0.0.0/x",
-            "10.0.0.0/",
-            "::ffff:10.0.0.0/64",
+        for (bad, fault) in [
+            ("10.0.0.0/33", NetworkFault::PrefixTooLong { max: 32 }),
+            ("fd00::/129", NetworkFault::PrefixTooLong { max: 128 }),
+            ("nope", NetworkFault::AddressDoesNotParse),
+            ("10.0.0.0/x", NetworkFault::PrefixNotNumber),
+            ("10.0.0.0/", NetworkFault::PrefixNotNumber),
+            ("::ffff:10.0.0.0/64", NetworkFault::MappedPrefixTooShort),
         ] {
             let err = IpNetworks::parse(&format!("10.0.0.1, {bad}")).unwrap_err();
             assert_eq!(err.entry, bad);
+            assert_eq!(err.fault, fault, "{bad}");
             assert!(err.to_string().contains(bad), "{bad}: {err}");
         }
     }

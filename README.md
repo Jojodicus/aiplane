@@ -210,6 +210,12 @@ Use [Docker Compose](deploy/compose.example.yml),
 [deployment guide](docs/operations/deployment.md) covers prerequisites, TLS,
 persistence and optional services.
 
+`/healthz` and `/readyz` serve liveness and setup readiness. A Prometheus
+scrape endpoint, `GET /metrics`, is off by default: switch it on with a scrape
+token, an allowed IP list or both under **Administration → Settings → Access**.
+Behind a reverse proxy the IP list needs `AIPLANE_TRUSTED_PROXIES` set to the
+proxy. See [monitoring](docs/operations/monitoring.md).
+
 To build from source, install [mise](https://mise.jdx.dev/) and run:
 
 ```bash

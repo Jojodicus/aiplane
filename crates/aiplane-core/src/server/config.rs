@@ -570,11 +570,52 @@ impl Default for UsageConfig {
 #[derive(Debug, Clone, Default)]
 pub struct MetricsConfig {
     pub enabled: bool,
-    /// The bearer token a scraper presents. Sealed at rest.
+    /// The bearer token a scraper presents, never empty. Sealed at rest.
     pub token: Option<String>,
-    /// Addresses and CIDR networks the client IP must fall in, as entered;
-    /// each was validated on save.
-    pub allowed_ips: Vec<String>,
+    pub allowed_ips: AllowedIps,
+}
+
+/// The client addresses `GET /metrics` admits, parsed once when the
+/// settings are applied.
+#[derive(Debug, Clone)]
+pub enum AllowedIps {
+    /// The entries as stored and the networks they name. No entries is no
+    /// address guard.
+    Listed {
+        entries: Vec<String>,
+        networks: crate::server::ip_networks::IpNetworks,
+    },
+    /// The stored value is not a list of addresses and networks — only a
+    /// hand-edited row can be. It admits nobody until it is saved again, so
+    /// a guard the gateway cannot read never turns into no guard.
+    Unreadable { stored: String },
+}
+
+impl Default for AllowedIps {
+    fn default() -> Self {
+        Self::Listed {
+            entries: Vec::new(),
+            networks: Default::default(),
+        }
+    }
+}
+
+impl AllowedIps {
+    /// Whether an address guard is configured, readable or not.
+    pub fn is_set(&self) -> bool {
+        match self {
+            Self::Listed { entries, .. } => !entries.is_empty(),
+            Self::Unreadable { .. } => true,
+        }
+    }
+
+    /// Whether `ip` may scrape. Assumes [`Self::is_set`].
+    pub fn admits(&self, ip: std::net::IpAddr) -> bool {
+        match self {
+            Self::Listed { networks, .. } => networks.contains(ip),
+            Self::Unreadable { .. } => false,
+        }
+    }
 }
 
 /// Rate-limit / quota enforcement. Limits themselves live in the DB (set via

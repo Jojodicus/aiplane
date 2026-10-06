@@ -2394,10 +2394,15 @@ async fn metrics_settings_validate_their_ip_list_and_apply_on_save() {
             .contains("CIDR"),
         "{refused}"
     );
+    let unknown = app
+        .serve(req(Method::GET, "/metricz", &cookie, None))
+        .await
+        .unwrap()
+        .status();
     assert_eq!(
         app.serve(scrape()).await.unwrap().status(),
-        StatusCode::NOT_FOUND,
-        "a refused save switches nothing on"
+        unknown,
+        "a refused save switches nothing on: /metrics answers like an unknown path"
     );
 
     let resp = app
@@ -2408,6 +2413,21 @@ async fn metrics_settings_validate_their_ip_list_and_apply_on_save() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
     assert_eq!(app.serve(scrape()).await.unwrap().status(), StatusCode::OK);
+
+    let me: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/me", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    let features = me["features"].as_array().unwrap();
+    assert!(
+        !features.iter().any(|f| f == "metrics"),
+        "the scrape endpoint is an operator surface, not a user's feature: {me}"
+    );
 
     let listed: serde_json::Value = serde_json::from_str(
         &body(

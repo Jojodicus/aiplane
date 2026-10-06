@@ -1618,7 +1618,7 @@ pub async fn settings_save(State(state): State<Arc<RamaState>>, req: Request) ->
                 Ok(value) => pairs.push((field.key.to_owned(), value)),
                 Err(invalid) => issues.push(serde_json::json!({
                     "path": field.key,
-                    "message": session_core::i18n::t(lang, invalid.message_key()),
+                    "message": invalid.message(lang),
                 })),
             },
         }

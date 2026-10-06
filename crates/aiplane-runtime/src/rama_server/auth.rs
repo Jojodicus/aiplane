@@ -179,11 +179,16 @@ fn credential(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// The token of an `Authorization: Bearer …` header, trimmed; `None` for any
-/// other header or an empty token. The one bearer parser: the `/v1` gate and
-/// the embed widget's visitor sessions both read theirs with it.
+/// other header or an empty token. The scheme name is case-insensitive (RFC
+/// 7235), the token is not. The one bearer parser: the `/v1` gate, the embed
+/// widget's visitor sessions and the `/metrics` scrape guard read theirs with
+/// it.
 pub fn parse_bearer(value: Option<&HeaderValue>) -> Option<&str> {
     let s = value?.to_str().ok()?;
-    let rest = s.strip_prefix("Bearer ")?;
+    let (scheme, rest) = s.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
     let trimmed = rest.trim();
     (!trimmed.is_empty()).then_some(trimmed)
 }
@@ -270,6 +275,19 @@ mod tests {
     fn parse_bearer_accepts_well_formed() {
         let v = header_value("Bearer gwk_abc");
         assert_eq!(parse_bearer(Some(&v)), Some("gwk_abc"));
+    }
+
+    #[test]
+    fn parse_bearer_reads_the_scheme_case_insensitively_and_the_token_exactly() {
+        for header in ["bearer gwk_AbC", "BEARER gwk_AbC", "BeArEr gwk_AbC"] {
+            assert_eq!(
+                parse_bearer(Some(&header_value(header))),
+                Some("gwk_AbC"),
+                "{header}"
+            );
+        }
+        assert!(parse_bearer(Some(&header_value("Bearergwk_abc"))).is_none());
+        assert!(parse_bearer(Some(&header_value("Bear gwk_abc"))).is_none());
     }
 
     #[test]

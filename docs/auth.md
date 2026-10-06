@@ -115,7 +115,7 @@ The web UI lets users create, configure, rotate, revoke and remove their tokens 
 
 The rama proxy router resolves auth inline at the top of each handler (no middleware layer — rama Service-style handlers receive the full `Request` and run their own gate):
 
-1. On `/v1/*`, read `Authorization: Bearer …` or `x-api-key`. The bearer header takes precedence; browser session cookies do not authenticate this surface.
+1. On `/v1/*`, read `Authorization: Bearer …` or `x-api-key`. The bearer header takes precedence; its scheme name matches in any case (`bearer`, `BEARER`), the token exactly. Browser session cookies do not authenticate this surface.
 2. For bearer: hash + look up in `tokens`. Reject 401 on miss / revoked / expired.
 3. Resolve the token's owner and model restrictions.
 4. Update a person's token's `last_used_at` in the background. System-token touches use the separate debounced path described below.

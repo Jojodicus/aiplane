@@ -6,7 +6,7 @@ for one interface do not automatically authorize another interface.
 
 ## Model clients
 
-Use `Authorization: Bearer <token>` or `x-api-key: <token>`. Personal tokens
+Use `Authorization: Bearer <token>` (the scheme name in any case) or `x-api-key: <token>`. Personal tokens
 start with `gwk_`; system-principal tokens start with `gws_` and use their own
 principal grants. Browser cookies do not authenticate `/v1` requests. The
 gateway validates its credential and supplies the configured upstream key
@@ -185,9 +185,10 @@ event handling; do not append a reconnect snapshot as if it were new text.
   flows. They are not generic bearer-authenticated model endpoints.
 - `/healthz` is public liveness. `/readyz` is public setup readiness: `503`
   with `setup_required` before completion, `200` afterwards.
-- `/metrics` is the Prometheus scrape endpoint. It answers `404` until an
-  administrator switches it on and sets a scrape token, an allowed IP list or
-  both; see [monitoring](../operations/monitoring.md).
+- `/metrics` is the Prometheus scrape endpoint. Until an administrator
+  switches it on and sets a scrape token, an allowed IP list or both, it
+  answers like a path that does not exist; see
+  [monitoring](../operations/monitoring.md).
 
 See [agent publication](../agent-guide/test-publish.md) for the widget snippet,
 identity modes, origins, A2A configuration and their limitations.
@@ -462,9 +463,9 @@ Debug fixture routes exist only in development builds.
 | `GET /hooks/{secret}` |
 | `POST /hooks/{secret}` |
 | `GET /integrations/callback` |
-| `GET /metrics` |
 | `POST /integrations/{key}/connect` |
 | `POST /integrations/{key}/retry` |
+| `GET /metrics` |
 | `GET /openapi.json` |
 | `GET /rag/oauth/callback` |
 | `GET /rag/{id}/connect` |

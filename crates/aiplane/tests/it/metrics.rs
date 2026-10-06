@@ -85,12 +85,34 @@ async fn status_of(state: &RamaState, req: Request) -> StatusCode {
 
 const BEARER: (&str, &str) = ("authorization", "Bearer scrape-token-1");
 
+/// Status, content type and body: what tells one answer from another.
+async fn answer(state: &RamaState, req: Request) -> (StatusCode, Option<String>, Vec<u8>) {
+    let resp = common::app(state.clone()).serve(req).await.unwrap();
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().to_string());
+    (
+        resp.status(),
+        content_type,
+        common::read_body(resp).await.to_vec(),
+    )
+}
+
+/// The answer a path nobody serves gets from the router's catch-all.
+async fn unknown_route(state: &RamaState) -> (StatusCode, Option<String>, Vec<u8>) {
+    let mut req = scrape("10.0.0.1", &[BEARER]);
+    *req.uri_mut() = "/metricz".parse().unwrap();
+    answer(state, req).await
+}
+
 #[tokio::test]
 async fn off_by_default_and_off_again_after_a_save() {
     let state = state().await;
     assert_eq!(
-        status_of(&state, scrape("10.0.0.1", &[BEARER])).await,
-        StatusCode::NOT_FOUND
+        answer(&state, scrape("10.0.0.1", &[BEARER])).await,
+        unknown_route(&state).await,
+        "switched off, /metrics answers like a path that does not exist"
     );
 
     configure(
@@ -105,22 +127,39 @@ async fn off_by_default_and_off_again_after_a_save() {
     );
 
     configure(&state, &[("metrics.enabled", "false")]).await;
-    let resp = common::app(state.clone())
-        .serve(scrape("10.0.0.1", &[BEARER]))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    let body: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
-    assert_eq!(body["error"]["code"], "not_found", "{body}");
+    assert_eq!(
+        answer(&state, scrape("10.0.0.1", &[BEARER])).await,
+        unknown_route(&state).await
+    );
 }
 
 #[tokio::test]
-async fn switched_on_without_a_guard_is_still_not_found() {
+async fn switched_on_without_a_guard_answers_like_an_unknown_route() {
     let state = state().await;
     configure(&state, &[("metrics.enabled", "true")]).await;
     assert_eq!(
-        status_of(&state, scrape("127.0.0.1", &[])).await,
-        StatusCode::NOT_FOUND
+        answer(&state, scrape("127.0.0.1", &[])).await,
+        unknown_route(&state).await
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_stored_ip_list_refuses_every_scrape() {
+    let state = state().await;
+    configure(
+        &state,
+        &[("metrics.enabled", "true"), ("metrics.token", TOKEN)],
+    )
+    .await;
+    // A hand-edited row: a bare value where the save writes a JSON list.
+    db::app_settings::set(&state.db, "settings.metrics.allowed_ips", "10.0.0.0/8")
+        .await
+        .unwrap();
+    state.reload_settings().await;
+    assert_eq!(
+        status_of(&state, scrape("10.0.0.1", &[BEARER])).await,
+        StatusCode::FORBIDDEN,
+        "an IP guard the gateway cannot read must not turn into no IP guard"
     );
 }
 
@@ -149,6 +188,22 @@ async fn a_token_guard_wants_the_exact_bearer() {
         )
         .await,
         StatusCode::UNAUTHORIZED
+    );
+    for header in ["bearer scrape-token-1", "BEARER scrape-token-1"] {
+        assert_eq!(
+            status_of(&state, scrape("192.0.2.1", &[("authorization", header)])).await,
+            StatusCode::OK,
+            "the scheme is case-insensitive: {header}"
+        );
+    }
+    assert_eq!(
+        status_of(
+            &state,
+            scrape("192.0.2.1", &[("authorization", "bearer SCRAPE-TOKEN-1")])
+        )
+        .await,
+        StatusCode::UNAUTHORIZED,
+        "the token is not"
     );
 
     let resp = common::app(state.clone())

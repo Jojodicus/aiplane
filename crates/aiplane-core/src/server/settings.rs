@@ -48,6 +48,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use crate::server::config::AllowedIps;
 use crate::server::config::{
     ChatConfig, ComfyuiConfig, CompactionConfig, Config, ContentGuardConfig, ContentGuardMode,
     ContentGuardPolicy, FeedbackConfig, GatewayConfig, GeoipConfig, LimitsConfig, MetricsConfig,
@@ -56,8 +57,9 @@ use crate::server::config::{
 };
 use crate::server::crypto::Crypto;
 use crate::server::db::{DbError, Pool, app_settings};
-use crate::server::ip_networks::{IpNetworks, split_entries};
+use crate::server::ip_networks::{InvalidNetwork, IpNetworks, NetworkFault, split_entries};
 use crate::server::upstreams::config::PoolKind;
+use session_core::i18n::{Lang, args, t, t_args};
 
 /// Prefix for every row this module owns, so the settings namespace cannot
 /// collide with `oidc.*`, `setup.*`, `gateway.public_url` or the seed markers.
@@ -113,24 +115,49 @@ pub enum Kind {
 }
 
 /// Why [`FieldSpec::check`] refused a submitted value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Invalid {
     NotWholeNumber,
     Negative,
     NotNumber,
     NotChoice,
-    NotIpNetwork,
+    NotIpNetwork(InvalidNetwork),
 }
 
 impl Invalid {
-    /// The Fluent key of the sentence the editor shows under the field.
-    pub fn message_key(self) -> &'static str {
+    /// The sentence the editor shows under the field, in `lang`.
+    pub fn message(&self, lang: Lang) -> String {
         match self {
-            Self::NotWholeNumber => "settings-invalid-whole-number",
-            Self::Negative => "settings-invalid-negative",
-            Self::NotNumber => "settings-invalid-number",
-            Self::NotChoice => "settings-invalid-choice",
-            Self::NotIpNetwork => "settings-invalid-ip-network",
+            Self::NotWholeNumber => t(lang, "settings-invalid-whole-number"),
+            Self::Negative => t(lang, "settings-invalid-negative"),
+            Self::NotNumber => t(lang, "settings-invalid-number"),
+            Self::NotChoice => t(lang, "settings-invalid-choice"),
+            Self::NotIpNetwork(invalid) => {
+                let reason = match invalid.fault {
+                    NetworkFault::PrefixNotNumber => {
+                        t(lang, "settings-invalid-ip-network-prefix-not-number")
+                    }
+                    NetworkFault::AddressDoesNotParse => {
+                        t(lang, "settings-invalid-ip-network-address")
+                    }
+                    NetworkFault::MappedPrefixTooShort => {
+                        t(lang, "settings-invalid-ip-network-mapped-prefix")
+                    }
+                    NetworkFault::PrefixTooLong { max } => t_args(
+                        lang,
+                        "settings-invalid-ip-network-prefix-too-long",
+                        &args([("max", u32::from(max).into())]),
+                    ),
+                };
+                t_args(
+                    lang,
+                    "settings-invalid-ip-network",
+                    &args([
+                        ("entry", invalid.entry.clone().into()),
+                        ("reason", reason.into()),
+                    ]),
+                )
+            }
         }
     }
 }
@@ -256,8 +283,7 @@ impl FieldSpec {
             )),
             Kind::NetworkList => {
                 let entries: Vec<&str> = split_entries(submitted).collect();
-                IpNetworks::from_entries(entries.iter().copied())
-                    .map_err(|_| Invalid::NotIpNetwork)?;
+                IpNetworks::from_entries(entries.iter().copied()).map_err(Invalid::NotIpNetwork)?;
                 Ok(json_list(entries.into_iter()))
             }
             _ => Ok(submitted.to_owned()),
@@ -286,6 +312,11 @@ pub struct SectionSpec {
     /// section forces a decision about where an operator will look for it
     /// rather than silently appending it to a list nobody can scan.
     pub category: Category,
+    /// Whether `GET /api/v0/me` lists this section among a signed-in user's
+    /// features while it is on (see [`enabled_sections`]). Off for an
+    /// operator-only surface, which no user navigates to and nobody but an
+    /// administrator needs to know is switched on.
+    pub user_feature: bool,
     pub fields: &'static [FieldSpec],
 }
 
@@ -419,6 +450,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "content_guard",
         category: Category::Access,
+        user_feature: true,
         fields: &[
             f("content_guard.enabled", Kind::Bool),
             f("content_guard.model", Kind::Model(PoolKind::SystemOne)),
@@ -436,6 +468,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "chat.ocr",
         category: Category::Chat,
+        user_feature: true,
         fields: &[
             f("chat.ocr.enabled", Kind::Bool),
             f("chat.ocr.model", Kind::Model(PoolKind::Ocr)),
@@ -453,6 +486,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "chat.compaction",
         category: Category::Chat,
+        user_feature: true,
         fields: &[
             f("chat.compaction.enabled", Kind::Bool),
             f("chat.compaction.default_context_window", Kind::Int),
@@ -465,11 +499,13 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "chat.turns",
         category: Category::Chat,
+        user_feature: true,
         fields: &[f("chat.turns.max_parallel", Kind::Int)],
     },
     SectionSpec {
         name: "chat.s3",
         category: Category::Data,
+        user_feature: true,
         fields: &[
             f("chat.s3.enabled", Kind::Bool),
             f("chat.s3.endpoint", Kind::Text),
@@ -483,6 +519,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "sandbox",
         category: Category::Tools,
+        user_feature: true,
         fields: &[
             f("sandbox.enabled", Kind::Bool),
             f("sandbox.runner_url", Kind::Text),
@@ -493,6 +530,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "comfyui",
         category: Category::Tools,
+        user_feature: true,
         fields: &[
             f("comfyui.enabled", Kind::Bool),
             // Restart-only: the job scheduler polling this URL is a running
@@ -510,6 +548,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "rag",
         category: Category::Data,
+        user_feature: true,
         fields: &[
             // Restart-only: stopping the indexer mid-pass could leave a
             // half-written index.
@@ -526,11 +565,13 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "skills",
         category: Category::Data,
+        user_feature: true,
         fields: &[f("skills.enabled", Kind::Bool), f("skills.dir", Kind::Path)],
     },
     SectionSpec {
         name: "typst",
         category: Category::Tools,
+        user_feature: true,
         fields: &[
             f("typst.enabled", Kind::Bool),
             f("typst.templates_dir", Kind::Path),
@@ -539,6 +580,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "geoip",
         category: Category::Tools,
+        user_feature: true,
         fields: &[
             f("geoip.enabled", Kind::Bool),
             f("geoip.db_path", Kind::Path),
@@ -548,6 +590,7 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "usage",
         category: Category::Access,
+        user_feature: true,
         fields: &[
             f("usage.enabled", Kind::Bool),
             f("usage.retention_days", Kind::Int),
@@ -557,11 +600,13 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "limits",
         category: Category::Access,
+        user_feature: true,
         fields: &[f("limits.enabled", Kind::Bool)],
     },
     SectionSpec {
         name: "feedback",
         category: Category::Notifications,
+        user_feature: true,
         fields: &[
             f("feedback.enabled", Kind::Bool),
             // Which of the two credential sets below is live. Both stay
@@ -584,11 +629,13 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "push",
         category: Category::Notifications,
+        user_feature: true,
         fields: &[f("push.enabled", Kind::Bool), f("push.contact", Kind::Text)],
     },
     SectionSpec {
         name: "gateway",
         category: Category::Access,
+        user_feature: true,
         fields: &[
             f("gateway.token_ttl_days", Kind::Int),
             f("gateway.session_ttl_days", Kind::Int),
@@ -599,6 +646,8 @@ pub static SECTIONS: &[SectionSpec] = &[
     SectionSpec {
         name: "metrics",
         category: Category::Access,
+        // A scrape endpoint for Prometheus, not something a user opens.
+        user_feature: false,
         fields: &[
             f("metrics.enabled", Kind::Bool),
             f("metrics.token", Kind::Secret),
@@ -721,7 +770,7 @@ pub fn section_is_enabled(config: &Config, section: &SectionSpec) -> Option<bool
     })
 }
 
-/// The names of every switchable section that is currently on.
+/// The names of every switchable user-feature section that is currently on.
 ///
 /// This is what the web UI navigates by: a page for a feature the operator
 /// turned off should not be in the sidebar, and should say so rather than
@@ -732,7 +781,7 @@ pub fn section_is_enabled(config: &Config, section: &SectionSpec) -> Option<bool
 pub fn enabled_sections(config: &Config) -> Vec<String> {
     SECTIONS
         .iter()
-        .filter(|section| section_is_enabled(config, section) == Some(true))
+        .filter(|section| section.user_feature && section_is_enabled(config, section) == Some(true))
         .map(|section| section.name.to_string())
         .collect()
 }
@@ -935,7 +984,7 @@ pub fn apply(settings: &Settings, config: &mut Config) {
     config.metrics = MetricsConfig {
         enabled: settings.bool("metrics.enabled", false),
         token: settings.text("metrics.token"),
-        allowed_ips: settings.list("metrics.allowed_ips", Vec::new()),
+        allowed_ips: allowed_ips(settings),
     };
 
     // Field-by-field, not `config.gateway = …` like the blocks above. Two keys
@@ -1103,6 +1152,34 @@ fn feedback(s: &Settings) -> FeedbackConfig {
         gitlab_token: s.text("feedback.gitlab_token"),
         // Same legacy-only indirection as `github_token_env` above.
         gitlab_token_env: None,
+    }
+}
+
+/// Parsed here, once per apply, so an unreadable row is reported once rather
+/// than on every scrape — and refuses every scrape rather than vanishing.
+fn allowed_ips(s: &Settings) -> AllowedIps {
+    let Some(stored) = s.raw("metrics.allowed_ips") else {
+        return AllowedIps::default();
+    };
+    if stored.trim().is_empty() {
+        return AllowedIps::default();
+    }
+    let unreadable = |why: String| {
+        tracing::error!(
+            "settings.metrics.allowed_ips is unreadable ({why}); GET /metrics refuses every \
+             scrape until the Prometheus metrics card is saved again at /admin/settings"
+        );
+        AllowedIps::Unreadable {
+            stored: stored.to_owned(),
+        }
+    };
+    let entries: Vec<String> = match serde_json::from_str(stored) {
+        Ok(entries) => entries,
+        Err(err) => return unreadable(format!("not a JSON list: {err}")),
+    };
+    match IpNetworks::from_entries(entries.iter().map(String::as_str)) {
+        Ok(networks) => AllowedIps::Listed { entries, networks },
+        Err(err) => unreadable(err.to_string()),
     }
 }
 
@@ -1418,7 +1495,12 @@ pub fn snapshot(c: &Config) -> Vec<(String, String)> {
     put("metrics.token", opt(c.metrics.token.clone()));
     put(
         "metrics.allowed_ips",
-        serde_json::to_string(&c.metrics.allowed_ips).unwrap_or_else(|_| "[]".into()),
+        match &c.metrics.allowed_ips {
+            AllowedIps::Listed { entries, .. } => {
+                serde_json::to_string(entries).unwrap_or_else(|_| "[]".into())
+            }
+            AllowedIps::Unreadable { stored } => stored.clone(),
+        },
     );
 
     put(
@@ -1485,6 +1567,10 @@ mod tests {
         }
         // `[gateway]` has no master switch: always in force, never gated.
         assert!(!on.iter().any(|s| s == "gateway"));
+        assert!(
+            !on.iter().any(|s| s == "metrics"),
+            "an operator-only endpoint is not a user's feature: {on:?}"
+        );
 
         let mut off_config = Config::default();
         let comfyui_off = Settings::from_map(
@@ -1838,9 +1924,41 @@ mod tests {
     #[test]
     fn a_network_list_refuses_an_entry_it_could_not_match_against() {
         let ips = field("metrics.allowed_ips").unwrap();
-        for bad in ["10.0.0.0/33", "10.0.0.1, prometheus.internal", "fd00::/129"] {
-            assert_eq!(ips.check(bad), Err(Invalid::NotIpNetwork), "{bad:?}");
+        for (bad, entry, fault) in [
+            (
+                "10.0.0.0/33",
+                "10.0.0.0/33",
+                NetworkFault::PrefixTooLong { max: 32 },
+            ),
+            (
+                "10.0.0.1, prometheus.internal",
+                "prometheus.internal",
+                NetworkFault::AddressDoesNotParse,
+            ),
+        ] {
+            assert_eq!(
+                ips.check(bad),
+                Err(Invalid::NotIpNetwork(InvalidNetwork {
+                    entry: entry.into(),
+                    fault
+                })),
+                "{bad:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_refused_network_entry_is_named_with_its_reason() {
+        let ips = field("metrics.allowed_ips").unwrap();
+        let message = ips.check("10.0.0.0/33").unwrap_err().message(Lang::En);
+        assert!(message.contains("10.0.0.0/33"), "{message}");
+        assert!(message.contains("32"), "{message}");
+        let message = ips
+            .check("prometheus.internal")
+            .unwrap_err()
+            .message(Lang::De);
+        assert!(message.contains("prometheus.internal"), "{message}");
+        assert!(!message.starts_with("settings-"), "{message}");
     }
 
     #[test]
@@ -1856,7 +1974,19 @@ mod tests {
         );
         assert!(config.metrics.enabled);
         assert_eq!(config.metrics.token.as_deref(), Some("scrape-me"));
-        assert_eq!(config.metrics.allowed_ips, vec!["10.0.0.0/8".to_string()]);
+        assert!(config.metrics.allowed_ips.is_set());
+        assert!(
+            config
+                .metrics
+                .allowed_ips
+                .admits("10.1.2.3".parse().unwrap())
+        );
+        assert!(
+            !config
+                .metrics
+                .allowed_ips
+                .admits("192.0.2.1".parse().unwrap())
+        );
 
         let mut off = Config::default();
         apply(&Settings::default(), &mut off);
@@ -1865,7 +1995,30 @@ mod tests {
             "the endpoint is off until switched on"
         );
         assert_eq!(off.metrics.token, None);
-        assert!(off.metrics.allowed_ips.is_empty());
+        assert!(!off.metrics.allowed_ips.is_set());
+
+        let mut blank = Config::default();
+        apply(&settings_of(&[("metrics.token", "  ")]), &mut blank);
+        assert_eq!(blank.metrics.token, None, "an empty token is no token");
+    }
+
+    #[test]
+    fn an_unreadable_allowed_ip_row_stays_a_guard_that_admits_nobody() {
+        for stored in ["10.0.0.0/8", r#"["10.0.0.0/8","nope"]"#, "{}"] {
+            let mut config = Config::default();
+            apply(
+                &settings_of(&[("metrics.enabled", "true"), ("metrics.allowed_ips", stored)]),
+                &mut config,
+            );
+            let ips = &config.metrics.allowed_ips;
+            assert!(ips.is_set(), "{stored}");
+            assert!(!ips.admits("10.0.0.1".parse().unwrap()), "{stored}");
+            let shown: HashMap<_, _> = snapshot(&config).into_iter().collect();
+            assert_eq!(
+                shown["metrics.allowed_ips"], stored,
+                "the editor shows what is stored, so saving it again fixes it"
+            );
+        }
     }
 
     // Every `Kind::Choice` option needs a label key, and the key is derived

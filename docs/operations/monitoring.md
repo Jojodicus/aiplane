@@ -14,7 +14,8 @@ The metrics endpoint is off until an administrator switches it on.
      write-only in the settings page.
    - **Allowed IPs** (`metrics.allowed_ips`): addresses or CIDR networks, such
      as `10.0.0.0/8, 2001:db8::/32`, that the scraping client must come from.
-     An entry that is not an address or a network is refused on Save.
+     An entry that is not an address or a network is refused on Save, with
+     the entry and the reason named under the field.
 3. Turn on **Serve /metrics** (`metrics.enabled`) and save the card.
 
 The change applies to the next scrape; no restart is needed. With both guards
@@ -22,14 +23,18 @@ set, a scrape must pass both.
 
 | Situation | Response |
 |---|---|
-| Switched off | `404` |
-| Switched on, but no token and no allowed IPs | `404`; the endpoint never answers unguarded |
+| Switched off | The answer an unknown path gets: `404` |
+| Switched on, but no token and no allowed IPs | The same; the endpoint never answers unguarded |
 | Allowed IPs set, client address not in them | `403` |
+| Allowed IPs stored in a form the gateway cannot read (only a hand-edited database row) | `403` for every scrape, and one error in the log when the settings load; saving the card again fixes it |
 | Token set, `Authorization: Bearer` missing or wrong | `401` |
 | Every configured guard passes | `200`, `text/plain; version=0.0.4` |
 
-Refusals use the gateway's JSON error envelope. The address is checked before
-the token. The endpoint uses no browser session and sends no CORS headers.
+While the endpoint is not served, nothing distinguishes `/metrics` from a path
+that does not exist. The `403` and `401` refusals use the gateway's JSON error
+envelope. The address is checked before the token. The `Bearer` scheme name
+matches in any case; the token must match exactly. The endpoint uses no browser
+session and sends no CORS headers.
 
 ## Behind a reverse proxy
 

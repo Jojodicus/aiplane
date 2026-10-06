@@ -199,9 +199,9 @@ Category: **Access**. The endpoint answers only when `metrics.enabled` is on and
 
 | Key | Input / choices | Meaning | Restart |
 |---|---|---|---|
-| `metrics.enabled` | Boolean | Serve `GET /metrics`. Off answers `404`; on without a token and without allowed IPs also answers `404`. | No |
+| `metrics.enabled` | Boolean | Serve `GET /metrics`. Off, or on without a token and without allowed IPs, it answers like a path that does not exist (`404`). | No |
 | `metrics.token` | Write-only secret | Bearer token a scraper sends as `Authorization: Bearer <token>`; a missing or wrong token answers `401`. Stored encrypted. | No |
-| `metrics.allowed_ips` | List of IP addresses and CIDR networks | Client addresses allowed to scrape; any other answers `403`. Each entry must be an address or a CIDR network, or Save is refused. Behind a reverse proxy this works only when `AIPLANE_TRUSTED_PROXIES` names the proxy. | No |
+| `metrics.allowed_ips` | List of IP addresses and CIDR networks | Client addresses allowed to scrape; any other answers `403`. Each entry must be an address or a CIDR network, or Save is refused naming the entry and the reason. Behind a reverse proxy this works only when `AIPLANE_TRUSTED_PROXIES` names the proxy. | No |
 
 ## Web search provider fields
 

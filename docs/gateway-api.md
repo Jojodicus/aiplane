@@ -30,7 +30,7 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | GET  | `/v1/sandbox/files/{run}/{filename}` | Bearer | Downloads a file a sandbox run produced for the caller, scoped to the caller's user (see `sandbox_api`). |
 | GET  | `/healthz`                 | none | Liveness. Returns `{"status":"ok"}`. |
 | GET  | `/readyz`                  | none | Returns HTTP 200 and `{"status":"ok"}` after setup completes; before setup, HTTP 503 and `{"status":"setup_required"}`. This checks setup state, not upstream health. |
-| GET  | `/metrics`                 | scrape token and/or allowed IPs | Prometheus text exposition (`text/plain; version=0.0.4`). `404` while switched off or switched on without a guard, `403` for a client address outside the allowed IP list, `401` for a missing or wrong `Authorization: Bearer` token; with both guards set, both must pass. Configured under `/admin/settings` → Access → Prometheus metrics; see [monitoring](operations/monitoring.md). |
+| GET  | `/metrics`                 | scrape token and/or allowed IPs | Prometheus text exposition (`text/plain; version=0.0.4`). While switched off or switched on without a guard, the answer an unknown path gets (`404`); `403` for a client address outside the allowed IP list, `401` for a missing or wrong `Authorization: Bearer` token (scheme name in any case); with both guards set, both must pass. Configured under `/admin/settings` → Access → Prometheus metrics; see [monitoring](operations/monitoring.md). |
 
 `POST /v1/audio/translations` is **not** implemented — no route is registered.
 

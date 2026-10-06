@@ -5,9 +5,11 @@
 //!
 //! Switched on and guarded from `/admin/settings` (the `metrics` card), read
 //! from the effective configuration on every request so a saved change
-//! applies to the next scrape. It is never open without a guard: switched on
-//! with neither a token nor an allowed IP list, it answers 404 exactly as if
-//! it were off.
+//! applies to the next scrape. It is never open without a guard. Switched off,
+//! or switched on with neither a token nor an allowed IP list, it is not
+//! served at all: the request goes to the router's catch-all and gets exactly
+//! the answer an unknown path gets, so nothing tells the two states apart from
+//! a route that does not exist.
 //!
 //! The body is the Prometheus text exposition format, written by hand: only
 //! values the process already keeps — the upstream registry's per-backend
@@ -23,23 +25,28 @@ use rama::http::{HeaderValue, Request, Response, StatusCode, header};
 
 use aiplane_core::server::config::MetricsConfig;
 use aiplane_core::server::crypto::{constant_time_eq, sha256_hex};
-use aiplane_core::server::ip_networks::IpNetworks;
 use aiplane_core::server::upstreams::Pool;
+use aiplane_runtime::rama_server::auth::parse_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
 
 use crate::rama_server::pages::json_error;
+use crate::rama_server::spa;
 
 const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 pub async fn scrape(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     let config = state.config();
-    let client_ip = state.client_ip(&req).and_then(|ip| ip.parse().ok());
-    let authorization = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    if let Err(refusal) = admit(&config.metrics, client_ip, authorization) {
-        return refusal.response();
+    let client_ip = state.client_addr(&req);
+    let verdict = admit(
+        &config.metrics,
+        client_ip,
+        parse_bearer(req.headers().get(header::AUTHORIZATION)),
+    );
+    match verdict {
+        Ok(()) => {}
+        Err(Refusal::NotServed) => return spa::spa_get(req).await,
+        Err(Refusal::AddressNotAllowed(ip)) => return address_not_allowed(ip),
+        Err(Refusal::BadToken) => return bad_token(),
     }
     let body = render(
         &state.upstreams.pools(),
@@ -56,90 +63,54 @@ pub async fn scrape(State(state): State<Arc<RamaState>>, req: Request) -> Respon
 /// Why a scrape was turned away.
 #[derive(Debug, PartialEq, Eq)]
 enum Refusal {
-    Disabled,
-    Unguarded,
+    /// Switched off, or on without a guard.
+    NotServed,
     AddressNotAllowed(Option<IpAddr>),
     BadToken,
 }
 
-impl Refusal {
-    fn response(&self) -> Response {
-        match self {
-            Self::Disabled => json_error(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "GET /metrics is switched off on this gateway. An administrator turns it on \
-                 under Settings → Access → Prometheus metrics.",
-            ),
-            Self::Unguarded => json_error(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "GET /metrics is switched on but has neither a scrape token nor an allowed IP \
-                 list, and it never answers unguarded. An administrator sets at least one under \
-                 Settings → Access → Prometheus metrics.",
-            ),
-            Self::AddressNotAllowed(ip) => json_error(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                &format!(
-                    "GET /metrics refused the client address {}: it is not in the allowed IP \
-                     list under Settings → Access → Prometheus metrics. Behind a reverse proxy, \
-                     set AIPLANE_TRUSTED_PROXIES to the proxy so the gateway sees the real \
-                     client.",
-                    ip.map_or_else(|| "(unknown)".to_string(), |ip| ip.to_string())
-                ),
-            ),
-            Self::BadToken => {
-                let mut response = json_error(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    "GET /metrics needs `Authorization: Bearer <token>` with the scrape token \
-                     set under Settings → Access → Prometheus metrics; it was missing or wrong.",
-                );
-                response
-                    .headers_mut()
-                    .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-                response
-            }
-        }
-    }
+fn address_not_allowed(ip: Option<IpAddr>) -> Response {
+    json_error(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        &format!(
+            "GET /metrics refused the client address {}: it is not in the allowed IP list under \
+             Settings → Access → Prometheus metrics. Behind a reverse proxy, set \
+             AIPLANE_TRUSTED_PROXIES to the proxy so the gateway sees the real client.",
+            ip.map_or_else(|| "(unknown)".to_string(), |ip| ip.to_string())
+        ),
+    )
 }
 
-/// Whether a scrape from `client_ip` carrying `authorization` may read the
+fn bad_token() -> Response {
+    let mut response = json_error(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "GET /metrics needs `Authorization: Bearer <token>` with the scrape token set under \
+         Settings → Access → Prometheus metrics; it was missing or wrong.",
+    );
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
+}
+
+/// Whether a scrape from `client_ip` presenting `bearer` may read the
 /// metrics. The address is checked before the token, so a client outside the
 /// allowed networks learns nothing about the token.
 fn admit(
     metrics: &MetricsConfig,
     client_ip: Option<IpAddr>,
-    authorization: Option<&str>,
+    bearer: Option<&str>,
 ) -> Result<(), Refusal> {
-    if !metrics.enabled {
-        return Err(Refusal::Disabled);
+    if !metrics.enabled || (metrics.token.is_none() && !metrics.allowed_ips.is_set()) {
+        return Err(Refusal::NotServed);
     }
-    let token = metrics.token.as_deref().filter(|t| !t.is_empty());
-    if token.is_none() && metrics.allowed_ips.is_empty() {
-        return Err(Refusal::Unguarded);
+    if metrics.allowed_ips.is_set() && !client_ip.is_some_and(|ip| metrics.allowed_ips.admits(ip)) {
+        return Err(Refusal::AddressNotAllowed(client_ip));
     }
-    if !metrics.allowed_ips.is_empty() {
-        let allowed = match IpNetworks::from_entries(metrics.allowed_ips.iter().map(String::as_str))
-        {
-            Ok(allowed) => allowed,
-            Err(err) => {
-                // The save refuses such an entry, so only a hand-edited row
-                // gets here. Refusing everyone keeps the list a guard.
-                tracing::error!(error = %err, "metrics.allowed_ips holds an unreadable entry; refusing every scrape until it is fixed in /admin/settings");
-                IpNetworks::default()
-            }
-        };
-        if !client_ip.is_some_and(|ip| allowed.contains(ip)) {
-            return Err(Refusal::AddressNotAllowed(client_ip));
-        }
-    }
-    if let Some(expected) = token {
-        let presented = authorization
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(str::trim)
-            .unwrap_or_default();
+    if let Some(expected) = &metrics.token {
+        let presented = bearer.unwrap_or_default();
         if !constant_time_eq(
             sha256_hex(expected.as_bytes()).as_bytes(),
             sha256_hex(presented.as_bytes()).as_bytes(),
@@ -280,6 +251,8 @@ fn escape_label(value: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
+    use aiplane_core::server::config::AllowedIps;
+    use aiplane_core::server::ip_networks::IpNetworks;
     use aiplane_core::server::upstreams::{
         BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig, UpstreamRegistry,
     };
@@ -440,10 +413,14 @@ mod tests {
     }
 
     fn config(enabled: bool, token: Option<&str>, ips: &[&str]) -> MetricsConfig {
+        let entries: Vec<String> = ips.iter().map(|s| s.to_string()).collect();
         MetricsConfig {
             enabled,
             token: token.map(str::to_string),
-            allowed_ips: ips.iter().map(|s| s.to_string()).collect(),
+            allowed_ips: AllowedIps::Listed {
+                networks: IpNetworks::from_entries(ips.iter().copied()).unwrap(),
+                entries,
+            },
         }
     }
 
@@ -451,42 +428,43 @@ mod tests {
         Some(s.parse().unwrap())
     }
 
+    fn bearer(header: &'static str) -> Option<String> {
+        parse_bearer(Some(&HeaderValue::from_static(header))).map(str::to_string)
+    }
+
     #[test]
-    fn off_or_unguarded_is_not_found() {
-        let any = Some("Bearer t");
+    fn off_or_unguarded_is_not_served() {
         assert_eq!(
             admit(
                 &config(false, Some("t"), &["0.0.0.0/0"]),
                 ip("10.0.0.1"),
-                any
+                Some("t")
             ),
-            Err(Refusal::Disabled)
+            Err(Refusal::NotServed)
         );
         assert_eq!(
-            admit(&config(true, None, &[]), ip("10.0.0.1"), any),
-            Err(Refusal::Unguarded)
-        );
-        assert_eq!(
-            admit(&config(true, Some(""), &[]), ip("10.0.0.1"), any),
-            Err(Refusal::Unguarded),
-            "an empty token is no token"
+            admit(&config(true, None, &[]), ip("10.0.0.1"), Some("t")),
+            Err(Refusal::NotServed)
         );
     }
 
     #[test]
     fn a_token_alone_must_match_exactly() {
         let c = config(true, Some("s3cret"), &[]);
-        assert_eq!(admit(&c, ip("203.0.113.9"), Some("Bearer s3cret")), Ok(()));
+        assert_eq!(
+            admit(&c, ip("203.0.113.9"), bearer("Bearer s3cret").as_deref()),
+            Ok(())
+        );
         for bad in [
             None,
-            Some("Bearer"),
-            Some("Bearer s3cre"),
-            Some("Bearer s3cret2"),
-            Some("Basic s3cret"),
-            Some("s3cret"),
+            bearer("Bearer"),
+            bearer("Bearer s3cre"),
+            bearer("Bearer s3cret2"),
+            bearer("Basic s3cret"),
+            bearer("s3cret"),
         ] {
             assert_eq!(
-                admit(&c, ip("203.0.113.9"), bad),
+                admit(&c, ip("203.0.113.9"), bad.as_deref()),
                 Err(Refusal::BadToken),
                 "{bad:?}"
             );
@@ -512,45 +490,45 @@ mod tests {
     #[test]
     fn both_guards_must_pass_and_the_address_is_checked_first() {
         let c = config(true, Some("s3cret"), &["10.0.0.0/8"]);
-        assert_eq!(admit(&c, ip("10.0.0.5"), Some("Bearer s3cret")), Ok(()));
+        assert_eq!(admit(&c, ip("10.0.0.5"), Some("s3cret")), Ok(()));
         assert_eq!(
-            admit(&c, ip("192.0.2.1"), Some("Bearer s3cret")),
+            admit(&c, ip("192.0.2.1"), Some("s3cret")),
             Err(Refusal::AddressNotAllowed(ip("192.0.2.1")))
         );
         assert_eq!(
-            admit(&c, ip("10.0.0.5"), Some("Bearer wrong")),
+            admit(&c, ip("10.0.0.5"), Some("wrong")),
             Err(Refusal::BadToken)
         );
         assert_eq!(
-            admit(&c, ip("192.0.2.1"), Some("Bearer wrong")),
+            admit(&c, ip("192.0.2.1"), Some("wrong")),
             Err(Refusal::AddressNotAllowed(ip("192.0.2.1")))
         );
     }
 
     #[test]
     fn an_unreadable_stored_list_refuses_everyone() {
-        let c = config(true, Some("s3cret"), &["10.0.0.0/8", "not-a-network"]);
+        let c = MetricsConfig {
+            enabled: true,
+            token: Some("s3cret".into()),
+            allowed_ips: AllowedIps::Unreadable {
+                stored: "10.0.0.0/8".into(),
+            },
+        };
         assert_eq!(
-            admit(&c, ip("10.0.0.5"), Some("Bearer s3cret")),
+            admit(&c, ip("10.0.0.5"), Some("s3cret")),
             Err(Refusal::AddressNotAllowed(ip("10.0.0.5")))
         );
     }
 
     #[test]
     fn refusals_answer_with_their_status_in_the_error_envelope() {
-        for (refusal, status) in [
-            (Refusal::Disabled, StatusCode::NOT_FOUND),
-            (Refusal::Unguarded, StatusCode::NOT_FOUND),
-            (Refusal::AddressNotAllowed(None), StatusCode::FORBIDDEN),
-            (Refusal::BadToken, StatusCode::UNAUTHORIZED),
+        for (response, status) in [
+            (address_not_allowed(None), StatusCode::FORBIDDEN),
+            (bad_token(), StatusCode::UNAUTHORIZED),
         ] {
-            let response = refusal.response();
-            assert_eq!(response.status(), status, "{refusal:?}");
+            assert_eq!(response.status(), status);
             assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
         }
-        assert_eq!(
-            Refusal::BadToken.response().headers()[header::WWW_AUTHENTICATE],
-            "Bearer"
-        );
+        assert_eq!(bad_token().headers()[header::WWW_AUTHENTICATE], "Bearer");
     }
 }
