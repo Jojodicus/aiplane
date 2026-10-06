@@ -44,7 +44,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Audio transcription endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Text-to-speech endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Batch inference endpoint | ❌ | ✅ | ⚪ | A3 L28 |
-| Public reranking endpoint | ❌ | ✅ | ⚪ | A3 L28 |
+| Public reranking endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Public moderation endpoint | ❌ | ✅ | ⚪ | A3 L28 |
 | OpenAI-compatible streaming | ✅ | ✅ | ✅ | A3 L2 O1 |
 | Provider-specific request options pass through where supported | 🟡 | ✅ | 🟡 | A3 L2 O1 |

@@ -20,6 +20,7 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | POST | `/v1/messages/count_tokens` | Bearer or `x-api-key` | Anthropic-shaped input-token counting for client context management; see [Claude Code](claude-code.md). |
 | POST | `/v1/systemone`            | Bearer | TypeSafe System One-compatible typed decisions. Byte-dumb relay to the `system_one` pool; non-streaming. |
 | POST | `/v1/embeddings`           | Bearer | Single + batch. Byte-dumb relay to the `embedding` pool; non-streaming. |
+| POST | `/v1/rerank`               | Bearer | Cohere/Jina/vLLM/TEI-style `{model, query, documents, top_n?}`. Byte-dumb relay to the `rerank` pool's `/rerank`; non-streaming, response untranslated. Metered as usage kind `rerank`; a backend's bare `usage.total_tokens` counts as input tokens. |
 | POST | `/v1/images/generations`   | Bearer | JSON (`{model, prompt, size, …}`) in, OpenAI images envelope (`data[].b64_json` or `.url`) out. Byte-dumb relay to the `image` pool. |
 | POST | `/v1/images/edits`         | Bearer | `multipart/form-data` (`image` + `prompt` + `model`). Byte-dumb relay to the `image` pool. |
 | POST | `/v1/audio/transcriptions` | Bearer | `multipart/form-data`, Whisper-compatible. Silence-trimmed and re-framed before forwarding to the `transcription` pool. |

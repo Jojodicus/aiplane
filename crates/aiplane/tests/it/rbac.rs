@@ -5,8 +5,8 @@
 //!
 //! Proves the gateway-groups access model actually gates every surface:
 //!
-//!   * every `/v1/*` proxy route (chat, embeddings, images gen/edit, speech,
-//!     transcriptions) + `/v1/models` listing + `/v1/models/{id}`,
+//!   * every `/v1/*` proxy route (chat, embeddings, rerank, images gen/edit,
+//!     speech, transcriptions) + `/v1/models` listing + `/v1/models/{id}`,
 //!   * the session proxy routes (`/api/v0/transcriptions`, `/api/v0/speech`),
 //!   * the chat-UI model dropdown,
 //!   * per-collection RAG gating,
@@ -80,6 +80,7 @@ const EMBED_MODEL: &str = "embed-model";
 const IMAGE_MODEL: &str = "image-model";
 const SPEECH_MODEL: &str = "speech-model";
 const TX_MODEL: &str = "tx-model";
+const RERANK_MODEL: &str = "rerank-model";
 
 /// The RBAC resolver used by every fixture: `platform-admins` → admin (admin
 /// flag), `engineering` → engineering, default role `user`.
@@ -198,12 +199,21 @@ async fn fixture(restrict_kind: PoolKind, groups: &[&str]) -> (Fixture, Principa
             gof(PoolKind::Transcription),
         ),
     );
+    pools.insert(
+        "rerank".into(),
+        pool(
+            PoolKind::Rerank,
+            backend("rerank-be", &uri, false),
+            gof(PoolKind::Rerank),
+        ),
+    );
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "chat", 0, &[CHAT_MODEL]);
     common::seed_pool_models(&registry, "embed", 0, &[EMBED_MODEL]);
     common::seed_pool_models(&registry, "image", 0, &[IMAGE_MODEL]);
     common::seed_pool_models(&registry, "speech", 0, &[SPEECH_MODEL]);
     common::seed_pool_models(&registry, "voice", 0, &[TX_MODEL]);
+    common::seed_pool_models(&registry, "rerank", 0, &[RERANK_MODEL]);
 
     let db_pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let tools = Arc::new(aiplane_runtime::server::tools::ToolRegistry::new());
@@ -416,6 +426,17 @@ async fn v1_embeddings_gated() {
     assert_route(PoolKind::Embedding, "/v1/embeddings", || {
         (
             json_body(json!({"model": EMBED_MODEL, "input": "hi"})),
+            Some("application/json".into()),
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn v1_rerank_gated() {
+    assert_route(PoolKind::Rerank, "/v1/rerank", || {
+        (
+            json_body(json!({"model": RERANK_MODEL, "query": "q", "documents": ["d"]})),
             Some("application/json".into()),
         )
     })

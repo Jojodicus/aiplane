@@ -1059,9 +1059,12 @@ async fn state_with_backend_api_key(
     )
 }
 
-/// A chat pool whose single backend answers to the bare alias `qwen` and
+/// A `kind` pool whose single backend answers to the bare alias `qwen` and
 /// serves the real id `model-a`.
-async fn state_with_alias_pool(upstream_url: &str) -> aiplane::rama_server::RamaState {
+async fn state_with_alias_pool(
+    upstream_url: &str,
+    kind: PoolKind,
+) -> aiplane::rama_server::RamaState {
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -1069,7 +1072,7 @@ async fn state_with_alias_pool(upstream_url: &str) -> aiplane::rama_server::Rama
     use aiplane_core::server::rbac::Resolver;
     use aiplane_core::server::upstreams::{
         self,
-        config::{AliasSpec, BackendConfig, PickerStrategy, PoolKind, UpstreamPoolConfig},
+        config::{AliasSpec, BackendConfig, PickerStrategy, UpstreamPoolConfig},
     };
     use aiplane_core::server::{Config, db};
     use aiplane_runtime::server::AppState;
@@ -1086,7 +1089,7 @@ async fn state_with_alias_pool(upstream_url: &str) -> aiplane::rama_server::Rama
             fallback_offline: None,
             compliance: Default::default(),
             enforce_limits: true,
-            kind: PoolKind::Chat,
+            kind,
             strategy: PickerStrategy::RoundRobin,
             models: Vec::new(),
             backend: vec![BackendConfig {
@@ -1134,7 +1137,7 @@ async fn v1_chat_alias_rewrites_model_and_sets_resolved_header() {
         .mount(&upstream)
         .await;
 
-    let state = state_with_alias_pool(&upstream.uri()).await;
+    let state = state_with_alias_pool(&upstream.uri(), PoolKind::Chat).await;
     let bearer = common::seed_user_with_token(&state, "alice").await;
     let app = common::app(state);
 
@@ -1158,5 +1161,226 @@ async fn v1_chat_alias_rewrites_model_and_sets_resolved_header() {
             .and_then(|v| v.to_str().ok()),
         Some("model-a"),
         "response must advertise the resolved real model id"
+    );
+}
+
+// --- /v1/rerank --------------------------------------------------------------
+
+fn rerank_request(bearer: Option<&str>, body: serde_json::Value) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/rerank")
+        .header("content-type", "application/json");
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    builder.body(Body::from(body.to_string())).unwrap()
+}
+
+#[tokio::test]
+async fn v1_rerank_relays_through_upstream() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rerank"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "model": "rerank-model",
+            "query": "invoice 4711",
+            "documents": ["invoice 4711", "invoice 4712"],
+            "top_n": 1,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"index": 0, "relevance_score": 0.93}],
+        })))
+        .mount(&upstream)
+        .await;
+
+    let state = common::state_with_pool(&upstream.uri(), PoolKind::Rerank, "rerank-model").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({
+                "model": "rerank-model",
+                "query": "invoice 4711",
+                "documents": ["invoice 4711", "invoice 4712"],
+                "top_n": 1,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["results"][0]["index"], 0);
+    assert_eq!(parsed["results"][0]["relevance_score"], 0.93);
+}
+
+#[tokio::test]
+async fn v1_rerank_without_bearer_is_401() {
+    let state =
+        common::state_with_pool("http://unused.invalid", PoolKind::Rerank, "rerank-model").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(rerank_request(
+            None,
+            json!({"model": "rerank-model", "query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn v1_rerank_missing_model_field_is_400() {
+    let state =
+        common::state_with_pool("http://unused.invalid", PoolKind::Rerank, "rerank-model").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({"query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v1_rerank_unknown_model_is_404_model_not_found() {
+    let state =
+        common::state_with_pool("http://unused.invalid", PoolKind::Rerank, "rerank-model").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({"model": "no-such-model", "query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["error"]["code"], "model_not_found");
+}
+
+#[tokio::test]
+async fn rerank_endpoint_rejects_embedding_model_with_404() {
+    let state =
+        common::state_with_pool("http://unused.invalid", PoolKind::Embedding, "embed-model").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({"model": "embed-model", "query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "an embedding model must not be usable on /v1/rerank"
+    );
+}
+
+#[tokio::test]
+async fn v1_rerank_alias_rewrites_model_and_sets_resolved_header() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rerank"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"model": "model-a"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": []})))
+        .mount(&upstream)
+        .await;
+
+    let state = state_with_alias_pool(&upstream.uri(), PoolKind::Rerank).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({"model": "qwen", "query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "alias must rewrite model→model-a so the upstream mock matches"
+    );
+    assert_eq!(
+        resp.headers()
+            .get("x-gateway-resolved-model")
+            .and_then(|v| v.to_str().ok()),
+        Some("model-a"),
+    );
+}
+
+/// A rerank backend reports only `usage.total_tokens` (vLLM, Jina): every
+/// token it scored is input, so a per-token input price applies to all of
+/// them and the call counts against spend limits like an embedding does.
+#[tokio::test]
+async fn v1_rerank_records_rerank_usage_priced_on_its_tokens() {
+    use aiplane_core::server::db::model_defaults::{self, PricingUnit};
+    use aiplane_core::server::db::usage::{Filter, Period, aggregate, period_bounds};
+    use jiff::Timestamp;
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rerank"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"index": 0, "relevance_score": 0.5}],
+            "usage": {"total_tokens": 500_000},
+        })))
+        .mount(&upstream)
+        .await;
+
+    let state = common::state_with_pool(&upstream.uri(), PoolKind::Rerank, "rerank-model").await;
+    model_defaults::set_pricing_with_unit(
+        &state.db,
+        "rerank-model",
+        Some(2.0),
+        None,
+        PricingUnit::Tokens,
+    )
+    .await
+    .unwrap();
+    let metered = aiplane_core::server::usage::spawn(state.db.clone(), 90);
+    let state = state.with_usage(metered);
+    let db = state.db.clone();
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+
+    let resp = app
+        .serve(rerank_request(
+            Some(&bearer),
+            json!({"model": "rerank-model", "query": "q", "documents": ["d"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let _ = common::read_body(resp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    let kinds: Vec<String> = sqlx::query_scalar("SELECT kind FROM usage_events")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(kinds, vec!["rerank".to_string()]);
+    let now = Timestamp::now();
+    let bounds = period_bounds(Period::Today, "UTC", now);
+    let agg = aggregate(&db, bounds, &Filter::default(), 90, now, true)
+        .await
+        .unwrap();
+    assert_eq!(agg.summary.total_tokens, 500_000);
+    assert!(
+        (agg.summary.total_cost - 1.0).abs() < 1e-9,
+        "500k tokens at 2.0 per 1M input tokens, got {}",
+        agg.summary.total_cost
     );
 }

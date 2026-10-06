@@ -126,7 +126,12 @@ async fn preflight_on_transcriptions_and_embeddings() {
     let state = common::state_with_chat_pool("http://unused.invalid").await;
     let app = common::app(state);
 
-    for path in ["/v1/audio/transcriptions", "/v1/embeddings", "/v1/models"] {
+    for path in [
+        "/v1/audio/transcriptions",
+        "/v1/embeddings",
+        "/v1/rerank",
+        "/v1/models",
+    ] {
         let resp = app.serve(preflight(path, "https://x.test")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT, "preflight {path}");
         assert_eq!(

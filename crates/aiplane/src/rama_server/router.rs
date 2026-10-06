@@ -9,7 +9,7 @@
 //!     credential) and the OAuth round-trips, whose redirect URIs are
 //!     registered with external providers and so cannot move.
 //!   - **Model API proxy**: `/v1/models`, `/v1/chat/completions`, `/v1/systemone`,
-//!     `/v1/audio/*`, `/v1/embeddings`, `/v1/images/*` — bearer-authenticated,
+//!     `/v1/audio/*`, `/v1/embeddings`, `/v1/rerank`, `/v1/images/*` — bearer-authenticated,
 //!     forwarded to the upstream pool selected by model.
 //!   - **Anthropic-compatible proxy**: `/v1/messages` — the same pipeline
 //!     behind the Messages API wire format, so Claude Code and other
@@ -112,6 +112,7 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_post("/v1/audio/transcriptions", proxy::transcribe)
         .with_post("/v1/audio/speech", proxy::speech)
         .with_post("/v1/embeddings", proxy::embeddings)
+        .with_post("/v1/rerank", proxy::rerank)
         .with_post("/v1/images/generations", proxy::images_generations)
         .with_post("/v1/images/edits", proxy::images_edits)
         // Bearer-authed download of a file a sandbox run produced for an

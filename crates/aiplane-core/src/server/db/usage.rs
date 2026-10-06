@@ -79,6 +79,9 @@ pub enum UsageKind {
     /// carried in `input_units` so an operator can see how much document work
     /// a user's uploads caused.
     Ocr,
+    /// `POST /v1/rerank`. Priced on input tokens like an embedding; a rerank
+    /// backend scores (query, document) pairs and generates nothing.
+    Rerank,
     SystemOne,
 }
 
@@ -91,6 +94,7 @@ impl UsageKind {
             UsageKind::Image => "image",
             UsageKind::Speech => "speech",
             UsageKind::Ocr => "ocr",
+            UsageKind::Rerank => "rerank",
             UsageKind::SystemOne => "system_one",
         }
     }

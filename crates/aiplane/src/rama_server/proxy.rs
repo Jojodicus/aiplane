@@ -247,7 +247,13 @@ fn response_metrics(kind: UsageKind, bytes: &Bytes) -> (TokenUsage, UnitUsage) {
         units.output = aiplane_features::server::image_gen::image_output_units_from_value(&value)
             .or(units.output);
     }
-    (usage::usage_from_value(&value), units)
+    let (mut prompt, completion, total) = usage::usage_from_value(&value);
+    // vLLM and Jina report a rerank's tokens only as `total_tokens`; a
+    // reranker generates nothing, so all of them are input and priced so.
+    if kind == UsageKind::Rerank && completion.is_none() {
+        prompt = prompt.or(total);
+    }
+    ((prompt, completion, total), units)
 }
 
 fn request_units(kind: UsageKind, body: &Bytes) -> UnitUsage {
@@ -1308,21 +1314,47 @@ fn trim_audio_field(fields: Vec<MultipartField>) -> Vec<MultipartField> {
     out
 }
 
-/// `POST /v1/embeddings` — OpenAI-compatible text embeddings. Byte-dumb
-/// proxy: authenticate, read the `model`, pick a healthy backend from the
-/// **Embedding** pool, and relay the request/response 1:1. No streaming and
-/// no tool injection — an embeddings request is a single round-trip. This is
-/// a shared embedding surface other services can call instead of wiring their
-/// own backend; routing/health/keying all go through the gateway like chat and
-/// transcription do.
+/// `POST /v1/embeddings` — OpenAI-compatible text embeddings, relayed to the
+/// **Embedding** pool. A shared embedding surface other services can call
+/// instead of wiring their own backend; routing/health/keying all go through
+/// the gateway like chat and transcription do.
 pub async fn embeddings(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    relay_by_model(
+        &state,
+        req,
+        PoolKind::Embedding,
+        UsageKind::Embedding,
+        "embeddings",
+    )
+    .await
+}
+
+/// `POST /v1/rerank` — Cohere/Jina/vLLM/TEI-style reranking (`{model, query,
+/// documents, top_n?}`), relayed to the **Rerank** pool's `/rerank`, the same
+/// backends knowledge search reranks with. The response is the backend's own;
+/// the gateway does not translate between rerank dialects.
+pub async fn rerank(State(state): State<Arc<RamaState>>, req: Request) -> Response {
+    relay_by_model(&state, req, PoolKind::Rerank, UsageKind::Rerank, "rerank").await
+}
+
+/// Byte-dumb proxy for a single-round-trip JSON endpoint: authenticate, read
+/// the `model`, pick a healthy backend from the `kind` pool, rewrite `model`
+/// to the resolved id and relay the request/response 1:1 to
+/// `upstream_path`, metered as `usage`. No streaming and no tool injection.
+async fn relay_by_model(
+    state: &Arc<RamaState>,
+    req: Request,
+    kind: PoolKind,
+    usage: UsageKind,
+    upstream_path: &str,
+) -> Response {
     let (parts, body) = req.into_parts();
     // Bearer required; no per-model RBAC gate here, matching the chat path.
-    let user = match require_bearer(&state, &parts.headers).await {
+    let user = match require_bearer(state, &parts.headers).await {
         Ok(u) => u,
         Err(refusal) => return refusal.into_response(),
     };
-    if let Some(resp) = limit_check(&state, &user).await {
+    if let Some(resp) = limit_check(state, &user).await {
         return resp;
     }
     let body = match read_body_to_bytes(body).await {
@@ -1339,32 +1371,26 @@ pub async fn embeddings(State(state): State<Arc<RamaState>>, req: Request) -> Re
     // `route` resolves aliases + fallback and maps an unknown model → 404
     // `model_not_found` / all-down → 503 via `route_error_response`.
     let access = state.pool_access_for_token(&user);
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Embedding, &access)
-    {
+    let acquired = match state.upstreams.route_access(&model, kind, &access) {
         Ok(a) => a,
         Err(e) => return route_error_response(e),
     };
     let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Embedding).await
-    {
+    if let Some(resp) = limit_check_for_model(state, &user, &real_model, kind).await {
         return resp;
     }
     let body = rewrite_model_in_bytes(body, &real_model);
     let rec = RecordParams::v1(
         &user,
-        UsageKind::Embedding,
+        usage,
         real_model.clone(),
-        state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Embedding),
+        state.upstreams.enforce_limits_for_model(&real_model, kind),
     );
     let resp = forward(
-        &state,
+        state,
         acquired,
         Method::POST,
-        "embeddings",
+        upstream_path,
         parts.headers,
         body,
         rec,

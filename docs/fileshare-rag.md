@@ -518,6 +518,9 @@ vLLM's scoring endpoint. Both response shapes (`{"results": […]}` and a bare
 array) parse, and an out-of-range index from a misbehaving backend is dropped
 rather than trusted.
 
+The same pool serves API clients directly through `POST /v1/rerank`; see the
+[HTTP API reference](reference/api.md#reranking).
+
 ## Freshness
 
 Three ways a collection gets re-synced, cheapest first:

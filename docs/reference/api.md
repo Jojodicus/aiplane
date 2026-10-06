@@ -21,6 +21,7 @@ when forwarding; client credentials are not passed to the model provider.
 | `POST /v1/messages/count_tokens` |
 | `POST /v1/systemone` |
 | `POST /v1/embeddings` |
+| `POST /v1/rerank` |
 | `POST /v1/images/generations` |
 | `POST /v1/images/edits` |
 | `POST /v1/audio/transcriptions` |
@@ -92,6 +93,30 @@ Pool/group permissions and a token's own model restriction are cumulative.
 Automatic-route session affinity accepts `X-Gateway-Session-Id` or
 `X-Gateway-Session`. Reuse an identifier for the same client conversation.
 Headers depend on the code path and decision; clients must tolerate absence.
+
+### Reranking
+
+`POST /v1/rerank` scores documents against a query with a model from a
+`rerank` pool, the same backends knowledge search reranks with. Send the
+Cohere/Jina/vLLM/TEI request shape:
+
+```bash
+curl https://aiplane.example.com/v1/rerank \
+  -H "Authorization: Bearer $AIPLANE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"your-rerank-model","query":"refund policy","documents":["first passage","second passage"],"top_n":1}'
+```
+
+The gateway reads only `model`: it resolves aliases, rewrites `model` to the
+real ID, forwards the body unchanged to the backend's `/rerank` and relays the
+backend's response, so the response shape (for example `results[]` with
+`index` and `relevance_score`) is the backend's. Rerank models are not listed
+by `/v1/models`, offered in a token's model restriction or grantable to a
+system principal, so use an unrestricted personal token. Pool group
+restrictions apply as on every `/v1` route. An unknown model returns `404 model_not_found`; no healthy
+backend returns `503`. Calls are recorded as usage of kind `rerank` and count
+against rate, quota and spend limits. When the backend reports only
+`usage.total_tokens`, those tokens are priced as input tokens.
 
 ## Browser application API
 
@@ -433,6 +458,7 @@ Debug fixture routes exist only in development builds.
 | `POST /v1/messages/count_tokens` |
 | `GET /v1/models` |
 | `GET /v1/models/{*id}` |
+| `POST /v1/rerank` |
 | `GET /v1/sandbox/files/{run}/{filename}` |
 | `POST /v1/systemone` |
 | `GET /{*name}` |
