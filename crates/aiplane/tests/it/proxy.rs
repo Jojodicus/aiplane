@@ -1347,7 +1347,7 @@ async fn v1_rerank_alias_rewrites_model_and_sets_resolved_header() {
     );
 }
 
-/// A rerank backend reports only `usage.total_tokens` (vLLM, Jina): every
+/// A rerank backend that reports only `usage.total_tokens` (vLLM): every
 /// token it scored is input, so a per-token input price applies to all of
 /// them and the call counts against spend limits like an embedding does.
 #[tokio::test]

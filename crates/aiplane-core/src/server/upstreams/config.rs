@@ -164,6 +164,13 @@ impl PoolKind {
         }
     }
 
+    /// An internal capability pool: never listed in `/v1/models`, offered to
+    /// a token or grantable. OCR serves the gateway's own document reading
+    /// and has no `/v1` endpoint a client could call it through.
+    pub fn is_internal(self) -> bool {
+        matches!(self, Self::Ocr)
+    }
+
     /// Every kind, in the order an operator should see them offered.
     ///
     /// The one place the vocabulary is written down. It had been copied into
@@ -384,6 +391,15 @@ impl BackendConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_is_the_only_internal_kind() {
+        let internal: Vec<PoolKind> = PoolKind::ALL
+            .into_iter()
+            .filter(|k| k.is_internal())
+            .collect();
+        assert_eq!(internal, vec![PoolKind::Ocr]);
+    }
 
     #[test]
     fn parses_speech_pool_with_voices() {

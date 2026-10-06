@@ -97,8 +97,10 @@ Headers depend on the code path and decision; clients must tolerate absence.
 ### Reranking
 
 `POST /v1/rerank` scores documents against a query with a model from a
-`rerank` pool, the same backends knowledge search reranks with. Send the
-Cohere/Jina/vLLM/TEI request shape:
+`rerank` pool, the same backends knowledge search reranks with. The body is
+relayed to the backend unchanged, so send the request in the backend's own
+dialect. Cohere, Jina and vLLM accept this shape; Text Embeddings Inference,
+for example, names the passages `texts` instead of `documents`:
 
 ```bash
 curl https://aiplane.example.com/v1/rerank \
@@ -114,16 +116,22 @@ backend's response, so the response shape (for example `results[]` with
 
 Rerank models are ordinary models for access purposes, like embedding
 models: `/v1/models` lists them, a token's model restriction can include
-them, a system principal can be granted them, and pool group restrictions
-apply. A token restricted to other models gets `403 model_not_allowed`; a
-system principal without a grant on the model gets `404 model_not_found`, as
-does an unknown model. No healthy backend returns `503`.
+them, a system principal can be granted them, and the pool's group
+restriction applies to the caller. A token restricted to other models gets
+`403 model_not_allowed`; a system principal without a grant on the model gets
+`404 model_not_found`, as does an unknown model. No healthy backend returns
+`503`. Knowledge search reranks through the same pools as a gateway-internal
+call: it is neither subject to the searching person's pool group restrictions
+nor metered.
 
-Calls are recorded as usage of kind `rerank` and count against rate, quota
-and spend limits. With a per-token price, a rerank call is charged at the
-model's input price. When the backend reports only `usage.total_tokens` (as
-vLLM and Jina do), those tokens count as input tokens; a backend that reports
-no usage records no tokens and costs nothing.
+Every call is recorded as usage of kind `rerank` and counts against
+request-count limits. Tokens are recorded only when the backend's response
+carries a `usage` object with `prompt_tokens` or `total_tokens`; a bare
+`total_tokens` (as vLLM reports) counts as input tokens, charged at the
+model's input price when it is priced per token. A backend that reports no
+usage (Text Embeddings Inference) or reports something other than tokens
+(Cohere's `meta.billed_units.search_units`) is recorded with no tokens and no
+cost, so its calls do not count against token quotas or spend limits.
 
 ## Browser application API
 

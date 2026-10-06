@@ -248,7 +248,7 @@ fn response_metrics(kind: UsageKind, bytes: &Bytes) -> (TokenUsage, UnitUsage) {
             .or(units.output);
     }
     let (mut prompt, completion, total) = usage::usage_from_value(&value);
-    // vLLM and Jina report a rerank's tokens only as `total_tokens`; a
+    // vLLM reports a rerank's tokens only as `total_tokens`; a
     // reranker generates nothing, so all of them are input and priced so.
     if kind == UsageKind::Rerank && completion.is_none() {
         prompt = prompt.or(total);
@@ -1329,10 +1329,10 @@ pub async fn embeddings(State(state): State<Arc<RamaState>>, req: Request) -> Re
     .await
 }
 
-/// `POST /v1/rerank` — Cohere/Jina/vLLM/TEI-style reranking (`{model, query,
-/// documents, top_n?}`), relayed to the **Rerank** pool's `/rerank`, the same
-/// backends knowledge search reranks with. The response is the backend's own;
-/// the gateway does not translate between rerank dialects.
+/// `POST /v1/rerank` — reranking, relayed to the **Rerank** pool's `/rerank`,
+/// the same backends knowledge search reranks with. Request and response are
+/// the backend's own dialect (Cohere, Jina and vLLM share `{model, query,
+/// documents, top_n?}`); the gateway does not translate between dialects.
 pub async fn rerank(State(state): State<Arc<RamaState>>, req: Request) -> Response {
     relay_by_model(&state, req, PoolKind::Rerank, UsageKind::Rerank, "rerank").await
 }

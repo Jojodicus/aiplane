@@ -1943,28 +1943,19 @@ impl UpstreamRegistry {
         voices
     }
 
-    /// Internal capability pools — never listed in `/v1/models` or offered
-    /// to a token. OCR serves the gateway's own document reading and has no
-    /// `/v1` endpoint a client could call it through.
-    fn is_internal_kind(kind: PoolKind) -> bool {
-        matches!(kind, PoolKind::Ocr)
-    }
-
     /// Every advertised model across *all* pools and kinds, de-duplicated by
     /// id (replicas serving the same id collapse to one) and sorted. Backs
     /// the OpenAI-parity `GET /v1/models`, which lists every usable model
     /// regardless of capability — clients pick by id.
     pub fn all_models(&self) -> Vec<String> {
-        self.collect_models(|p| !Self::is_internal_kind(p.kind))
+        self.collect_models(|p| !p.kind.is_internal())
     }
 
     /// Like [`Self::all_models`], but only over pools `access` permits — the
     /// per-user `GET /v1/models`. A model withheld here is also unroutable for
     /// the same caller (see [`Self::route_for`]), so the list can't be bypassed.
     pub fn all_models_for(&self, access: &PoolAccess) -> Vec<String> {
-        self.collect_models_for(access, |p| {
-            !Self::is_internal_kind(p.kind) && access.allows(p)
-        })
+        self.collect_models_for(access, |p| !p.kind.is_internal() && access.allows(p))
     }
 
     /// Like [`Self::models_for_kind`], but only over pools `access` permits —
@@ -1977,9 +1968,11 @@ impl UpstreamRegistry {
     /// the per-user `GET /v1/models/{id}`.
     pub fn knows_any_for(&self, model: &str, access: &PoolAccess) -> bool {
         access.allowlist_allows(model)
-            && self.data().pools.values().any(|p| {
-                !Self::is_internal_kind(p.kind) && access.reaches(p, model) && p.knows_model(model)
-            })
+            && self
+                .data()
+                .pools
+                .values()
+                .any(|p| !p.kind.is_internal() && access.reaches(p, model) && p.knows_model(model))
     }
 
     /// Every model [`Self::all_models_for`] lists, each with its kind, its
@@ -1993,10 +1986,7 @@ impl UpstreamRegistry {
         let d = self.data();
         let mut catalog: HashMap<String, CatalogModel> = HashMap::new();
         let mut real_ids: HashSet<String> = HashSet::new();
-        for kind in PoolKind::ALL
-            .into_iter()
-            .filter(|k| !Self::is_internal_kind(*k))
-        {
+        for kind in PoolKind::ALL.into_iter().filter(|k| !k.is_internal()) {
             for pool in d
                 .pools
                 .values()
