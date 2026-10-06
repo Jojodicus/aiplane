@@ -190,21 +190,39 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		...init,
 		headers: { accept: 'application/json', ...init?.headers }
 	});
-	if (!res.ok) {
-		// The gateway answers auth failures with an OpenAI-style envelope;
-		// surface status so callers can distinguish 401 (sign in) from 5xx.
-		const detail = await res.text().catch(() => '');
-		const retry = Number(res.headers.get('retry-after'));
-		throw new ApiError(
-			res.status,
-			`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
-			undefined,
-			Number.isFinite(retry) && retry > 0 ? retry : undefined,
-			detail
-		);
-	}
+	if (!res.ok) throw await responseError(res);
 	if (res.status === 204) return undefined as T;
 	return (await res.json()) as T;
+}
+
+/**
+ * A refused response as an {@link ApiError}, for the calls that cannot go
+ * through {@link request} (multipart uploads, audio answers). The gateway
+ * answers with an OpenAI-style envelope; the status lets callers tell 401
+ * (sign in) from 5xx.
+ */
+export async function responseError(res: Response): Promise<ApiError> {
+	const detail = await res.text().catch(() => '');
+	const retry = Number(res.headers.get('retry-after'));
+	return new ApiError(
+		res.status,
+		`${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+		undefined,
+		Number.isFinite(retry) && retry > 0 ? retry : undefined,
+		detail
+	);
+}
+
+/**
+ * A refusal in words for the user: the server's own sentence from its
+ * envelope, or, when it sent none, a catalog message naming the status —
+ * never an empty notice.
+ */
+export function refusalSentence(
+	err: ApiError,
+	tr: (key: string, args?: Record<string, string | number>) => string
+): string {
+	return err.serverMessage?.trim().slice(0, 200) || tr('error-request-failed', { status: err.status });
 }
 
 /**

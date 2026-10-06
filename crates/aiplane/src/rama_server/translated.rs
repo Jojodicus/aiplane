@@ -111,14 +111,6 @@ pub(crate) async fn run(
         }
         None => access,
     };
-    if let Some(response) =
-        proxy::enforce_content_guard(&state, &turn.body, &routing_model, &access).await
-    {
-        return Err(proxy::with_automatic_route_headers(
-            response,
-            automatic_decision.as_ref(),
-        ));
-    }
     // Resolve **without** taking a slot: the tool loop makes its own routing
     // decision per round, so a guard acquired here would be dropped unused —
     // holding capacity the request never spends and counting as a dispatch it
@@ -128,11 +120,29 @@ pub(crate) async fn run(
     // request that waits and then succeeds looks like a slow one.
     let real_model = proxy::resolve_or_wait(&state, &routing_model, &access)
         .await
-        .map_err(|e| refusals.route_error(e))?;
+        .map_err(|e| {
+            proxy::with_automatic_route_headers(
+                refusals.route_error(e),
+                automatic_decision.as_ref(),
+            )
+        })?;
+    // The limits come before the content guard, so a caller over budget does
+    // not cost a guard inference on the way to its 429.
     if let Some(exceeded) =
         proxy::limit_exceeded_for_model(&state, &user, &real_model, PoolKind::Chat).await
     {
-        return Err(refusals.rate_limited(&exceeded));
+        return Err(proxy::with_automatic_route_headers(
+            refusals.rate_limited(&exceeded),
+            automatic_decision.as_ref(),
+        ));
+    }
+    if let Some(response) =
+        proxy::enforce_content_guard(&state, &turn.body, &routing_model, &access).await
+    {
+        return Err(proxy::with_automatic_route_headers(
+            response,
+            automatic_decision.as_ref(),
+        ));
     }
 
     // The `model` field becomes the resolved id first, because the admin

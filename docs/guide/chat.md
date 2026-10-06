@@ -61,4 +61,6 @@ Open **Export** in the header and choose Markdown or PDF. Markdown is useful for
 
 If sending fails, the composer restores the submitted text and files and shows a notice. Read the notice before sending again. If a conversation is paused, answer its outstanding decision first. If another person already settled an approval, refresh the state rather than submitting an alternative decision.
 
+Dictation, voice conversation and spoken replies count against your [usage limits](account-and-usage.md#read-usage-and-limits) like messages do. Once a limit is reached, the voice controls show a notice that voice is paused and point you to **Usage**: a recording is not transcribed, and a reply in a voice conversation still appears as text in the transcript but is not spoken. A sentence the installation has spoken recently can still play, because it is replayed without a model call.
+
 Model, transcription and speech-voice controls in the header are hidden below the small-screen breakpoint. Use a wider viewport when you need to change those settings.

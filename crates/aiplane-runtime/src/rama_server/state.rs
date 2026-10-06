@@ -118,6 +118,41 @@ impl RamaState {
         }
     }
 
+    /// The first limit a caller is already over for a call to the resolved
+    /// `model`, if any — the one check every person and bearer call goes
+    /// through. `subject_id` and `role_ids` carry the owner's user, group and
+    /// global rules; `token_id`, for a bearer call, adds the token's own rules
+    /// as a further ceiling, so issuing a token can only narrow what its owner
+    /// may spend. `enforce_limits` is the serving pool's flag: an exempt pool
+    /// is never refused.
+    pub async fn limit_exceeded(
+        &self,
+        subject_id: &str,
+        role_ids: &[String],
+        token_id: Option<&str>,
+        model: &str,
+        enforce_limits: bool,
+    ) -> Option<aiplane_core::server::limits::LimitExceeded> {
+        if !enforce_limits {
+            return None;
+        }
+        if let Err(exceeded) = self
+            .enforcer
+            .check_for_model(subject_id, role_ids, model, enforce_limits)
+            .await
+        {
+            return Some(exceeded);
+        }
+        match token_id {
+            Some(token_id) => self
+                .enforcer
+                .check_token_for_model(token_id, model, enforce_limits)
+                .await
+                .err(),
+            None => None,
+        }
+    }
+
     pub fn with_trusted_proxies(
         mut self,
         trusted: aiplane_core::server::trusted_proxies::TrustedProxies,

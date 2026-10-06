@@ -15,8 +15,9 @@
  * the mic again.
  */
 import { base } from '$app/paths';
-import { api } from './api';
+import { api, responseError } from './api';
 import { t } from './i18n.svelte';
+import { isLimitRefusal, voiceRefusalMessage } from './voice-refusal';
 import {
 	recordingErrorMessage,
 	recordingUnavailableReason,
@@ -44,6 +45,8 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 	let spokenLang = '';
 	const ttsQueue: string[] = [];
 	let playing = false;
+	/** The current reply went over a usage limit: the rest of it is not read aloud. */
+	let replySilenced = false;
 
 	const audio = new Audio();
 	const playNext = async (): Promise<void> => {
@@ -71,6 +74,17 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 					void audio.play().catch(() => resolve());
 				});
 				URL.revokeObjectURL(url);
+			} else if (!res.ok) {
+				// The reply stays readable in the captions; only its voice is
+				// withheld, and the user should know why it went quiet.
+				const err = await responseError(res);
+				state.note = voiceRefusalMessage(err, t);
+				if (isLimitRefusal(err)) {
+					// Every further sentence of this reply would be refused the
+					// same way; asking for each would only repeat the refusal.
+					replySilenced = true;
+					ttsQueue.length = 0;
+				}
 			}
 		} catch {
 			/* a failed chunk must not stall the queue */
@@ -79,7 +93,7 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 	};
 
 	const enqueueSpeech = (sentence: string): void => {
-		if (!sentence.trim()) return;
+		if (!sentence.trim() || replySilenced) return;
 		ttsQueue.push(sentence);
 		if (!playing) void playNext();
 	};
@@ -140,6 +154,7 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 	/** Reset the reply tracking for a fresh voice turn. */
 	const beginReply = (): void => {
 		spokenChars = 0;
+		replySilenced = false;
 	};
 
 	const transcribeAndSubmit = async (wav: Blob, model: string): Promise<void> => {
@@ -150,14 +165,7 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 		try {
 			const resp = await fetch('/api/v0/transcriptions', { method: 'POST', body: fd });
 			if (!resp.ok) {
-				const raw = await resp.text();
-				let msg = raw;
-				try {
-					msg = (JSON.parse(raw) as { error?: { message?: string } })?.error?.message || raw;
-				} catch {
-					/* raw */
-				}
-				state.note = msg.slice(0, 200);
+				state.note = voiceRefusalMessage(await responseError(resp), t);
 				state.phase = 'idle';
 				return;
 			}

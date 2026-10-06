@@ -1007,6 +1007,8 @@ The turn pipeline is **half-duplex, push-to-talk**:
 
 Everything persists as normal chat turns, so the conversation stays readable and continuable in text. The feature only appears when a `speech` upstream pool **and** a transcription model are both available.
 
+Both voice endpoints check the user's limits as a chat submit does and refuse with the same `429 rate_limited` envelope and `Retry-After`; a sentence served from the speech cache is not refused by limits, though it is by access. These calls are multipart uploads and audio answers, so they cannot go through `request<T>()`; they turn a refused response into the same `ApiError` with `responseError()`. `lib/voice-refusal.ts` then words it: the gateway's limit codes (`rate_limited`, `rate_limit_exceeded`) become the catalog's `voice-limit-reached` in the voice modal, the dictation button and the feedback voice note. The status alone decides nothing, because a `429` from an upstream or a proxy says nothing about the user's limits. Any other refusal shows the envelope's own message, or `error-request-failed` with the status when the body carries none (`refusalSentence()` in `lib/api.ts`, which the feedback dialog's other calls use too). A limit refusal during read-aloud drops the rest of that reply's sentences instead of asking for each; the reply stays on screen.
+
 ## i18n
 
 The Fluent catalogs under `crates/session-core/locales/<lang>/*.ftl` are the

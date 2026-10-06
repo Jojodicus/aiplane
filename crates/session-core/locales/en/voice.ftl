@@ -19,6 +19,9 @@ voice-phase-listening = Listening — tap to send
 voice-phase-speaking = Speaking — tap to interrupt
 voice-recording-stop-failed = Recording could not be stopped: { $error }
 voice-network-error = Network error: { $error }
+# A voice input or read-aloud call refused because the user is over one of
+# their usage limits (also shown by the feedback voice note).
+voice-limit-reached = You have reached a usage limit, so voice is paused. Your limits and when they refresh are on the Usage page.
 
 # Why the microphone would not start. Shown at the moment someone is
 # trying to talk to the gateway, so they need it in their own language.

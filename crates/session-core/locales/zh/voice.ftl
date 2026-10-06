@@ -15,6 +15,7 @@ voice-phase-listening = 正在聆听——点击发送
 voice-phase-speaking = 正在说话——点击打断
 voice-recording-stop-failed = 无法停止录音：{ $error }
 voice-network-error = 网络错误：{ $error }
+voice-limit-reached = 您已达到使用限额，语音功能已暂停。您的限额及其刷新时间可在“用量”页面查看。
 
 # Why the microphone would not start. Shown at the moment someone is
 # trying to talk to the gateway, so they need it in their own language.

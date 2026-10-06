@@ -104,6 +104,10 @@ The selector call is recorded as System One usage. The target's limits are
 checked afterwards, as for any model. A caller whose selector passes but whose
 target is refused, for example by a rule scoped to the target model, gets
 `429` after the selector has run and, on an enforced selector pool, been billed.
+That `429` carries the decision's `X-Gateway-Route-*` headers on
+`/v1/chat/completions`, `/v1/responses` and `/v1/messages` alike, as do the
+other refusals that follow the decision (an unroutable target, the content
+guard).
 
 Token counting checks only the selector: the count itself is not metered, so
 for a static model it is independent of limits.

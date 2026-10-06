@@ -536,11 +536,7 @@ pub async fn message_send(
 /// later. What is left is the caller having no budget, and storage failing.
 fn submit_refusal(err: SubmitTurnError) -> Response {
     match err {
-        SubmitTurnError::RateLimited => json_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "rate_limited",
-            "rate limit or quota exceeded — see /usage",
-        ),
+        SubmitTurnError::RateLimited(exceeded) => over_budget(&exceeded),
         SubmitTurnError::DecisionPending(message) => {
             json_error(StatusCode::CONFLICT, "decision_pending", &message)
         }
@@ -548,6 +544,22 @@ fn submit_refusal(err: SubmitTurnError) -> Response {
             json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", &msg)
         }
     }
+}
+
+/// What a signed-in user over a limit is told, whether they sent a message or
+/// spoke to the chat's voice input or read-aloud: the refusal, and in
+/// `Retry-After` how long until the breached window moves on.
+pub fn over_budget(exceeded: &aiplane_core::server::limits::LimitExceeded) -> Response {
+    let mut response = json_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        "rate limit or quota exceeded — see /usage",
+    );
+    response.headers_mut().insert(
+        rama::http::header::RETRY_AFTER,
+        rama::http::HeaderValue::from(exceeded.retry_after_secs.max(0)),
+    );
+    response
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -632,20 +644,19 @@ pub async fn session_steer(
         Ok(turn) => turn.and_then(|turn| turn.model).unwrap_or_default(),
         Err(err) => return internal(err),
     };
-    if state
-        .enforcer
-        .check_for_model(
+    if let Some(exceeded) = state
+        .limit_exceeded(
             &user.id,
             &state.role_ids_for(&user.roles),
+            None,
             &model,
             state
                 .upstreams
                 .enforce_limits_for_model(&model, aiplane_core::server::upstreams::PoolKind::Chat),
         )
         .await
-        .is_err()
     {
-        return submit_refusal(SubmitTurnError::RateLimited);
+        return submit_refusal(SubmitTurnError::RateLimited(exceeded));
     }
 
     // The insert is conditional on the turn still running, so the answer

@@ -581,6 +581,37 @@ async fn session_speech_is_per_group() {
     );
 }
 
+/// The speech cache is shared across users, so a sentence someone with access
+/// already had spoken must not reach a user without it: the access check
+/// comes before the cache.
+#[tokio::test]
+async fn session_speech_from_the_cache_is_per_group() {
+    let (fx, p) = fixture(PoolKind::Speech, &["finance"]).await;
+    let body = || json_body(json!({"text": "Cached for members only.", "language": "en"}));
+    let adm = cookie_status(
+        &fx,
+        &p.admin.cookie,
+        "/api/v0/speech",
+        body(),
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(adm, StatusCode::OK, "the admin's synthesis fills the cache");
+    let eng = cookie_status(
+        &fx,
+        &p.eng.cookie,
+        "/api/v0/speech",
+        body(),
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(
+        eng,
+        StatusCode::NOT_FOUND,
+        "a cached sentence is refused to a non-member like an uncached one"
+    );
+}
+
 #[tokio::test]
 async fn session_transcription_is_per_group() {
     let (fx, p) = fixture(PoolKind::Transcription, &["finance"]).await;

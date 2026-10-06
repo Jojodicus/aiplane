@@ -32,6 +32,8 @@ import {
 } from './feedback-screenshot';
 import { t } from './i18n.svelte';
 import { me } from './session.svelte';
+import { refusalSentence, responseError } from './api';
+import { voiceRefusalMessage } from './voice-refusal';
 import {
 	recordingErrorMessage,
 	recordingUnavailableReason,
@@ -349,7 +351,7 @@ async function extractFields(wav: Blob): Promise<void> {
 		form.append('file', wav, 'feedback.wav');
 		const tResp = await fetch('/api/v0/transcriptions', { method: 'POST', body: form });
 		if (!tResp.ok) {
-			feedback.error = await errorMessage(tResp);
+			feedback.error = voiceRefusalMessage(await responseError(tResp), t);
 			return;
 		}
 		const transcript = ((await tResp.json()) as { text?: string }).text?.trim() ?? '';
@@ -510,13 +512,7 @@ export async function submit(): Promise<void> {
 	}
 }
 
-/** Pull the server's own message out of a JSON error envelope. */
+/** The server's own message from its error envelope, or a message naming the status. */
 async function errorMessage(resp: Response): Promise<string> {
-	const raw = await resp.text();
-	try {
-		const parsed = JSON.parse(raw) as { error?: { message?: string } };
-		return (parsed?.error?.message || raw).slice(0, 200);
-	} catch {
-		return raw.slice(0, 200) || `request failed (${resp.status})`;
-	}
+	return refusalSentence(await responseError(resp), t);
 }
