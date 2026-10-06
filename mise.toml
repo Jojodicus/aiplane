@@ -640,7 +640,11 @@ sources = ["docs/site-support/requirements.txt"]
 outputs = ["target/docs-venv/.installed"]
 run = """
 set -eu
-RUST_LOG=warn uv venv --python 3.12.14 --allow-existing target/docs-venv
+# Always from scratch: CI's rust-cache restores target/ with this venv partly
+# pruned, and `uv pip sync` trusts the surviving metadata of half-deleted
+# packages. The task only runs when requirements.txt changes, so this is cheap.
+rm -rf target/docs-venv
+RUST_LOG=warn uv venv --python 3.12.14 target/docs-venv
 RUST_LOG=warn uv pip sync --python target/docs-venv/bin/python --require-hashes docs/site-support/requirements.txt
 touch target/docs-venv/.installed
 """
