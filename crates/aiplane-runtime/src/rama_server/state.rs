@@ -131,7 +131,12 @@ impl RamaState {
     /// a client is. Call before the request is split: the socket peer lives in
     /// its extensions.
     pub fn client_ip(&self, req: &rama::http::Request) -> Option<String> {
-        aiplane_features::server::geoip::client_ip(req, &self.trusted_proxies)
+        self.client_addr(req).map(|ip| ip.to_string())
+    }
+
+    /// [`Self::client_ip`] as an address, for matching against networks.
+    pub fn client_addr(&self, req: &rama::http::Request) -> Option<std::net::IpAddr> {
+        aiplane_features::server::geoip::client_addr(req, &self.trusted_proxies)
     }
 
     /// Install what runs a visitor's turn on the public agent endpoint.

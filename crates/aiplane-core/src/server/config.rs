@@ -144,6 +144,10 @@ pub struct Config {
     /// `[push] enabled = false` to turn the feature (and its endpoints) off.
     #[serde(default)]
     pub push: PushConfig,
+    /// The Prometheus scrape endpoint, `GET /metrics`. Set only at
+    /// `/admin/settings` — it never had a config-file block to import.
+    #[serde(skip)]
+    pub metrics: MetricsConfig,
     /// Where the gateway may connect on behalf of a user, a model or an
     /// agent's owner, set from the environment by [`Config::load`]; the
     /// default is the safe one. See `outbound_guard`.
@@ -556,6 +560,60 @@ impl Default for UsageConfig {
             enabled: true,
             retention_days: 90,
             currency: "USD".to_string(),
+        }
+    }
+}
+
+/// Who may scrape `GET /metrics`. The endpoint answers only when it is
+/// enabled *and* at least one guard is set; with both set, a scrape must pass
+/// both.
+#[derive(Debug, Clone, Default)]
+pub struct MetricsConfig {
+    pub enabled: bool,
+    /// The bearer token a scraper presents, never empty. Sealed at rest.
+    pub token: Option<String>,
+    pub allowed_ips: AllowedIps,
+}
+
+/// The client addresses `GET /metrics` admits, parsed once when the
+/// settings are applied.
+#[derive(Debug, Clone)]
+pub enum AllowedIps {
+    /// The entries as stored and the networks they name. No entries is no
+    /// address guard.
+    Listed {
+        entries: Vec<String>,
+        networks: crate::server::ip_networks::IpNetworks,
+    },
+    /// The stored value is not a list of addresses and networks — only a
+    /// hand-edited row can be. It admits nobody until it is saved again, so
+    /// a guard the gateway cannot read never turns into no guard.
+    Unreadable { stored: String },
+}
+
+impl Default for AllowedIps {
+    fn default() -> Self {
+        Self::Listed {
+            entries: Vec::new(),
+            networks: Default::default(),
+        }
+    }
+}
+
+impl AllowedIps {
+    /// Whether an address guard is configured, readable or not.
+    pub fn is_set(&self) -> bool {
+        match self {
+            Self::Listed { entries, .. } => !entries.is_empty(),
+            Self::Unreadable { .. } => true,
+        }
+    }
+
+    /// Whether `ip` may scrape. Assumes [`Self::is_set`].
+    pub fn admits(&self, ip: std::net::IpAddr) -> bool {
+        match self {
+            Self::Listed { networks, .. } => networks.contains(ip),
+            Self::Unreadable { .. } => false,
         }
     }
 }

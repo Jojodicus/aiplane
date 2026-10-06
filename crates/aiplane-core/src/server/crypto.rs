@@ -365,6 +365,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex_encode(&Sha256::digest(bytes))
 }
 
+/// Compares without an early return on the first differing byte, so the
+/// comparison time does not leak how much of a guessed secret was right.
+/// Compare digests of equal length (e.g. two [`sha256_hex`]) so the length
+/// check does not leak the secret's length either.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// `n` random bytes, lowercase hex — the shape every opaque credential in the
 /// gateway takes. Panics only if the OS RNG fails, which is not a condition
 /// any caller can sensibly handle.
@@ -417,6 +428,14 @@ mod activity_key_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn constant_time_eq_still_compares_correctly() {
+        use super::constant_time_eq;
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+    }
+
     /// The OS RNG actually produces entropy.
     ///
     /// Worth pinning because it is a *rename* away from a mistake: rand 0.10

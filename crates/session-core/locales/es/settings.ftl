@@ -79,6 +79,8 @@ settings-s-push = Web Push
 settings-s-push-blurb = Avisos al terminar una respuesta. El par de claves se genera y guarda automáticamente.
 settings-s-gateway = Sesiones y tokens
 settings-s-gateway-blurb = Cuánto tiempo siguen siendo válidos un inicio de sesión del navegador y un token de API, y si los administradores pueden suplantar a otros usuarios.
+settings-s-metrics = Métricas de Prometheus
+settings-s-metrics-blurb = El endpoint de recogida GET /metrics. Solo responde si hay un token o una lista de IP permitidas; con ambos, una recogida debe cumplir los dos.
 
 # ─── Campos ──────────────────────────────────────────────────────────────────
 
@@ -235,6 +237,13 @@ settings-f-gateway-session_absolute_max_days-help = Tope estricto en días desde
 settings-f-gateway-allow_impersonation = Permitir la suplantación
 settings-f-gateway-allow_impersonation-help = Deja que los administradores actúen como otro usuario para depurar. Cada suplantación queda auditada y muestra un aviso permanente; desactivado, los botones se ocultan y el endpoint rechaza.
 
+settings-f-metrics-enabled = Servir /metrics
+settings-f-metrics-enabled-help = Desactivado responde 404. Activado sin token y sin IP permitidas también responde 404: el endpoint nunca queda abierto sin protección.
+settings-f-metrics-token = Token de recogida
+settings-f-metrics-token-help = Prometheus lo envía como Authorization: Bearer <token>. Se guarda cifrado.
+settings-f-metrics-allowed_ips = IP permitidas
+settings-f-metrics-allowed_ips-help = Direcciones o redes CIDR, p. ej. 10.0.0.0/8, 2001:db8::/32. Detrás de un proxy inverso solo funciona si AIPLANE_TRUSTED_PROXIES nombra el proxy; si no, cada recogida llega desde la dirección del proxy.
+
 # Confirmación antes de borrar un ajuste guardado (editor de la SPA).
 settings-clear-confirm = ¿Restablecer { $key } a su valor predeterminado integrado?
 settings-heading = Ajustes
@@ -256,3 +265,8 @@ settings-invalid-whole-number = Introduce un número entero.
 settings-invalid-negative = Introduce un número igual o mayor que 0.
 settings-invalid-number = Introduce un número, por ejemplo 0,7.
 settings-invalid-choice = Elige una de las opciones ofrecidas.
+settings-invalid-ip-network = «{ $entry }» no es una dirección IP ni una red CIDR, como 10.0.0.0/8 o 2001:db8::/32: { $reason }.
+settings-invalid-ip-network-prefix-not-number = la longitud del prefijo no es un número
+settings-invalid-ip-network-address = la dirección no es válida
+settings-invalid-ip-network-mapped-prefix = una red IPv4 mapeada necesita un prefijo de 96 o más
+settings-invalid-ip-network-prefix-too-long = la longitud del prefijo supera { $max }

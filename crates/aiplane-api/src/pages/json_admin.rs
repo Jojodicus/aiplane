@@ -1558,7 +1558,8 @@ fn settings_kind(kind: settings::Kind) -> &'static str {
         settings::Kind::Model(_) => "model",
         settings::Kind::Choice(_) => "choice",
         settings::Kind::Secret => "secret",
-        settings::Kind::List => "list",
+        // The same control as a plain list; the save validates each entry.
+        settings::Kind::List | settings::Kind::NetworkList => "list",
     }
 }
 
@@ -1613,23 +1614,11 @@ pub async fn settings_save(State(state): State<Arc<RamaState>>, req: Request) ->
                     pairs.push((field.key.to_owned(), submitted));
                 }
             }
-            settings::Kind::List => {
-                let items: Vec<String> = submitted
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                pairs.push((
-                    field.key.to_owned(),
-                    serde_json::to_string(&items).unwrap_or_else(|_| "[]".into()),
-                ));
-            }
             _ => match field.check(&submitted) {
                 Ok(value) => pairs.push((field.key.to_owned(), value)),
                 Err(invalid) => issues.push(serde_json::json!({
                     "path": field.key,
-                    "message": session_core::i18n::t(lang, invalid.message_key()),
+                    "message": invalid.message(lang),
                 })),
             },
         }

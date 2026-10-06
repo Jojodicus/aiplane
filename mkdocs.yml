@@ -72,6 +72,7 @@ nav:
   - Operations:
       - Deployment: operations/deployment.md
       - Backup and recovery: operations/backup-recovery.md
+      - Monitoring: operations/monitoring.md
       - Troubleshooting: operations/troubleshooting.md
   - Reference:
       - HTTP API: reference/api.md

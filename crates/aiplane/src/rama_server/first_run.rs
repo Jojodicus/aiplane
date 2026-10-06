@@ -108,6 +108,7 @@ fn serves_before_setup(path: &str) -> bool {
     // session or webhook secret can exist yet — so they already refuse
     // everything, with a status their callers understand.
     path == "/v1"
+        || path == "/metrics"
         || path.starts_with("/v1/")
         || path.starts_with("/api/v0/")
         || path.starts_with("/hooks/")
@@ -238,6 +239,7 @@ mod tests {
             "/v1/models",
             "/api/v0/me",
             "/hooks/abc123",
+            "/metrics",
         ] {
             assert!(
                 serves_before_setup(path),

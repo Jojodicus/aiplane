@@ -62,6 +62,8 @@ settings-s-push = Web Push
 settings-s-push-blurb = Turn-complete notifications. The keypair is generated and stored automatically.
 settings-s-gateway = Sessions & tokens
 settings-s-gateway-blurb = How long a browser login and an API token stay valid, and whether admins may impersonate.
+settings-s-metrics = Prometheus metrics
+settings-s-metrics-blurb = The GET /metrics scrape endpoint. It answers only with a token or an allowed IP list set; with both, a scrape must pass both.
 
 # ─── Fields ──────────────────────────────────────────────────────────────────
 
@@ -242,6 +244,13 @@ settings-f-gateway-session_absolute_max_days-help = Hard cap in days on a browse
 settings-f-gateway-allow_impersonation = Allow impersonation
 settings-f-gateway-allow_impersonation-help = Let admins act as another user for debugging. Every impersonation is audited and shows a persistent banner; off hides the buttons and the endpoint refuses.
 
+settings-f-metrics-enabled = Serve /metrics
+settings-f-metrics-enabled-help = Off answers 404. On without a token and without allowed IPs also answers 404 — the endpoint is never open unguarded.
+settings-f-metrics-token = Scrape token
+settings-f-metrics-token-help = Prometheus sends it as Authorization: Bearer <token>. Stored encrypted.
+settings-f-metrics-allowed_ips = Allowed IPs
+settings-f-metrics-allowed_ips-help = Addresses or CIDR networks, e.g. 10.0.0.0/8, 2001:db8::/32. Behind a reverse proxy this only works when AIPLANE_TRUSTED_PROXIES names the proxy; otherwise every scrape comes from the proxy address.
+
 # Confirmation before clearing one stored setting (SPA settings editor).
 settings-clear-confirm = Reset { $key } to its built-in default?
 settings-heading = Settings
@@ -266,3 +275,8 @@ settings-invalid-whole-number = Enter a whole number.
 settings-invalid-negative = Enter a number of 0 or more.
 settings-invalid-number = Enter a number, such as 0.7.
 settings-invalid-choice = Choose one of the offered options.
+settings-invalid-ip-network = “{ $entry }” is not an IP address or CIDR network, such as 10.0.0.0/8 or 2001:db8::/32: { $reason }.
+settings-invalid-ip-network-prefix-not-number = the prefix length is not a number
+settings-invalid-ip-network-address = the address does not parse
+settings-invalid-ip-network-mapped-prefix = an IPv4-mapped network needs a prefix of 96 or more
+settings-invalid-ip-network-prefix-too-long = the prefix length exceeds { $max }

@@ -14,6 +14,34 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// RFC 7235: the auth scheme name is case-insensitive; the token is not.
+#[tokio::test]
+async fn v1_reads_the_bearer_scheme_in_any_case_and_the_token_exactly() {
+    let state = common::state_with_chat_pool("http://unused.invalid").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    let models = |authorization: String| {
+        Request::builder()
+            .method(Method::GET)
+            .uri("/v1/models")
+            .header("authorization", authorization)
+            .body(Body::empty())
+            .unwrap()
+    };
+    for scheme in ["bearer", "BEARER"] {
+        let resp = app
+            .serve(models(format!("{scheme} {bearer}")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{scheme}");
+    }
+    let resp = app
+        .serve(models(format!("bearer {}", bearer.to_uppercase())))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn v1_models_without_bearer_is_401() {
     let state = common::state_with_chat_pool("http://unused.invalid").await;

@@ -77,6 +77,8 @@ settings-s-push = Web Push
 settings-s-push-blurb = Уведомления о завершении ответа. Пара ключей создаётся и сохраняется автоматически.
 settings-s-gateway = Сессии и токены
 settings-s-gateway-blurb = Как долго действуют вход через браузер и токен API, и могут ли администраторы работать от имени другого пользователя.
+settings-s-metrics = Метрики Prometheus
+settings-s-metrics-blurb = Эндпоинт сбора GET /metrics. Он отвечает, только если задан токен или список разрешённых IP; если заданы оба, запрос должен пройти обе проверки.
 
 # ─── Поля ────────────────────────────────────────────────────────────────────
 
@@ -233,6 +235,13 @@ settings-f-gateway-session_absolute_max_days-help = Жёсткий предел 
 settings-f-gateway-allow_impersonation = Разрешить работу от имени пользователя
 settings-f-gateway-allow_impersonation-help = Позволяет администраторам действовать от имени другого пользователя для отладки. Каждый такой сеанс протоколируется и показывает постоянный баннер; при выключении кнопки скрыты, а эндпоинт отказывает.
 
+settings-f-metrics-enabled = Отдавать /metrics
+settings-f-metrics-enabled-help = Выключено — ответ 404. Включено без токена и без разрешённых IP — тоже 404: эндпоинт никогда не открыт без защиты.
+settings-f-metrics-token = Токен сбора
+settings-f-metrics-token-help = Prometheus передаёт его как Authorization: Bearer <token>. Хранится в зашифрованном виде.
+settings-f-metrics-allowed_ips = Разрешённые IP
+settings-f-metrics-allowed_ips-help = Адреса или сети CIDR, например 10.0.0.0/8, 2001:db8::/32. За обратным прокси это работает, только если AIPLANE_TRUSTED_PROXIES указывает этот прокси; иначе каждый запрос приходит с адреса прокси.
+
 # Подтверждение перед сбросом сохранённой настройки (редактор в SPA).
 settings-clear-confirm = Сбросить { $key } к встроенному значению по умолчанию?
 settings-heading = Настройки
@@ -254,3 +263,8 @@ settings-invalid-whole-number = Введите целое число.
 settings-invalid-negative = Введите число не меньше 0.
 settings-invalid-number = Введите число, например 0,7.
 settings-invalid-choice = Выберите один из предложенных вариантов.
+settings-invalid-ip-network = «{ $entry }» — не IP-адрес и не сеть CIDR, например 10.0.0.0/8 или 2001:db8::/32: { $reason }.
+settings-invalid-ip-network-prefix-not-number = длина префикса не является числом
+settings-invalid-ip-network-address = адрес не распознан
+settings-invalid-ip-network-mapped-prefix = для сети IPv4-mapped нужен префикс не меньше 96
+settings-invalid-ip-network-prefix-too-long = длина префикса больше { $max }

@@ -316,15 +316,19 @@ pub fn transport_is_secure(headers: &HeaderMap, public_url: &str) -> bool {
 /// peer rama stashes in the request extensions as `SocketInfo` and, only when
 /// that peer is a trusted proxy, the forwarded headers. The one resolution
 /// every consumer shares.
-pub fn client_ip(req: &rama::http::Request, trusted: &TrustedProxies) -> Option<String> {
+pub fn client_addr(req: &rama::http::Request, trusted: &TrustedProxies) -> Option<IpAddr> {
     use rama::extensions::ExtensionsRef;
     let peer = req
         .extensions()
         .get_ref::<rama::net::stream::SocketInfo>()
         .map(|s| s.peer_addr().ip_addr);
-    trusted
-        .client_ip(peer, req.headers())
-        .map(|ip| ip.to_string())
+    trusted.client_ip(peer, req.headers())
+}
+
+/// [`client_addr`] as text, the form the location lookup and the request
+/// context store.
+pub fn client_ip(req: &rama::http::Request, trusted: &TrustedProxies) -> Option<String> {
+    client_addr(req, trusted).map(|ip| ip.to_string())
 }
 
 #[cfg(test)]
