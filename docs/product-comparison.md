@@ -418,7 +418,7 @@ The product and documentation sources were checked against these exact repositor
 
 | Product/source | Repository | Revision |
 |---|---|---|
-| croit AIplane (implementation baseline reviewed) | [`croit/aiplane`](https://github.com/croit/aiplane) | [`df2c8e8f706267cd10c59b8b411d7c28bdc1541d`](https://github.com/croit/aiplane/commit/df2c8e8f706267cd10c59b8b411d7c28bdc1541d) |
+| croit AIplane (implementation baseline reviewed) | [`croit/aiplane`](https://github.com/croit/aiplane) | [`dd1ff82464feb410bf78e5d5b45e5c693cfcb8b5`](https://github.com/croit/aiplane/commit/dd1ff82464feb410bf78e5d5b45e5c693cfcb8b5) |
 | LiteLLM (implementation and documentation) | [`BerriAI/litellm`](https://github.com/BerriAI/litellm) | [`e1d16f51d14849c1b3decf17cd81a3bcb4863dca`](https://github.com/BerriAI/litellm/commit/e1d16f51d14849c1b3decf17cd81a3bcb4863dca) |
 | Open WebUI (implementation) | [`open-webui/open-webui`](https://github.com/open-webui/open-webui) | [`8bd8b4fac5e059578ac0c74b3c18d11139f88b7d`](https://github.com/open-webui/open-webui/commit/8bd8b4fac5e059578ac0c74b3c18d11139f88b7d) |
 | Open WebUI (public feature documentation) | [`open-webui/docs`](https://github.com/open-webui/docs) | [`e6e9151cae4d4aec79d1a2169475c0a41f47cad9`](https://github.com/open-webui/docs/commit/e6e9151cae4d4aec79d1a2169475c0a41f47cad9) |
