@@ -1943,13 +1943,11 @@ impl UpstreamRegistry {
         voices
     }
 
-    /// Internal capability pools — never listed as chat models.
-    ///
-    /// OCR takes a document and reranking scores (query, passage) pairs;
-    /// neither answers a chat completion, so a client picking a model from
-    /// `/v1/models` must never see them.
+    /// Internal capability pools — never listed in `/v1/models` or offered
+    /// to a token. OCR serves the gateway's own document reading and has no
+    /// `/v1` endpoint a client could call it through.
     fn is_internal_kind(kind: PoolKind) -> bool {
-        matches!(kind, PoolKind::Ocr | PoolKind::Rerank)
+        matches!(kind, PoolKind::Ocr)
     }
 
     /// Every advertised model across *all* pools and kinds, de-duplicated by
@@ -4489,10 +4487,19 @@ mod tests {
                     vec![backend("ocr", 16)],
                 ),
             ),
+            (
+                "rerank",
+                pool_config(
+                    PoolKind::Rerank,
+                    PickerStrategy::RoundRobin,
+                    vec![backend("rerank", 16)],
+                ),
+            ),
         ]);
         seed_models(&reg, "cloud", 0, &["kimi"]);
         seed_models(&reg, "embed", 0, &["bge"]);
         seed_models(&reg, "ocr", 0, &["paddle"]);
+        seed_models(&reg, "rerank", 0, &["bge-reranker"]);
 
         let catalog = reg.model_catalog_for(&PoolAccess::all());
 
@@ -4510,6 +4517,12 @@ mod tests {
                     alias_of: None,
                 },
                 CatalogModel {
+                    id: "bge-reranker".into(),
+                    kind: PoolKind::Rerank,
+                    compliance: Compliance::default(),
+                    alias_of: None,
+                },
+                CatalogModel {
                     id: "kimi".into(),
                     kind: PoolKind::Chat,
                     compliance: cloud_flags,
@@ -4522,7 +4535,12 @@ mod tests {
                     alias_of: Some("kimi".into()),
                 },
             ],
-            "internal kinds (OCR) stay out, as they do in /v1/models"
+            "OCR stays out, as it does in /v1/models; rerank is public like embedding"
+        );
+        assert_eq!(
+            reg.all_models(),
+            vec!["bge", "bge-reranker", "kimi", "smart"],
+            "/v1/models lists rerank models and leaves OCR out"
         );
     }
 

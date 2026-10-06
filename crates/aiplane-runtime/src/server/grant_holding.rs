@@ -211,13 +211,14 @@ async fn offers(state: &RamaState, access: &PoolAccess, model: &str) -> Option<M
 
 /// The kinds of model a model grant can name: every kind a request can
 /// route to by name — an agent's chat, voice and image tools, a principal
-/// token's `/v1` calls. OCR and reranking are the gateway's own.
-const GRANTABLE_KINDS: [PoolKind; 6] = [
+/// token's `/v1` calls. OCR is the gateway's own.
+const GRANTABLE_KINDS: [PoolKind; 7] = [
     PoolKind::Chat,
     PoolKind::Transcription,
     PoolKind::Speech,
     PoolKind::Image,
     PoolKind::Embedding,
+    PoolKind::Rerank,
     PoolKind::SystemOne,
 ];
 

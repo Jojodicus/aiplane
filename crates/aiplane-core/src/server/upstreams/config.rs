@@ -140,9 +140,8 @@ pub enum PoolKind {
     /// Dedicated document OCR. This is an internal capability pool; it is
     /// not exposed as a normal chat model endpoint.
     Ocr,
-    /// Cross-encoder reranking. Backs knowledge-search reranking and
-    /// `POST /v1/rerank`. It scores (query, passage) pairs and is never a
-    /// chat model, so like [`PoolKind::Ocr`] it stays out of `/v1/models`.
+    /// Cross-encoder reranking: scores (query, passage) pairs. Backs
+    /// knowledge-search reranking and `POST /v1/rerank`.
     Rerank,
     /// TypeSafe System One compatible decision models. Backs
     /// `POST /v1/systemone`; unlike chat models these return typed `noul`,

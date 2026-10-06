@@ -150,6 +150,7 @@ tokens-models-kind-chat = Chat
 tokens-models-kind-transcription = Sprache zu Text
 tokens-models-kind-speech = Text zu Sprache
 tokens-models-kind-embedding = Embedding
+tokens-models-kind-rerank = Reranking
 tokens-models-kind-image = Bilder
 tokens-models-kind-system_one = System One
 tokens-tools-tile-on = Erlaubt

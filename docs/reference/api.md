@@ -110,13 +110,20 @@ curl https://aiplane.example.com/v1/rerank \
 The gateway reads only `model`: it resolves aliases, rewrites `model` to the
 real ID, forwards the body unchanged to the backend's `/rerank` and relays the
 backend's response, so the response shape (for example `results[]` with
-`index` and `relevance_score`) is the backend's. Rerank models are not listed
-by `/v1/models`, offered in a token's model restriction or grantable to a
-system principal, so use an unrestricted personal token. Pool group
-restrictions apply as on every `/v1` route. An unknown model returns `404 model_not_found`; no healthy
-backend returns `503`. Calls are recorded as usage of kind `rerank` and count
-against rate, quota and spend limits. When the backend reports only
-`usage.total_tokens`, those tokens are priced as input tokens.
+`index` and `relevance_score`) is the backend's.
+
+Rerank models are ordinary models for access purposes, like embedding
+models: `/v1/models` lists them, a token's model restriction can include
+them, a system principal can be granted them, and pool group restrictions
+apply. A token restricted to other models gets `403 model_not_allowed`; a
+system principal without a grant on the model gets `404 model_not_found`, as
+does an unknown model. No healthy backend returns `503`.
+
+Calls are recorded as usage of kind `rerank` and count against rate, quota
+and spend limits. With a per-token price, a rerank call is charged at the
+model's input price. When the backend reports only `usage.total_tokens` (as
+vLLM and Jina do), those tokens count as input tokens; a backend that reports
+no usage records no tokens and costs nothing.
 
 ## Browser application API
 

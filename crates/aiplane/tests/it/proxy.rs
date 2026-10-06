@@ -1216,6 +1216,32 @@ async fn v1_rerank_relays_through_upstream() {
     assert_eq!(parsed["results"][0]["relevance_score"], 0.93);
 }
 
+/// Rerank models are listed and retrievable like embedding models: a client
+/// discovers them the same way it discovers anything else it may route to.
+#[tokio::test]
+async fn v1_models_lists_and_retrieves_rerank_models() {
+    let state =
+        common::state_with_pool("http://unused.invalid", PoolKind::Rerank, "rerank-model").await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    let get = |uri: &str| {
+        Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let resp = app.serve(get("/v1/models")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["data"][0]["id"], "rerank-model", "{parsed}");
+
+    let resp = app.serve(get("/v1/models/rerank-model")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn v1_rerank_without_bearer_is_401() {
     let state =

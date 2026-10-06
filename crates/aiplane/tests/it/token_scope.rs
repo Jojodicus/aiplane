@@ -334,6 +334,56 @@ fn json_req(method: Method, uri: &str, cookie: &str, body: Option<&str>) -> Requ
     }
 }
 
+/// A token restricted to a rerank model reaches it on `/v1/rerank`, and is
+/// refused another rerank model the gateway serves, as for any other kind.
+#[tokio::test]
+async fn a_token_restricted_to_a_rerank_model_reaches_only_that_one() {
+    use aiplane_core::server::upstreams::PoolKind;
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rerank"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"results": []})))
+        .mount(&upstream)
+        .await;
+    let state = common::state_with_pool(&upstream.uri(), PoolKind::Rerank, "rerank-a").await;
+    common::seed_pool_models(&state.upstreams, "pool", 0, &["rerank-a", "rerank-b"]);
+    let (bearer, token_id) = common::seed_user_with_token_id(&state, "alice").await;
+    token_models::set_for_token(&state.db, &token_id, &["rerank-a".into()], ManagedBy::Owner)
+        .await
+        .unwrap();
+    let app = common::app(state);
+    let rerank = |model: &str| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/v1/rerank")
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"model": model, "query": "q", "documents": ["d"]}).to_string(),
+            ))
+            .unwrap()
+    };
+
+    let resp = app.serve(rerank("rerank-a")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app.serve(rerank("rerank-b")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    assert_eq!(parsed["error"]["code"], "model_not_allowed", "{parsed}");
+
+    let resp = app.serve(models_req(&bearer)).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&common::read_body(resp).await).unwrap();
+    let ids: Vec<&str> = parsed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["rerank-a"], "{parsed}");
+}
+
 /// `PUT /api/v0/tokens/{id}/models` — the owner-side allowlist save.
 fn models_put(cookie: &str, token_id: &str, restrict: bool, models: &[&str]) -> Request {
     json_req(

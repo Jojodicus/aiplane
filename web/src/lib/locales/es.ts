@@ -2460,6 +2460,7 @@ export const es: Catalog = {
  "tokens-models-kind-chat": "Chat",
  "tokens-models-kind-embedding": "Embedding",
  "tokens-models-kind-image": "Imágenes",
+ "tokens-models-kind-rerank": "Reordenación",
  "tokens-models-kind-speech": "Texto a voz",
  "tokens-models-kind-system_one": "System One",
  "tokens-models-kind-transcription": "Voz a texto",

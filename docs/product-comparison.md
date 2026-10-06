@@ -2,7 +2,7 @@
 
 This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI. It is maintained as a standalone product document; the README remains focused on AIplane.
 
-**Checked on 4 October 2026.** AIplane entries use the local `main` implementation revision pinned at the end of this document. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. For LiteLLM, ✅ means available in the open-source edition; 🟡 Enterprise means the capability requires a paid Enterprise license. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
+**Checked on 4 October 2026; the AIplane "Public reranking endpoint" row was rechecked on 6 October 2026.** AIplane entries use the local `main` implementation revision pinned at the end of this document, except that row, which reflects a later AIplane revision that adds `POST /v1/rerank`. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. For LiteLLM, ✅ means available in the open-source edition; 🟡 Enterprise means the capability requires a paid Enterprise license. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
 
 ## How to read the matrix
 
@@ -413,7 +413,7 @@ AIplane sources link to this repository's user and operator documentation. LiteL
 
 ## Git revisions compared
 
-The product and documentation sources were checked against these exact repository revisions. The public documentation pages were reviewed on **4 October 2026**; the revision pins make this comparison reproducible even as the upstream `main` branches move.
+The product and documentation sources were checked against these exact repository revisions. The public documentation pages were reviewed on **4 October 2026**; the revision pins make this comparison reproducible even as the upstream `main` branches move. The AIplane "Public reranking endpoint" row is the one exception: it was rechecked on **6 October 2026** against a later AIplane revision than the baseline below.
 
 | Product/source | Repository | Revision |
 |---|---|---|

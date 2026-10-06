@@ -25,7 +25,7 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | POST | `/v1/images/edits`         | Bearer | `multipart/form-data` (`image` + `prompt` + `model`). Byte-dumb relay to the `image` pool. |
 | POST | `/v1/audio/transcriptions` | Bearer | `multipart/form-data`, Whisper-compatible. Silence-trimmed and re-framed before forwarding to the `transcription` pool. |
 | POST | `/v1/audio/speech`         | Bearer | Text-to-speech (OpenAI-shaped: `{model, input, voice, response_format}`). Byte-dumb relay to the `speech` pool; audio bytes out. Returns a routing error if no `speech` backend serves the model (i.e. no `speech` pool configured). |
-| GET  | `/v1/models`               | Bearer | Lists every model served by any healthy backend across public pools (chat, transcription, embedding, image, speech, system_one), de-duplicated by id. Synthesised from the registry's cached model sets — no upstream round-trip. |
+| GET  | `/v1/models`               | Bearer | Lists every model served by any healthy backend across public pools (chat, transcription, embedding, rerank, image, speech, system_one), de-duplicated by id. Synthesised from the registry's cached model sets — no upstream round-trip. |
 | GET  | `/v1/models/{id}`          | Bearer | Retrieve a single model object, or `404 model_not_found` if no backend serves the id. `{id}` is a catch-all because model ids contain `/`. |
 | GET  | `/v1/sandbox/files/{run}/{filename}` | Bearer | Downloads a file a sandbox run produced for the caller, scoped to the caller's user (see `sandbox_api`). |
 | GET  | `/healthz`                 | none | Liveness. Returns `{"status":"ok"}`. |
