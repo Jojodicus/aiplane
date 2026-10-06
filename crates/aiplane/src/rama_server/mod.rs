@@ -26,10 +26,12 @@ pub mod oidc_handlers;
 pub mod openapi;
 pub mod proxy;
 pub mod rag_api;
+pub mod responses;
 pub mod router;
 pub mod sandbox_api;
 pub mod setup_api;
 pub mod spa;
+pub(crate) mod translated;
 
 pub use aiplane_api::pages;
 pub use aiplane_core::rama_server::{SessionStore, cors, session};

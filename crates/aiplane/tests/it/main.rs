@@ -37,6 +37,7 @@ mod embed;
 mod feedback_extract;
 mod healthz;
 mod oidc_integration;
+mod openai_responses;
 mod openapi_drift;
 mod proxy;
 mod push_routes;

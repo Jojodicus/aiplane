@@ -25,8 +25,9 @@ The proxy, browser JSON API and Anthropic compatibility layer have separate prot
 | OpenAI-compatible proxy | `crates/aiplane/src/rama_server/proxy.rs` | `{"error":{"message":"…","type":"…","code":"…"}}` for gateway-generated errors |
 | Browser JSON API | `crates/aiplane-api/src/pages/mod.rs`, `json_error` and related helpers | `{"error":{"message":"…","type":"…","code":"…"}}`, with optional additional fields |
 | Anthropic compatibility | `crates/aiplane-core/src/server/anthropic/error.rs` and `crates/aiplane/src/rama_server/messages.rs` | Anthropic-shaped protocol errors |
+| OpenAI Responses compatibility | `crates/aiplane/src/rama_server/responses/mod.rs` | The proxy's envelope; request errors carry `type: invalid_request_error` and the offending `param`; a failure after a stream started is a `response.failed` event |
 
-In the proxy's general error helper, `type` and `code` use the supplied code. Model-not-found has the more specific OpenAI request-error shape, including `param: model`. Upstream error bodies can be relayed rather than rewritten. See [Gateway HTTP API](gateway-api.md#errors) and [Claude Code](claude-code.md) for the client contracts.
+In the proxy's general error helper, `type` and `code` use the supplied code. Model-not-found has the more specific OpenAI request-error shape, including `param: model`. Upstream error bodies can be relayed rather than rewritten. See [Gateway HTTP API](gateway-api.md#errors), [Claude Code](claude-code.md) and [Codex](codex.md) for the client contracts.
 
 Streaming errors must follow the stream's protocol: an HTTP status cannot be replaced after response headers have been sent. Clients should inspect terminal error events/chunks as well as the original HTTP status.
 

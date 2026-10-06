@@ -75,6 +75,7 @@ pub const EMBED_PREFIX: &str = "/api/v0/embed/";
 /// a revoked key or a removed origin should stop working in browsers within
 /// minutes, not after a day of cached preflights.
 const EMBED_CORS: CorsHeaders = CorsHeaders {
+    allow_methods: "GET, POST, OPTIONS",
     allow_headers: "authorization, content-type",
     max_age_secs: "600",
 };

@@ -36,7 +36,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Anthropic-native upstream support | ✅ | ✅ | 🟡 | A4 L4 O1 |
 | TypeSafe System One upstream support | ✅ | ⚪ | ⚪ | A4 |
 | OpenAI Chat Completions endpoint | ✅ | ✅ | ✅ | A3 L2 O1 |
-| OpenAI Responses endpoint | ❌ | ✅ | 🟡 | A3 L28 O24 |
+| OpenAI Responses endpoint | ✅ | ✅ | 🟡 | A3 L28 O24 |
 | Anthropic Messages endpoint | ✅ | ✅ | ✅ | A3 L2 O24 |
 | Embeddings endpoint | ✅ | ✅ | 🟡 | A3 L2 O24 |
 | Image generation endpoint | ✅ | ✅ | ⚪ | A3 L28 |
@@ -299,7 +299,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 
 AIplane's strongest position is the combination of a user-facing AI workspace, a governed application gateway, and a business-agent lifecycle in one self-hosted product. The most distinctive documented areas are browser control in a user's own browser, agent publication to a website or A2A channel, repeatable tests before publication, durable human decisions in an inbox, and version-matched documentation shipped with each installation.
 
-AIplane is behind LiteLLM on documented provider breadth, the standalone Python SDK, the Responses and batch API surfaces, broad third-party logging/observability integrations, Terraform deployment modules, and documented multi-replica scaling. Those are concrete gaps, not wording problems. AIplane's documented deployment topology is one application replica; do not position it as horizontally scalable today.
+AIplane is behind LiteLLM on documented provider breadth, the standalone Python SDK, the batch API surface, broad third-party logging/observability integrations, Terraform deployment modules, and documented multi-replica scaling. Those are concrete gaps, not wording problems. AIplane's documented deployment topology is one application replica; do not position it as horizontally scalable today.
 
 Open WebUI documents stronger end-user collaboration and chat customization in areas such as shared channels, multi-model side-by-side chats, a centralized file manager, and user-selectable local-password authentication. AIplane's advantage is deeper integration between employee chat, application/API governance, and business-agent lifecycle controls. The products overlap substantially in chat, knowledge retrieval, tools, voice and image workflows; check each row's conditions before calling them equivalent.
 

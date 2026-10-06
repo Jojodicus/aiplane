@@ -60,9 +60,10 @@ use aiplane_core::server::upstreams::PoolKind;
 use aiplane_core::server::upstreams::registry::RouteError;
 use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
-use aiplane_runtime::server::tools::runner::{LoopError, ToolCallAcc};
+use aiplane_runtime::server::tools::runner::{LoopError, LoopOutput, ToolCallAcc};
 
 use crate::rama_server::proxy::{self, ChunkMeta, StreamFailure, StreamSink, TokenUsage};
+use crate::rama_server::translated::{self, Ran, Refusals, TranslatedTurn, Turn};
 
 /// How often to send an SSE `ping` while a streamed turn is producing no
 /// upstream bytes.
@@ -95,126 +96,32 @@ pub async fn messages(State(state): State<Arc<RamaState>>, req: Request) -> Resp
         Err(resp) => return resp,
     };
     let requested_model = translated.model.clone();
-
-    // The same tool surface `/v1/chat/completions` resolves, from the same
-    // place: gateway tools ride along only when the token has tool use
-    // enabled, and this endpoint is pure translation when it doesn't.
-    let (allowed_tools, auto_tools, user_mcp) = state.api_tool_layer(&user).await;
-
-    // Resolve aliases + the unknown-model fallback once, up front. This is
-    // what makes `claude-sonnet-4-6` (a name no self-hosted backend serves)
-    // route to whatever the operator aliased it to.
-    let access = state
-        .pool_access_for_token(&user)
-        .for_request(&requested_model);
-    let (routing_model, automatic_decision) = match proxy::resolve_automatic_chat_route(
-        &state,
-        &user,
-        &requested_model,
-        &translated.body,
-        &access,
-        &parts.headers,
-        !allowed_tools.is_empty() || !auto_tools.is_empty(),
+    let turn = TranslatedTurn {
+        body: translated.body,
+        model: translated.model,
+        stream: translated.stream,
+        effort: translated.effort,
+    };
+    let turn = match translated::run(
+        state,
+        user,
+        parts.headers,
+        client_ip,
+        turn,
+        &AnthropicRefusals,
+        || Box::new(AnthropicSink::new(&requested_model)),
     )
     .await
     {
-        Ok(value) => value,
+        Ok(turn) => turn,
         Err(response) => return response,
     };
-    let access = match &automatic_decision {
-        Some(decision) => {
-            access.for_route_targets(&decision.alias, [decision.effective_target.as_str()])
-        }
-        None => access,
+    let Turn { ran, route } = turn;
+    let response = match ran {
+        Ran::Streamed(response) => response,
+        Ran::Buffered(outcome) => buffered_response(outcome, &requested_model),
     };
-    if let Some(response) =
-        proxy::enforce_content_guard(&state, &translated.body, &routing_model, &access).await
-    {
-        return proxy::with_automatic_route_headers(response, automatic_decision.as_ref());
-    }
-    // `route_or_wait`, not `route_access`: when the pool is momentarily down
-    // (a restarting GPU box, a model being swapped) this parks the request until
-    // a backend answers its probe again instead of failing it. Nothing has been
-    // written to the client yet, so a request that waits and then succeeds looks
-    // to Claude Code exactly like a slow one — the turn continues instead of
-    // dying. See `upstreams::wait`.
-    // Resolve **without** taking a slot: the tool loop below makes its own
-    // routing decision per round, so a guard acquired here would be dropped
-    // unused — holding capacity the request never spends and counting as a
-    // dispatch it never made. Waiting still happens, because a pool with no
-    // available replica should park the request rather than fail it.
-    let real_model = match proxy::resolve_or_wait(&state, &routing_model, &access).await {
-        Ok(id) => id,
-        Err(e) => return route_error_response(e),
-    };
-    if let Some(exceeded) = proxy::limit_exceeded_for_model(
-        &state,
-        &user,
-        &real_model,
-        aiplane_core::server::upstreams::PoolKind::Chat,
-    )
-    .await
-    {
-        return rate_limited(&exceeded);
-    }
-
-    // The model's `model` field becomes the resolved id first, because the
-    // admin defaults are keyed on it — an alias inherits its target's
-    // settings, exactly as on the OpenAI path. The `Value` form of the merge
-    // is the one to use here: the OpenAI path holds the client's raw `Bytes`
-    // and needs the bytes variant, but this body was just *built* as a
-    // `Value`, so serialising it only to parse it back would be pure waste.
-    let mut request_body = translated.body;
-    proxy::set_model_in_value(&mut request_body, &real_model);
-    if let Err(err) =
-        aiplane_core::server::model_defaults::apply_defaults(&state.db, &mut request_body).await
-    {
-        // Same posture as the bytes variant: a broken stored default is not a
-        // reason to fail the caller's request.
-        tracing::warn!(error = %err, model = %real_model, "model_defaults: skipping merge");
-    }
-    apply_thinking(
-        &state,
-        &real_model,
-        &access,
-        translated.effort,
-        &mut request_body,
-    )
-    .await;
-
-    let resp = if translated.stream {
-        proxy::stream_with_tools(
-            state,
-            user,
-            real_model.clone(),
-            access,
-            parts.headers,
-            client_ip,
-            request_body,
-            allowed_tools,
-            auto_tools,
-            user_mcp,
-            Box::new(AnthropicSink::new(&requested_model)),
-        )
-        .await
-    } else {
-        buffered(
-            state,
-            user,
-            &requested_model,
-            &real_model,
-            access,
-            parts.headers,
-            client_ip,
-            request_body,
-            allowed_tools,
-            auto_tools,
-            user_mcp,
-        )
-        .await
-    };
-    let response = proxy::with_resolved_model_header(resp, &requested_model, &real_model);
-    proxy::with_automatic_route_headers(response, automatic_decision.as_ref())
+    route.decorate(response)
 }
 
 /// Read, parse and translate a request body — the identical prologue both
@@ -427,40 +334,12 @@ pub async fn hello() -> Response {
     StatusCode::OK.into_response()
 }
 
-/// The non-streaming path: run the turn through the shared buffered loop, then
-/// translate its result.
-#[allow(clippy::too_many_arguments)]
-async fn buffered(
-    state: Arc<RamaState>,
-    user: aiplane_core::server::auth::UserCtx,
-    requested_model: &str,
-    real_model: &str,
-    access: aiplane_core::server::upstreams::PoolAccess,
-    headers: rama::http::HeaderMap,
-    client_ip: Option<String>,
-    request_body: Value,
-    allowed_tools: Vec<String>,
-    auto_tools: Vec<String>,
-    user_mcp: aiplane_runtime::server::tools::mcp::manager::UserMcpLayer,
-) -> Response {
-    let outcome = match proxy::buffered_with_tools(
-        &state,
-        &user,
-        real_model,
-        access,
-        headers,
-        client_ip,
-        request_body,
-        &allowed_tools,
-        &auto_tools,
-        &user_mcp,
-    )
-    .await
-    {
+/// The non-streaming result, translated into an Anthropic `Message`.
+fn buffered_response(outcome: Result<LoopOutput, LoopError>, requested_model: &str) -> Response {
+    let outcome = match outcome {
         Ok(o) => o,
         Err(err) => return loop_error_response(err),
     };
-
     if outcome.status >= 400 {
         // The upstream's own wording survives: the client's
         // retry-without-the-capability recovery matches on it.
@@ -469,7 +348,6 @@ async fn buffered(
             &anthropic::error::from_upstream(outcome.status, &outcome.body),
         );
     }
-
     let completion: Value = match serde_json::from_slice(&outcome.body) {
         Ok(v) => v,
         Err(err) => {
@@ -480,58 +358,20 @@ async fn buffered(
         }
     };
     let message = anthropic::response::from_openai(&completion, requested_model);
-    let mut resp = proxy::with_budget_header(
-        json_response(StatusCode::OK, &message),
-        outcome.budget_exhausted,
-    );
-    if let Ok(rounds) = rama::http::HeaderValue::from_str(&outcome.rounds.to_string()) {
-        resp.headers_mut().insert("x-gateway-tool-rounds", rounds);
-    }
-    // Which replica served the turn. The one way a client can check from
-    // outside whether prefix affinity is doing what it claims.
-    match outcome.backend.as_deref() {
-        Some(b) => proxy::with_backend_header(resp, b),
-        None => resp,
-    }
+    translated::with_outcome_headers(json_response(StatusCode::OK, &message), &outcome)
 }
 
-/// Translate the request's thinking configuration into the serving model's
-/// own reasoning parameter.
-///
-/// The `thinking` field never reaches the upstream — a vLLM backend rejects
-/// it — so the request's *intent* is carried across instead: the gateway's
-/// effort levels already know how each backend family spells "think harder"
-/// (`chat_template_kwargs.enable_thinking`, `reasoning_effort`,
-/// `thinking.budget_tokens`), and an admin can retune the per-level budgets
-/// per model on `/admin/models` without touching this path.
-async fn apply_thinking(
-    state: &RamaState,
-    real_model: &str,
-    access: &aiplane_core::server::upstreams::PoolAccess,
-    effort: Option<aiplane_core::server::reasoning::Effort>,
-    body: &mut Value,
-) {
-    // No `thinking` and no `output_config` in the request: say nothing about
-    // reasoning, matching what `/v1/chat/completions` does for a client that
-    // sets no reasoning parameter of its own.
-    let Some(effort) = effort else {
-        return;
-    };
-    // Same three-source resolution as the chat driver — an Anthropic-format
-    // client asking for extended thinking against an Ollama backend has to get
-    // the spelling that server understands, or its `thinking` block translates
-    // into a parameter that is silently dropped.
-    let dialect = state
-        .upstreams
-        .serving_profile(
-            real_model,
-            aiplane_core::server::upstreams::PoolKind::Chat,
-            access,
-        )
-        .dialect;
-    let (style, overrides) =
-        aiplane_core::server::reasoning::resolve_for_model(&state.db, real_model, dialect).await;
-    aiplane_core::server::reasoning::apply_effort(style, effort, &overrides, body);
+/// Pre-turn refusals in the Anthropic shape.
+struct AnthropicRefusals;
+
+impl Refusals for AnthropicRefusals {
+    fn route_error(&self, err: RouteError) -> Response {
+        route_error_response(err)
+    }
+
+    fn rate_limited(&self, err: &aiplane_core::server::limits::LimitExceeded) -> Response {
+        rate_limited(err)
+    }
 }
 
 /// The Anthropic-format [`StreamSink`]: re-encodes the loop's OpenAI chunks

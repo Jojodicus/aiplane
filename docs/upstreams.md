@@ -233,7 +233,7 @@ Prefix matching gets two things an exact key cannot:
 
 **Prior art.** This is the design inference routers converged on: [SGLang's cache-aware policy](https://docs.sglang.io/advanced_features/sgl_model_gateway.html) keeps an approximate radix tree per worker and switches to shortest-queue on imbalance; [llm-d's `approx-prefix-cache-producer`](https://llm-d.ai/docs/architecture/advanced/kv-management/prefix-cache-aware-routing) splits the prompt into fixed-size blocks, chains a rolling hash and keeps an LRU index of prefix hash → pod; [vLLM's production-stack](https://docs.vllm.ai/projects/production-stack/en/latest/use_cases/prefix-aware-routing.html) calls it prefix-aware routing and offers session stickiness alongside it. This AIplane takes the llm-d shape, which needs neither a tokenizer nor model-server cooperation. Two findings from that work shaped the details above: SGLang measured **69% → 96% cache hits and 678 → ~1080 output tokens/s** on a multi-turn coding-agent benchmark once conversation affinity was explicit rather than derived ([sgl-project/sglang#26263](https://github.com/sgl-project/sglang/issues/26263)) — which is why the header exists and is preferred; and the same issue records the failure mode of keying on the first message only, where decisions end up dominated by the system-prompt overlap every session shares rather than the multi-turn prefix that actually drives reuse — which is why the chain covers the whole prefill.
 
-**Seeing what it decided.** Every response carries `X-Gateway-Backend` naming the replica that served it — except on the streamed tool-loop path (`/v1/messages` with `stream: true`), where the routing decision happens inside the already-started stream and there is no header left to set; read those from the usage table or the per-backend counters on `/admin/upstreams`. Turning on `RUST_LOG=aiplane_core::server::upstreams::registry=debug` logs each decision and its inputs:
+**Seeing what it decided.** Every response carries `X-Gateway-Backend` naming the replica that served it — except on the streamed tool-loop path (`/v1/messages` or `/v1/responses` with `stream: true`), where the routing decision happens inside the already-started stream and there is no header left to set; read those from the usage table or the per-backend counters on `/admin/upstreams`. Turning on `RUST_LOG=aiplane_core::server::upstreams::registry=debug` logs each decision and its inputs:
 
 ```text
 prefix-affinity: too little of this prompt is cached anywhere — balancing  blocks=102 best=0
@@ -270,7 +270,7 @@ So AIplane parks it. `upstreams::wait::route_or_wait` retries the normal routing
   response headers left long ago: a `send()` that fails has emitted no frames,
   so there is nothing to duplicate. Only a failure *after* frames have been
   forwarded is unrecoverable.
-- **Past the budget the answer is still retryable**: `/v1/messages` returns `529 overloaded_error` with `Retry-After`, `/v1/chat/completions` a `503` with `Retry-After`, so the client's own backoff continues where AIplane left off. Never a `4xx` — a `404` is the one thing no SDK retries.
+- **Past the budget the answer is still retryable**: `/v1/messages` returns `529 overloaded_error` with `Retry-After`, `/v1/chat/completions` and `/v1/responses` a `503` with `Retry-After`, so the client's own backoff continues where AIplane left off. Never a `4xx` — a `404` is the one thing no SDK retries.
 
 ### Verified against two live replicas
 

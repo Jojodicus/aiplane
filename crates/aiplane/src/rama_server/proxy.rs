@@ -203,7 +203,7 @@ pub(crate) async fn limit_exceeded(
 
 /// A `429 Too Many Requests` with an OpenAI-shaped error envelope and a
 /// `Retry-After` header, naming the breached limit.
-fn limit_exceeded_response(e: &aiplane_core::server::limits::LimitExceeded) -> Response {
+pub(crate) fn limit_exceeded_response(e: &aiplane_core::server::limits::LimitExceeded) -> Response {
     let msg = e.to_string();
     let body = json!({
         "error": {
@@ -1066,7 +1066,7 @@ pub(crate) fn with_budget_header(mut response: Response, budget_exhausted: bool)
     response
 }
 
-fn loop_error_response(err: LoopError) -> Response {
+pub(crate) fn loop_error_response(err: LoopError) -> Response {
     match err {
         LoopError::MalformedRequest(m) => {
             error_response(StatusCode::BAD_REQUEST, "invalid_request", &m)
@@ -2589,6 +2589,15 @@ pub(crate) trait StreamSink: Send {
         acc: &BTreeMap<usize, ToolCallAcc>,
     ) -> Vec<Bytes>;
 
+    /// Work that must be done before [`Self::finish`] tells the client the
+    /// turn is complete — storing the result a follow-up request may
+    /// reference the moment it sees the end of this one.
+    fn before_finish(
+        &mut self,
+    ) -> Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> {
+        None
+    }
+
     /// The loop ended normally.
     fn finish(&mut self) -> Vec<Bytes>;
 
@@ -2600,7 +2609,18 @@ pub(crate) trait StreamSink: Send {
     fn heartbeat(&self) -> Option<(std::time::Duration, Bytes)> {
         None
     }
+
+    /// A rewrite applied to every frame as it leaves for the client, in the
+    /// order the client receives them — keep-alives included, which are sent
+    /// from another task. For a format that numbers its events. `None` (the
+    /// default) sends frames as they are.
+    fn outbound(&self) -> Option<Outbound> {
+        None
+    }
 }
+
+/// See [`StreamSink::outbound`].
+pub(crate) type Outbound = Box<dyn FnMut(Bytes) -> Bytes + Send>;
 
 /// The OpenAI sink: relay upstream events verbatim, terminate with `[DONE]`.
 struct OpenAiSink;
@@ -2849,6 +2869,13 @@ pub(crate) async fn stream_with_tools(
     // rama::futures::channel::mpsc::unbounded matches the pattern used by
     // the chat-page SSE producer (`pages/chat/mod.rs`).
     let (mut tx, rx) = mpsc::unbounded::<Result<Bytes, std::io::Error>>();
+    let body = match sink.outbound() {
+        Some(mut outbound) => {
+            use rama::futures::StreamExt;
+            rama::http::Body::from_stream(rx.map(move |frame| frame.map(&mut outbound)))
+        }
+        None => rama::http::Body::from_stream(rx),
+    };
 
     tokio::spawn(async move {
         for frame in sink.prologue() {
@@ -2890,6 +2917,11 @@ pub(crate) async fn stream_with_tools(
         if let Some(handle) = heartbeat {
             handle.abort();
         }
+        if outcome.is_ok()
+            && let Some(work) = sink.before_finish()
+        {
+            work.await;
+        }
         let closing = match outcome {
             Ok(()) => sink.finish(),
             Err(failure) => sink.error(&failure),
@@ -2904,7 +2936,7 @@ pub(crate) async fn stream_with_tools(
         .header(rama::http::header::CONTENT_TYPE, "text/event-stream")
         .header(rama::http::header::CACHE_CONTROL, "no-cache, no-transform")
         .header("x-accel-buffering", "no")
-        .body(rama::http::Body::from_stream(rx))
+        .body(body)
         .unwrap_or_else(|err| {
             error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3729,7 +3761,7 @@ pub(crate) async fn resolve_or_wait(
 /// twin. Short on purpose: the wait already happened server-side.
 const OUTAGE_RETRY_AFTER_SECS: u32 = 5;
 
-fn route_error_response(err: RouteError) -> Response {
+pub(crate) fn route_error_response(err: RouteError) -> Response {
     // The status and wording are the error's own (see
     // `RouteError::status_and_message`); only the envelope is OpenAI's. The
     // two model errors keep their distinct shapes — OpenAI clients (the Vercel
@@ -3753,13 +3785,25 @@ fn route_error_response(err: RouteError) -> Response {
         }
         return resp;
     }
-    // OpenAI's request-error shape, with `param: "model"` so clients treat it
-    // as a bad request rather than something to retry.
+    // With `param: "model"` so clients treat it as a bad request rather than
+    // something to retry.
+    request_error_response(status, code, Some("model"), &message)
+}
+
+/// OpenAI's request-error shape: `type: "invalid_request_error"`, the `code`,
+/// and the request parameter at fault, when there is one. SDKs branch on
+/// `param` and `code`, not on the message.
+pub(crate) fn request_error_response(
+    status: StatusCode,
+    code: &str,
+    param: Option<&str>,
+    message: &str,
+) -> Response {
     let body = json!({
         "error": {
             "message": message,
             "type": "invalid_request_error",
-            "param": "model",
+            "param": param,
             "code": code,
         }
     });

@@ -273,6 +273,7 @@ Start in [`docs/README.md`](docs/README.md) for the index. The topical docs:
 | OIDC login + gateway-minted tokens | [`docs/auth.md`](docs/auth.md) |
 | OpenAI-compat endpoints, streaming, transcription | [`docs/gateway-api.md`](docs/gateway-api.md) |
 | Claude Code / Anthropic Messages compatibility (`/v1/messages`) | [`docs/claude-code.md`](docs/claude-code.md) |
+| Codex CLI / OpenAI Responses compatibility (`/v1/responses`) | [`docs/codex.md`](docs/codex.md) |
 | Multi-provider routing, load balancing, health checks | [`docs/upstreams.md`](docs/upstreams.md) |
 | Tool registry, role→tool mapping, execution loop | [`docs/tools-rbac.md`](docs/tools-rbac.md) |
 | Which tools exist, their gates and toggle keys | [`docs/tools-inventory.md`](docs/tools-inventory.md) |
