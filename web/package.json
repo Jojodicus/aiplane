@@ -13,24 +13,24 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --tsgo && tsc -p embed/tsconfig.json"
 	},
 	"devDependencies": {
-		"@sveltejs/adapter-static": "^3.0.8",
-		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.70.3",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@tailwindcss/typography": "^0.5.20",
 		"@tailwindcss/vite": "^4.1.0",
-		"@types/node": "^26.6.3",
+		"@types/node": "^26.6.4",
 		"@typescript/native": "npm:typescript@^7.0.2",
-		"daisyui": "^5.7.46",
+		"daisyui": "^5.7.47",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.1.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.1"
+		"vite": "^8.3.3"
 	},
 	"dependencies": {
-		"@zumer/snapdom": "^3.1.1",
+		"@zumer/snapdom": "^3.3.0",
 		"dompurify": "^3.4.16",
-		"marked": "^18.0.12"
+		"marked": "^18.1.0"
 	},
 	"//overrides": "@sveltejs/kit still declares cookie ^0.6.0, which pins the tree to a version with GHSA-pxg6-pf52-xh8x (out-of-bounds characters accepted in cookie name/path/domain). No published kit release relaxes that range, so force the patched line here. Drop this once kit's own dependency moves past 0.7.",
 	"overrides": {
