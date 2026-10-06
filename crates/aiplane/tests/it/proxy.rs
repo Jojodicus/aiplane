@@ -1410,3 +1410,65 @@ async fn v1_rerank_records_rerank_usage_priced_on_its_tokens() {
         agg.summary.total_cost
     );
 }
+
+/// An embedding backend that reports only `usage.total_tokens`: an
+/// embedding generates nothing, so every token is input and priced so.
+#[tokio::test]
+async fn v1_embeddings_prices_a_bare_total_as_input_tokens() {
+    use aiplane_core::server::db::model_defaults::{self, PricingUnit};
+    use aiplane_core::server::db::usage::{Filter, Period, aggregate, period_bounds};
+    use jiff::Timestamp;
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+            "usage": {"total_tokens": 250_000},
+        })))
+        .mount(&upstream)
+        .await;
+
+    let state = common::state_with_pool(&upstream.uri(), PoolKind::Embedding, "embed-model").await;
+    model_defaults::set_pricing_with_unit(
+        &state.db,
+        "embed-model",
+        Some(4.0),
+        None,
+        PricingUnit::Tokens,
+    )
+    .await
+    .unwrap();
+    let metered = aiplane_core::server::usage::spawn(state.db.clone(), 90);
+    let state = state.with_usage(metered);
+    let db = state.db.clone();
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/embeddings")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "embed-model", "input": "hi"}).to_string(),
+        ))
+        .unwrap();
+    let resp = app.serve(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let _ = common::read_body(resp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    let now = Timestamp::now();
+    let bounds = period_bounds(Period::Today, "UTC", now);
+    let agg = aggregate(&db, bounds, &Filter::default(), 90, now, true)
+        .await
+        .unwrap();
+    assert_eq!(agg.summary.total_tokens, 250_000);
+    assert!(
+        (agg.summary.total_cost - 1.0).abs() < 1e-9,
+        "250k tokens at 4.0 per 1M input tokens, got {}",
+        agg.summary.total_cost
+    );
+}

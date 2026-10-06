@@ -132,6 +132,8 @@ model's input price when it is priced per token. A backend that reports no
 usage (Text Embeddings Inference) or reports something other than tokens
 (Cohere's `meta.billed_units.search_units`) is recorded with no tokens and no
 cost, so its calls do not count against token quotas or spend limits.
+`POST /v1/embeddings` follows the same rule: a bare `total_tokens` counts as
+input tokens.
 
 ## Browser application API
 

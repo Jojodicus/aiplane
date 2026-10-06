@@ -248,9 +248,10 @@ fn response_metrics(kind: UsageKind, bytes: &Bytes) -> (TokenUsage, UnitUsage) {
             .or(units.output);
     }
     let (mut prompt, completion, total) = usage::usage_from_value(&value);
-    // vLLM reports a rerank's tokens only as `total_tokens`; a
-    // reranker generates nothing, so all of them are input and priced so.
-    if kind == UsageKind::Rerank && completion.is_none() {
+    // Some backends report only `total_tokens` (vLLM for a rerank). An
+    // embedding or a rerank generates nothing, so all of them are input and
+    // priced so.
+    if matches!(kind, UsageKind::Embedding | UsageKind::Rerank) && completion.is_none() {
         prompt = prompt.or(total);
     }
     ((prompt, completion, total), units)
@@ -3843,6 +3844,33 @@ mod tests {
 
     fn parse(body: &Bytes) -> serde_json::Value {
         serde_json::from_slice(body).unwrap()
+    }
+
+    fn tokens_of(kind: UsageKind, body: serde_json::Value) -> TokenUsage {
+        response_metrics(kind, &Bytes::from(body.to_string())).0
+    }
+
+    #[test]
+    fn a_bare_total_counts_as_input_for_input_only_kinds() {
+        let bare = json!({"usage": {"total_tokens": 9}});
+        for kind in [UsageKind::Embedding, UsageKind::Rerank] {
+            assert_eq!(tokens_of(kind, bare.clone()), (Some(9), None, Some(9)));
+        }
+    }
+
+    #[test]
+    fn a_bare_total_stays_unsplit_for_a_chat_call() {
+        let bare = json!({"usage": {"total_tokens": 9}});
+        assert_eq!(tokens_of(UsageKind::Chat, bare), (None, None, Some(9)));
+    }
+
+    #[test]
+    fn a_reported_prompt_count_is_kept_as_is() {
+        let full = json!({"usage": {"prompt_tokens": 4, "total_tokens": 9}});
+        assert_eq!(
+            tokens_of(UsageKind::Embedding, full),
+            (Some(4), None, Some(9))
+        );
     }
 
     /// The gateway's own routing hint must not travel further than the gateway.
