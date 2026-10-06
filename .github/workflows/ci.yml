@@ -56,26 +56,11 @@ env:
   # to exist as an image: Kubernetes pulls, it cannot build from a context the
   # way `docker compose` does.
   IMAGE_OCR: ghcr.io/croit/aiplane-ocr-sidecar
-  # DEPRECATED mirrors under the project's former name (croit LLM Gateway).
-  # metadata-action takes a newline-separated list of images and emits the same
-  # tag set for each, so every push writes both names from one build — an
-  # install that still says `ghcr.io/croit/llm-gateway:production` keeps
-  # updating instead of silently freezing on the last pre-rename digest. They
-  # are published for compatibility only; nothing in this repository refers to
-  # them, and they go away in a future intentional breaking release. See
-  # docs/renaming.md.
-  IMAGE_LEGACY: ghcr.io/croit/llm-gateway
-  IMAGE_SANDBOX_LEGACY: ghcr.io/croit/llm-gateway-sandbox
-  IMAGE_RUNNER_LEGACY: ghcr.io/croit/llm-gateway-sandbox-runner
-  IMAGE_OCR_LEGACY: ghcr.io/croit/llm-gateway-ocr-sidecar
   # The Helm chart is published as an OCI artifact into the same registry as
   # the images, so `helm install oci://…/aiplane --version <v>` needs no
-  # checkout of this repository. `CHART_NAME_LEGACY` is the pre-rename chart,
-  # republished from the same source so an existing `helm upgrade` against it
-  # does not 404 (see docs/renaming.md).
+  # checkout of this repository.
   CHART_REPO: oci://ghcr.io/croit/charts
   CHART_NAME: aiplane
-  CHART_NAME_LEGACY: llm-gateway
   # The workspace compiles 2-3x in one job (clippy debug + test debug +
   # release build) and lumis pulls in ~116 tree-sitter grammars, so the
   # default-runner disk fills up. Dropping debuginfo from the dev/test
@@ -111,7 +96,7 @@ jobs:
 
       # install_args limits this to gitleaks; pulling the full toolset (Rust,
       # Node, typst) would cost minutes for a 1.3 s scan.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: gitleaks
 
@@ -163,7 +148,7 @@ jobs:
 
       # Installs the toolchain pinned in mise.toml (Rust + components, Node,
       # typst, cargo-binstall) and caches it across runs.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
       # Belt-and-suspenders: mise.toml requests the rustfmt/clippy components,
       # but on the GitHub runner (which ships its own rustup) that doesn't
       # always take, so `cargo fmt`/`clippy` via the pinned toolchain fail.
@@ -253,7 +238,7 @@ jobs:
       # rather than in the `ci` job, whose shallow checkout cannot derive a
       # version, and not taken from the `extension` job, so a failed store
       # publish on a tag cannot hold back the image.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: node@24
       - name: mise run stage-extension
@@ -264,9 +249,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ${{ env.IMAGE }}
-            ${{ env.IMAGE_LEGACY }}
+          images: ${{ env.IMAGE }}
           # `v<derived version>` on EVERY build is what lets a chart pin one
           # number and find the matching image whether it came from a release
           # tag or from main. `production` is the moving "latest official
@@ -320,8 +303,7 @@ jobs:
       # job's GitHub OIDC token gets a short-lived Sigstore certificate bound to
       # this workflow, cosign signs the pushed DIGEST (never a tag, which can
       # move), and the signature lands in GHCR beside the image plus Rekor's
-      # public log. No key exists to leak. Each image name is signed on its own
-      # because the signature is stored per repository.
+      # public log. No key exists to leak.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         if: github.event_name != 'pull_request'
       - name: Sign the pushed image
@@ -329,10 +311,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -e
-          for repo in "$IMAGE" "$IMAGE_LEGACY"; do
-            cosign sign --yes "$repo@$DIGEST"
-          done
+          cosign sign --yes "$IMAGE@$DIGEST"
 
   # Sandbox companion images. These are large (LibreOffice + Chromium + the
   # data/science stack) and self-contained (no Rust artifact needed for the
@@ -368,9 +347,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ${{ env.IMAGE_SANDBOX }}
-            ${{ env.IMAGE_SANDBOX_LEGACY }}
+          images: ${{ env.IMAGE_SANDBOX }}
           # `v<derived version>` on EVERY build is what lets a chart pin one
           # number and find the matching image whether it came from a release
           # tag or from main. `production` is the moving "latest official
@@ -411,10 +388,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -e
-          for repo in "$IMAGE_SANDBOX" "$IMAGE_SANDBOX_LEGACY"; do
-            cosign sign --yes "$repo@$DIGEST"
-          done
+          cosign sign --yes "$IMAGE_SANDBOX@$DIGEST"
 
   sandbox-runner-image:
     name: sandbox runner image
@@ -444,9 +418,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ${{ env.IMAGE_RUNNER }}
-            ${{ env.IMAGE_RUNNER_LEGACY }}
+          images: ${{ env.IMAGE_RUNNER }}
           # `v<derived version>` on EVERY build is what lets a chart pin one
           # number and find the matching image whether it came from a release
           # tag or from main. `production` is the moving "latest official
@@ -489,10 +461,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -e
-          for repo in "$IMAGE_RUNNER" "$IMAGE_RUNNER_LEGACY"; do
-            cosign sign --yes "$repo@$DIGEST"
-          done
+          cosign sign --yes "$IMAGE_RUNNER@$DIGEST"
 
   # The OCR sidecar. It exists as a Containerfile that `docker compose` builds
   # from a context — which Kubernetes cannot do, it only pulls. So it is built
@@ -515,9 +484,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ${{ env.IMAGE_OCR }}
-            ${{ env.IMAGE_OCR_LEGACY }}
+          images: ${{ env.IMAGE_OCR }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -557,10 +524,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -e
-          for repo in "$IMAGE_OCR" "$IMAGE_OCR_LEGACY"; do
-            cosign sign --yes "$repo@$DIGEST"
-          done
+          cosign sign --yes "$IMAGE_OCR@$DIGEST"
 
   # The Chrome extension. Built on every run so a change that breaks packaging
   # is caught by a pull request, uploaded to the Web Store only on a release
@@ -579,7 +543,7 @@ jobs:
           fetch-depth: 0
 
       # Node alone: packaging is a copy, a JSON edit and a zip.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: node@24
 
@@ -676,7 +640,7 @@ jobs:
       # are pinned here rather than in mise.toml's [tools] so a developer who
       # never touches the chart does not download them on every `mise install`;
       # `mise run helm-lint` pins the same versions.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: helm@3.19.0 kubeconform@0.7.0
 
@@ -734,17 +698,6 @@ jobs:
           mise x helm@3.19.0 -- helm package "deploy/helm/$CHART_NAME" \
             --version "$CHART_VERSION" --app-version "$V" --destination dist
           push_and_sign "$CHART_NAME"
-
-          # The same chart republished under the project's former name, so an
-          # existing `helm upgrade <release> oci://…/charts/llm-gateway` keeps
-          # resolving. Only Chart.yaml's name differs, which is also what keeps
-          # that release's object names (and its PVC) unchanged. Deprecated —
-          # it goes away in a future breaking release. See docs/renaming.md.
-          rm -rf dist/legacy && cp -r "deploy/helm/$CHART_NAME" "dist/legacy"
-          sed -i "s|^name: $CHART_NAME$|name: $CHART_NAME_LEGACY|" dist/legacy/Chart.yaml
-          mise x helm@3.19.0 -- helm package dist/legacy \
-            --version "$CHART_VERSION" --app-version "$V" --destination dist
-          push_and_sign "$CHART_NAME_LEGACY"
           {
             echo "### Helm chart published"
             echo

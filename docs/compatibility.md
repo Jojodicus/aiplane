@@ -13,6 +13,17 @@ The server still accepts selected `GATEWAY_*` environment variables as aliases f
 
 The Helm chart can read an existing session key stored under either `AIPLANE_SESSION_KEY` or `GATEWAY_SESSION_KEY`. It renders the key under both names when managing its Secret. If an externally managed Secret uses the older key name, configure `sessionKey.existingSecretKey` explicitly.
 
+## Published names
+
+Images and the Helm chart are published only under the AIplane names
+(`ghcr.io/croit/aiplane*` and `oci://ghcr.io/croit/charts/aiplane`). The former
+`ghcr.io/croit/llm-gateway*` images and `llm-gateway` chart receive no further
+builds; an installation that still references them stays on its last pulled
+version. Point image references at the matching `aiplane` name. To move a Helm
+release of the `llm-gateway` chart, upgrade it to `oci://ghcr.io/croit/charts/aiplane`
+with `nameOverride: llm-gateway`, which keeps every object name, including the
+PersistentVolumeClaim that holds the database.
+
 ## Stored-data compatibility
 
 The encryption key derivation still tries retired product-name labels when reading stored secrets. New values are written using the current AIplane label. This allows current releases to read databases created by earlier releases without changing the operator's configured key.

@@ -163,8 +163,7 @@ release builds, narrow the identity to `@refs/tags/v.+$`. A verification
 succeeds only when the certificate names that workflow and ref; any other
 signer, or no signature, fails with a non-zero exit code. Artifacts published
 before the pipeline signed them have no signature and fail verification; deploy
-a signed version instead. The deprecated `ghcr.io/croit/llm-gateway*` names are
-signed the same way.
+a signed version instead.
 
 To enforce this in Kubernetes, use an admission policy that checks Sigstore
 signatures (for example the Sigstore policy-controller or Kyverno's
