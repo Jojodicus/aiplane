@@ -135,6 +135,7 @@ with `setup_required` until setup completes, and `200` afterwards. Readiness
 does not prove that every upstream model server is healthy.
 The Helm chart uses `/healthz` for its readiness probe so that the Service
 continues routing requests to the initial setup wizard.
+For Prometheus metrics, see [monitoring](monitoring.md).
 
 ## Build from source
 

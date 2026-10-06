@@ -50,12 +50,13 @@ use std::path::PathBuf;
 
 use crate::server::config::{
     ChatConfig, ComfyuiConfig, CompactionConfig, Config, ContentGuardConfig, ContentGuardMode,
-    ContentGuardPolicy, FeedbackConfig, GatewayConfig, GeoipConfig, LimitsConfig, OcrConfig,
-    PushConfig, RagConfig, S3Config, SandboxConfig, SkillsConfig, TurnsConfig, TypstConfig,
-    UsageConfig,
+    ContentGuardPolicy, FeedbackConfig, GatewayConfig, GeoipConfig, LimitsConfig, MetricsConfig,
+    OcrConfig, PushConfig, RagConfig, S3Config, SandboxConfig, SkillsConfig, TurnsConfig,
+    TypstConfig, UsageConfig,
 };
 use crate::server::crypto::Crypto;
 use crate::server::db::{DbError, Pool, app_settings};
+use crate::server::ip_networks::{IpNetworks, split_entries};
 use crate::server::upstreams::config::PoolKind;
 
 /// Prefix for every row this module owns, so the settings namespace cannot
@@ -82,6 +83,12 @@ pub enum Kind {
     Secret,
     /// A list of strings, stored as a JSON array.
     List,
+    /// A list of IP addresses and CIDR networks: stored and edited like
+    /// [`Kind::List`], but every entry must parse as an
+    /// [`IpNetworks`] entry, or the save is refused. An allowlist with an
+    /// entry the gateway cannot read would guard something other than what
+    /// the operator wrote.
+    NetworkList,
     /// A model id, offered as a dropdown of the models actually configured in
     /// the pool of this kind — plus an "automatic" choice for the empty value,
     /// which every one of these fields already treats as "pick the first
@@ -112,6 +119,7 @@ pub enum Invalid {
     Negative,
     NotNumber,
     NotChoice,
+    NotIpNetwork,
 }
 
 impl Invalid {
@@ -122,6 +130,7 @@ impl Invalid {
             Self::Negative => "settings-invalid-negative",
             Self::NotNumber => "settings-invalid-number",
             Self::NotChoice => "settings-invalid-choice",
+            Self::NotIpNetwork => "settings-invalid-ip-network",
         }
     }
 }
@@ -144,7 +153,12 @@ pub enum Span {
 const fn span_for(kind: Kind) -> Span {
     match kind {
         Kind::Int | Kind::Float | Kind::Bool | Kind::Choice(_) => Span::Half,
-        Kind::Text | Kind::Path | Kind::Secret | Kind::List | Kind::Model(_) => Span::Full,
+        Kind::Text
+        | Kind::Path
+        | Kind::Secret
+        | Kind::List
+        | Kind::NetworkList
+        | Kind::Model(_) => Span::Full,
     }
 }
 
@@ -220,7 +234,8 @@ impl FieldSpec {
     /// the save asks this first: it accepts exactly what those reads use.
     /// Every integer setting is a count, a size or a duration, so a negative
     /// one is refused too. A float is stored with a dot, whichever separator
-    /// the browser's locale submitted.
+    /// the browser's locale submitted. A list arrives comma-separated and is
+    /// stored as a JSON array.
     pub fn check(&self, submitted: &str) -> Result<String, Invalid> {
         match self.kind {
             Kind::Int => match submitted.parse::<i64>() {
@@ -233,6 +248,18 @@ impl FieldSpec {
                 _ => Err(Invalid::NotNumber),
             },
             Kind::Choice(values) if !values.contains(&submitted) => Err(Invalid::NotChoice),
+            Kind::List => Ok(json_list(
+                submitted
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty()),
+            )),
+            Kind::NetworkList => {
+                let entries: Vec<&str> = split_entries(submitted).collect();
+                IpNetworks::from_entries(entries.iter().copied())
+                    .map_err(|_| Invalid::NotIpNetwork)?;
+                Ok(json_list(entries.into_iter()))
+            }
             _ => Ok(submitted.to_owned()),
         }
     }
@@ -244,6 +271,10 @@ impl FieldSpec {
             _ => &[],
         }
     }
+}
+
+fn json_list<'a>(items: impl Iterator<Item = &'a str>) -> String {
+    serde_json::to_string(&items.collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
 }
 
 /// A group of fields, rendered as one card.
@@ -565,6 +596,15 @@ pub static SECTIONS: &[SectionSpec] = &[
             f("gateway.allow_impersonation", Kind::Bool),
         ],
     },
+    SectionSpec {
+        name: "metrics",
+        category: Category::Access,
+        fields: &[
+            f("metrics.enabled", Kind::Bool),
+            f("metrics.token", Kind::Secret),
+            f("metrics.allowed_ips", Kind::NetworkList),
+        ],
+    },
 ];
 
 /// The `[gateway]` keys that deliberately did **not** move into the database,
@@ -674,6 +714,7 @@ pub fn section_is_enabled(config: &Config, section: &SectionSpec) -> Option<bool
         "content_guard" => config.content_guard.enabled,
         "feedback" => config.feedback.is_some(),
         "push" => config.push.enabled,
+        "metrics" => config.metrics.enabled,
         // `[gateway]` is session and token lifetimes — always in force, no
         // master switch to report.
         _ => return None,
@@ -891,6 +932,11 @@ pub fn apply(settings: &Settings, config: &mut Config) {
         .bool("feedback.enabled", false)
         .then(|| feedback(settings));
     config.push = push(settings);
+    config.metrics = MetricsConfig {
+        enabled: settings.bool("metrics.enabled", false),
+        token: settings.text("metrics.token"),
+        allowed_ips: settings.list("metrics.allowed_ips", Vec::new()),
+    };
 
     // Field-by-field, not `config.gateway = …` like the blocks above. Two keys
     // in this block are owned by the config file on purpose — the wizard's
@@ -1368,6 +1414,13 @@ pub fn snapshot(c: &Config) -> Vec<(String, String)> {
     put("push.enabled", c.push.enabled.to_string());
     put("push.contact", c.push.contact.clone());
 
+    put("metrics.enabled", c.metrics.enabled.to_string());
+    put("metrics.token", opt(c.metrics.token.clone()));
+    put(
+        "metrics.allowed_ips",
+        serde_json::to_string(&c.metrics.allowed_ips).unwrap_or_else(|_| "[]".into()),
+    );
+
     put(
         "gateway.token_ttl_days",
         c.gateway.token_ttl_days.to_string(),
@@ -1763,6 +1816,56 @@ mod tests {
         for bad in ["", "GitHub", "bitbucket"] {
             assert_eq!(choice.check(bad), Err(Invalid::NotChoice), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_list_is_stored_as_a_json_array_of_its_trimmed_entries() {
+        let list = field("feedback.labels").unwrap();
+        assert_eq!(list.check("bug, ui,,"), Ok(r#"["bug","ui"]"#.to_owned()));
+        assert_eq!(list.check(""), Ok("[]".to_owned()));
+    }
+
+    #[test]
+    fn a_network_list_accepts_addresses_and_cidr_networks() {
+        let ips = field("metrics.allowed_ips").unwrap();
+        assert_eq!(
+            ips.check("10.0.0.0/8, 192.0.2.7 2001:db8::/32,"),
+            Ok(r#"["10.0.0.0/8","192.0.2.7","2001:db8::/32"]"#.to_owned())
+        );
+        assert_eq!(ips.check(""), Ok("[]".to_owned()));
+    }
+
+    #[test]
+    fn a_network_list_refuses_an_entry_it_could_not_match_against() {
+        let ips = field("metrics.allowed_ips").unwrap();
+        for bad in ["10.0.0.0/33", "10.0.0.1, prometheus.internal", "fd00::/129"] {
+            assert_eq!(ips.check(bad), Err(Invalid::NotIpNetwork), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_metrics_settings_reach_the_config() {
+        let mut config = Config::default();
+        apply(
+            &settings_of(&[
+                ("metrics.enabled", "true"),
+                ("metrics.token", "scrape-me"),
+                ("metrics.allowed_ips", r#"["10.0.0.0/8"]"#),
+            ]),
+            &mut config,
+        );
+        assert!(config.metrics.enabled);
+        assert_eq!(config.metrics.token.as_deref(), Some("scrape-me"));
+        assert_eq!(config.metrics.allowed_ips, vec!["10.0.0.0/8".to_string()]);
+
+        let mut off = Config::default();
+        apply(&Settings::default(), &mut off);
+        assert!(
+            !off.metrics.enabled,
+            "the endpoint is off until switched on"
+        );
+        assert_eq!(off.metrics.token, None);
+        assert!(off.metrics.allowed_ips.is_empty());
     }
 
     // Every `Kind::Choice` option needs a label key, and the key is derived

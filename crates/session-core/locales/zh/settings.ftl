@@ -77,6 +77,8 @@ settings-s-push = Web Push
 settings-s-push-blurb = 回答完成时的通知。密钥对会自动生成并保存。
 settings-s-gateway = 会话与令牌
 settings-s-gateway-blurb = 浏览器登录与 API 令牌的有效期，以及管理员是否可以模拟其他用户。
+settings-s-metrics = Prometheus 指标
+settings-s-metrics-blurb = GET /metrics 抓取端点。仅在设置了令牌或允许的 IP 列表时才响应；两者都设置时，抓取必须同时满足两者。
 
 # ─── 字段 ─────────────────────────────────────────────────────────────────────
 
@@ -233,6 +235,13 @@ settings-f-gateway-session_absolute_max_days-help = 自登录起的硬性上限�
 settings-f-gateway-allow_impersonation = 允许模拟用户
 settings-f-gateway-allow_impersonation-help = 允许管理员以其他用户身份进行调试。每次模拟都会被审计并显示常驻横幅；关闭时按钮隐藏，端点也会拒绝。
 
+settings-f-metrics-enabled = 提供 /metrics
+settings-f-metrics-enabled-help = 关闭时返回 404。开启但既无令牌也无允许的 IP 时同样返回 404——端点绝不会在无保护的情况下开放。
+settings-f-metrics-token = 抓取令牌
+settings-f-metrics-token-help = Prometheus 以 Authorization: Bearer <token> 发送。加密存储。
+settings-f-metrics-allowed_ips = 允许的 IP
+settings-f-metrics-allowed_ips-help = 地址或 CIDR 网段，例如 10.0.0.0/8、2001:db8::/32。位于反向代理之后时，只有在 AIPLANE_TRUSTED_PROXIES 包含该代理时才有效；否则每次抓取都来自代理地址。
+
 # 清除某项已保存设置前的确认（SPA 设置编辑器）。
 settings-clear-confirm = 要将 { $key } 重置为内置默认值吗？
 settings-heading = 设置
@@ -254,3 +263,4 @@ settings-invalid-whole-number = 请输入整数。
 settings-invalid-negative = 请输入不小于 0 的数字。
 settings-invalid-number = 请输入数字，例如 0.7。
 settings-invalid-choice = 请从提供的选项中选择。
+settings-invalid-ip-network = 请输入 IP 地址或 CIDR 网段，例如 10.0.0.0/8 或 2001:db8::/32。

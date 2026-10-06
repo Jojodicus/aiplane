@@ -41,7 +41,8 @@ use crate::rama_server::embed_cors::EmbedCorsLayer;
 use crate::rama_server::first_run::FirstRunLayer;
 use crate::rama_server::setup_api;
 use crate::rama_server::{
-    api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, sandbox_api, spa,
+    api, comfyui_api, messages, metrics, oidc_handlers, openapi, pages, proxy, rag_api,
+    sandbox_api, spa,
 };
 use aiplane_core::rama_server::cors::V1CorsLayer;
 
@@ -68,6 +69,9 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
                 )
             }
         })
+        // Prometheus scrape endpoint; guarded by its own token and IP list
+        // from `/admin/settings`, not by a session. See `metrics`.
+        .with_get("/metrics", metrics::scrape)
         .with_endpoint_layer(endpoint(BodyLimitLayer::HANDLER_CAPPED))
         // --- Non-UI routes that outlived the server-rendered pages --------
         //

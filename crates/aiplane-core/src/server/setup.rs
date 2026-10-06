@@ -179,7 +179,7 @@ pub async fn recovery_token_matches(
     let Some(expected) = app_settings::get(pool, RECOVERY_TOKEN_KEY).await? else {
         return Ok(false);
     };
-    Ok(constant_time_eq(
+    Ok(crypto::constant_time_eq(
         expected.as_bytes(),
         crypto::sha256_hex(presented.as_bytes()).as_bytes(),
     ))
@@ -288,15 +288,6 @@ async fn load_sealed_json<T: serde::de::DeserializeOwned>(
     Ok(crypto
         .open_from_string(&stored)
         .and_then(|json| serde_json::from_str(&json).ok()))
-}
-
-/// Compares without an early return on the first differing byte, so the
-/// comparison time does not leak how much of a guessed token was right.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]
@@ -449,12 +440,5 @@ mod tests {
             load_draft(&pool, &c).await.unwrap().is_none(),
             "the draft holds a client secret; it must not outlive the run"
         );
-    }
-
-    #[test]
-    fn constant_time_eq_still_compares_correctly() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
     }
 }

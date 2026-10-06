@@ -54,6 +54,8 @@ settings-s-push = Web Push
 settings-s-push-blurb = Benachrichtigung, sobald eine Antwort fertig ist. Das Schlüsselpaar wird automatisch erzeugt und gespeichert.
 settings-s-gateway = Sitzungen & Tokens
 settings-s-gateway-blurb = Wie lange ein Browser-Login und ein API-Token gültig bleiben, und ob Admins sich als andere Nutzer ausgeben dürfen.
+settings-s-metrics = Prometheus-Metriken
+settings-s-metrics-blurb = Der Scrape-Endpunkt GET /metrics. Er antwortet nur, wenn ein Token oder eine IP-Liste gesetzt ist; sind beide gesetzt, muss ein Abruf beide erfüllen.
 
 # ─── Felder ──────────────────────────────────────────────────────────────────
 
@@ -234,6 +236,13 @@ settings-f-gateway-session_absolute_max_days-help = Harte Obergrenze in Tagen ab
 settings-f-gateway-allow_impersonation = Identitätsübernahme erlauben
 settings-f-gateway-allow_impersonation-help = Erlaubt Admins, zur Fehlersuche als anderer Nutzer zu handeln. Jede Übernahme wird protokolliert und zeigt ein dauerhaftes Banner; ausgeschaltet sind die Schaltflächen verborgen und der Endpunkt lehnt ab.
 
+settings-f-metrics-enabled = /metrics bereitstellen
+settings-f-metrics-enabled-help = Aus antwortet mit 404. An ohne Token und ohne erlaubte IPs antwortet ebenfalls mit 404 — der Endpunkt ist nie ungeschützt offen.
+settings-f-metrics-token = Scrape-Token
+settings-f-metrics-token-help = Prometheus sendet es als Authorization: Bearer <token>. Wird verschlüsselt gespeichert.
+settings-f-metrics-allowed_ips = Erlaubte IPs
+settings-f-metrics-allowed_ips-help = Adressen oder CIDR-Netze, z. B. 10.0.0.0/8, 2001:db8::/32. Hinter einem Reverse Proxy funktioniert das nur, wenn AIPLANE_TRUSTED_PROXIES den Proxy nennt; sonst kommt jeder Abruf von der Adresse des Proxys.
+
 # Bestätigung vor dem Zurücksetzen einer gespeicherten Einstellung (SPA-Editor).
 settings-clear-confirm = { $key } auf den eingebauten Standardwert zurücksetzen?
 settings-heading = Einstellungen
@@ -255,3 +264,4 @@ settings-invalid-whole-number = Gib eine ganze Zahl ein.
 settings-invalid-negative = Gib eine Zahl ab 0 ein.
 settings-invalid-number = Gib eine Zahl ein, etwa 0,7.
 settings-invalid-choice = Wähle eine der angebotenen Optionen.
+settings-invalid-ip-network = Gib IP-Adressen oder CIDR-Netze ein, etwa 10.0.0.0/8 oder 2001:db8::/32.

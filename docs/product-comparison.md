@@ -265,7 +265,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Browser-control action audit trail | ✅ | ⚪ | ⚪ | A17 |
 | External logging callbacks | ⚪ | ✅ | 🟡 | L21 O17 |
 | OpenTelemetry traces, metrics, and logs | ⚪ | ✅ | ✅ | L22 O18 |
-| Prometheus metrics endpoint | ⚪ | ✅ | 🟡 | L22 O18 |
+| Prometheus metrics endpoint | ✅ | ✅ | 🟡 | A34 L22 O18 |
 | Built-in usage dashboard | ✅ | ✅ | ✅ | A8 L10 O6 |
 | Blind model evaluation / arena | ⚪ | 🟡 | ✅ | L23 O6 |
 | Model-quality evaluation workflow | 🟡 | ✅ | ✅ | A25 L23 O6 |
@@ -350,6 +350,7 @@ AIplane sources link to this repository's user and operator documentation. LiteL
 | A31 | [Deployment options](operations/deployment.md) |
 | A32 | [Backup and recovery](operations/backup-recovery.md) |
 | A33 | [Versioned installed documentation](documentation-system.md) |
+| A34 | [Monitoring](operations/monitoring.md), [Prometheus metrics settings](admin/settings.md#prometheus-metrics) |
 
 ### LiteLLM
 

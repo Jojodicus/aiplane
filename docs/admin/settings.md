@@ -14,7 +14,7 @@ Most fields reload without restart. The declared restart fields are `comfyui.bas
 
 Settings are stored in the database. Secrets are write-only: the UI shows whether one is set, not its plaintext. Leaving a secret input blank during Save preserves the stored value. Use its explicit Clear action, with confirmation, to remove it. Clearing a stored setting uses its built-in fallback; it does not re-import an arbitrary value from a configuration file.
 
-Save validates typed settings before storing them. Invalid whole numbers, negative integer values, non-numeric or non-finite values, and unlisted choice values show an inline error and leave the stored setting unchanged. Decimal settings accept either a period or a comma as the decimal separator.
+Save validates typed settings before storing them. Invalid whole numbers, negative integer values, non-numeric or non-finite values, unlisted choice values, and IP-list entries that are not an address or a CIDR network show an inline error and leave the stored setting unchanged. Decimal settings accept either a period or a comma as the decimal separator.
 
 The [field reference](settings-reference.md) lists every declared field and its meaning. The operating system's persistent paths and externally reachable services remain deployment responsibilities.
 
@@ -53,6 +53,16 @@ Moving the RAG data directory does not move existing indexes. Review persistent 
 ![Content guard settings choose a decision model, monitor or enforce mode, and actions for sensitive content.](../img/guide/content-guard.png)
 
 The Usage card enables per-request accounting, retention and display currency. The Limits card enables enforcement of rules from `/admin/limits`. Gateway settings control token/session lifetimes and impersonation. See [access management](access.md).
+
+### Prometheus metrics
+
+The **Prometheus metrics** card controls the `GET /metrics` scrape endpoint. It has three fields:
+
+- **Serve /metrics** switches the endpoint on.
+- **Scrape token** is the secret a scraper sends as `Authorization: Bearer <token>`. It is write-only like every secret.
+- **Allowed IPs** lists the addresses and CIDR networks, such as `10.0.0.0/8, 2001:db8::/32`, that a scrape must come from.
+
+The endpoint answers only when it is switched on and at least one of the token and the IP list is set; otherwise it answers `404`. With both set, a scrape must pass both. A client address outside the list gets `403`; a missing or wrong token gets `401`. Saved changes apply to the next scrape without a restart. Behind a reverse proxy, the IP list works only when `AIPLANE_TRUSTED_PROXIES` names the proxy; otherwise every scrape arrives from the proxy's address. The IP list guards only `/metrics`, not other gateway access. See [monitoring](../operations/monitoring.md) for the scrape configuration and the metrics.
 
 The **content guard** checks request messages for the compliance areas that the destination chat pool does not declare as covered. GDPR and NDA are independent checks. AIplane sends the request messages to the configured **System One** guard model, asking only about the uncovered area or areas:
 

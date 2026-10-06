@@ -19,95 +19,26 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use rama::http::HeaderMap;
 use thiserror::Error;
 
+use crate::server::ip_networks::{InvalidNetwork, IpNetworks};
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TrustedProxyError {
     #[error(
-        "`{entry}` in the trusted-proxy list is not an IP address or CIDR network \
-         (e.g. `10.0.0.0/8`, `192.0.2.7`, `fd00::/8`): {reason}. Fix `$AIPLANE_TRUSTED_PROXIES` — \
-         refusing to start rather than guess which proxies to believe"
+        "in the trusted-proxy list, {0}. Fix `$AIPLANE_TRUSTED_PROXIES` — refusing to start \
+         rather than guess which proxies to believe"
     )]
-    Invalid { entry: String, reason: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Network {
-    addr: IpAddr,
-    prefix: u8,
-}
-
-impl Network {
-    fn parse(entry: &str) -> Result<Self, TrustedProxyError> {
-        let invalid = |reason: &str| TrustedProxyError::Invalid {
-            entry: entry.to_string(),
-            reason: reason.to_string(),
-        };
-        let (host, prefix) = match entry.split_once('/') {
-            Some((host, prefix)) => (
-                host,
-                Some(
-                    prefix
-                        .parse::<u8>()
-                        .map_err(|_| invalid("the prefix length is not a number"))?,
-                ),
-            ),
-            None => (entry, None),
-        };
-        let written: IpAddr = host
-            .parse()
-            .map_err(|_| invalid("the address does not parse"))?;
-        let addr = written.to_canonical();
-        let max = if addr.is_ipv4() { 32 } else { 128 };
-        let prefix = match prefix {
-            None => max,
-            // `::ffff:10.0.0.0/104` names an IPv4 network; peers are matched
-            // in their IPv4 form, so the network must be too.
-            Some(p) if addr.is_ipv4() && written.is_ipv6() => p
-                .checked_sub(96)
-                .ok_or_else(|| invalid("an IPv4-mapped network needs a prefix of 96 or more"))?,
-            Some(p) => p,
-        };
-        if prefix > max {
-            return Err(invalid(&format!("the prefix length exceeds {max}")));
-        }
-        Ok(Self { addr, prefix })
-    }
-
-    fn contains(&self, ip: IpAddr) -> bool {
-        match (self.addr, ip.to_canonical()) {
-            (IpAddr::V4(net), IpAddr::V4(ip)) => {
-                network_bits(u32::from(net).into(), 32, self.prefix)
-                    == network_bits(u32::from(ip).into(), 32, self.prefix)
-            }
-            (IpAddr::V6(net), IpAddr::V6(ip)) => {
-                network_bits(net.into(), 128, self.prefix)
-                    == network_bits(ip.into(), 128, self.prefix)
-            }
-            _ => false,
-        }
-    }
-}
-
-fn network_bits(bits: u128, width: u32, prefix: u8) -> u128 {
-    if prefix == 0 {
-        0
-    } else {
-        bits >> (width - u32::from(prefix))
-    }
+    Invalid(#[from] InvalidNetwork),
 }
 
 /// The set of networks whose forwarded headers are believed. Empty by default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrustedProxies(Vec<Network>);
+pub struct TrustedProxies(IpNetworks);
 
 impl TrustedProxies {
     /// Parse a comma- or whitespace-separated list of addresses and CIDR
     /// networks. Empty entries are skipped so a trailing comma is harmless.
     pub fn parse(list: &str) -> Result<Self, TrustedProxyError> {
-        list.split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|e| !e.is_empty())
-            .map(Network::parse)
-            .collect::<Result<Vec<_>, _>>()
-            .map(Self)
+        Ok(Self(IpNetworks::parse(list)?))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -115,7 +46,7 @@ impl TrustedProxies {
     }
 
     pub fn trusts(&self, ip: IpAddr) -> bool {
-        self.0.iter().any(|n| n.contains(ip))
+        self.0.contains(ip)
     }
 
     /// The client behind a request that arrived from `peer` with `headers`.
@@ -327,13 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn an_ipv4_mapped_network_is_read_as_ipv4() {
-        let p = proxies("::ffff:10.0.0.0/104");
-        assert!(p.trusts(ip("10.200.0.1")));
-        assert!(!p.trusts(ip("11.0.0.1")));
-    }
-
-    #[test]
     fn hops_may_carry_ports_and_brackets() {
         let p = proxies("10.0.0.0/8");
         for (hop, want) in [
@@ -347,36 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn cidr_boundaries_are_exact() {
-        let p = proxies("192.0.2.0/25");
-        assert!(p.trusts(ip("192.0.2.127")));
-        assert!(!p.trusts(ip("192.0.2.128")));
-        assert!(proxies("0.0.0.0/0").trusts(ip("8.8.8.8")));
-        assert!(!proxies("0.0.0.0/0").trusts(ip("::1")));
-        assert!(proxies("192.0.2.7").trusts(ip("192.0.2.7")));
-        assert!(!proxies("192.0.2.7").trusts(ip("192.0.2.8")));
-    }
-
-    #[test]
-    fn list_parsing_tolerates_separators_and_empties() {
-        assert!(proxies("").is_empty());
-        assert!(proxies(" , ").is_empty());
-        let p = proxies("10.0.0.0/8,\n172.16.0.0/12 192.0.2.1,");
-        assert!(p.trusts(ip("172.31.0.1")) && p.trusts(ip("192.0.2.1")));
-    }
-
-    #[test]
-    fn a_bad_entry_is_refused_with_the_entry_named() {
-        for bad in [
-            "10.0.0.0/33",
-            "fd00::/129",
-            "nope",
-            "10.0.0.0/x",
-            "10.0.0.0/",
-            "::ffff:10.0.0.0/64",
-        ] {
-            let err = TrustedProxies::parse(&format!("10.0.0.1, {bad}")).unwrap_err();
-            assert!(err.to_string().contains(bad), "{bad}: {err}");
-        }
+    fn a_bad_entry_names_itself_and_the_variable_to_fix() {
+        let err = TrustedProxies::parse("10.0.0.1, 10.0.0.0/33").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("10.0.0.0/33"), "{message}");
+        assert!(message.contains("AIPLANE_TRUSTED_PROXIES"), "{message}");
     }
 }

@@ -193,6 +193,16 @@ Category: **Access**.
 | `gateway.session_absolute_max_days` | Integer | Hard cap in days on a browser login since sign-in, which no amount of activity extends. It also forces a periodic trip through the identity provider, the only point at which group claims are re-read. | No |
 | `gateway.allow_impersonation` | Boolean | Let admins act as another user for debugging. Every impersonation is audited and shows a persistent banner; off hides the buttons and the endpoint refuses. | No |
 
+### metrics
+
+Category: **Access**. The endpoint answers only when `metrics.enabled` is on and `metrics.token`, `metrics.allowed_ips` or both are set; with both set, a scrape must pass both. See [monitoring](../operations/monitoring.md).
+
+| Key | Input / choices | Meaning | Restart |
+|---|---|---|---|
+| `metrics.enabled` | Boolean | Serve `GET /metrics`. Off answers `404`; on without a token and without allowed IPs also answers `404`. | No |
+| `metrics.token` | Write-only secret | Bearer token a scraper sends as `Authorization: Bearer <token>`; a missing or wrong token answers `401`. Stored encrypted. | No |
+| `metrics.allowed_ips` | List of IP addresses and CIDR networks | Client addresses allowed to scrape; any other answers `403`. Each entry must be an address or a CIDR network, or Save is refused. Behind a reverse proxy this works only when `AIPLANE_TRUSTED_PROXIES` names the proxy. | No |
+
 ## Web search provider fields
 
 Web search uses a separate settings card and API. It is not a section of the registry above.

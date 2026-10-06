@@ -36,6 +36,7 @@ mod docs_current;
 mod embed;
 mod feedback_extract;
 mod healthz;
+mod metrics;
 mod oidc_integration;
 mod openapi_drift;
 mod proxy;

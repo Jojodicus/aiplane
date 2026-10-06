@@ -27,7 +27,8 @@ integrations and features vary with each installation's configuration.*
   prerequisites through setup to your first chat and API request.
 - **Joining an existing installation:** [Start using AIplane](guide/getting-started.md).
 - **Operating a deployment:** [Deployment](operations/deployment.md),
-  [backups and recovery](operations/backup-recovery.md), and
+  [backups and recovery](operations/backup-recovery.md),
+  [monitoring](operations/monitoring.md), and
   [troubleshooting](operations/troubleshooting.md).
 
 ## Use AIplane

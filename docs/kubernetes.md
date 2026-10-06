@@ -153,6 +153,9 @@ its network is listed too. Keep the list to proxies you run: trusting a network
 that clients can reach directly lets them forge their address again. A bad entry
 stops the pod at boot with the entry named.
 
+The allowed IP list of the Prometheus `/metrics` endpoint is matched against the
+same client address; see [monitoring](operations/monitoring.md).
+
 ## Step 4 — Run the setup wizard
 
 Open AIplane. A fresh install lands on **`/setup`**.

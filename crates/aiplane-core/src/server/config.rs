@@ -144,6 +144,10 @@ pub struct Config {
     /// `[push] enabled = false` to turn the feature (and its endpoints) off.
     #[serde(default)]
     pub push: PushConfig,
+    /// The Prometheus scrape endpoint, `GET /metrics`. Set only at
+    /// `/admin/settings` — it never had a config-file block to import.
+    #[serde(skip)]
+    pub metrics: MetricsConfig,
     /// Where the gateway may connect on behalf of a user, a model or an
     /// agent's owner, set from the environment by [`Config::load`]; the
     /// default is the safe one. See `outbound_guard`.
@@ -558,6 +562,19 @@ impl Default for UsageConfig {
             currency: "USD".to_string(),
         }
     }
+}
+
+/// Who may scrape `GET /metrics`. The endpoint answers only when it is
+/// enabled *and* at least one guard is set; with both set, a scrape must pass
+/// both.
+#[derive(Debug, Clone, Default)]
+pub struct MetricsConfig {
+    pub enabled: bool,
+    /// The bearer token a scraper presents. Sealed at rest.
+    pub token: Option<String>,
+    /// Addresses and CIDR networks the client IP must fall in, as entered;
+    /// each was validated on save.
+    pub allowed_ips: Vec<String>,
 }
 
 /// Rate-limit / quota enforcement. Limits themselves live in the DB (set via

@@ -2355,6 +2355,84 @@ async fn settings_save_refuses_values_the_typed_reads_would_replace() {
     assert_eq!(shown(&saved, "chat.compaction.trigger_ratio"), "0.6");
 }
 
+/// The metrics card: an allowed-IP entry that is not an address or a network
+/// is refused inline and nothing is stored; a valid save switches `/metrics`
+/// on for the next scrape, with the token write-only.
+#[tokio::test]
+async fn metrics_settings_validate_their_ip_list_and_apply_on_save() {
+    let (state, cookie) = setup().await;
+    let app = router(state);
+    let save = |values: &str| {
+        req(
+            Method::POST,
+            "/api/v0/admin/settings",
+            &cookie,
+            Some(format!(r#"{{"section":"metrics","values":{values}}}"#)),
+        )
+    };
+    let scrape = || {
+        Request::builder()
+            .uri("/metrics")
+            .header(header::AUTHORIZATION, "Bearer scrape-token-1")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let resp = app
+        .serve(save(
+            r#"{"metrics.enabled":"true","metrics.token":"scrape-token-1","metrics.allowed_ips":"10.0.0.0/8, 10.0.0.0/33"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let refused: serde_json::Value = serde_json::from_str(&body(resp).await).unwrap();
+    assert_eq!(refused["error"]["issues"][0]["path"], "metrics.allowed_ips");
+    assert!(
+        refused["error"]["issues"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CIDR"),
+        "{refused}"
+    );
+    assert_eq!(
+        app.serve(scrape()).await.unwrap().status(),
+        StatusCode::NOT_FOUND,
+        "a refused save switches nothing on"
+    );
+
+    let resp = app
+        .serve(save(
+            r#"{"metrics.enabled":"true","metrics.token":"scrape-token-1","metrics.allowed_ips":""}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{}", body(resp).await);
+    assert_eq!(app.serve(scrape()).await.unwrap().status(), StatusCode::OK);
+
+    let listed: serde_json::Value = serde_json::from_str(
+        &body(
+            app.serve(req(Method::GET, "/api/v0/admin/settings", &cookie, None))
+                .await
+                .unwrap(),
+        )
+        .await,
+    )
+    .unwrap();
+    let section = listed["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "metrics")
+        .unwrap();
+    assert_eq!(section["category"], "access");
+    assert_eq!(section["enabled"], true);
+    let token = &section["fields"][1];
+    assert_eq!(token["key"], "metrics.token");
+    assert_eq!(token["value"], serde_json::Value::Null, "write-only");
+    assert_eq!(token["secret_set"], true);
+    assert_eq!(section["fields"][2]["kind"], "list");
+}
+
 /// A connection test that fails says so in its status, with the shared
 /// envelope carrying the same `code` and details the success body would.
 #[tokio::test]
