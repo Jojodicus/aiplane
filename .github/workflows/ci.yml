@@ -8,7 +8,8 @@
 #                  artifacts; the CSS + datastar.js are baked into the binary via
 #                  include_bytes!). On pull requests it builds with --no-push to
 #                  validate the Dockerfile; on the default branch and tags it
-#                  pushes to GHCR.
+#                  pushes to GHCR and signs the pushed digest keyless with
+#                  cosign (as do the other image jobs and the chart job).
 #
 # Toolchain + tasks come from mise.toml (jdx/mise-action installs Rust, Node,
 # typst, etc. and caches them). The old GitLab pipeline wrapped rustc in an
@@ -218,6 +219,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -296,6 +298,7 @@ jobs:
 
       # PR: build only (validate the Dockerfile). Branch/tag: build + push.
       - name: Build and push
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -308,6 +311,24 @@ jobs:
           # /api/v0/build, which is what the UI's version line shows.
           build-args: |
             AIPLANE_VERSION=${{ needs.version.outputs.version }}
+
+      # Keyless signing (docs/operations/deployment.md#verify-images): the
+      # job's GitHub OIDC token gets a short-lived Sigstore certificate bound to
+      # this workflow, cosign signs the pushed DIGEST (never a tag, which can
+      # move), and the signature lands in GHCR beside the image plus Rekor's
+      # public log. No key exists to leak. Each image name is signed on its own
+      # because the signature is stored per repository.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name != 'pull_request'
+      - name: Sign the pushed image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -e
+          for repo in "$IMAGE" "$IMAGE_LEGACY"; do
+            cosign sign --yes "$repo@$DIGEST"
+          done
 
   # Sandbox companion images. These are large (LibreOffice + Chromium + the
   # data/science stack) and self-contained (no Rust artifact needed for the
@@ -326,6 +347,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The gold image is multi-GB (LibreOffice, Chromium, scipy/sklearn/…);
@@ -371,6 +393,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: sandbox-image
@@ -378,6 +401,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the pushed image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -e
+          for repo in "$IMAGE_SANDBOX" "$IMAGE_SANDBOX_LEGACY"; do
+            cosign sign --yes "$repo@$DIGEST"
+          done
 
   sandbox-runner-image:
     name: sandbox runner image
@@ -390,6 +423,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # COPY-prebuilt, like the gateway image: pull the binary the `ci` job
@@ -437,6 +471,7 @@ jobs:
       # Multi-stage Containerfile compiles the runner from the workspace, so the
       # context is the repo root (target/ is excluded via .dockerignore).
       - name: Build and push
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -445,11 +480,22 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the pushed image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -e
+          for repo in "$IMAGE_RUNNER" "$IMAGE_RUNNER_LEGACY"; do
+            cosign sign --yes "$repo@$DIGEST"
+          done
+
   # The OCR sidecar. It exists as a Containerfile that `docker compose` builds
   # from a context — which Kubernetes cannot do, it only pulls. So it is built
   # and published here like any other component. amd64 only, matching the other
   # images; the Containerfile is arch-neutral (python:slim + PyMuPDF) if
   # multi-arch is ever wanted.
+
   ocr-sidecar-image:
     name: ocr sidecar image
     needs: [secrets, ci, version]
@@ -457,6 +503,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -490,6 +537,7 @@ jobs:
 
       # PR: build only (validate the Containerfile). Branch/tag: build + push.
       - name: Build and push
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: deploy/ocr-sidecar
@@ -497,6 +545,18 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name != 'pull_request'
+      - name: Sign the pushed image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -e
+          for repo in "$IMAGE_OCR" "$IMAGE_OCR_LEGACY"; do
+            cosign sign --yes "$repo@$DIGEST"
+          done
 
   # The Chrome extension. Built on every run so a change that breaks packaging
   # is caught by a pull request, uploaded to the Web Store only on a release
@@ -603,6 +663,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -635,6 +696,8 @@ jobs:
       # `--app-version` stays the plain number in both cases: it is what the
       # chart derives its image tags from, and the images are tagged
       # `v<plain version>`.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name != 'pull_request'
       - name: Package + push chart
         if: github.event_name != 'pull_request'
         env:
@@ -651,9 +714,18 @@ jobs:
           # so docker/login-action would not help it.
           echo "$GITHUB_TOKEN" | mise x helm@3.19.0 -- helm registry login ghcr.io \
             --username "${{ github.actor }}" --password-stdin
+          # helm push prints the pushed manifest's digest; the chart is signed
+          # by that digest like the images, keyless (see the container job).
+          push_and_sign() {
+            set -o pipefail
+            mise x helm@3.19.0 -- helm push "dist/$1-$CHART_VERSION.tgz" "$CHART_REPO" 2>&1 | tee push.log
+            digest=$(sed -n 's/^Digest: //p' push.log)
+            test -n "$digest"
+            cosign sign --yes "${CHART_REPO#oci://}/$1@$digest"
+          }
           mise x helm@3.19.0 -- helm package "deploy/helm/$CHART_NAME" \
             --version "$CHART_VERSION" --app-version "$V" --destination dist
-          mise x helm@3.19.0 -- helm push "dist/$CHART_NAME-$CHART_VERSION.tgz" "$CHART_REPO"
+          push_and_sign "$CHART_NAME"
 
           # The same chart republished under the project's former name, so an
           # existing `helm upgrade <release> oci://…/charts/llm-gateway` keeps
@@ -664,7 +736,7 @@ jobs:
           sed -i "s|^name: $CHART_NAME$|name: $CHART_NAME_LEGACY|" dist/legacy/Chart.yaml
           mise x helm@3.19.0 -- helm package dist/legacy \
             --version "$CHART_VERSION" --app-version "$V" --destination dist
-          mise x helm@3.19.0 -- helm push "dist/$CHART_NAME_LEGACY-$CHART_VERSION.tgz" "$CHART_REPO"
+          push_and_sign "$CHART_NAME_LEGACY"
           {
             echo "### Helm chart published"
             echo

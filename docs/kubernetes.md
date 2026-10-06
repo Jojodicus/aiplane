@@ -97,6 +97,10 @@ helm show chart oci://ghcr.io/croit/charts/aiplane            # newest release
 helm install … oci://ghcr.io/croit/charts/aiplane --version 2609.1.0
 ```
 
+The chart and every image it deploys are signed by CI; see
+[Verify images](operations/deployment.md#verify-images) for the `cosign verify`
+command and how to enforce it with an admission policy.
+
 To try an unreleased state, install from a git checkout instead — that chart
 has `appVersion: latest` and therefore follows the `:latest` images:
 

@@ -137,6 +137,39 @@ The Helm chart uses `/healthz` for its readiness probe so that the Service
 continues routing requests to the initial setup wizard.
 For Prometheus metrics, see [monitoring](monitoring.md).
 
+## Verify images
+
+CI signs every image and Helm chart it publishes with
+[Sigstore cosign](https://docs.sigstore.dev/cosign/verifying/verify/), keyless.
+There is no public key to distribute: the signature is bound to the GitHub
+workflow that built the artifact, recorded in Sigstore's public transparency
+log, and stored in GHCR next to the image. Verifying proves that an image was
+built by `croit/aiplane`'s CI from `main` or a release tag and has not been
+changed since.
+
+Install [cosign](https://docs.sigstore.dev/cosign/system_config/installation/),
+then verify the reference you deploy:
+
+```bash
+cosign verify ghcr.io/croit/aiplane:production \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/croit/aiplane/\.github/workflows/ci\.yml@refs/(heads/main|tags/v.+)$'
+```
+
+The same two flags verify `ghcr.io/croit/aiplane-sandbox`,
+`ghcr.io/croit/aiplane-sandbox-runner`, `ghcr.io/croit/aiplane-ocr-sidecar` and
+the chart (`ghcr.io/croit/charts/aiplane:<chart version>`). To accept only
+release builds, narrow the identity to `@refs/tags/v.+$`. A verification
+succeeds only when the certificate names that workflow and ref; any other
+signer, or no signature, fails with a non-zero exit code. Artifacts published
+before the pipeline signed them have no signature and fail verification; deploy
+a signed version instead. The deprecated `ghcr.io/croit/llm-gateway*` names are
+signed the same way.
+
+To enforce this in Kubernetes, use an admission policy that checks Sigstore
+signatures (for example the Sigstore policy-controller or Kyverno's
+`verifyImages`) with the issuer and identity above.
+
 ## Build from source
 
 Install the toolchain with `mise install`. `mise run build` builds the release
