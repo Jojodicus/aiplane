@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { LOCALES, LOCALE_NAMES, locale, setLocale, t } from '$lib/i18n.svelte';
+	import { LOCALES, LOCALE_NAMES, locale, setLocale, t } from '#lib/i18n.svelte.js';
 
 	let { placement = 'up' }: { placement?: 'up' | 'down' } = $props();
 	let open = $state(false);

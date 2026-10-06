@@ -1,10 +1,10 @@
 <script lang="ts" generics="T extends CapabilityItem">
 	import type { Snippet } from 'svelte';
-	import type { CapabilityItem } from '$lib/api';
-	import { capabilityGroups, capabilityId, descriptionOf, editLink, searchCapabilities } from '$lib/capability-picker';
-	import { t } from '$lib/i18n.svelte';
-	import { toolCategoryLabel } from '$lib/tools';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import type { CapabilityItem } from '#lib/api.js';
+	import { capabilityGroups, capabilityId, descriptionOf, editLink, searchCapabilities } from '#lib/capability-picker.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { toolCategoryLabel } from '#lib/tools.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 
 	/**
 	 * The searchable, grouped capability list the chat picker and the agent

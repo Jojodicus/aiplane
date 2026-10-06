@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import type { IntegrationConnector, IntegrationMode } from '$lib/integrations';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { IntegrationConnector, IntegrationMode } from '#lib/integrations.js';
 	import IntegrationModePicker from './IntegrationModePicker.svelte';
 
 	let { connector, onmode, onall }: {

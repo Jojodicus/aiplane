@@ -1,16 +1,16 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import EditModal from '$lib/components/EditModal.svelte';
-	import CapabilityPicker from '$lib/components/chat/CapabilityPicker.svelte';
-	import LimitBars from '$lib/components/usage/LimitBars.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import EditModal from '#lib/components/EditModal.svelte';
+	import CapabilityPicker from '#lib/components/chat/CapabilityPicker.svelte';
+	import LimitBars from '#lib/components/usage/LimitBars.svelte';
 	import TokenModelPicker from './TokenModelPicker.svelte';
-	import { n, t } from '$lib/i18n.svelte';
-	import { daysUntilExpiry, quotaChanges, quotaUsed, tokenDate, type ManagedToken, type NewQuota } from '$lib/tokens';
-	import { selectionSummary, type TokenModel } from '$lib/token-models';
-	import { limitPercent, usageCost, usageInteger } from '$lib/usage';
-	import type { UsageLimit } from '$lib/usage-types';
-	import type { ChatCapability } from '$lib/api';
+	import { n, t } from '#lib/i18n.svelte.js';
+	import { daysUntilExpiry, quotaChanges, quotaUsed, tokenDate, type ManagedToken, type NewQuota } from '#lib/tokens.js';
+	import { selectionSummary, type TokenModel } from '#lib/token-models.js';
+	import { limitPercent, usageCost, usageInteger } from '#lib/usage.js';
+	import type { UsageLimit } from '#lib/usage-types.js';
+	import type { ChatCapability } from '#lib/api.js';
 
 	type ToolState = 'on' | 'auto' | 'off';
 

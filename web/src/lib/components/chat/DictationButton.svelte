@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 	import {
 		recordingErrorMessage,
 		recordingUnavailableReason,
 		startRecording,
 		type VoiceRecorder
-	} from '$lib/voice-recorder';
-	import { responseError } from '$lib/api';
-	import { voiceRefusalMessage } from '$lib/voice-refusal';
+	} from '#lib/voice-recorder.js';
+	import { responseError } from '#lib/api.js';
+	import { voiceRefusalMessage } from '#lib/voice-refusal.js';
 
 	let { model, ontranscript, onerror }: {
 		model: string;

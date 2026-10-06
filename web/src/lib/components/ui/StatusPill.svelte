@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { statusPillClass, type Tone } from '$lib/ui-variants';
+	import { statusPillClass, type Tone } from '#lib/ui-variants.js';
 
 	let { tone = 'neutral', size = 'md', children }: { tone?: Tone; size?: 'sm' | 'md'; children: Snippet } = $props();
 </script>

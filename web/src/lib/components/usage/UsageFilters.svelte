@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { USAGE_PERIODS, USAGE_SOURCES, type UsageFilters } from '$lib/usage';
-	import type { UsageResponse } from '$lib/usage-types';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { USAGE_PERIODS, USAGE_SOURCES, type UsageFilters } from '#lib/usage.js';
+	import type { UsageResponse } from '#lib/usage-types.js';
 
 	let { filters, data, onchange }: {
 		filters: UsageFilters;

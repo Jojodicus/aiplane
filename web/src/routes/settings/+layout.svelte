@@ -1,7 +1,7 @@
 <script lang="ts">
-	import SectionTabs from '$lib/components/SectionTabs.svelte';
-	import { sectionTabs } from '$lib/section-tabs';
-	import { t } from '$lib/i18n.svelte';
+	import SectionTabs from '#lib/components/SectionTabs.svelte';
+	import { sectionTabs } from '#lib/section-tabs.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { children } = $props<{ children: import('svelte').Snippet }>();
 </script>

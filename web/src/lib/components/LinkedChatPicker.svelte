@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { linkedChatOptions } from '$lib/linked-chat';
-	import type { ChatSession } from '$lib/chat-protocol';
+	import { api } from '#lib/api.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { linkedChatOptions } from '#lib/linked-chat.js';
+	import type { ChatSession } from '#lib/chat-protocol.js';
 
 	/**
 	 * Which chat a reusing schedule or webhook continues in. Shared by both

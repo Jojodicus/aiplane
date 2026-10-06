@@ -2,10 +2,10 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
-	import type { AdminModelsData } from '$lib/admin-models';
-	import AdminModelEditor from '$lib/components/admin/AdminModelEditor.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPut } from '#lib/admin-client.js';
+	import type { AdminModelsData } from '#lib/admin-models.js';
+	import AdminModelEditor from '#lib/components/admin/AdminModelEditor.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	// `?model=` rather than a path segment: model names carry slashes
 	// (`Qwen/Qwen3-35B`), and a query value survives them without depending on

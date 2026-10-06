@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	// The catalog and the run history are two jobs, so they are two pages —
 	// the old single page stacked both and neither could be linked to. These

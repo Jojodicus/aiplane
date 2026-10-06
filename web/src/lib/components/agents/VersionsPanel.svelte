@@ -1,7 +1,7 @@
 <script lang="ts">
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import { agentsApi, type AgentError, type AgentVersion, type SpecIssue } from '$lib/agents';
-	import { locale, t } from '$lib/i18n.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import { agentsApi, type AgentError, type AgentVersion, type SpecIssue } from '#lib/agents.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * Draft and published versions. Publishing snapshots the draft as the next

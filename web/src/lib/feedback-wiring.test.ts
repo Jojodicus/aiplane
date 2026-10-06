@@ -80,7 +80,7 @@ test('a conversation page suppresses the FAB and the composer carries the entry 
 test('diagnostics capture is started from the root layout load', () => {
 	const layoutLoad = read('src/routes/+layout.ts');
 	assert.match(layoutLoad, /initFeedbackCapture\(\)/);
-	assert.match(layoutLoad, /from '\$lib\/feedback-capture'/);
+	assert.match(layoutLoad, /from '#lib\/feedback-capture(\.[jt]s)?'/);
 });
 
 test('the dialog posts to the versioned feedback endpoints', () => {

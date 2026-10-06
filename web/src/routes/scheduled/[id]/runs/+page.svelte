@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import { locale, t } from '$lib/i18n.svelte';
-	import { formatScheduledRun, type ScheduledAction, type ScheduledRun } from '$lib/scheduled';
+	import { adminJson } from '#lib/admin-client.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
+	import { formatScheduledRun, type ScheduledAction, type ScheduledRun } from '#lib/scheduled.js';
 
 	/**
 	 * One schedule's run history — the list of chats it produced.

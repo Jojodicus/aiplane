@@ -1,7 +1,7 @@
 <script lang="ts">
 	import CondEditor from './CondEditor.svelte';
-	import { condKind, slotValueFromText, splitList, type CondKind, type SlotInfo, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { condKind, slotValueFromText, splitList, type CondKind, type SlotInfo, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import FieldIssues from './FieldIssues.svelte';
 
 	/**

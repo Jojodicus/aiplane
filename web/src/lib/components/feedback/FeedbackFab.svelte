@@ -14,8 +14,8 @@
 	 * -right corner (send, stop, mic, attach), and a floating button there sits
 	 * on top of them. The composer carries its own feedback button instead.
 	 */
-	import { feedback, openDialog } from '$lib/feedback.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { feedback, openDialog } from '#lib/feedback.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let capturing = $derived(feedback.shotStatus === 'capturing' && !feedback.open);
 </script>

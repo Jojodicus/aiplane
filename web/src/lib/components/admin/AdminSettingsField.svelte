@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { AdminSettingsField } from '$lib/admin-settings';
-	import { settingsCatalogKey } from '$lib/admin-settings';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { modelSelectOptions } from '$lib/model-option';
+	import type { AdminSettingsField } from '#lib/admin-settings.js';
+	import { settingsCatalogKey } from '#lib/admin-settings.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { modelSelectOptions } from '#lib/model-option.js';
 
 	let { field, draft, error, onchange, onclear }: { field: AdminSettingsField; draft: string; error?: string; onchange: (key: string, value: string) => void; onclear: (key: string) => Promise<void> } = $props();
 	let labelKey = $derived(settingsCatalogKey('settings-f-', field.key));

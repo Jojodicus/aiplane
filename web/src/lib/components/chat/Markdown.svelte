@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/markdown';
-	import type { MarkdownImage } from '$lib/markdown';
-	import { t } from '$lib/i18n.svelte';
+	import { renderMarkdown } from '#lib/markdown.js';
+	import type { MarkdownImage } from '#lib/markdown.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { content, class: className = '', images = [], hiddenImageUrls }: {
 		content: string | null | undefined;

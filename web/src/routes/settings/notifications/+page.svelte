@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
-	import PushNotificationsCard from '$lib/components/tokens/PushNotificationsCard.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { TokenManagementDetails } from '$lib/tokens';
+	import { adminJson } from '#lib/admin-client.js';
+	import PushNotificationsCard from '#lib/components/tokens/PushNotificationsCard.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { TokenManagementDetails } from '#lib/tokens.js';
 
 	let details = $state<TokenManagementDetails | null>(null);
 	let error = $state<string | null>(null);

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
-	import { editableRoute, newRouteBlocker } from '$lib/automatic-routes';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPut } from '#lib/admin-client.js';
+	import { editableRoute, newRouteBlocker } from '#lib/automatic-routes.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	type Candidate = { key: string; target: string; description: string };
 	type Route = {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { agentsApi, embedSnippet, splitList, type AgentError, type EmbedKey } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { agentsApi, embedSnippet, splitList, type AgentError, type EmbedKey } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * The keys websites embed this agent with (`docs/embed.md`). The server

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { AdminSettingsSection } from '$lib/admin-settings';
-	import { settingsCatalogKey } from '$lib/admin-settings';
+	import type { AdminSettingsSection } from '#lib/admin-settings.js';
+	import { settingsCatalogKey } from '#lib/admin-settings.js';
 	import AdminSettingsField from './AdminSettingsField.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { section, drafts, errors = {}, onchange, onsave, onclear, saving }: { section: AdminSettingsSection; drafts: Record<string, string>; errors?: Record<string, string>; onchange: (key: string, value: string) => void; onsave: () => Promise<void>; onclear: (key: string) => Promise<void>; saving: boolean } = $props();
 	let master = $derived(section.fields[0]?.key === `${section.name}.enabled` && section.fields[0]?.kind === 'bool' ? section.fields[0] : null);

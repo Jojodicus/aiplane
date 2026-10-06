@@ -5,7 +5,7 @@
  * SvelteKit stack: an annotated viewport screenshot, voice-to-fields
  * dictation, pasted image attachments, and the browser diagnostics the report
  * is actually useful for. The component in
- * `$lib/components/feedback/FeedbackDialog.svelte` renders this; everything
+ * `#lib/components/feedback/FeedbackDialog.svelte` renders this; everything
  * that is not markup lives here.
  *
  * Two orderings matter and are not incidental:

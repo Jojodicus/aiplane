@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { AdminLimitRule, AdminLimitsData, LimitDimension, LimitSubjectType, LimitWindow } from '$lib/admin-limits';
-	import { limitSubjectName } from '$lib/admin-limits';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import type { AdminLimitRule, AdminLimitsData, LimitDimension, LimitSubjectType, LimitWindow } from '#lib/admin-limits.js';
+	import { limitSubjectName } from '#lib/admin-limits.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 
 	let { data, editing = null, onsave }: { data: AdminLimitsData; editing?: AdminLimitRule | null; onsave: (body: Record<string, string | number>, subject: string) => Promise<void> } = $props();
 	let subjectType = $state<LimitSubjectType>('global');

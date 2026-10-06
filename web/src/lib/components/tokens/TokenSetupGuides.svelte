@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { t } from '$lib/i18n.svelte';
-	import { GUIDE_TABS, selectedGuideTab } from '$lib/tokens-tabs';
+	import { t } from '#lib/i18n.svelte.js';
+	import { GUIDE_TABS, selectedGuideTab } from '#lib/tokens-tabs.js';
 
 	let origin = $state('https://llm.croit.io');
 	let client = $derived(selectedGuideTab(page.url.search));

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { agentsApi, embedSnippet, type AgentError, type EmbedKey, type Spec } from '$lib/agents';
+	import { agentsApi, embedSnippet, type AgentError, type EmbedKey, type Spec } from '#lib/agents.js';
 	import {
 		originOf,
 		readColor,
@@ -18,9 +18,9 @@
 		writeVoice,
 		type Voice,
 		type VoiceKind
-	} from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import ModelPicker from '../ModelPicker.svelte';
 	import WidgetPreview from './WidgetPreview.svelte';
 	import { writeOnChange } from './write-on-change.svelte';

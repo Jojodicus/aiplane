@@ -1,10 +1,10 @@
 <script lang="ts">
-	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
+	import AiSuggestion from '#lib/components/ui/AiSuggestion.svelte';
 	import type { Snippet } from 'svelte';
-	import type { AgentError, AssistSuggestion } from '$lib/agents';
-	import { setupErrorMessage } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import type { AgentError, AssistSuggestion } from '#lib/agents.js';
+	import { setupErrorMessage } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * One part of the prompt assistant's proposal (#117) inside the step it

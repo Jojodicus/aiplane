@@ -1,9 +1,9 @@
 <script lang="ts">
-	import StepIndicator from '$lib/components/ui/StepIndicator.svelte';
+	import StepIndicator from '#lib/components/ui/StepIndicator.svelte';
 	import { goto } from '$app/navigation';
-	import { STEPS, asStep, type StepKey } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { STEPS, asStep, type StepKey } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SetupStep from './SetupStep.svelte';
 
 	/**

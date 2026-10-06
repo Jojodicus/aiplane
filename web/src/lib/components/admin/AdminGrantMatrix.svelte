@@ -8,10 +8,10 @@
 	 * in turn. Both write through the same save, so neither is a second source of
 	 * truth.
 	 */
-	import { coverageOf, groupGrantRows, matchesGrantFilter, FAMILY_SECTION, type GrantFilter, type GrantRow } from '$lib/admin-groups';
-	import { toolCategoryLabel } from '$lib/tools';
-	import { toggleValue } from '$lib/multi-select';
-	import { t } from '$lib/i18n.svelte';
+	import { coverageOf, groupGrantRows, matchesGrantFilter, FAMILY_SECTION, type GrantFilter, type GrantRow } from '#lib/admin-groups.js';
+	import { toolCategoryLabel } from '#lib/tools.js';
+	import { toggleValue } from '#lib/multi-select.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import type { AdminGroup } from './AdminGroupForm.svelte';
 
 	let {

@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { adminDelete } from '$lib/admin-client';
-	import { t } from '$lib/i18n.svelte';
-	import { poolCoverage, type Backend, type Coverage, type Pool } from '$lib/upstreams';
+	import { adminDelete } from '#lib/admin-client.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { poolCoverage, type Backend, type Coverage, type Pool } from '#lib/upstreams.js';
 	import BackendCard from './BackendCard.svelte';
 	import PoolEditor from './PoolEditor.svelte';
-	import EditModal from '$lib/components/EditModal.svelte';
+	import EditModal from '#lib/components/EditModal.svelte';
 
 	interface Props {
 		pool: Pool;

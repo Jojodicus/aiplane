@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
-	import { errorMessage, focused, inboxApi, itemHeading, itemLink, kindLabel, type InboxItem } from '$lib/inbox';
-	import { inboxLive, watchInbox } from '$lib/inbox.svelte';
-	import type { Answer } from '$lib/suspension';
-	import { dt, t } from '$lib/i18n.svelte';
-	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
+	import { errorMessage, focused, inboxApi, itemHeading, itemLink, kindLabel, type InboxItem } from '#lib/inbox.js';
+	import { inboxLive, watchInbox } from '#lib/inbox.svelte.js';
+	import type { Answer } from '#lib/suspension.js';
+	import { dt, t } from '#lib/i18n.svelte.js';
+	import SuspensionCard from '#lib/components/SuspensionCard.svelte';
 
 	let items = $state<InboxItem[]>([]);
 	let loading = $state(true);

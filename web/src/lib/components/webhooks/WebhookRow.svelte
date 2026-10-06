@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { adminDelete, adminPost } from '$lib/admin-client';
-	import { locale, t } from '$lib/i18n.svelte';
-	import { runLinks } from '$lib/run-links';
-	import { formatWebhookFire, type Webhook } from '$lib/webhooks';
+	import { adminDelete, adminPost } from '#lib/admin-client.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
+	import { runLinks } from '#lib/run-links.js';
+	import { formatWebhookFire, type Webhook } from '#lib/webhooks.js';
 
 	/**
 	 * One webhook on `/webhooks`.

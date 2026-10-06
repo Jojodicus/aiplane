@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { agentsApi, type AgentError, type AgentVersion } from '$lib/agents';
+	import { agentsApi, type AgentError, type AgentVersion } from '#lib/agents.js';
 	import {
 		FILTER_OUTCOMES,
 		SECTIONS,
@@ -15,8 +15,8 @@
 		type TestCase,
 		type TestRun,
 		type TestsListing
-	} from '$lib/agent-tests';
-	import { locale, t } from '$lib/i18n.svelte';
+	} from '#lib/agent-tests.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * Stored test cases and their runs (`docs/agent-builder.md` → "Evaluation"). A

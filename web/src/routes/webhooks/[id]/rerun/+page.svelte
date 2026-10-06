@@ -2,11 +2,11 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import { ApiError, request } from '$lib/api';
-	import WebhookSubpageHeader from '$lib/components/webhooks/WebhookSubpageHeader.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { Webhook, WebhookRun, WebhooksData } from '$lib/webhooks';
+	import { adminJson } from '#lib/admin-client.js';
+	import { ApiError, request } from '#lib/api.js';
+	import WebhookSubpageHeader from '#lib/components/webhooks/WebhookSubpageHeader.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { Webhook, WebhookRun, WebhooksData } from '#lib/webhooks.js';
 	let webhook = $state<Webhook | null>(null);
 	let run = $state<WebhookRun | null>(null);
 	let prompt = $state('');

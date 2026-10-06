@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { api } from '$lib/api';
-	import UsageFiltersView from '$lib/components/usage/UsageFilters.svelte';
-	import UsageLimits from '$lib/components/usage/UsageLimits.svelte';
-	import UsageStats from '$lib/components/usage/UsageStats.svelte';
-	import UsageTable from '$lib/components/usage/UsageTable.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { usageSearch, type UsageFilters } from '$lib/usage';
-	import type { UsageResponse } from '$lib/usage-types';
+	import { api } from '#lib/api.js';
+	import UsageFiltersView from '#lib/components/usage/UsageFilters.svelte';
+	import UsageLimits from '#lib/components/usage/UsageLimits.svelte';
+	import UsageStats from '#lib/components/usage/UsageStats.svelte';
+	import UsageTable from '#lib/components/usage/UsageTable.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { usageSearch, type UsageFilters } from '#lib/usage.js';
+	import type { UsageResponse } from '#lib/usage-types.js';
 
 	let data = $state<UsageResponse | null>(null);
 	let error = $state<string | null>(null);

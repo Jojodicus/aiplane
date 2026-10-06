@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
-	import { extensionStatus, onExtensionState, requestActivation, type ExtensionStatus } from '$lib/browser-bridge';
-	import { browserSetupStage, chromeWebStoreUrl, EXTENSION_DOWNLOAD_PATH } from '$lib/browser-extension';
-	import { t } from '$lib/i18n.svelte';
-	import type { ToolEntry, ToolsResponse } from '$lib/tools';
+	import { adminJson } from '#lib/admin-client.js';
+	import { extensionStatus, onExtensionState, requestActivation, type ExtensionStatus } from '#lib/browser-bridge.js';
+	import { browserSetupStage, chromeWebStoreUrl, EXTENSION_DOWNLOAD_PATH } from '#lib/browser-extension.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { ToolEntry, ToolsResponse } from '#lib/tools.js';
 
 	let tool = $state<ToolEntry | undefined>(undefined);
 	let loaded = $state(false);

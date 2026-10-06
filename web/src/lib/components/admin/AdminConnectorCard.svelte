@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { connectorBadges, type AdminConnector } from '$lib/admin-connectors';
-	import { t } from '$lib/i18n.svelte';
+	import { connectorBadges, type AdminConnector } from '#lib/admin-connectors.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { connector, ontoggle, ondelete } = $props<{
 		connector: AdminConnector;

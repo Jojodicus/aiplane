@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import type { SidebarSession } from '$lib/sidebar.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { SidebarSession } from '#lib/sidebar.svelte.js';
 
 	let { session, active, onopen, onpin, onremove }: {
 		session: SidebarSession;

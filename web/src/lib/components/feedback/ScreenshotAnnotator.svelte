@@ -2,7 +2,7 @@
 	/**
 	 * The screenshot + its annotation toolbar.
 	 *
-	 * The drawing itself is `$lib/feedback-annotator` — a plain canvas
+	 * The drawing itself is `#lib/feedback-annotator.js` — a plain canvas
 	 * controller, deliberately not reactive state: shapes, pointer capture and
 	 * an undo stack are exactly the things that get worse when every stroke
 	 * has to round-trip through the reactivity graph. This component owns the
@@ -23,9 +23,9 @@
 		type Annotator,
 		type AnnotatorTool,
 		type ZoomMode
-	} from '$lib/feedback-annotator';
-	import { setShotExporter } from '$lib/feedback.svelte';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/feedback-annotator.js';
+	import { setShotExporter } from '#lib/feedback.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { dataUrl, tall = false }: { dataUrl: string; tall?: boolean } = $props();
 

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { Spec } from '$lib/agents';
-	import { readColor, readScope } from '$lib/agent-setup';
+	import type { Spec } from '#lib/agents.js';
+	import { readColor, readScope } from '#lib/agent-setup.js';
 	import { parseHex, readableText } from '../../../../../shared/color.ts';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * A sketch of the website widget (`docs/embed.md`): the title it shows

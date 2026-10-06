@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { adminPost } from '$lib/admin-client';
-	import { t, n } from '$lib/i18n.svelte';
-	import { activityCounts, naturalSort, parallelismMismatch, type Backend, type Pool } from '$lib/upstreams';
+	import { adminPost } from '#lib/admin-client.js';
+	import { t, n } from '#lib/i18n.svelte.js';
+	import { activityCounts, naturalSort, parallelismMismatch, type Backend, type Pool } from '#lib/upstreams.js';
 	import BackendEditor from './BackendEditor.svelte';
-	import EditModal from '$lib/components/EditModal.svelte';
+	import EditModal from '#lib/components/EditModal.svelte';
 
 	interface Props {
 		backend: Backend;

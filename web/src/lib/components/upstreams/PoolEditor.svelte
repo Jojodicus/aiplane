@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { adminPost, adminPut } from '$lib/admin-client';
-	import { t } from '$lib/i18n.svelte';
-	import { parseVoices, splitLines, splitList, type Backend, type Pool } from '$lib/upstreams';
-	import GroupSelect from '$lib/components/GroupSelect.svelte';
-	import { normalizeSelection } from '$lib/multi-select';
+	import { adminPost, adminPut } from '#lib/admin-client.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { parseVoices, splitLines, splitList, type Backend, type Pool } from '#lib/upstreams.js';
+	import GroupSelect from '#lib/components/GroupSelect.svelte';
+	import { normalizeSelection } from '#lib/multi-select.js';
 
 	interface Props {
 		pool?: Pool | null;

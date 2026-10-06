@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminDelete, adminJson, adminPost } from '$lib/admin-client';
-	import type { AdminConnectorsData } from '$lib/admin-connectors';
-	import AdminConnectorCard from '$lib/components/admin/AdminConnectorCard.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPost } from '#lib/admin-client.js';
+	import type { AdminConnectorsData } from '#lib/admin-connectors.js';
+	import AdminConnectorCard from '#lib/components/admin/AdminConnectorCard.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<AdminConnectorsData | null>(null);
 	let error = $state<string | null>(null);

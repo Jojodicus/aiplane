@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { adminJson } from '$lib/admin-client';
+	import { adminJson } from '#lib/admin-client.js';
 	import CollectionForm from './CollectionForm.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { RagCollection, RagProfile, RagProvider } from '$lib/rag';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { RagCollection, RagProfile, RagProvider } from '#lib/rag.js';
 
 	/**
 	 * The collection editor, on its own route.

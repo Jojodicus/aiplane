@@ -6,14 +6,14 @@
 export const prerender = false;
 export const ssr = false;
 
-import { initFeedbackCapture } from '$lib/feedback-capture';
-import { detect, loadCatalog } from '$lib/i18n.svelte';
+import { initFeedbackCapture } from '#lib/feedback-capture.js';
+import { detect, loadCatalog } from '#lib/i18n.svelte.js';
 
 /**
  * Get the reader's catalog in memory before anything renders.
  *
  * Only English is bundled with the app; the other five are separate chunks
- * (see `$lib/i18n.svelte`). Awaiting here — in the root layout's load, which
+ * (see `#lib/i18n.svelte`). Awaiting here — in the root layout's load, which
  * SvelteKit runs before the first route paints — is what keeps a German
  * session from flashing an English app and then re-rendering. It costs one
  * request the service worker has usually already cached, and nothing at all

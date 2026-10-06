@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { n, t } from '$lib/i18n.svelte';
-	import { filterTokenModels, groupTokenModels, isCompliant, selectionSummary, type TokenModel } from '$lib/token-models';
+	import { n, t } from '#lib/i18n.svelte.js';
+	import { filterTokenModels, groupTokenModels, isCompliant, selectionSummary, type TokenModel } from '#lib/token-models.js';
 
 	/**
 	 * The model allowlist of one API token: a switch between "follows my

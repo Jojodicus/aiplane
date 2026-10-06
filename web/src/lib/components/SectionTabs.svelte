@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { t } from '$lib/i18n.svelte';
-	import { me } from '$lib/session.svelte';
-	import { featureEnabled } from '$lib/features';
-	import { selectedSectionTab, type SectionTab } from '$lib/section-tabs';
+	import { t } from '#lib/i18n.svelte.js';
+	import { me } from '#lib/session.svelte.js';
+	import { featureEnabled } from '#lib/features.js';
+	import { selectedSectionTab, type SectionTab } from '#lib/section-tabs.js';
 
 	let { tabs, label }: { tabs: SectionTab[]; label: string } = $props();
 	let selected = $derived(selectedSectionTab(page.url.pathname, tabs));

@@ -1,6 +1,6 @@
 /**
  * Server-sent-event block parsing shared by the SPA and the embed widget.
- * Pure TypeScript: no Svelte, no `$lib`, no DOM, so both bundles can import it
+ * Pure TypeScript: no Svelte, no `#lib`, no DOM, so both bundles can import it
  * without pulling in the other's code.
  */
 

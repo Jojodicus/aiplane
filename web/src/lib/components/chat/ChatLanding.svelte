@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { api } from '$lib/api';
-	import { t } from '$lib/i18n.svelte';
-	import { me } from '$lib/session.svelte';
-	import { refreshSidebar } from '$lib/sidebar.svelte';
+	import { api } from '#lib/api.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { me } from '#lib/session.svelte.js';
+	import { refreshSidebar } from '#lib/sidebar.svelte.js';
 
 	let error = $state<string | null>(null);
 	let started = false;

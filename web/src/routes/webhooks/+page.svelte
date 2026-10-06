@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import WebhookRow from '$lib/components/webhooks/WebhookRow.svelte';
-	import WebhookSecretReveal from '$lib/components/webhooks/WebhookSecretReveal.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { WebhooksData } from '$lib/webhooks';
+	import { adminJson } from '#lib/admin-client.js';
+	import WebhookRow from '#lib/components/webhooks/WebhookRow.svelte';
+	import WebhookSecretReveal from '#lib/components/webhooks/WebhookSecretReveal.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { WebhooksData } from '#lib/webhooks.js';
 
 	let data = $state<WebhooksData | null>(null);
 	let loading = $state(true);

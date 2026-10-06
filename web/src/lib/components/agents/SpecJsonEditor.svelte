@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { cleanSpec, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { cleanSpec, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * The whole spec as JSON, for what the form does not cover (a verifier, a

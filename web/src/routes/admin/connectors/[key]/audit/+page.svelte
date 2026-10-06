@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
-	import { dt, t } from '$lib/i18n.svelte';
-	import { clearPageTitleOverride, setPageTitleOverride } from '$lib/page-title';
+	import { adminJson } from '#lib/admin-client.js';
+	import { dt, t } from '#lib/i18n.svelte.js';
+	import { clearPageTitleOverride, setPageTitleOverride } from '#lib/page-title.js';
 
 	interface AuditEvent { id: string; user_id: string; user_email: string; tool_id: string; arguments: string | null; outcome: string; error: string | null; session_id: string | null; created_at: string; }
 	interface AuditData { connector: { key: string; title: string }; events: AuditEvent[]; }

@@ -84,7 +84,7 @@ test('the last document going away clears the panel', () => {
 // again, which is the bug this module was written for.
 test('the canvas panel reconciles the open document against the list', () => {
 	const panel = read('src/lib/components/chat/ConversationCanvas.svelte');
-	assert.match(panel, /from '\$lib\/canvas-refresh'/);
+	assert.match(panel, /from '#lib\/canvas-refresh(\.[jt]s)?'/);
 	assert.match(panel, /\$effect\(\(\) => \{[\s\S]*?canvasRefresh\(/);
 });
 

@@ -18,7 +18,7 @@
 				document.documentElement.dataset.theme = m ? m[1] : 'dark';
 				document.querySelector('meta[name="theme-color"]').content = m && m[1] === 'light' ? '#ffffff' : '#1d1d1b';
 
-				// Language, same story: `$lib/i18n` resolves the `lang` cookie
+				// Language, same story: `#lib/i18n.svelte` resolves the `lang` cookie
 				// then the browser's own preference list, and the app fixes up
 				// `<html lang>` once it mounts. Doing it here too means the
 				// attribute is right for the *first* paint, which is what a

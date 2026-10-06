@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import { chipClass } from '$lib/ui-variants';
+	import { t } from '#lib/i18n.svelte.js';
+	import { chipClass } from '#lib/ui-variants.js';
 
 	/**
 	 * One option of a multi-pick set (tools, channels, tags). Toggles on

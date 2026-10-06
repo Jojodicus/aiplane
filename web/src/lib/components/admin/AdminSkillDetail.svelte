@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/markdown';
-	import { t } from '$lib/i18n.svelte';
-	import { effectiveSkillGroups, type AdminSkill } from '$lib/admin-skills';
+	import { renderMarkdown } from '#lib/markdown.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { effectiveSkillGroups, type AdminSkill } from '#lib/admin-skills.js';
 
 	let { skill, groups, ondelete, onsavegrants } = $props<{
 		skill: AdminSkill;

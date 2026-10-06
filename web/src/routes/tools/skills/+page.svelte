@@ -2,13 +2,13 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { adminDelete, adminJson, adminPost } from '$lib/admin-client';
-	import NavIcon from '$lib/components/NavIcon.svelte';
-	import PersonalSkillDetail from '$lib/components/skills/PersonalSkillDetail.svelte';
-	import PersonalSkillEditor from '$lib/components/skills/PersonalSkillEditor.svelte';
-	import PersonalSkillRail from '$lib/components/skills/PersonalSkillRail.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { NEW_SKILL_TEMPLATE, selectedSkill, type PersonalSkill } from '$lib/skills';
+	import { adminDelete, adminJson, adminPost } from '#lib/admin-client.js';
+	import NavIcon from '#lib/components/NavIcon.svelte';
+	import PersonalSkillDetail from '#lib/components/skills/PersonalSkillDetail.svelte';
+	import PersonalSkillEditor from '#lib/components/skills/PersonalSkillEditor.svelte';
+	import PersonalSkillRail from '#lib/components/skills/PersonalSkillRail.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { NEW_SKILL_TEMPLATE, selectedSkill, type PersonalSkill } from '#lib/skills.js';
 
 	interface SkillDetail {
 		body: string;

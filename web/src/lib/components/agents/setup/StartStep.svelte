@@ -1,9 +1,9 @@
 <script lang="ts">
-	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
-	import { agentsApi, cleanSpec, ensureShape, type AgentError, type Spec } from '$lib/agents';
-	import { STEPS, TEMPLATES, applyTemplate, isBlank, setupErrorMessage, type StepKey, type TemplateKey } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import ChoiceCard from '#lib/components/ui/ChoiceCard.svelte';
+	import { agentsApi, cleanSpec, ensureShape, type AgentError, type Spec } from '#lib/agents.js';
+	import { STEPS, TEMPLATES, applyTemplate, isBlank, setupErrorMessage, type StepKey, type TemplateKey } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * Where the assistant starts: a template, each a valid starter draft

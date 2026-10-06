@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { Spec } from '$lib/agents';
-	import type { StepKey } from '$lib/agent-setup';
+	import type { Spec } from '#lib/agents.js';
+	import type { StepKey } from '#lib/agent-setup.js';
 	import AbilitiesStep from './AbilitiesStep.svelte';
 	import BasicsStep from './BasicsStep.svelte';
 	import IdentityStep from './IdentityStep.svelte';

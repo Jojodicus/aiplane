@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { adminJson } from '$lib/admin-client';
+	import { adminJson } from '#lib/admin-client.js';
 	import ScheduleForm from './ScheduleForm.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { ScheduledAction, ScheduledData } from '$lib/scheduled';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { ScheduledAction, ScheduledData } from '#lib/scheduled.js';
 
 	/**
 	 * The schedule editor, on its own route.

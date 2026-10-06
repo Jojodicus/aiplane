@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { AdminToken } from '$lib/admin-tokens';
-	import type { TokenModel } from '$lib/token-models';
-	import { adminJson, adminPut } from '$lib/admin-client';
-	import AdminTokenRow from '$lib/components/admin/AdminTokenRow.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import type { AdminToken } from '#lib/admin-tokens.js';
+	import type { TokenModel } from '#lib/token-models.js';
+	import { adminJson, adminPut } from '#lib/admin-client.js';
+	import AdminTokenRow from '#lib/components/admin/AdminTokenRow.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	interface TokensData {
 		tokens: AdminToken[];

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminDelete, adminJson, adminPost } from '$lib/admin-client';
-	import type { AdminLimitsData, AdminLimitRule } from '$lib/admin-limits';
-	import AdminLimitForm from '$lib/components/admin/AdminLimitForm.svelte';
-	import AdminLimitsTable from '$lib/components/admin/AdminLimitsTable.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPost } from '#lib/admin-client.js';
+	import type { AdminLimitsData, AdminLimitRule } from '#lib/admin-limits.js';
+	import AdminLimitForm from '#lib/components/admin/AdminLimitForm.svelte';
+	import AdminLimitsTable from '#lib/components/admin/AdminLimitsTable.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<AdminLimitsData | null>(null);
 	let error = $state<string | null>(null);

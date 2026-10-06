@@ -1,9 +1,9 @@
 <script lang="ts">
-	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
-	import type { Spec } from '$lib/agents';
-	import { readScope, strictIncomplete, writeScope } from '$lib/agent-setup';
-	import { t } from '$lib/i18n.svelte';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
+	import ChipToggle from '#lib/components/ui/ChipToggle.svelte';
+	import type { Spec } from '#lib/agents.js';
+	import { readScope, strictIncomplete, writeScope } from '#lib/agent-setup.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
 	import ImproveText from './ImproveText.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';

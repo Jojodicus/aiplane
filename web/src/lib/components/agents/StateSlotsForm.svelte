@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { freshName, renameKey, splitList, writerOptions, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { freshName, renameKey, splitList, writerOptions, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import FieldIssues from './FieldIssues.svelte';
 
 	/**

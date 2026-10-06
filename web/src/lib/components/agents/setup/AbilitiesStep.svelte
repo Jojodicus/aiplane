@@ -1,12 +1,12 @@
 <script lang="ts">
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import CapabilityBrowser from '$lib/components/capabilities/CapabilityBrowser.svelte';
-	import { grantable, type GrantableItem, type Spec } from '$lib/agents';
-	import { LOCKED_GROUP, RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { rankCapabilities } from '$lib/capability-picker';
-	import { t } from '$lib/i18n.svelte';
-	import { toolCategoryLabel } from '$lib/tools';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import CapabilityBrowser from '#lib/components/capabilities/CapabilityBrowser.svelte';
+	import { grantable, type GrantableItem, type Spec } from '#lib/agents.js';
+	import { LOCKED_GROUP, RAG_LIST, RAG_SEARCH, abilities, requireKnowledgeSearch, setAbility, setKnowledge, type Ability } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { rankCapabilities } from '#lib/capability-picker.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { toolCategoryLabel } from '#lib/tools.js';
 	import SuggestionBox from './SuggestionBox.svelte';
 
 	/**

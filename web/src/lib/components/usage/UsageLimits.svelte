@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 	import LimitBars from './LimitBars.svelte';
-	import type { UsageLimit } from '$lib/usage-types';
+	import type { UsageLimit } from '#lib/usage-types.js';
 
 	let { limits, currency, timezone }: { limits: UsageLimit[]; currency: string; timezone: string } = $props();
 </script>

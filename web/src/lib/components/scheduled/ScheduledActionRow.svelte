@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { adminDelete, adminPost } from '$lib/admin-client';
-	import { locale, t } from '$lib/i18n.svelte';
-	import { runLinks } from '$lib/run-links';
-	import { formatScheduledRun, type ScheduledAction } from '$lib/scheduled';
+	import { adminDelete, adminPost } from '#lib/admin-client.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
+	import { runLinks } from '#lib/run-links.js';
+	import { formatScheduledRun, type ScheduledAction } from '#lib/scheduled.js';
 
 	/**
 	 * One schedule on `/scheduled`.

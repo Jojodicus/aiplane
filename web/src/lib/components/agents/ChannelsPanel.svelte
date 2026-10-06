@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { agentsApi, CHANNEL_KINDS, type AgentError, type ChannelKind, type NotifyChannel } from '$lib/agents';
-	import { LOCALES, LOCALE_NAMES, locale, t, type Locale } from '$lib/i18n.svelte';
+	import { agentsApi, CHANNEL_KINDS, type AgentError, type ChannelKind, type NotifyChannel } from '#lib/agents.js';
+	import { LOCALES, LOCALE_NAMES, locale, t, type Locale } from '#lib/i18n.svelte.js';
 
 	/**
 	 * Slack and Discord incoming webhooks that announce the agent's waiting

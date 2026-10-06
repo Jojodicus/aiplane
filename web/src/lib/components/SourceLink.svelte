@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { login = false } = $props<{ login?: boolean }>();
 	let sourceUrl = $state('https://github.com/croit/aiplane');

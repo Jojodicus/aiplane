@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import type { CanvasDocument, ChatAsset } from '$lib/api';
-	import { canvasBounds, clampCanvasWidth } from '$lib/canvas-layout';
-	import { canvasRefresh } from '$lib/canvas-refresh';
-	import { n, t } from '$lib/i18n.svelte';
+	import { api } from '#lib/api.js';
+	import type { CanvasDocument, ChatAsset } from '#lib/api.js';
+	import { canvasBounds, clampCanvasWidth } from '#lib/canvas-layout.js';
+	import { canvasRefresh } from '#lib/canvas-refresh.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 	import Markdown from './Markdown.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 
 	let { id, documents, assets, isOwner, onclose, onerror }: {
 		id: string;

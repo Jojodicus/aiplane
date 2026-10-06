@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { gateHint, type Spec, type TestDebug } from '$lib/agents';
-	import { slotLabel } from '$lib/agent-setup';
-	import { t } from '$lib/i18n.svelte';
+	import { gateHint, type Spec, type TestDebug } from '#lib/agents.js';
+	import { slotLabel } from '#lib/agent-setup.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * What a manager sees of a test turn that a visitor never does: every slot

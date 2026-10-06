@@ -1,9 +1,9 @@
 <script lang="ts">
-	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
-	import { agentsApi, type AgentError, type ImproveField } from '$lib/agents';
-	import { setupErrorMessage } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import AiSuggestion from '#lib/components/ui/AiSuggestion.svelte';
+	import { agentsApi, type AgentError, type ImproveField } from '#lib/agents.js';
+	import { setupErrorMessage } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * "Improve" for one text (the task, the tone, the answer for other

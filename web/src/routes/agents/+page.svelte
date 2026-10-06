@@ -1,11 +1,11 @@
 <script lang="ts">
-	import Modal from '$lib/components/ui/Modal.svelte';
-	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
+	import Modal from '#lib/components/ui/Modal.svelte';
+	import ArchitectModal from '#lib/components/agents/ArchitectModal.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { agentIdFromName, agentsApi, type AgentError, type AgentSummary } from '$lib/agents';
-	import { locale, t } from '$lib/i18n.svelte';
+	import { agentIdFromName, agentsApi, type AgentError, type AgentSummary } from '#lib/agents.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
 
 	let agents = $state<AgentSummary[]>([]);
 	let loading = $state(true);

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ChoiceCard from '$lib/components/ui/ChoiceCard.svelte';
-	import { grantable, type Spec } from '$lib/agents';
+	import ChoiceCard from '#lib/components/ui/ChoiceCard.svelte';
+	import { grantable, type Spec } from '#lib/agents.js';
 	import {
 		IDENTITY_METHODS,
 		identityLabels,
@@ -10,9 +10,9 @@
 		topicsNeedingIdentity,
 		writeIdentity,
 		type IdentityMethod
-	} from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 

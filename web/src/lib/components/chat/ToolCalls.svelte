@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ToolCall } from '$lib/chat-protocol';
-	import { prettyToolPayload, summarizeToolCalls, TOOL_GROUP_THRESHOLD } from '$lib/chat-transcript';
-	import { n, t } from '$lib/i18n.svelte';
+	import type { ToolCall } from '#lib/chat-protocol.js';
+	import { prettyToolPayload, summarizeToolCalls, TOOL_GROUP_THRESHOLD } from '#lib/chat-transcript.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	let { calls, label = (name: string) => name }: { calls: ToolCall[]; label?: (name: string) => string } = $props();
 	const anyRunning = $derived(calls.some((call: ToolCall) => call.status === 'running'));

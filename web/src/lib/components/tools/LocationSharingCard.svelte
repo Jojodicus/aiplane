@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import type { LocationSharingState } from '$lib/tools';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { LocationSharingState } from '#lib/tools.js';
 
 	let { location, busy, onshare, onforget }: {
 		location: LocationSharingState;

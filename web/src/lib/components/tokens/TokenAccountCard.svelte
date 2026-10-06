@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import type { TokenManagementDetails } from '$lib/tokens';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { TokenManagementDetails } from '#lib/tokens.js';
 	let { account }: { account: TokenManagementDetails['account'] } = $props();
 	let oidc = $derived(account.oidc_roles.length ? account.oidc_roles.join(', ') : t('tokens-roles-none'));
 	let rbac = $derived(account.rbac_roles.length ? account.rbac_roles.join(', ') : t('tokens-roles-none-granted'));

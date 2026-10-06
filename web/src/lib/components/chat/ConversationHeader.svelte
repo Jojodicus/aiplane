@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { modelSelectOptions, type ChatModelOption } from '$lib/model-option';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { modelSelectOptions, type ChatModelOption } from '#lib/model-option.js';
 
 	let {
 		id,

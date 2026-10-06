@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { filterSearchOptions, nextEnabledOptionIndex, type SearchOption } from '$lib/searchable-select';
-	import { summarizeSelection, toggleValue } from '$lib/multi-select';
+	import { t } from '#lib/i18n.svelte.js';
+	import { filterSearchOptions, nextEnabledOptionIndex, type SearchOption } from '#lib/searchable-select.js';
+	import { summarizeSelection, toggleValue } from '#lib/multi-select.js';
 
 	const generatedId = $props.id();
 	let {

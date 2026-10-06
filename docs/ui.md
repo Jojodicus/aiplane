@@ -771,7 +771,7 @@ catalog strings.
   someone else").
 - **Model choice.** One `ModelPicker` (`components/agents/ModelPicker.svelte`):
   the chat picker's `SearchableSelect` with the options `modelSelectOptions`
-  builds (`$lib/model-option`, the GDPR / NDA badges included), led by
+  builds (`#lib/model-option`, the GDPR / NDA badges included), led by
   *Default (<model>)* for the gateway's default model of that kind
   (`defaults.<kind>` of `GET /api/v0/agent-resources`, Models & routing →
   Default models). The list is `models.<kind>` — what the manager may use and

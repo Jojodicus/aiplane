@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { adminJson, adminPost, adminPut } from '$lib/admin-client';
-	import { ApiError, request } from '$lib/api';
-	import type { AdminModelsData } from '$lib/admin-models';
-	import type { AdminSettingsData, AdminSettingsSection as AdminSettingsSectionData } from '$lib/admin-settings';
-	import { fieldDraft, selectedSettingsCategory } from '$lib/admin-settings';
-	import AdminSettingsRail from '$lib/components/admin/AdminSettingsRail.svelte';
-	import AdminSettingsSection from '$lib/components/admin/AdminSettingsSection.svelte';
-	import SearchSettingsCard from '$lib/components/admin/SearchSettingsCard.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminJson, adminPost, adminPut } from '#lib/admin-client.js';
+	import { ApiError, request } from '#lib/api.js';
+	import type { AdminModelsData } from '#lib/admin-models.js';
+	import type { AdminSettingsData, AdminSettingsSection as AdminSettingsSectionData } from '#lib/admin-settings.js';
+	import { fieldDraft, selectedSettingsCategory } from '#lib/admin-settings.js';
+	import AdminSettingsRail from '#lib/components/admin/AdminSettingsRail.svelte';
+	import AdminSettingsSection from '#lib/components/admin/AdminSettingsSection.svelte';
+	import SearchSettingsCard from '#lib/components/admin/SearchSettingsCard.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<AdminSettingsData | null>(null);
 	let drafts = $state<Record<string, Record<string, string>>>({});

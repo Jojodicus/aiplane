@@ -5,8 +5,8 @@
 		jobTone,
 		relativeTime,
 		type ComfyuiJob
-	} from '$lib/admin-comfyui';
-	import { dt, locale, t } from '$lib/i18n.svelte';
+	} from '#lib/admin-comfyui.js';
+	import { dt, locale, t } from '#lib/i18n.svelte.js';
 
 	let { jobs }: { jobs: ComfyuiJob[] } = $props();
 

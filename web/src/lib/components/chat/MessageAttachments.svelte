@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ChatAttachment } from '$lib/chat-protocol';
-	import { n, t } from '$lib/i18n.svelte';
+	import type { ChatAttachment } from '#lib/chat-protocol.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	let { attachments, removable = false, onremove }: {
 		attachments: ChatAttachment[];

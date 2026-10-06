@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson, adminPost } from '$lib/admin-client';
-	import IntegrationConnectorCard from '$lib/components/integrations/IntegrationConnectorCard.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { withAllToolModes, withToolMode, type IntegrationConnector, type IntegrationMode } from '$lib/integrations';
+	import { adminJson, adminPost } from '#lib/admin-client.js';
+	import IntegrationConnectorCard from '#lib/components/integrations/IntegrationConnectorCard.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { withAllToolModes, withToolMode, type IntegrationConnector, type IntegrationMode } from '#lib/integrations.js';
 
 	let connectors = $state<IntegrationConnector[]>([]);
 	let error = $state<string | null>(null);

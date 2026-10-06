@@ -1,5 +1,5 @@
 <script lang="ts">
-	import NavIcon from '$lib/components/NavIcon.svelte';
+	import NavIcon from '#lib/components/NavIcon.svelte';
 
 	let { connectorKey, icon }: { connectorKey: string; icon: string | null } = $props();
 

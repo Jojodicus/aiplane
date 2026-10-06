@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { issuesUnder, type AgentSummary, type Granted, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { issuesUnder, type AgentSummary, type Granted, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import MainAgentForm from './MainAgentForm.svelte';
 	import RoutesForm from './RoutesForm.svelte';
 	import SettingsForm from './SettingsForm.svelte';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Conversation from '$lib/Conversation.svelte';
+	import Conversation from '#lib/Conversation.svelte';
 
 	let { data } = $props<{ data: { id: string } }>();
 </script>

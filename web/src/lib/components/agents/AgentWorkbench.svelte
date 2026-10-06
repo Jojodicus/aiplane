@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import type { Spec } from '$lib/agents';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import type { Spec } from '#lib/agents.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import AgentEditor from './AgentEditor.svelte';
 	import AgentCanvas from './AgentCanvas.svelte';
 	import ActivityPanel from './ActivityPanel.svelte';

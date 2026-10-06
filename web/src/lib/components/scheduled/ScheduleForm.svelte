@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { adminPost, adminPut } from '$lib/admin-client';
-	import { locale, t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import LinkedChatPicker from '$lib/components/LinkedChatPicker.svelte';
-	import { initialLinkedSession, linkedSessionField } from '$lib/linked-chat';
-	import { modelSelectOptions, type ChatModelOption } from '$lib/model-option';
-	import { cronFromSchedule, defaultSchedule, formatScheduledRun, scheduleFromCron, type ScheduledAction } from '$lib/scheduled';
-	import { timezoneOptions } from '$lib/timezones';
+	import { adminPost, adminPut } from '#lib/admin-client.js';
+	import { locale, t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import LinkedChatPicker from '#lib/components/LinkedChatPicker.svelte';
+	import { initialLinkedSession, linkedSessionField } from '#lib/linked-chat.js';
+	import { modelSelectOptions, type ChatModelOption } from '#lib/model-option.js';
+	import { cronFromSchedule, defaultSchedule, formatScheduledRun, scheduleFromCron, type ScheduledAction } from '#lib/scheduled.js';
+	import { timezoneOptions } from '#lib/timezones.js';
 
 	let { action = null, models, defaultTimezone, onsaved, oncancel } = $props<{
 		action?: ScheduledAction | null;
