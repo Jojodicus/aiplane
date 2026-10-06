@@ -81,8 +81,9 @@ Responses expose the decision through:
 - `X-Gateway-Route-Suggested-Target`
 - `X-Gateway-Route-Confidence`
 
-The feature applies consistently to `/v1/chat/completions`, `/v1/messages`,
-`/v1/messages/count_tokens`, and the built-in persisted chat driver.
+The feature applies consistently to `/v1/chat/completions`, `/v1/responses`,
+`/v1/messages`, `/v1/messages/count_tokens`, and the built-in persisted chat
+driver.
 Token counting stays a cheap, quota-independent operation for static models.
 When an automatic alias requires selector inference, the normal request and
 quota gate runs before that inference.

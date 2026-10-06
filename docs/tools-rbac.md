@@ -439,7 +439,7 @@ change is written to `agent_audit` in the same transaction.
 
 ## Tool injection
 
-On `POST /v1/chat/completions` and `/v1/messages`:
+On `POST /v1/chat/completions`, `/v1/responses` and `/v1/messages`:
 
 1. Compute the caller's allowed set (roles → ids → resolvable in the
    `ToolSource`).

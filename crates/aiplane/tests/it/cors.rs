@@ -68,7 +68,7 @@ async fn preflight_on_chat_completions_is_unauthenticated_2xx_with_cors() {
     );
     assert_eq!(
         h.get(header::ACCESS_CONTROL_ALLOW_METHODS).unwrap(),
-        "GET, POST, OPTIONS",
+        "GET, POST, DELETE, OPTIONS",
     );
     assert_eq!(
         h.get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(),

@@ -17,6 +17,9 @@ when forwarding; client credentials are not passed to the model provider.
 | `GET /v1/models` |
 | `GET /v1/models/{*id}` |
 | `POST /v1/chat/completions` |
+| `POST /v1/responses` |
+| `GET /v1/responses/{*id}` |
+| `DELETE /v1/responses/{*id}` |
 | `POST /v1/messages` |
 | `POST /v1/messages/count_tokens` |
 | `POST /v1/systemone` |
@@ -26,6 +29,10 @@ when forwarding; client credentials are not passed to the model provider.
 | `POST /v1/audio/transcriptions` |
 | `POST /v1/audio/speech` |
 | `GET /v1/sandbox/files/{run}/{filename}` |
+
+`/v1/responses` keeps a response for 30 days when the request has `store` on
+(the default), so `previous_response_id` can continue it; only the person or
+principal whose token created it can read, continue or delete it.
 
 OpenAI-compatible upstreams determine many request options and response fields.
 AIplane compatibility is endpoint-specific; an upstream's additional endpoint
@@ -45,7 +52,8 @@ curl https://aiplane.example.com/v1/chat/completions \
 
 For streaming, add `"stream":true` to that JSON and use a streaming-capable
 client (`curl -N` for a terminal). OpenAI chat uses `text/event-stream` with
-`data:` frames and `[DONE]`. Anthropic Messages uses its own named events.
+`data:` frames and `[DONE]`. OpenAI Responses (`/v1/responses`) and Anthropic
+Messages use their own named events.
 Errors can occur after streaming headers have been sent; clients must inspect
 stream events as well as the initial HTTP status.
 
@@ -433,6 +441,9 @@ Debug fixture routes exist only in development builds.
 | `POST /v1/messages/count_tokens` |
 | `GET /v1/models` |
 | `GET /v1/models/{*id}` |
+| `POST /v1/responses` |
+| `GET /v1/responses/{*id}` |
+| `DELETE /v1/responses/{*id}` |
 | `GET /v1/sandbox/files/{run}/{filename}` |
 | `POST /v1/systemone` |
 | `GET /{*name}` |

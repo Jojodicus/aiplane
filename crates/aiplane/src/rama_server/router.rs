@@ -8,9 +8,9 @@
 //!   - **Non-UI survivors**: the two public `/hooks` triggers (the URL is the
 //!     credential) and the OAuth round-trips, whose redirect URIs are
 //!     registered with external providers and so cannot move.
-//!   - **Model API proxy**: `/v1/models`, `/v1/chat/completions`, `/v1/systemone`,
-//!     `/v1/audio/*`, `/v1/embeddings`, `/v1/images/*` — bearer-authenticated,
-//!     forwarded to the upstream pool selected by model.
+//!   - **Model API proxy**: `/v1/models`, `/v1/chat/completions`, `/v1/responses`,
+//!     `/v1/systemone`, `/v1/audio/*`, `/v1/embeddings`, `/v1/images/*` —
+//!     bearer-authenticated, forwarded to the upstream pool selected by model.
 //!   - **Anthropic-compatible proxy**: `/v1/messages` — the same pipeline
 //!     behind the Messages API wire format, so Claude Code and other
 //!     Anthropic-format clients can be pointed here.
@@ -41,7 +41,8 @@ use crate::rama_server::embed_cors::EmbedCorsLayer;
 use crate::rama_server::first_run::FirstRunLayer;
 use crate::rama_server::setup_api;
 use crate::rama_server::{
-    api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, sandbox_api, spa,
+    api, comfyui_api, messages, oidc_handlers, openapi, pages, proxy, rag_api, responses,
+    sandbox_api, spa,
 };
 use aiplane_core::rama_server::cors::V1CorsLayer;
 
@@ -100,6 +101,13 @@ pub fn router(state: Arc<RamaState>) -> Router<Arc<RamaState>, Endpoint> {
         .with_get("/v1/models/{*id}", proxy::retrieve_model)
         .with_post("/v1/chat/completions", proxy::chat_completions)
         .with_post("/v1/systemone", proxy::system_one)
+        // OpenAI Responses format — what Codex CLI speaks. Same pipeline as
+        // `/v1/chat/completions`, plus stored responses. See
+        // `rama_server::responses`. Catch-all: the handlers read the id (and
+        // an `/input_items` suffix) from the raw path.
+        .with_post("/v1/responses", responses::create)
+        .with_get("/v1/responses/{*id}", responses::retrieve)
+        .with_delete("/v1/responses/{*id}", responses::delete)
         .with_endpoint_layer(endpoint(BodyLimitLayer::ANTHROPIC_UPLOAD))
         // Anthropic Messages format — what Claude Code speaks. Same pipeline
         // as `/v1/chat/completions` (routing, limits, tool loop, usage); only

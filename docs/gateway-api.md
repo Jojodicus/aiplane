@@ -1,8 +1,8 @@
 # Gateway HTTP API
 
 Automatic routing aliases remain wire-compatible with standard clients: send
-the alias in the existing `model` field on `/v1/chat/completions` or
-`/v1/messages`. The response reports the effective decision in
+the alias in the existing `model` field on `/v1/chat/completions`,
+`/v1/responses` or `/v1/messages`. The response reports the effective decision in
 `X-Gateway-Resolved-Model` and the `X-Gateway-Route-*` headers documented in
 [`automatic-routing.md`](automatic-routing.md). No gateway-specific request
 field is required.
@@ -16,6 +16,10 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | POST | `/v1/chat/completions`     | Bearer | Streaming + non-streaming. Server-side tool execution when the caller's token has tool grants (see [`tools-rbac.md`](tools-rbac.md)); otherwise a byte-for-byte passthrough. Routes to the `chat` pool. |
+| POST | `/v1/responses` | Bearer or `x-api-key` | OpenAI Responses compatibility, streaming and buffered replies, on the same pipeline as `/v1/chat/completions`; see [Responses API](#responses-api) and [Codex](codex.md). |
+| GET | `/v1/responses/{id}` | Bearer or `x-api-key` | A stored response, readable by the person or principal whose token created it. |
+| GET | `/v1/responses/{id}/input_items` | Bearer or `x-api-key` | The input items of a stored response, paged with `limit`, `order` and `after`. |
+| DELETE | `/v1/responses/{id}` | Bearer or `x-api-key` | Deletes a stored response. |
 | POST | `/v1/messages` | Bearer or `x-api-key` | Anthropic Messages compatibility, streaming and buffered replies; see [Claude Code](claude-code.md). |
 | POST | `/v1/messages/count_tokens` | Bearer or `x-api-key` | Anthropic-shaped input-token counting for client context management; see [Claude Code](claude-code.md). |
 | POST | `/v1/systemone`            | Bearer | TypeSafe System One-compatible typed decisions. Byte-dumb relay to the `system_one` pool; non-streaming. |
@@ -126,7 +130,7 @@ A request that runs gateway tools (including `web_search_options`) is one whole 
 
 A turn that calls a client-owned tool is handed back to the client as always, and carries no budget signal.
 
-`/v1/messages` follows the same rounds. Its buffered response sets `X-Gateway-Tool-Budget-Exhausted`; the Anthropic wire format has no slot for the body field, so a streamed Anthropic response carries no signal.
+`/v1/messages` and `/v1/responses` follow the same rounds. Their buffered responses set `X-Gateway-Tool-Budget-Exhausted`; neither wire format has a slot for the body field, so a streamed Anthropic or Responses response carries no signal.
 
 ## Streaming
 
@@ -135,6 +139,39 @@ A turn that calls a client-owned tool is handed back to the client as always, an
 - Upstream SSE frames are relayed 1:1 — AIplane does not reframe `data:` lines. The deltas are tapped in parallel through a repetition-based loop guard; a model that collapses into a loop is cut off with a terminating error chunk and `[DONE]`, while a long-but-progressing answer streams through untouched.
 - The gateway-owned tool loop opens an upstream stream for each round. It accumulates tool-call deltas, suppresses gateway-owned calls from the client stream, executes them and continues with their results. Client-owned calls are handed back to the client. A budget-closing final round can be held until complete so ignored tool calls cannot leak into its answer.
 - This is distinct from the web UI's chat, which posts to `POST /api/v0/chat/sessions/{id}/messages` and reads `GET /api/v0/chat/sessions/{id}/events` — SSE carrying AIplane's own JSON event protocol (`snapshot`, `turn_delta`, `tool_call_done`, …), not OpenAI SSE. See [`ui.md`](ui.md#chat-streaming-the-json-event-protocol).
+
+## Responses API
+
+`POST /v1/responses` serves the OpenAI Responses API — what Codex CLI, the OpenAI Agents SDK and other Responses-only clients speak — on the same pipeline as `/v1/chat/completions`: the request is translated into a chat completion, routed, limited, metered and run through the gateway tool loop exactly like one, and the result is translated back. Setup for Codex is in [`codex.md`](codex.md); the translation lives in `crates/aiplane/src/rama_server/responses/`.
+
+| Request | What AIplane does |
+|---|---|
+| `instructions`, `system` and `developer` messages | One leading system message |
+| `input` (a string or items) | Chat messages: `message` items with `input_text`, `input_image` (URL or data URI) and `output_text` parts; `function_call` / `function_call_output` and `custom_tool_call` / `custom_tool_call_output` items as tool calls and tool results; `reasoning` items are dropped |
+| `function` tools | Chat function tools |
+| `custom` (freeform) tools | A function taking one string `input`; a grammar, if any, is added to the description. The call comes back as a `custom_tool_call` item |
+| Hosted tools (`web_search`, `file_search`, `code_interpreter`, …) | Dropped: they only run on OpenAI's platform |
+| `max_output_tokens`, `temperature`, `top_p`, `parallel_tool_calls`, `tool_choice`, `text.format` | `max_tokens`, `temperature`, `top_p`, `parallel_tool_calls`, `tool_choice`, `response_format` |
+| `reasoning.effort` | The serving model's reasoning parameter, via the Fast / Standard / Deep / Max levels (`none`/`minimal`/`low` → Fast, `medium` → Standard, `high` → Deep, `xhigh` → Max) |
+| `input_file` parts | Replaced by a note naming the file: the backends accept text and images only |
+| `include`, `prompt_cache_key`, `text.verbosity`, other unknown fields | Dropped, not rejected |
+| `background: true`, `conversation`, `prompt`, `item_reference`, an `input_image` by `file_id` | `400 invalid_request_error` naming the `param`: AIplane has no background mode, Conversations API, stored prompts or Files API, and answering without them would answer a different request |
+
+The response is a `response` object with `reasoning` (as `reasoning_text` content), `message`, `function_call` and `custom_tool_call` output items, `output_text`, and `usage` (`input_tokens` and `output_tokens`; a buffered response also carries `cached_tokens` and `reasoning_tokens` where the backend reports them, a streamed one reports them as `0`). `model` is the name the client asked for; the resolved one is in `X-Gateway-Resolved-Model`. A `length` stop is `status: "incomplete"` with `incomplete_details.reason: "max_output_tokens"`.
+
+With `stream: true` the response is the Responses event sequence: `response.created`, `response.in_progress`, per item `response.output_item.added` … `response.output_item.done` with `response.output_text.delta`, `response.reasoning_text.delta`, `response.function_call_arguments.delta` or `response.custom_tool_call_input.delta` in between, and `response.completed` (`response.incomplete` after a `length` stop). Every event carries a `sequence_number`, in the order the client receives the events. While the stream is open AIplane re-sends `response.in_progress` every 15 seconds, so a client watching for events does not abort a turn that is busy without upstream output — a gateway tool running, a slow first token. A failure after the stream started is `response.failed` with `error.code` (`rate_limit_exceeded`, `invalid_request` or `server_error`, or the gateway's own code such as `tool_budget_exhausted`) and the upstream's wording in `error.message`; an item the failure cut off has `status: "incomplete"`. As on `/v1/messages`, a client-owned tool call arrives whole, with a single arguments delta.
+
+Errors before a stream starts use the OpenAI envelope of `/v1/chat/completions`; an upstream error is relayed with its status and body.
+
+### Stored responses
+
+A response is stored when its request has `store` on, which is OpenAI's default. Codex sends `store: false`.
+
+- `previous_response_id` continues a stored response: its input and output items, and those of every response it continued in turn, precede the new `input`. Only the new request's `instructions` apply. A chain whose link is missing — deleted, expired, or created by someone else — is `400 previous_response_not_found` rather than a shorter context. A chain is read up to 1000 responses or 64 MiB deep; past that, start a new one by sending the conversation as `input`.
+- `GET /v1/responses/{id}`, `GET /v1/responses/{id}/input_items` and `DELETE /v1/responses/{id}` read, list and delete one.
+- A stored response belongs to the person, or the system principal, whose token created it: any of their tokens can read, continue or delete it, nobody else can, and another caller's id answers `404` exactly like an unknown one. Administrators have no view of stored responses. Deleting the person or principal deletes them.
+- Stored responses are kept for 30 days. Expired ones are never served and are deleted hourly.
+- A streamed response is stored before `response.completed` is sent, so a client may continue it immediately.
 
 ## Header handling
 
@@ -199,10 +236,12 @@ Status codes AIplane itself produces:
 | Status | `code` | Cause |
 |---|---|---|
 | `400` | `invalid_request` | Malformed body, missing `model`, unparseable multipart. |
+| `400` | `previous_response_not_found` | `/v1/responses`: a response in the `previous_response_id` chain does not exist, has expired, or belongs to someone else. |
 | `401` | `unauthorized` | Missing / malformed / unknown bearer token. |
 | `403` | `model_not_allowed` | The credential's model restriction excludes the requested model. |
 | `429` | `rate_limit_exceeded` | An applicable request, token or cost limit is exceeded; inspect the response and `Retry-After`. |
 | `404` | `model_not_found` | No backend in any pool serves the requested model. |
+| `404` | `not_found` | `/v1/responses/{id}`: no stored response with that id belongs to the caller. |
 | `500` | `internal_error` | Internal failure or unparseable upstream JSON. |
 | `502` | `upstream_unreachable` | A chosen backend was contacted but the transport/read failed. |
 | `502` | `tool_budget_exhausted` | Tool rounds ran, but the model never produced text, even in the closing round after the budget ran out. See [Tool-round budget](#tool-round-budget). |

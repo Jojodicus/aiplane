@@ -37,17 +37,16 @@ production DB."
 4. **Not pushed yet?** A migration that is not on `origin/main` has
    run on no installation, so it is amended rather than followed by a
    new one: all unpushed work shares one migration (today
-   `0077_agent_builder.sql`, which squashed the agent-builder chain and
-   took the agent architect's tables in #118). Amending it means, in
-   the same commit: replace its line in
-   `tests/migration-checksums.txt` with the one
-   `no_released_migration_has_been_modified` prints, regenerate
-   `tests/fixtures/schema_after_agent_builder.txt` with
-   `UPDATE_SCHEMA_FIXTURE=1 mise run test-crate aiplane-core migration_0077`
-   and review its diff, and keep `tests/migration_0077.rs` passing (the
-   lossless upgrade from the last pushed migration). Developers whose
+   `0078_openai_responses.sql`). Amending it means, in the same commit:
+   replace its line in `tests/migration-checksums.txt` with the one
+   `no_released_migration_has_been_modified` prints. Developers whose
    local database already ran the old bytes must recreate it. The
-   moment the migration is pushed, rule (1) applies.
+   moment the migration is pushed, rule (1) applies. Squashing several
+   unpushed migrations into one additionally needs the proof
+   `0077_agent_builder.sql` carries: a schema fixture
+   (`tests/fixtures/schema_after_agent_builder.txt`, regenerated with
+   `UPDATE_SCHEMA_FIXTURE=1 mise run test-crate aiplane-core migration_0077`)
+   and a lossless-upgrade test (`tests/migration_0077.rs`).
 
 ### Migrations run with foreign keys off
 

@@ -630,6 +630,9 @@ async fn main() -> anyhow::Result<()> {
     // with their sub-agent runs, state and visitor sessions.
     aiplane_runtime::agents::retention::spawn_retention_sweeper(state.clone());
 
+    // Responses stored through `/v1/responses` past their 30 days.
+    aiplane::rama_server::responses::store::spawn_pruner(state.db.clone());
+
     // Before anything can fire: no run pending now can still be running, so
     // close them rather than let the history show them as running forever.
     // Scheduled runs are swept by the worker itself, ahead of its first tick.

@@ -107,8 +107,10 @@ where
 /// Anthropic-format browser client authenticate in Node and fail in a page.
 /// `anthropic-version` rides on *every* Messages API request, and
 /// `anthropic-beta` is forwarded upstream deliberately — both are useless if
-/// the preflight rejects them before the handler ever runs.
+/// the preflight rejects them before the handler ever runs. `DELETE` is for
+/// `DELETE /v1/responses/{id}`, the one `/v1` route that removes something.
 const V1_CORS: CorsHeaders = CorsHeaders {
+    allow_methods: "GET, POST, DELETE, OPTIONS",
     allow_headers: "authorization, content-type, x-api-key, anthropic-version, anthropic-beta",
     max_age_secs: "86400",
 };
@@ -118,6 +120,8 @@ const V1_CORS: CorsHeaders = CorsHeaders {
 /// the embed endpoint only a live embed key's); what they write once they
 /// allow one is this.
 pub struct CorsHeaders {
+    /// The methods a cross-origin caller may use.
+    pub allow_methods: &'static str,
     /// The request headers a cross-origin caller may set.
     pub allow_headers: &'static str,
     /// How long a browser may cache the preflight answer.
@@ -132,7 +136,7 @@ impl CorsHeaders {
         headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_static("GET, POST, OPTIONS"),
+            HeaderValue::from_static(self.allow_methods),
         );
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
