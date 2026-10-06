@@ -14,7 +14,7 @@ Shared crates:
 - **`session-core`** — chat substrate (DB schema + worker registry + the JSON-SSE event protocol in `chat_json` + `SessionDriver` trait). AIplane plugs in an `OpenAiDriver`; the trait keeps the substrate driver-agnostic so a future second consumer can drive the same chat surface without forking. It is owner-agnostic too: it knows a person's conversation by `user_id` and treats any other owner as opaque — agent runs, visitors and principals are `aiplane-agents`' business.
 - **`shared`** — OpenAI wire types shared across the workspace.
 
-Built on **rama 0.3** (HTTP server + router + middleware) on the server, and **SvelteKit 2 + Svelte 5** with **daisyUI v5 + Tailwind v4** in `web/`. The browser talks to `/api/v0` over JSON and receives live turn updates as JSON frames on an SSE stream.
+Built on **rama 0.3** (HTTP server + router + middleware) on the server, and **SvelteKit 3 + Svelte 5** with **daisyUI v5 + Tailwind v4** in `web/`. The browser talks to `/api/v0` over JSON and receives live turn updates as JSON frames on an SSE stream.
 
 ## Repo layout
 

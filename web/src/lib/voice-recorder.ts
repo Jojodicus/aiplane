@@ -2,7 +2,7 @@
  * The SPA's side of the shared microphone (`web/shared/voice-recorder.ts`,
  * also the embed widget's): the recording as the `Blob` the transcription
  * uploads take, and the failures worded in the user's language. The worklet
- * is served at `${base}/pcm-recorder.js` (`web/static/`).
+ * is served at `/pcm-recorder.js` (`web/static/`).
  */
 import { t } from './i18n.svelte';
 import { MicRecording, recordingBlocker } from '../../shared/voice-recorder.ts';

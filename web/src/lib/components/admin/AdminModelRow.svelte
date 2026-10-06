@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { untrack } from 'svelte';
 	import { configuredFacets, pricingUnitFor } from '$lib/admin-models';
 	import type { AdminModel } from '$lib/admin-models';
@@ -61,7 +60,7 @@
 					{#if facets.length === 0}<span class="text-xs text-base-content/40">{t('admin-not-configured')}</span>{/if}
 					{#each facets as facet}<span class="badge badge-ghost badge-sm">{t(`admin-badge-${facet === 'context' ? 'ctx' : facet === 'capabilities' ? 'caps' : facet}`)}</span>{/each}
 				</span>
-				<a class="btn btn-ghost btn-xs justify-self-end" href="{base}/admin/models/edit?model={encodeURIComponent(model.name)}">{t('admin-edit-model')}</a>
+				<a class="btn btn-ghost btn-xs justify-self-end" href="/admin/models/edit?model={encodeURIComponent(model.name)}">{t('admin-edit-model')}</a>
 			</div>
 		</div>
 	</div>

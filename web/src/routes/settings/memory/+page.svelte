@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -102,7 +101,7 @@
 						<p class="text-sm text-base-content/60">{t('memory-kind-preference-hint', { count: preferences.max_count, chars: preferences.char_budget })}</p>
 						{#if !preferences.in_context}
 							<div class="alert alert-warning alert-soft text-sm">
-								<span>{t('memory-preference-not-in-context')} <a class="link" href="{base}/tools">{t('nav-tools')}</a></span>
+								<span>{t('memory-preference-not-in-context')} <a class="link" href="/tools">{t('nav-tools')}</a></span>
 							</div>
 						{/if}
 					{/if}

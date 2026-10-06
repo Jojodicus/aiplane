@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { adminJson } from '$lib/admin-client';
 	import CollectionForm from './CollectionForm.svelte';
@@ -33,7 +32,7 @@
 	async function done(name: string, aggregate: boolean, gitRef: string | null) {
 		const notice = id === null ? (aggregate ? 'created-aggregate' : 'queued') : 'saved';
 		const ref = notice === 'queued' && gitRef ? `&ref=${encodeURIComponent(gitRef)}` : '';
-		await goto(`${base}/rag?notice=${notice}&name=${encodeURIComponent(name)}${ref}`);
+		await goto(`/rag?notice=${notice}&name=${encodeURIComponent(name)}${ref}`);
 	}
 
 	onMount(async () => {
@@ -64,7 +63,7 @@
 <svelte:head><title>{id === null ? t('rag-new-page-title') : t('rag-edit-page-title')}</title></svelte:head>
 
 <div class="w-full max-w-4xl">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/rag">← {t('rag-back-to-collections')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/rag">← {t('rag-back-to-collections')}</a>
 	<h1 class="m-0 mt-2 text-2xl font-bold">
 		{id === null ? t('rag-create-heading') : collection ? t('rag-edit-heading', { name: collection.name }) : t('rag-edit-page-title')}
 	</h1>
@@ -85,7 +84,7 @@
 				{groups}
 				defaultModel={defaultEmbedding}
 				onsaved={done}
-				oncancel={() => goto(`${base}/rag`)}
+				oncancel={() => goto('/rag')}
 			/>
 		</div>
 	{/if}

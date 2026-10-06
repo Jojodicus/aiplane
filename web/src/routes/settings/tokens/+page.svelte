@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
 	import EditModal from '$lib/components/EditModal.svelte';
@@ -95,8 +94,8 @@
 <div class="flex w-full flex-col gap-4">
 	<p class="text-sm text-base-content/60">{t('tokens-intro')}</p>
 	<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('tokens-page-heading')}>
-		<a class:tab-active={selected === 'tokens'} class="tab whitespace-nowrap" href="{base}/settings/tokens?tab=tokens" aria-current={selected === 'tokens' ? 'page' : undefined}>{t('tokens-tab-tokens')}</a>
-		<a class:tab-active={selected === 'guides'} class="tab whitespace-nowrap" href="{base}/settings/tokens?tab=guides" aria-current={selected === 'guides' ? 'page' : undefined}>{t('tokens-tab-guides')}</a>
+		<a class:tab-active={selected === 'tokens'} class="tab whitespace-nowrap" href="/settings/tokens?tab=tokens" aria-current={selected === 'tokens' ? 'page' : undefined}>{t('tokens-tab-tokens')}</a>
+		<a class:tab-active={selected === 'guides'} class="tab whitespace-nowrap" href="/settings/tokens?tab=guides" aria-current={selected === 'guides' ? 'page' : undefined}>{t('tokens-tab-guides')}</a>
 	</nav>
 	{#if error}<div class="alert alert-error mb-4"><span>{error}</span></div>{/if}
 	{#if notice}<div class="alert alert-info mb-4"><span>{notice}</span></div>{/if}

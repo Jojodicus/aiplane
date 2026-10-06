@@ -3,7 +3,6 @@
 	import { adminDelete, adminJson, adminPatch, adminPost } from '$lib/admin-client';
 	import { dt, t } from '$lib/i18n.svelte';
 	import { parseSources, sourceLabel, type RagCollection, type RagLogEntry, type RagRef } from '$lib/rag';
-	import { base } from '$app/paths';
 	import EditModal from '$lib/components/EditModal.svelte';
 
 	let { collection, onchanged, onnotice } = $props<{
@@ -183,7 +182,7 @@
 				</div>
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<a class="btn btn-sm" href="{base}/rag/{collection.id}/edit">{t('rag-button-edit')}</a>
+				<a class="btn btn-sm" href="/rag/{collection.id}/edit">{t('rag-button-edit')}</a>
 				<button class="btn btn-sm" onclick={rotateSync}>{collection.sync_hook_set ? t('rag-button-sync-token-rotate') : t('rag-button-sync-token')}</button>
 				{#if collection.sync_hook_set}<button class="btn btn-ghost btn-sm" onclick={clearSync}>{t('rag-button-sync-token-clear')}</button>{/if}
 				<button class="btn btn-outline btn-error btn-sm" onclick={removeCollection}>{t('rag-button-delete-collection')}</button>

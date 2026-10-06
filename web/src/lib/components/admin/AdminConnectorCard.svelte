@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { connectorBadges, type AdminConnector } from '$lib/admin-connectors';
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n.svelte';
 
 	let { connector, ontoggle, ondelete } = $props<{
@@ -21,7 +20,7 @@
 				<p class="m-0 mt-0.5 break-all text-xs text-base-content/50">{connector.base_url}</p>
 			</div>
 			<div class="flex shrink-0 flex-wrap items-center gap-2">
-				<a href={`${base}/admin/connectors/${encodeURIComponent(connector.key)}/edit`} class="btn btn-ghost btn-xs">{t('connectors-edit-summary')}</a>
+				<a href={`/admin/connectors/${encodeURIComponent(connector.key)}/edit`} class="btn btn-ghost btn-xs">{t('connectors-edit-summary')}</a>
 				<button type="button" class="btn btn-ghost btn-xs {connector.enabled ? '' : 'btn-primary'}" disabled={!connector.enabled && connector.needs_setup} title={!connector.enabled && connector.needs_setup ? t('connectors-enable-disabled-title') : undefined} onclick={ontoggle}>{connector.enabled ? t('connectors-disable-button') : t('connectors-enable-button')}</button>
 				{#if connector.audit}<a href={`/admin/connectors/${encodeURIComponent(connector.key)}/audit`} class="btn btn-ghost btn-xs">{t('connectors-audit-log-button')}</a>{/if}
 				<button type="button" class="btn btn-ghost btn-xs text-error" onclick={ondelete}>{t('connectors-delete-button')}</button>

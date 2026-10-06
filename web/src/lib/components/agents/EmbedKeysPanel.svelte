@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { agentsApi, embedSnippet, splitList, type AgentError, type EmbedKey } from '$lib/agents';
 	import { t } from '$lib/i18n.svelte';
 
@@ -36,7 +35,7 @@
 	const create = () =>
 		run(async () => {
 			const created = await agentsApi.createEmbedKey(agentId, { name: name.trim(), origins: splitList(origins) });
-			snippet = embedSnippet(`${window.location.origin}${base}/embed.js`, created.key);
+			snippet = embedSnippet(`${window.location.origin}/embed.js`, created.key);
 			name = '';
 			origins = '';
 		});

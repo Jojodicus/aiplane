@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { adminDelete, adminPost } from '$lib/admin-client';
 	import { locale, t } from '$lib/i18n.svelte';
 	import { runLinks } from '$lib/run-links';
@@ -79,7 +78,7 @@
 				{#if webhook.last_error}<p class="mt-1 text-xs text-error">{webhook.last_error}</p>{/if}
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<a class="btn btn-sm" href="{base}/webhooks/{webhook.id}/edit">{t('webhooks-edit-title')}</a>
+				<a class="btn btn-sm" href="/webhooks/{webhook.id}/edit">{t('webhooks-edit-title')}</a>
 				<button class="btn btn-sm" type="button" onclick={toggle}>{webhook.enabled ? t('webhooks-pause-title') : t('webhooks-resume-title')}</button>
 				<button class="btn btn-sm" type="button" onclick={rotate}>{t('webhooks-rotate-title')}</button>
 				<button class="btn btn-outline btn-error btn-sm" type="button" onclick={remove}>{t('webhooks-delete-title')}</button>
@@ -90,17 +89,17 @@
 		     rather than showing dead links. -->
 		<div class="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3 text-sm">
 			{#if links.chat}
-				<a class="link link-hover font-medium" href="{base}{links.chat}">{t('webhooks-open-chat')}</a>
-				{#if links.runs}<a class="link link-hover text-base-content/70" href="{base}{links.runs}">{t('webhooks-open-runs', { count: webhook.run_count })}</a>{/if}
+				<a class="link link-hover font-medium" href={links.chat}>{t('webhooks-open-chat')}</a>
+				{#if links.runs}<a class="link link-hover text-base-content/70" href={links.runs}>{t('webhooks-open-runs', { count: webhook.run_count })}</a>{/if}
 			{:else if links.runs}
 				{#if webhook.last_chat_deleted && webhook.chat_count <= 1}<span class="badge badge-sm badge-outline text-base-content/60">{t('webhooks-run-chat-deleted')}</span>{/if}
-				<a class="link link-hover font-medium" href="{base}{links.runs}">
+				<a class="link link-hover font-medium" href={links.runs}>
 					{webhook.chat_count > 0 ? t('webhooks-open-chats', { count: webhook.chat_count }) : t('webhooks-open-runs', { count: webhook.run_count })}
 				</a>
 			{:else}
 				<span class="text-base-content/50">{t('webhooks-never-fired')}</span>
 			{/if}
-			{#if webhook.has_payload}<a class="link link-hover text-base-content/70" href="{base}/webhooks/{webhook.id}/rerun">{t('webhooks-rerun-link')}</a>{/if}
+			{#if webhook.has_payload}<a class="link link-hover text-base-content/70" href="/webhooks/{webhook.id}/rerun">{t('webhooks-rerun-link')}</a>{/if}
 		</div>
 	</div>
 </article>

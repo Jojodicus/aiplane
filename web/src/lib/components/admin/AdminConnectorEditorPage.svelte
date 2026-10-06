@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { adminJson, adminPut } from '$lib/admin-client';
 	import {
@@ -40,7 +39,7 @@
 				scopes: splitConnectorValues(value.scopes),
 				groups: value.groups
 			});
-			await goto(`${base}/admin/connectors`);
+			await goto('/admin/connectors');
 		} catch (caught) {
 			error = String(caught);
 		}
@@ -58,7 +57,7 @@
 <svelte:head><title>{key === null ? t('connectors-add-page-title') : t('connectors-edit-page-title')}</title></svelte:head>
 
 <div class="w-full max-w-3xl">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/admin/connectors">← {t('connectors-heading')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/admin/connectors">← {t('connectors-heading')}</a>
 	<h1 class="m-0 mt-2 text-2xl font-bold">
 		{key === null ? t('connectors-add-summary') : t('connectors-edit-heading', { name: connector?.title ?? key })}
 	</h1>

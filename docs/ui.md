@@ -10,7 +10,7 @@ The whole stack:
 |---|---|---|
 | HTTP server / router | rama 0.3 | `crates/aiplane/src/rama_server/router.rs` |
 | Static SPA hosting | hand-rolled rama handler over `tokio::fs` | `crates/aiplane/src/rama_server/spa.rs` |
-| UI framework | SvelteKit 2 / Svelte 5 (runes), Vite | `web/` |
+| UI framework | SvelteKit 3 / Svelte 5 (runes), Vite | `web/` |
 | API contract | OpenAPI 3.1, generated from the router and the handlers' wire types | `GET /openapi.json` (`crates/aiplane/src/rama_server/openapi/`) |
 | API client | one `fetch` helper + hand-declared shapes | `web/src/lib/api.ts` |
 | Chat streaming | JSON events over SSE | `crates/session-core/src/chat_json.rs` ↔ `web/src/lib/chat-protocol.ts` |

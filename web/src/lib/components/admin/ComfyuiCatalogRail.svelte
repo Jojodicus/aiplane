@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { groupWorkflowsByKind, type ComfyuiWorkflow } from '$lib/admin-comfyui';
 	import { n, t } from '$lib/i18n.svelte';
 
@@ -50,7 +49,7 @@
 				</div>
 				{#each group.workflows as workflow (workflow.id)}
 					<a
-						href="{base}/admin/comfyui?workflow={encodeURIComponent(workflow.id)}"
+						href="/admin/comfyui?workflow={encodeURIComponent(workflow.id)}"
 						aria-current={selected?.id === workflow.id ? 'true' : undefined}
 						class="block truncate rounded px-2 py-1.5 font-mono text-sm transition-colors {selected?.id ===
 						workflow.id

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { api, ApiError } from '$lib/api';
 	import type { CanvasDocument, ChatAsset, ChatCapability } from '$lib/api';
@@ -674,7 +673,7 @@
 		try {
 			const forked = await api.forkChatSession(id);
 			await refreshSidebar();
-			await goto(`${base}/chat/${forked.id}`);
+			await goto(`/chat/${forked.id}`);
 		} catch (err) {
 			notice = String(err);
 		}

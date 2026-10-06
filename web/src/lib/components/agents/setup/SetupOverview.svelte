@@ -2,7 +2,6 @@
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import { base } from '$app/paths';
 	import { ensureShape, type Spec } from '$lib/agents';
 	import { SECTIONS, checklist, sectionStatus, summary, type SectionStatus, type StepKey } from '$lib/agent-setup';
 	import { emptyPlan, type GrantPlan } from '$lib/agent-grant-plan';
@@ -96,7 +95,7 @@
 				</div>
 				<div class="flex flex-wrap gap-2">
 					<button class="btn" type="button" onclick={() => (planning = true)}>🎙 {t('architect-open')}</button>
-					<a class="btn btn-primary" href="{base}/agents/{ws.id}/setup/start">{t('agents-setup-cta-start')}</a>
+					<a class="btn btn-primary" href="/agents/{ws.id}/setup/start">{t('agents-setup-cta-start')}</a>
 				</div>
 			</div>
 		{/if}

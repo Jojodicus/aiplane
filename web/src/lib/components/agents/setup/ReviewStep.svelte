@@ -1,6 +1,5 @@
 <script lang="ts">
 	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
-	import { base } from '$app/paths';
 	import { agentsApi, type AgentError, type Spec } from '$lib/agents';
 	import { SECTIONS, checklist, setupErrorMessage, summary, type StepKey } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
@@ -77,5 +76,5 @@
 			{#if testError}<p class="m-0 mt-2 text-error" role="alert">{testError}</p>{/if}
 		</AiSuggestion>
 	{/if}
-	<a class="link link-primary text-sm" href="{base}/agents/{ws.id}?tab=try">{t('agents-setup-review-try')}</a>
+	<a class="link link-primary text-sm" href="/agents/{ws.id}?tab=try">{t('agents-setup-review-try')}</a>
 </div>

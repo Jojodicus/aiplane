@@ -1,6 +1,5 @@
 <script lang="ts">
 	import StepIndicator from '$lib/components/ui/StepIndicator.svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { STEPS, asStep, type StepKey } from '$lib/agent-setup';
 	import { useWorkspace } from '$lib/agent-workspace.svelte';
@@ -24,8 +23,8 @@
 	const completed = $derived(STEPS.map((_, i) => i).filter((i) => i < index));
 	const name = $derived(ws.spec.profile?.display || ws.detail?.display || ws.detail?.name || '');
 
-	const href = (to: StepKey) => `${base}/agents/${ws.id}/setup/${to}`;
-	const overview = () => `${base}/agents/${ws.id}?tab=setup`;
+	const href = (to: StepKey) => `/agents/${ws.id}/setup/${to}`;
+	const overview = () => `/agents/${ws.id}?tab=setup`;
 
 	async function saved(): Promise<boolean> {
 		return !ws.writable || !ws.dirty || (await ws.save());

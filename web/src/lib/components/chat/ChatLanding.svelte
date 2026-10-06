@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { t } from '$lib/i18n.svelte';
 	import { me } from '$lib/session.svelte';
@@ -15,7 +14,7 @@
 		api.chatLanding()
 			.then(async ({ session }) => {
 				await refreshSidebar();
-				await goto(`${base}/chat/${session.id}`, { replaceState: true });
+				await goto(`/chat/${session.id}`, { replace: true });
 			})
 			.catch((caught) => { error = String(caught); });
 	});

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import {
 		formatDuration,
 		jobDurationMs,
@@ -59,7 +58,7 @@
 							<span class="break-all font-mono text-xs text-base-content/60">{job.output_filename}</span>
 						{/if}
 						{#if job.session_id}
-							<a class="link link-hover ml-2 whitespace-nowrap text-xs" href="{base}/chat/{job.session_id}">
+							<a class="link link-hover ml-2 whitespace-nowrap text-xs" href="/chat/{job.session_id}">
 								{t('admin-comfyui-job-open')} ↗
 							</a>
 						{/if}

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
 	import { selectedGroupAdminTab, skillMatrixRows, toolMatrixRows } from '$lib/admin-groups';
@@ -60,7 +59,7 @@
 
 	async function createFrom(value: string) {
 		seedOidcValue = value;
-		await goto(`${base}/admin/groups?tab=groups`);
+		await goto('/admin/groups?tab=groups');
 	}
 
 	let toolRows = $derived(
@@ -86,10 +85,10 @@
 			<p class="max-w-3xl text-sm text-base-content/70">{t('groups-intro')}</p>
 		</div>
 		<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('groups-heading')}>
-			<a class:tab-active={selected === 'groups'} class="tab whitespace-nowrap" href="{base}/admin/groups?tab=groups">{t('groups-tab-groups')}</a>
-			<a class:tab-active={selected === 'identity'} class="tab whitespace-nowrap" href="{base}/admin/groups?tab=identity">{t('groups-tab-identity')}</a>
-			<a class:tab-active={selected === 'tools'} class="tab whitespace-nowrap" href="{base}/admin/groups?tab=tools">{t('groups-tab-tools')}</a>
-			<a class:tab-active={selected === 'skills'} class="tab whitespace-nowrap" href="{base}/admin/groups?tab=skills">{t('groups-tab-skills')}</a>
+			<a class:tab-active={selected === 'groups'} class="tab whitespace-nowrap" href="/admin/groups?tab=groups">{t('groups-tab-groups')}</a>
+			<a class:tab-active={selected === 'identity'} class="tab whitespace-nowrap" href="/admin/groups?tab=identity">{t('groups-tab-identity')}</a>
+			<a class:tab-active={selected === 'tools'} class="tab whitespace-nowrap" href="/admin/groups?tab=tools">{t('groups-tab-tools')}</a>
+			<a class:tab-active={selected === 'skills'} class="tab whitespace-nowrap" href="/admin/groups?tab=skills">{t('groups-tab-skills')}</a>
 		</nav>
 	</header>
 

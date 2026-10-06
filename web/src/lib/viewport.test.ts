@@ -15,8 +15,3 @@ test('the chat and an agent test chat fill the window, every other page scrolls'
 	assert.ok(!boundedViewport(at('/agents')));
 	assert.ok(!boundedViewport(at('/chatter')));
 });
-
-test('the rule reads the path under the base the app is served at', () => {
-	assert.ok(boundedViewport(at('/gw/agents/support?tab=try'), '/gw'));
-	assert.ok(boundedViewport(at('/gw/chat'), '/gw'));
-});

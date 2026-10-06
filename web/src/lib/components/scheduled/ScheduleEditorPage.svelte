@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { adminJson } from '$lib/admin-client';
 	import ScheduleForm from './ScheduleForm.svelte';
@@ -28,7 +27,7 @@
 	let missing = $state(false);
 
 	async function done() {
-		await goto(`${base}/scheduled?notice=${id === null ? 'created' : 'saved'}`);
+		await goto(`/scheduled?notice=${id === null ? 'created' : 'saved'}`);
 	}
 
 	onMount(async () => {
@@ -48,7 +47,7 @@
 </script>
 
 <div class="w-full max-w-4xl">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/scheduled">← {t('scheduled-back')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/scheduled">← {t('scheduled-back')}</a>
 	<h1 class="m-0 mt-2 text-2xl font-bold">
 		{id === null ? t('scheduled-create-heading') : action ? t('scheduled-edit-named-heading', { name: action.name }) : t('scheduled-edit-heading')}
 	</h1>
@@ -66,7 +65,7 @@
 				models={data.models}
 				defaultTimezone={data.default_timezone}
 				onsaved={done}
-				oncancel={() => goto(`${base}/scheduled`)}
+				oncancel={() => goto('/scheduled')}
 			/>
 		</div>
 	{/if}

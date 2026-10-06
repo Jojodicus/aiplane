@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { adminJson } from '$lib/admin-client';
 	import { locale, t } from '$lib/i18n.svelte';
@@ -43,7 +42,7 @@
 <svelte:head><title>{t('scheduled-runs-page-title')}</title></svelte:head>
 
 <div class="w-full max-w-4xl">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/scheduled">← {t('scheduled-back')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/scheduled">← {t('scheduled-back')}</a>
 	<h1 class="m-0 mt-2 text-2xl font-bold">{action ? t('scheduled-runs-heading', { name: action.name }) : t('scheduled-runs-page-title')}</h1>
 	<p class="mt-2 text-sm text-base-content/60">{t('scheduled-runs-intro')}</p>
 
@@ -70,7 +69,7 @@
 								{#if run.chat_deleted}
 									<span class="badge badge-sm badge-outline text-base-content/60">{t('scheduled-run-chat-deleted')}</span>
 								{:else if run.session_id}
-									<a class="link link-hover" href="{base}/chat/{run.session_id}">{t('scheduled-run-open')}</a>
+									<a class="link link-hover" href="/chat/{run.session_id}">{t('scheduled-run-open')}</a>
 								{/if}
 							</div>
 						</li>

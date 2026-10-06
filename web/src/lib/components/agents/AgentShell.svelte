@@ -1,7 +1,6 @@
 <script lang="ts">
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { onMount, type Snippet } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { boundedViewport } from '$lib/viewport';
@@ -21,7 +20,7 @@
 	const ws = provideWorkspace(new AgentWorkspace(id));
 	// The test chat fills the window the shell bounds: the page passes the
 	// height on down a flex column instead of growing past it.
-	const bounded = $derived(boundedViewport(page.url, base));
+	const bounded = $derived(boundedViewport(page.url));
 
 	onMount(() => void ws.load());
 	$effect(() => ws.remember());
@@ -34,7 +33,7 @@
 		try {
 			await ws.publish();
 		} catch {
-			if (ws.issues.length) await goto(`${base}/agents/${id}?tab=setup`);
+			if (ws.issues.length) await goto(`/agents/${id}?tab=setup`);
 		}
 	}
 
@@ -42,7 +41,7 @@
 		if (!ws.detail || !confirm(t('agents-delete-confirm', { name: ws.detail.name }))) return;
 		try {
 			await agentsApi.remove(id);
-			await goto(`${base}/agents`);
+			await goto('/agents');
 		} catch (err) {
 			ws.fail(err);
 		}
@@ -50,7 +49,7 @@
 </script>
 
 <div data-agent-page class="flex w-full flex-col gap-4 {bounded ? 'h-full min-h-0' : ''}">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/agents">← {t('agents-back')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/agents">← {t('agents-back')}</a>
 
 	{#if ws.loadError}
 		<div class="alert alert-error"><span>{ws.loadError}</span></div>

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { adminJson } from '$lib/admin-client';
 	import WebhookRow from '$lib/components/webhooks/WebhookRow.svelte';
@@ -54,7 +53,7 @@
 	<section class="space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<h2 class="text-xl font-semibold">{t('webhooks-list-heading')}</h2>
-			<a class="btn btn-primary btn-sm" href="{base}/webhooks/new">{t('webhooks-create-heading')}</a>
+			<a class="btn btn-primary btn-sm" href="/webhooks/new">{t('webhooks-create-heading')}</a>
 		</div>
 		{#if loading}
 			<div class="skeleton h-28 w-full"></div>

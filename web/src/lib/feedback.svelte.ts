@@ -22,7 +22,6 @@
  * Endpoints are `/api/v0/feedback{,/config,/extract}` and, for dictation, the
  * existing `/api/v0/transcriptions`.
  */
-import { base } from '$app/paths';
 import { getConsoleLogs, getNetworkLogs } from './feedback-capture';
 import {
 	capturePageDataUrl,
@@ -337,7 +336,7 @@ export async function toggleVoice(): Promise<void> {
 		return;
 	}
 	try {
-		recorder = await startRecording(`${base}/pcm-recorder.js`);
+		recorder = await startRecording('/pcm-recorder.js');
 		feedback.voicePhase = 'recording';
 	} catch (err) {
 		feedback.error = recordingErrorMessage(err);
@@ -408,7 +407,7 @@ export function stopVoice(): void {
  * console/network ring buffers and the tail of the conversation.
  */
 export function collectSystemInfo(): Record<string, unknown> {
-	const segments = location.pathname.replace(base, '').split('/').filter(Boolean);
+	const segments = location.pathname.split('/').filter(Boolean);
 	const info: Record<string, unknown> = {
 		url: location.href,
 		module: segments[0] ?? '',
@@ -438,7 +437,7 @@ export function collectSystemInfo(): Record<string, unknown> {
 
 /** The chat-log consent only makes sense on a conversation page. */
 export function isChatPage(): boolean {
-	const segments = location.pathname.replace(base, '').split('/').filter(Boolean);
+	const segments = location.pathname.split('/').filter(Boolean);
 	return segments[0] === 'chat' && Boolean(segments[1]);
 }
 

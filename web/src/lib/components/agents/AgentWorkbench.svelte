@@ -44,12 +44,12 @@
 	const sub = $derived(subs.find((x) => x === param('sub')) ?? subs[0] ?? '');
 
 	function navigate(next: Record<string, string | null>) {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		for (const [key, value] of Object.entries(next)) {
 			if (value === null) url.searchParams.delete(key);
 			else url.searchParams.set(key, value);
 		}
-		void goto(url, { replaceState: true, noScroll: true, keepFocus: true });
+		void goto(url, { replace: true, reset: false });
 	}
 
 	function applyJson(parsed: Spec) {

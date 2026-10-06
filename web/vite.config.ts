@@ -23,6 +23,10 @@ import { gatewayDevProxy } from './src/lib/dev-proxy.ts';
  */
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit({
+		// Kept over Kit 3's `#lib` subpath import: svelte-check in TS 7 (`--tsgo`)
+		// mode cannot resolve a `.svelte` file behind a package `imports` entry
+		// and types every component imported that way as `any`.
+		alias: { $lib: 'src/lib' },
 		compilerOptions: {
 			// Runes mode for our components (Svelte 5).
 			runes: ({ filename }) =>

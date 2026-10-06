@@ -5,7 +5,7 @@
 // Phase 2 will grow this into the full app store (chat list, toasts);
 // phase 1 only needs the identity proof.
 import { api, ApiError } from '$lib/api';
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 
 export const me = $state<{ value: Awaited<ReturnType<typeof api.me>> | null; loaded: boolean }>({
 	value: null,
