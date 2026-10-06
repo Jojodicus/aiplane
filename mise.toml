@@ -287,8 +287,9 @@ set -eu
 # disagree, so a dependency can never drift in silently.
 npm --prefix web ci --no-audit --no-fund
 # web/.npmrc sets ignore-scripts, which suppresses OUR `prepare` hook along
-# with every dependency's. svelte-kit sync generates .svelte-kit/tsconfig.json
-# and the $types the SPA imports, so run it here where it is visible.
+# with every dependency's. svelte-kit sync generates node_modules/$app/tsconfig.json
+# (which web/tsconfig.json extends) and the $types the SPA imports, so run it
+# here where it is visible.
 npm --prefix web run prepare
 """
 
@@ -300,22 +301,27 @@ outputs = ["target/frontend/build/index.html", "target/frontend/build/embed.js"]
 run = """
 set -eu
 # Start from a clean output tree. A `vite build` over a previous one can leave
-# the emitted index.html and the JS chunks disagreeing about SvelteKit's
-# per-build global (`__sveltekit_<id>`) — the bootstrap then reads `.data` off
-# an undefined global and the app dies on load with a blank page and a single
-# console exception. Nothing downstream catches that: the files are all
-# present, so the build "succeeds" and every e2e page assertion fails at once.
+# an index.html that boots chunks of a different build — the app then dies on
+# load with a blank page and a single console exception. Nothing downstream
+# catches that: the build "succeeds" and every e2e page assertion fails at once.
 rm -rf web/build
 npm --prefix web run build
 
-# Prove the build is internally consistent before shipping it.
-html_id=$(grep -o '__sveltekit_[a-z0-9]*' web/build/index.html | sort -u)
-js_id=$(grep -roh '__sveltekit_[a-z0-9]*' web/build/_app | sort -u)
-if [ "$html_id" != "$js_id" ]; then
-  echo "torn SPA build: index.html uses '$html_id' but the JS uses '$js_id'." >&2
-  echo "The app would load to a blank page. Remove web/.svelte-kit and rebuild." >&2
+# Prove the build is internally consistent before shipping it: every chunk
+# index.html boots must be in the output — and it must boot some, or a
+# changed bootstrap format would leave this loop checking nothing.
+chunks=$(grep -o '/_app/[^"]*[.]js' web/build/index.html | sort -u) || true
+if [ -z "$chunks" ]; then
+  echo "build-spa: found no /_app/*.js chunk in index.html; update this guard to the new bootstrap." >&2
   exit 1
 fi
+for chunk in $chunks; do
+  if [ ! -f "web/build$chunk" ]; then
+    echo "torn SPA build: index.html boots '$chunk', which the build did not emit." >&2
+    echo "The app would load to a blank page. Remove web/.svelte-kit and rebuild." >&2
+    exit 1
+  fi
+done
 
 rm -rf target/frontend
 mkdir -p target/frontend
@@ -338,12 +344,12 @@ description = "svelte-check (typescript + a11y + Svelte diagnostics) across web/
 # tasks write web/.svelte-kit — `npm run check` runs `svelte-kit sync`, and
 # `vite build` syncs internally — and with only `web-install` between them
 # mise's DAG ran the two concurrently. When the sync landed mid-build, vite
-# emitted an index.html and JS chunks carrying different `__sveltekit_<id>`
-# globals: the "torn SPA build" that build-web's own guard catches, and that
+# emitted an index.html that boots chunks of a different build: the "torn SPA
+# build" that build-spa's own guard catches, and that
 # would otherwise ship an app that loads to a blank page. Intermittent by
 # nature — it went unnoticed until a CI run lost the race.
 depends = ["build-web"]
-sources = ["web/src/**/*", "web/embed/**/*", "web/shared/**/*", "web/vite.config.ts"]
+sources = ["web/src/**/*", "web/embed/**/*", "web/shared/**/*", "web/vite.config.ts", "web/tsconfig.json"]
 run = "npm --prefix web run check"
 
 [tasks.dev-ui]

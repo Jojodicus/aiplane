@@ -120,7 +120,7 @@ export function sourceLabel(url: string): string {
 }
 
 /** The confirmation the collection list shows after the editor redirects back to it. */
-export function listNotice(params: URLSearchParams): { key: string; args: Record<string, string> } | null {
+export function listNotice(params: Pick<URLSearchParams, 'get'>): { key: string; args: Record<string, string> } | null {
 	const name = params.get('name') ?? '';
 	const ref = params.get('ref');
 	switch (params.get('notice')) {

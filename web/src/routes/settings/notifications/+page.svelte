@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { adminJson } from '$lib/admin-client';
 	import PushNotificationsCard from '$lib/components/tokens/PushNotificationsCard.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -22,7 +21,7 @@
 	<div role="alert" class="alert alert-warning">
 		<span>{t('notifications-unavailable')}</span>
 		{#if details.account.rbac_roles.includes('admin')}
-			<a class="link" href="{base}/admin/settings">{t('notifications-admin-settings-link')}</a>
+			<a class="link" href="/admin/settings">{t('notifications-admin-settings-link')}</a>
 		{/if}
 	</div>
 {:else if !error}

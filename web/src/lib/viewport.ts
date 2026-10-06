@@ -6,10 +6,9 @@
  *
  * The chat, and an agent's test chat (Try it → Test chat, the tab's default).
  */
-export function boundedViewport(url: URL, base = ''): boolean {
-	const path = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : url.pathname;
+export function boundedViewport({ pathname: path, searchParams }: { pathname: string; searchParams: Pick<URLSearchParams, 'get'> }): boolean {
 	if (path === '/chat' || path.startsWith('/chat/')) return true;
 	if (!/^\/agents\/[^/]+\/?$/.test(path)) return false;
-	const sub = url.searchParams.get('sub');
-	return url.searchParams.get('tab') === 'try' && (sub === null || sub === 'test');
+	const sub = searchParams.get('sub');
+	return searchParams.get('tab') === 'try' && (sub === null || sub === 'test');
 }

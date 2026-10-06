@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import type { ChatCapability } from '$lib/api';
 	import { capabilityCounts, type CapabilityStateFilter } from '$lib/capability-picker';
 	import { t } from '$lib/i18n.svelte';
@@ -125,7 +124,7 @@
 				</footer>
 			{:else}
 				<div class="flex flex-1 items-center justify-center p-6 text-sm">
-					<p>{t('chat-render-no-tools-prefix')} <a class="link" href="{base}/tools/integrations">{t('nav-integrations')}</a>{t('chat-render-no-tools-suffix')}</p>
+					<p>{t('chat-render-no-tools-prefix')} <a class="link" href="/tools/integrations">{t('nav-integrations')}</a>{t('chat-render-no-tools-suffix')}</p>
 				</div>
 			{/if}
 		</div>

@@ -2,7 +2,6 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api';
 	import { loginPageUrl } from '$lib/auth';
@@ -33,9 +32,9 @@
 	// login, coming back to the route the user actually wanted. The setup
 	// wizard runs before any account exists — never bounce it.
 	$effect(() => {
-		const isSetup = page.url.pathname.startsWith(`${base}/setup`);
+		const isSetup = page.url.pathname.startsWith('/setup');
 		if (me.loaded && me.value === null && !page.url.pathname.endsWith('/login') && !isSetup) {
-			window.location.href = `${base}${loginPageUrl(page.url.pathname + page.url.search)}`;
+			window.location.href = loginPageUrl(page.url.pathname + page.url.search);
 		}
 	});
 
@@ -74,14 +73,14 @@
 			signOutError = String(err);
 			return;
 		}
-		window.location.href = `${base}/`;
+		window.location.href = '/';
 	}
 
 	async function newChat() {
 		try {
 			const { session } = await api.createChatSession();
 			await refreshSidebar();
-			await goto(`${base}/chat/${session.id}`);
+			await goto(`/chat/${session.id}`);
 		} catch {
 			/* the layout's redirect handles 401 */
 		}
@@ -100,8 +99,8 @@
 		try {
 			await api.deleteChatSession(id);
 			await refreshSidebar();
-			if (page.url.pathname === `${base}/chat/${id}` || page.url.pathname === `/chat/${id}`) {
-				await goto(`${base}/chat`);
+			if (page.url.pathname === `/chat/${id}`) {
+				await goto('/chat');
 			}
 		} catch (caught) {
 			sidebarError = String(caught);
@@ -123,7 +122,7 @@
 	}
 
 	const initialNavSections = savedNavSections();
-	if (page.url.pathname.startsWith(`${base}/admin/`) || page.url.pathname.startsWith(`${base}/rag`)) {
+	if (page.url.pathname.startsWith('/admin/') || page.url.pathname.startsWith('/rag')) {
 		initialNavSections.add('admin');
 	}
 	let workspaceOpen = $state(initialNavSections.has('workspace'));
@@ -179,13 +178,13 @@
 	);
 	const visibleAccountLinks = $derived(visibleNavLinks(accountLinks, features));
 	const visibleAdminLinks = $derived(visibleNavLinks(adminLinks, features));
-	const routeFeature = $derived(featureForRoute(page.url.pathname, base));
+	const routeFeature = $derived(featureForRoute(page.url.pathname));
 	const featureOff = $derived(
 		me.loaded && me.value !== null && routeFeature !== null && !featureEnabled(features, routeFeature)
 	);
 
 	const isAdmin = $derived(me.value?.role_ids?.includes('admin') ?? false);
-	const publicRoute = $derived(page.url.pathname.startsWith(`${base}/setup`) || page.url.pathname.endsWith('/login'));
+	const publicRoute = $derived(page.url.pathname.startsWith('/setup') || page.url.pathname.endsWith('/login'));
 	const pageTitle = $derived(pageTitleDescriptor(page.url.pathname));
 	const resolvedPageTitle = $derived(
 		$pageTitleOverride.pathname === page.url.pathname && $pageTitleOverride.title
@@ -198,14 +197,14 @@
 	);
 
 	function isActive(path: string): boolean {
-		return navItemActive(page.url.pathname, base, path);
+		return navItemActive(page.url.pathname, path);
 	}
 
 	function isChatActive(): boolean {
-		return page.url.pathname.startsWith(`${base}/chat`);
+		return page.url.pathname.startsWith('/chat');
 	}
 
-	const bounded = $derived(boundedViewport(page.url, base));
+	const bounded = $derived(boundedViewport(page.url));
 
 	onMount(() => {
 		// Keep <html lang> in step with the catalog: screen readers and the
@@ -214,7 +213,7 @@
 		void refreshSidebar();
 		void loadConfig();
 		if ('serviceWorker' in navigator) {
-			void navigator.serviceWorker.register(`${base}/sw.js`);
+			void navigator.serviceWorker.register('/sw.js');
 		}
 	});
 
@@ -230,7 +229,7 @@
 	<div class="relative isolate min-h-dvh overflow-hidden bg-base-100 text-base-content">
 		<div class="pointer-events-none absolute -left-20 -top-24 h-72 w-72 rounded-full bg-secondary/15 blur-3xl"></div>
 		<div class="pointer-events-none absolute -right-20 top-16 h-80 w-80 rounded-full bg-primary/20 blur-3xl"></div>
-		<div class="absolute left-5 top-5 z-20 sm:left-8 sm:top-8"><a href="{base}/chat" aria-label={t('nav-brand')}><BrandLockup /></a></div>
+		<div class="absolute left-5 top-5 z-20 sm:left-8 sm:top-8"><a href="/chat" aria-label={t('nav-brand')}><BrandLockup /></a></div>
 		<div class="absolute right-4 top-4 z-20"><LanguagePicker placement="down" /></div>
 		<main class="relative flex min-h-dvh items-center justify-center px-6 pb-8 pt-24"><div class="w-full">{@render children()}</div></main>
 	</div>
@@ -254,13 +253,13 @@
 		<div class="h-1 shrink-0 bg-linear-to-r from-secondary to-primary"></div>
 		<!-- Brand -->
 		<div class="px-4 pt-5 pb-5 flex items-center">
-			<a href="{base}/chat" aria-label={t('nav-brand')}><BrandLockup /></a>
+			<a href="/chat" aria-label={t('nav-brand')}><BrandLockup /></a>
 		</div>
 
 		<!-- Primary nav -->
 		<nav class="flex flex-col gap-0.5 px-2 pt-1 pb-2">
 			<a
-				href="{base}/chat"
+				href="/chat"
 				class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm {isChatActive()
 					? 'bg-primary/15 text-primary dark:text-base-content font-semibold'
 					: 'hover:bg-primary/10'}"
@@ -289,7 +288,7 @@
 					<div class="flex flex-col">
 						{#each items as [label, path, icon] (path)}
 							<a
-								href="{base}{path}"
+								href={path}
 								class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm {isActive(path)
 									? 'bg-primary/15 text-primary dark:text-base-content font-semibold'
 									: 'hover:bg-primary/10'}"
@@ -404,7 +403,7 @@
 							<span>{t('feature-disabled-body', { feature: t(`settings-s-${routeFeature.replaceAll('.', '-')}`) })}</span>
 						</div>
 						{#if isAdmin}
-							<a class="btn btn-sm mt-4" href="{base}/admin/settings">{t('feature-disabled-settings-link')}</a>
+							<a class="btn btn-sm mt-4" href="/admin/settings">{t('feature-disabled-settings-link')}</a>
 						{/if}
 					</div>
 				{:else}

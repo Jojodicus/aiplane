@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { base } from '$app/paths';
 	import {
 		edgeOnPath,
 		edgePath,
@@ -259,7 +258,7 @@
 								onrenamed={(name) => void select(`route:${name}`)}
 							/>
 							{#if selected.kind === 'target' && selected.targetKind === 'agent' && agentOf(spec.routes[selected.route!]?.agent)}
-								<a class="link link-primary text-sm" href="{base}/agents/{spec.routes[selected.route!].agent}">{t('agents-canvas-open-agent')}</a>
+								<a class="link link-primary text-sm" href="/agents/{spec.routes[selected.route!].agent}">{t('agents-canvas-open-agent')}</a>
 							{/if}
 						{/if}
 					{/key}

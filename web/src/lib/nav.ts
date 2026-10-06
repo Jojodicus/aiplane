@@ -12,11 +12,9 @@ import { sectionTabs, selectedSectionTab } from './section-tabs.ts';
  * `/admin/tokens`, and matching on a bare `startsWith` would do exactly that
  * for any entry whose path is a string prefix of another.
  */
-export function navItemActive(pathname: string, base: string, path: string): boolean {
-	const current = base && pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
-	if (path === '/admin/users' && selectedSectionTab(current, sectionTabs.adminAccess)) return true;
-	const target = `${base}${path}`;
-	return pathname === target || pathname === path || under(pathname, target) || under(pathname, path);
+export function navItemActive(pathname: string, path: string): boolean {
+	if (path === '/admin/users' && selectedSectionTab(pathname, sectionTabs.adminAccess)) return true;
+	return pathname === path || under(pathname, path);
 }
 
 function under(pathname: string, target: string): boolean {

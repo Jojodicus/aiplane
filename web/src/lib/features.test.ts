@@ -33,11 +33,6 @@ test('a prefix only matches whole path segments', () => {
 	assert.equal(featureForRoute('/ragtime'), null);
 });
 
-test('the base path is stripped before matching', () => {
-	assert.equal(featureForRoute('/gw/admin/comfyui', '/gw'), 'comfyui');
-	assert.equal(featureForRoute('/gw/chat', '/gw'), null);
-});
-
 test('a gateway that reports no feature list gates nothing', () => {
 	// Serving an SPA newer than the gateway must show too much, never hide a
 	// page that works.

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { base } from '$app/paths';
 	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
 	import { editableRoute, newRouteBlocker } from '$lib/automatic-routes';
 	import { t } from '$lib/i18n.svelte';
@@ -172,7 +171,7 @@
 			{#if blocker}
 				<div class="alert alert-info alert-soft" role="status">
 					<span>{t(blocker === 'selector' ? 'auto-route-needs-selector' : 'auto-route-needs-candidates')}</span>
-					<a class="btn btn-sm" href="{base}/admin/models?tab=upstreams">{t('auto-route-open-upstreams')}</a>
+					<a class="btn btn-sm" href="/admin/models?tab=upstreams">{t('auto-route-open-upstreams')}</a>
 				</div>
 			{/if}
 			{#if data.routes.length === 0 && !editing}<p class="text-sm text-base-content/60">{t('auto-route-empty')}</p>{/if}

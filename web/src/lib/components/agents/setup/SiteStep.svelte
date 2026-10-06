@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { agentsApi, embedSnippet, type AgentError, type EmbedKey, type Spec } from '$lib/agents';
 	import {
 		originOf,
@@ -105,7 +104,7 @@
 		try {
 			const name = `${spec.profile?.display || ws.detail?.name || ''} · ${new URL(origins[0]).host}`;
 			const created = await agentsApi.createEmbedKey(ws.id, { name, origins });
-			snippet = embedSnippet(`${window.location.origin}${base}/embed.js`, created.key);
+			snippet = embedSnippet(`${window.location.origin}/embed.js`, created.key);
 			keys = await agentsApi.embedKeys(ws.id);
 		} catch (err) {
 			error = setupErrorMessage(err as AgentError, t);

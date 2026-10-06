@@ -14,7 +14,6 @@
  * (POST /api/v0/speech → play) → tap while speaking interrupts and frees
  * the mic again.
  */
-import { base } from '$app/paths';
 import { api, responseError } from './api';
 import { t } from './i18n.svelte';
 import { isLimitRefusal, voiceRefusalMessage } from './voice-refusal';
@@ -217,7 +216,7 @@ export function createVoiceController(submit: (text: string) => Promise<void>) {
 			return;
 		}
 		try {
-			recorder = await startRecording(`${base}/pcm-recorder.js`);
+			recorder = await startRecording('/pcm-recorder.js');
 			state.phase = 'listening';
 		} catch (err) {
 			state.note = recordingErrorMessage(err);

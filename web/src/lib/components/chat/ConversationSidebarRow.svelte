@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n.svelte';
 	import type { SidebarSession } from '$lib/sidebar.svelte';
 
@@ -14,7 +13,7 @@
 
 <li class="group relative flex min-w-0 items-center">
 	<a
-		href="{base}/chat/{session.id}"
+		href="/chat/{session.id}"
 		class="block min-w-0 flex-1 truncate rounded-lg py-1.5 pl-3 pr-16 text-sm {active ? 'bg-base-300 font-medium' : 'hover:bg-base-300/50'}"
 		onclick={onopen}
 	>

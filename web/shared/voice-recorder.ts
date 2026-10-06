@@ -2,7 +2,7 @@
  * The microphone, as the SPA's voice composer, dictation and feedback and the
  * embed widget all record it: raw PCM through the `pcm-recorder` audio
  * worklet (`web/static/pcm-recorder.js`, the one copy; the SPA serves it at
- * `${base}/pcm-recorder.js`, the gateway at `/api/v0/embed/recorder.js` for
+ * `/pcm-recorder.js`, the gateway at `/api/v0/embed/recorder.js` for
  * the widget's cross-origin load), encoded as the 16 kHz WAV the
  * transcription paths trim (`wav.ts`). PCM rather than MediaRecorder/Opus
  * because the transcription handlers run the upload through a VAD that needs

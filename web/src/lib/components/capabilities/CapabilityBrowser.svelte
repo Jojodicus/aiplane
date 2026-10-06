@@ -1,6 +1,5 @@
 <script lang="ts" generics="T extends CapabilityItem">
 	import type { Snippet } from 'svelte';
-	import { base } from '$app/paths';
 	import type { CapabilityItem } from '$lib/api';
 	import { capabilityGroups, capabilityId, descriptionOf, editLink, searchCapabilities } from '$lib/capability-picker';
 	import { t } from '$lib/i18n.svelte';
@@ -102,7 +101,7 @@
 								{:else if about}
 									<p class="mt-1 text-sm text-base-content/60">{t('tools-no-description')}</p>
 								{/if}
-								{#if link}<a class="link link-hover text-sm" href="{base}{link}">{t('tools-configure-link')}</a>{/if}
+								{#if link}<a class="link link-hover text-sm" href={link}>{t('tools-configure-link')}</a>{/if}
 								{@render detail?.(item)}
 							</div>
 							{@render control(item)}

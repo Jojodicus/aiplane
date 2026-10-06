@@ -23,14 +23,13 @@ export const FEATURE_ROUTES: readonly (readonly [string, string])[] = [
 ] as const;
 
 /**
- * The feature `pathname` needs, or `null` when it needs none.
+ * The feature `path` needs, or `null` when it needs none.
  *
  * Longest prefix wins, and a prefix only matches on a whole path segment —
  * `/skills` must not claim `/admin/skills` (they happen to share a feature,
  * but `/tokens` and `/admin/tokens` are the shape this rule exists for).
  */
-export function featureForRoute(pathname: string, base = ''): string | null {
-	const path = base && pathname.startsWith(base) ? pathname.slice(base.length) || '/' : pathname;
+export function featureForRoute(path: string): string | null {
 	let best: { prefix: string; feature: string } | null = null;
 	for (const [prefix, feature] of FEATURE_ROUTES) {
 		if (path !== prefix && !path.startsWith(`${prefix}/`)) continue;

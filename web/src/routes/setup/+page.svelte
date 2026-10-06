@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { decodeSetupClaim, encodeSetupClaim, setupClaimChoices } from '$lib/setup';
 	import { t } from '$lib/i18n.svelte';
 
@@ -122,7 +121,7 @@
 			});
 			const body = await res.json();
 			if (!res.ok) throw new Error(body?.error?.message ?? res.statusText);
-			location.href = `${base}/admin/settings`;
+			location.href = '/admin/settings';
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -149,7 +148,7 @@
 	{#if notice}<div class="alert alert-warning mb-4 text-sm"><span>{notice}</span></div>{/if}
 
 	{#if error}
-		<div class="card border border-base-300"><div class="card-body gap-4"><h1 class="card-title">{t('setup-error-heading')}</h1><p class="m-0 text-base-content/80">{error}</p><a class="btn btn-outline btn-sm self-start" href="{base}/setup">{t('setup-error-back')}</a></div></div>
+		<div class="card border border-base-300"><div class="card-body gap-4"><h1 class="card-title">{t('setup-error-heading')}</h1><p class="m-0 text-base-content/80">{error}</p><a class="btn btn-outline btn-sm self-start" href="/setup">{t('setup-error-back')}</a></div></div>
 	{:else if !wiz}
 		<div class="skeleton h-96 w-full"></div>
 	{:else if wiz.access === 'closed'}

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { errorMessage, focused, inboxApi, itemHeading, itemLink, kindLabel, type InboxItem } from '$lib/inbox';
 	import { inboxLive, watchInbox } from '$lib/inbox.svelte';
@@ -83,7 +82,7 @@
 		<ul class="flex flex-col gap-3">
 			{#each items as item (item.id)}
 				{@const heading = itemHeading(item)}
-				{@const link = itemLink(item, base)}
+				{@const link = itemLink(item)}
 				<li>
 					<SuspensionCard
 						id="inbox-item-{item.id}"

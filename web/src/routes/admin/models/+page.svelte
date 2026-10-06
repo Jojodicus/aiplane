@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { base } from '$app/paths';
 	import { adminJson, adminPut } from '$lib/admin-client';
 	import { matchesModelFilter, selectedModelAdminTab } from '$lib/admin-models';
 	import type { AdminModelsData, ModelFilter } from '$lib/admin-models';
@@ -55,10 +54,10 @@
 			<p class="max-w-2xl text-sm text-base-content/70">{t('admin-models-routing-intro')}</p>
 		</div>
 		<nav class="tabs tabs-border w-full overflow-x-auto" aria-label={t('admin-models-routing-heading')}>
-			<a class:tab-active={selected === 'upstreams'} class="tab whitespace-nowrap" href="{base}/admin/models?tab=upstreams">{t('admin-models-tab-upstreams')}</a>
-			<a class:tab-active={selected === 'catalog'} class="tab whitespace-nowrap" href="{base}/admin/models?tab=catalog">{t('admin-models-tab-catalog')}</a>
-			<a class:tab-active={selected === 'defaults'} class="tab whitespace-nowrap" href="{base}/admin/models?tab=defaults">{t('admin-models-tab-defaults')}</a>
-			<a class:tab-active={selected === 'routing'} class="tab whitespace-nowrap" href="{base}/admin/models?tab=routing">{t('admin-models-tab-routing')}</a>
+			<a class:tab-active={selected === 'upstreams'} class="tab whitespace-nowrap" href="/admin/models?tab=upstreams">{t('admin-models-tab-upstreams')}</a>
+			<a class:tab-active={selected === 'catalog'} class="tab whitespace-nowrap" href="/admin/models?tab=catalog">{t('admin-models-tab-catalog')}</a>
+			<a class:tab-active={selected === 'defaults'} class="tab whitespace-nowrap" href="/admin/models?tab=defaults">{t('admin-models-tab-defaults')}</a>
+			<a class:tab-active={selected === 'routing'} class="tab whitespace-nowrap" href="/admin/models?tab=routing">{t('admin-models-tab-routing')}</a>
 		</nav>
 	</header>
 

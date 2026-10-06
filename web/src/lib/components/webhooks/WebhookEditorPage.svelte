@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { adminJson } from '$lib/admin-client';
 	import WebhookForm from './WebhookForm.svelte';
@@ -52,7 +51,7 @@
 </script>
 
 <div class="w-full max-w-4xl">
-	<a class="link link-hover text-sm text-base-content/60" href="{base}/webhooks">← {t('webhooks-back')}</a>
+	<a class="link link-hover text-sm text-base-content/60" href="/webhooks">← {t('webhooks-back')}</a>
 	<h1 class="m-0 mt-2 text-2xl font-bold">
 		{id === null ? t('webhooks-create-heading') : webhook ? t('webhooks-edit-named-heading', { name: webhook.name }) : t('webhooks-edit-heading')}
 	</h1>
@@ -62,7 +61,7 @@
 	{#if secretUrl}
 		<div class="mt-5">
 			<WebhookSecretReveal url={secretUrl} />
-			<a class="btn btn-primary btn-sm" href="{base}/webhooks?notice=created">{t('webhooks-reveal-done')}</a>
+			<a class="btn btn-primary btn-sm" href="/webhooks?notice=created">{t('webhooks-reveal-done')}</a>
 		</div>
 	{:else if missing}
 		<div class="alert alert-warning mt-4 text-sm"><span>{t('webhooks-toast-not-found')}</span></div>
@@ -75,9 +74,9 @@
 				models={data.models}
 				onsaved={async () => {
 					// Editing is done; creating stays put until the secret is copied.
-					if (id !== null) await goto(`${base}/webhooks?notice=saved`);
+					if (id !== null) await goto('/webhooks?notice=saved');
 				}}
-				oncancel={() => goto(`${base}/webhooks`)}
+				oncancel={() => goto('/webhooks')}
 				onsecret={revealed}
 			/>
 		</div>

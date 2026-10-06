@@ -11,7 +11,7 @@ const streamed = readFileSync(new URL('./components/chat/StreamedChat.svelte', i
 
 test('the application shell gives chat its own bounded viewport', () => {
 	assert.match(shell, /h-dvh overflow-clip/);
-	assert.match(shell, /boundedViewport\(page\.url, base\)/);
+	assert.match(shell, /boundedViewport\(page\.url\)/);
 	assert.match(shell, /bounded \? 'overflow-hidden'/);
 	assert.match(shell, /bounded \? 'h-full/);
 });

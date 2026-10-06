@@ -34,7 +34,7 @@ test('the inbox is shown when something waits, when the viewer answers for an ag
 
 test('a responder gets no link into the agent, a manager and an owner do', () => {
 	assert.equal(itemLink(item()), null);
-	assert.deepEqual(itemLink(item({ standing: 'manager' }), '/b'), { href: '/b/agents/a1', key: 'inbox-open-agent' });
+	assert.deepEqual(itemLink(item({ standing: 'manager' })), { href: '/agents/a1', key: 'inbox-open-agent' });
 	assert.deepEqual(itemLink(item({ standing: 'owner', agent: undefined, title: 'Nightly' })), {
 		href: '/chat/s1',
 		key: 'inbox-open-chat'

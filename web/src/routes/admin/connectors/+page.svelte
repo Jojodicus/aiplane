@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { adminDelete, adminJson, adminPost } from '$lib/admin-client';
-	import { base } from '$app/paths';
 	import type { AdminConnectorsData } from '$lib/admin-connectors';
 	import AdminConnectorCard from '$lib/components/admin/AdminConnectorCard.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -41,7 +40,7 @@
 	<p class="mb-6 text-sm text-base-content/60">{t('connectors-catalog-intro')}</p>
 	{#if error}<div class="alert alert-error mb-4 text-sm"><span>{error}</span></div>{/if}
 	{#if data}
-		<a href="{base}/admin/connectors/new" class="btn btn-primary btn-sm mb-2">{t('connectors-add-summary')}</a>
+		<a href="/admin/connectors/new" class="btn btn-primary btn-sm mb-2">{t('connectors-add-summary')}</a>
 		{#if data.connectors.length === 0}<div class="card border border-base-300"><div class="card-body"><p class="m-0 text-sm text-base-content/60">{t('connectors-empty-state')}</p></div></div>{/if}
 		<div class="mt-4 flex flex-col gap-3">
 			{#each data.connectors as connector (JSON.stringify(connector))}

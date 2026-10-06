@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n.svelte';
 
 	// The catalog and the run history are two jobs, so they are two pages —
@@ -17,7 +16,7 @@
 	{#each tabs as tab (tab.id)}
 		<a
 			role="tab"
-			href="{base}{tab.href}"
+			href={tab.href}
 			aria-selected={current === tab.id}
 			class="tab gap-2 {current === tab.id ? 'tab-active' : ''}"
 		>

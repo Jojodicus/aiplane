@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { api } from '$lib/api';
 	import { agentsApi, type AgentError } from '$lib/agents';
 	import { conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '$lib/architect';
@@ -134,7 +133,7 @@
 							{/if}
 						{/if}
 					{/each}
-					{#if path}<a class="btn btn-xs btn-ghost" href="{base}{path}">{t('architect-open-setup')}</a>{/if}
+					{#if path}<a class="btn btn-xs btn-ghost" href={path}>{t('architect-open-setup')}</a>{/if}
 				</div>
 			{/if}
 		{/snippet}

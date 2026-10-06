@@ -3,7 +3,6 @@
 	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
 	import StatusPill from '$lib/components/ui/StatusPill.svelte';
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { agentIdFromName, agentsApi, type AgentError, type AgentSummary } from '$lib/agents';
 	import { locale, t } from '$lib/i18n.svelte';
@@ -45,7 +44,7 @@
 		createError = null;
 		try {
 			const agent = await agentsApi.create({ name: id, display: display.trim(), description });
-			await goto(`${base}/agents/${agent.id}/setup/start`);
+			await goto(`/agents/${agent.id}/setup/start`);
 		} catch (err) {
 			createError = (err as AgentError).message;
 		} finally {
@@ -75,7 +74,7 @@
 	{:else}
 		<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 			{#each agents as agent (agent.id)}
-				<a class="card card-border transition-colors hover:border-primary" href="{base}/agents/{agent.id}">
+				<a class="card card-border transition-colors hover:border-primary" href="/agents/{agent.id}">
 					<div class="card-body gap-2 p-4">
 						<div class="flex items-start justify-between gap-2">
 							<h2 class="card-title text-base">{agent.display || agent.name}</h2>

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n.svelte';
 	import {
 		recordingErrorMessage,
@@ -63,7 +62,7 @@
 			return;
 		}
 		try {
-			recorder = await startRecording(`${base}/pcm-recorder.js`);
+			recorder = await startRecording('/pcm-recorder.js');
 			phase = 'recording';
 		} catch (caught) {
 			onerror(recordingErrorMessage(caught));

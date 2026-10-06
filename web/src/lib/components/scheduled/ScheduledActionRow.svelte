@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { adminDelete, adminPost } from '$lib/admin-client';
 	import { locale, t } from '$lib/i18n.svelte';
 	import { runLinks } from '$lib/run-links';
@@ -71,7 +70,7 @@
 				{#if action.last_error}<p class="mt-1 text-xs text-error">{t('scheduled-last-error', { error: action.last_error })}</p>{/if}
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<a class="btn btn-sm" href="{base}/scheduled/{action.id}/edit">{t('scheduled-edit-title')}</a>
+				<a class="btn btn-sm" href="/scheduled/{action.id}/edit">{t('scheduled-edit-title')}</a>
 				<button class="btn btn-sm" type="button" onclick={toggle}>{action.enabled ? t('scheduled-pause-title') : t('scheduled-resume-title')}</button>
 				<button class="btn btn-outline btn-error btn-sm" type="button" onclick={remove}>{t('scheduled-delete-title')}</button>
 			</div>
@@ -81,11 +80,11 @@
 		     rather than showing two dead links. -->
 		<div class="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3 text-sm">
 			{#if links.chat}
-				<a class="link link-hover font-medium" href="{base}{links.chat}">{t('scheduled-open-chat')}</a>
-				{#if links.runs}<a class="link link-hover text-base-content/70" href="{base}{links.runs}">{t('scheduled-open-runs', { count: action.run_count })}</a>{/if}
+				<a class="link link-hover font-medium" href={links.chat}>{t('scheduled-open-chat')}</a>
+				{#if links.runs}<a class="link link-hover text-base-content/70" href={links.runs}>{t('scheduled-open-runs', { count: action.run_count })}</a>{/if}
 			{:else if links.runs}
 				{#if action.last_chat_deleted && action.chat_count <= 1}<span class="badge badge-sm badge-outline text-base-content/60">{t('scheduled-run-chat-deleted')}</span>{/if}
-				<a class="link link-hover font-medium" href="{base}{links.runs}">
+				<a class="link link-hover font-medium" href={links.runs}>
 					{action.chat_count > 0 ? t('scheduled-open-chats', { count: action.chat_count }) : t('scheduled-open-runs', { count: action.run_count })}
 				</a>
 			{:else}

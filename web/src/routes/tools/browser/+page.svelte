@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
 	import { adminJson } from '$lib/admin-client';
 	import { extensionStatus, onExtensionState, requestActivation, type ExtensionStatus } from '$lib/browser-bridge';
 	import { browserSetupStage, chromeWebStoreUrl, EXTENSION_DOWNLOAD_PATH } from '$lib/browser-extension';
@@ -93,7 +92,7 @@
 					<button type="button" class="btn btn-primary btn-sm" onclick={switchOn}>{t('tools-browser-switch-on')}</button>
 				{/if}
 				{#if stage === 'tool_off'}
-					<a class="btn btn-primary btn-sm" href="{base}/tools">{t('tools-browser-open-tools')}</a>
+					<a class="btn btn-primary btn-sm" href="/tools">{t('tools-browser-open-tools')}</a>
 				{/if}
 				{#if stage !== 'not_granted' && stage !== 'ready'}
 					<button type="button" class="btn btn-ghost btn-sm" onclick={recheck} disabled={checking}>{t('tools-browser-recheck')}</button>
@@ -110,7 +109,7 @@
 			<h2 class="card-title text-base">{t('tools-browser-install-heading')}</h2>
 			<div class="flex flex-wrap items-center gap-3">
 				<a class="btn btn-primary btn-sm" href={chromeWebStoreUrl} target="_blank" rel="noopener noreferrer">{t('tools-browser-store-button')}</a>
-				<a class="btn btn-outline btn-sm" href="{base}{EXTENSION_DOWNLOAD_PATH}" download>{t('tools-browser-download-button')}</a>
+				<a class="btn btn-outline btn-sm" href={EXTENSION_DOWNLOAD_PATH} download>{t('tools-browser-download-button')}</a>
 			</div>
 			<p class="m-0 text-sm text-base-content/60">{t('tools-browser-download-note')}</p>
 

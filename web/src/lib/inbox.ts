@@ -89,14 +89,14 @@ export function itemHeading(item: InboxItem): { key: string; name: string } {
  * Where the item may link to. Only a manager may open the agent; a
  * responder gets nothing beyond the item. An owner opens their own chat.
  */
-export function itemLink(item: InboxItem, base = ''): { href: string; key: string } | null {
-	if (item.standing === 'owner') return { href: `${base}/chat/${item.session_id}`, key: 'inbox-open-chat' };
-	if (item.standing === 'manager' && item.agent) return { href: `${base}/agents/${item.agent.id}`, key: 'inbox-open-agent' };
+export function itemLink(item: InboxItem): { href: string; key: string } | null {
+	if (item.standing === 'owner') return { href: `/chat/${item.session_id}`, key: 'inbox-open-chat' };
+	if (item.standing === 'manager' && item.agent) return { href: `/agents/${item.agent.id}`, key: 'inbox-open-agent' };
 	return null;
 }
 
 /** The item a notification link (`?item=…`) names, if it is still listed. */
-export function focused(items: InboxItem[], search: URLSearchParams): string | null {
+export function focused(items: InboxItem[], search: Pick<URLSearchParams, 'get'>): string | null {
 	const id = search.get('item');
 	return id && items.some((i) => i.id === id) ? id : null;
 }

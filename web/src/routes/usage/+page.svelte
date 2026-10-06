@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { api } from '$lib/api';
 	import UsageFiltersView from '$lib/components/usage/UsageFilters.svelte';
 	import UsageLimits from '$lib/components/usage/UsageLimits.svelte';
@@ -17,14 +18,14 @@
 	async function refresh(replaceUrl = true) {
 		const current = ++request;
 		error = null;
-		if (replaceUrl) history.replaceState(history.state, '', `/usage${usageSearch(filters)}`);
+		if (replaceUrl) void goto(`/usage${usageSearch(filters)}`, { replace: true, reset: false });
 		try {
 			const next = await api.usage(filters);
 			if (current !== request) return;
 			data = next;
 			if (filters.scope !== next.scope) {
 				filters.scope = next.scope;
-				history.replaceState(history.state, '', `/usage${usageSearch(filters)}`);
+				void goto(`/usage${usageSearch(filters)}`, { replace: true, reset: false });
 			}
 		} catch (caught) {
 			if (current === request) error = String(caught);
