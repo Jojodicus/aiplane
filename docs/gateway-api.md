@@ -19,12 +19,13 @@ The routes are wired in `crates/aiplane/src/rama_server/router.rs`; the `/v1/*` 
 | POST | `/v1/messages` | Bearer or `x-api-key` | Anthropic Messages compatibility, streaming and buffered replies; see [Claude Code](claude-code.md). |
 | POST | `/v1/messages/count_tokens` | Bearer or `x-api-key` | Anthropic-shaped input-token counting for client context management; see [Claude Code](claude-code.md). |
 | POST | `/v1/systemone`            | Bearer | TypeSafe System One-compatible typed decisions. Byte-dumb relay to the `system_one` pool; non-streaming. |
-| POST | `/v1/embeddings`           | Bearer | Single + batch. Byte-dumb relay to the `embedding` pool; non-streaming. |
+| POST | `/v1/embeddings`           | Bearer | Single + batch. Byte-dumb relay to the `embedding` pool; non-streaming. A bare `usage.total_tokens` counts as input tokens. |
+| POST | `/v1/rerank`               | Bearer | Byte-dumb relay to the `rerank` pool's `/rerank`; non-streaming. Request and response are relayed unchanged, so the backend's own dialect applies (Cohere, Jina and vLLM take `{model, query, documents, top_n?}`). Recorded as usage kind `rerank`; tokens only when the backend reports `usage` (a bare `total_tokens` counts as input), otherwise no tokens and no cost. |
 | POST | `/v1/images/generations`   | Bearer | JSON (`{model, prompt, size, …}`) in, OpenAI images envelope (`data[].b64_json` or `.url`) out. Byte-dumb relay to the `image` pool. |
 | POST | `/v1/images/edits`         | Bearer | `multipart/form-data` (`image` + `prompt` + `model`). Byte-dumb relay to the `image` pool. |
 | POST | `/v1/audio/transcriptions` | Bearer | `multipart/form-data`, Whisper-compatible. Silence-trimmed and re-framed before forwarding to the `transcription` pool. |
 | POST | `/v1/audio/speech`         | Bearer | Text-to-speech (OpenAI-shaped: `{model, input, voice, response_format}`). Byte-dumb relay to the `speech` pool; audio bytes out. Returns a routing error if no `speech` backend serves the model (i.e. no `speech` pool configured). |
-| GET  | `/v1/models`               | Bearer | Lists every model served by any healthy backend across public pools (chat, transcription, embedding, image, speech, system_one), de-duplicated by id. Synthesised from the registry's cached model sets — no upstream round-trip. |
+| GET  | `/v1/models`               | Bearer | Lists every model served by any healthy backend across public pools (chat, transcription, embedding, rerank, image, speech, system_one), de-duplicated by id. Synthesised from the registry's cached model sets — no upstream round-trip. |
 | GET  | `/v1/models/{id}`          | Bearer | Retrieve a single model object, or `404 model_not_found` if no backend serves the id. `{id}` is a catch-all because model ids contain `/`. |
 | GET  | `/v1/sandbox/files/{run}/{filename}` | Bearer | Downloads a file a sandbox run produced for the caller, scoped to the caller's user (see `sandbox_api`). |
 | GET  | `/healthz`                 | none | Liveness. Returns `{"status":"ok"}`. |
@@ -156,8 +157,11 @@ units:
 - Transcription: provider-reported duration, or the measured duration of a
   decodable PCM/WAV, MP3, FLAC, Ogg/Vorbis, or ISO-MP4 payload.
 
-Configure prices per model in `/admin/models`. Chat and embedding models use
-prices per 1M tokens. Image, speech, and transcription models use prices per
+Configure prices per model in `/admin/models`. Chat, embedding and rerank
+models use prices per 1M tokens. An embedding or rerank call generates
+nothing, so when its backend reports only `usage.total_tokens`, those tokens
+are recorded as input tokens and priced at the input rate. A chat call
+reporting only a total keeps it unsplit. Image, speech, and transcription models use prices per
 image, character, or second respectively. Costs are settled when the usage
 writer flushes the event and are immutable afterwards. A successful cache hit
 on the voice TTS path does not create an upstream event and is therefore free.

@@ -182,7 +182,7 @@ pub async fn model_grant_pools(
 /// The kinds of model `model` is offered as anywhere on the gateway.
 async fn kinds_of(state: &RamaState, model: &str) -> Vec<PoolKind> {
     let mut kinds = Vec::new();
-    for kind in GRANTABLE_KINDS {
+    for kind in grantable_kinds() {
         if model_choices::offered(state, kind, &PoolAccess::all())
             .await
             .iter()
@@ -197,7 +197,7 @@ async fn kinds_of(state: &RamaState, model: &str) -> Vec<PoolKind> {
 /// The choice named `model` among the models of every kind an agent can use
 /// that `access` may pick (`server::model_choices`).
 async fn offers(state: &RamaState, access: &PoolAccess, model: &str) -> Option<ModelChoice> {
-    for kind in GRANTABLE_KINDS {
+    for kind in grantable_kinds() {
         if let Some(found) = model_choices::offered(state, kind, access)
             .await
             .into_iter()
@@ -211,15 +211,10 @@ async fn offers(state: &RamaState, access: &PoolAccess, model: &str) -> Option<M
 
 /// The kinds of model a model grant can name: every kind a request can
 /// route to by name — an agent's chat, voice and image tools, a principal
-/// token's `/v1` calls. OCR and reranking are the gateway's own.
-const GRANTABLE_KINDS: [PoolKind; 6] = [
-    PoolKind::Chat,
-    PoolKind::Transcription,
-    PoolKind::Speech,
-    PoolKind::Image,
-    PoolKind::Embedding,
-    PoolKind::SystemOne,
-];
+/// token's `/v1` calls. The internal kinds are the gateway's own.
+fn grantable_kinds() -> impl Iterator<Item = PoolKind> {
+    PoolKind::ALL.into_iter().filter(|kind| !kind.is_internal())
+}
 
 /// `principal` as a token minted by user `minted_by` may use it: every grant
 /// when the minter is an admin today, otherwise only the grants the minter
@@ -404,6 +399,22 @@ pub async fn capped_for_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_public_kind_is_grantable_and_ocr_is_not() {
+        assert_eq!(
+            grantable_kinds().collect::<Vec<_>>(),
+            vec![
+                PoolKind::Chat,
+                PoolKind::Transcription,
+                PoolKind::Embedding,
+                PoolKind::Image,
+                PoolKind::Speech,
+                PoolKind::Rerank,
+                PoolKind::SystemOne,
+            ]
+        );
+    }
 
     fn entry(granted: &GrantSet) -> Capped {
         Capped {

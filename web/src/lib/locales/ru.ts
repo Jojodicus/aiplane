@@ -2481,6 +2481,7 @@ export const ru: Catalog = {
  "tokens-models-kind-chat": "Чат",
  "tokens-models-kind-embedding": "Эмбеддинги",
  "tokens-models-kind-image": "Изображения",
+ "tokens-models-kind-rerank": "Переранжирование",
  "tokens-models-kind-speech": "Текст в речь",
  "tokens-models-kind-system_one": "System One",
  "tokens-models-kind-transcription": "Речь в текст",

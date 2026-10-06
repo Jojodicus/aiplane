@@ -2,7 +2,7 @@
 
 This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI. It is maintained as a standalone product document; the README remains focused on AIplane.
 
-**Checked on 4 October 2026.** AIplane entries use the local `main` implementation revision pinned at the end of this document. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. For LiteLLM, ✅ means available in the open-source edition; 🟡 Enterprise means the capability requires a paid Enterprise license. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
+**Checked on 6 October 2026.** AIplane entries use the local `main` implementation revision pinned at the end of this document. LiteLLM and Open WebUI entries describe the public product documentation linked in the source index. For LiteLLM, ✅ means available in the open-source edition; 🟡 Enterprise means the capability requires a paid Enterprise license. Product capabilities change; recheck those sources before using this matrix in a proposal or contract.
 
 ## How to read the matrix
 
@@ -44,7 +44,7 @@ This is a feature-by-feature comparison of croit AIplane, LiteLLM and Open WebUI
 | Audio transcription endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Text-to-speech endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Batch inference endpoint | ❌ | ✅ | ⚪ | A3 L28 |
-| Public reranking endpoint | ❌ | ✅ | ⚪ | A3 L28 |
+| Public reranking endpoint | ✅ | ✅ | ⚪ | A3 L28 |
 | Public moderation endpoint | ❌ | ✅ | ⚪ | A3 L28 |
 | OpenAI-compatible streaming | ✅ | ✅ | ✅ | A3 L2 O1 |
 | Provider-specific request options pass through where supported | 🟡 | ✅ | 🟡 | A3 L2 O1 |
@@ -417,7 +417,7 @@ The product and documentation sources were checked against these exact repositor
 
 | Product/source | Repository | Revision |
 |---|---|---|
-| croit AIplane (implementation baseline reviewed) | [`croit/aiplane`](https://github.com/croit/aiplane) | [`fb636484bb5cf019a1fb026753b56497b6d9c78b`](https://github.com/croit/aiplane/commit/fb636484bb5cf019a1fb026753b56497b6d9c78b) |
+| croit AIplane (implementation baseline reviewed) | [`croit/aiplane`](https://github.com/croit/aiplane) | [`df2c8e8f706267cd10c59b8b411d7c28bdc1541d`](https://github.com/croit/aiplane/commit/df2c8e8f706267cd10c59b8b411d7c28bdc1541d) |
 | LiteLLM (implementation and documentation) | [`BerriAI/litellm`](https://github.com/BerriAI/litellm) | [`e1d16f51d14849c1b3decf17cd81a3bcb4863dca`](https://github.com/BerriAI/litellm/commit/e1d16f51d14849c1b3decf17cd81a3bcb4863dca) |
 | Open WebUI (implementation) | [`open-webui/open-webui`](https://github.com/open-webui/open-webui) | [`8bd8b4fac5e059578ac0c74b3c18d11139f88b7d`](https://github.com/open-webui/open-webui/commit/8bd8b4fac5e059578ac0c74b3c18d11139f88b7d) |
 | Open WebUI (public feature documentation) | [`open-webui/docs`](https://github.com/open-webui/docs) | [`e6e9151cae4d4aec79d1a2169475c0a41f47cad9`](https://github.com/open-webui/docs/commit/e6e9151cae4d4aec79d1a2169475c0a41f47cad9) |

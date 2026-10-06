@@ -140,9 +140,8 @@ pub enum PoolKind {
     /// Dedicated document OCR. This is an internal capability pool; it is
     /// not exposed as a normal chat model endpoint.
     Ocr,
-    /// Cross-encoder reranking for retrieval. Like [`PoolKind::Ocr`], an
-    /// internal capability pool: it scores (query, passage) pairs and is
-    /// never a chat model, so it stays out of `/v1/models`.
+    /// Cross-encoder reranking: scores (query, passage) pairs. Backs
+    /// knowledge-search reranking and `POST /v1/rerank`.
     Rerank,
     /// TypeSafe System One compatible decision models. Backs
     /// `POST /v1/systemone`; unlike chat models these return typed `noul`,
@@ -163,6 +162,13 @@ impl PoolKind {
             Self::Rerank => "rerank",
             Self::SystemOne => "system_one",
         }
+    }
+
+    /// An internal capability pool: never listed in `/v1/models`, offered to
+    /// a token or grantable. OCR serves the gateway's own document reading
+    /// and has no `/v1` endpoint a client could call it through.
+    pub fn is_internal(self) -> bool {
+        matches!(self, Self::Ocr)
     }
 
     /// Every kind, in the order an operator should see them offered.
@@ -385,6 +391,15 @@ impl BackendConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_is_the_only_internal_kind() {
+        let internal: Vec<PoolKind> = PoolKind::ALL
+            .into_iter()
+            .filter(|k| k.is_internal())
+            .collect();
+        assert_eq!(internal, vec![PoolKind::Ocr]);
+    }
 
     #[test]
     fn parses_speech_pool_with_voices() {

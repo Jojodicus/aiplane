@@ -11,11 +11,12 @@ const qwen = model('qwen');
 const kimi = model('kimi', { gdpr: false, nda: false, price: { input: 0.6, output: 2.5, unit: 'tokens' } });
 const glm = model('glm', { nda: false, price: { input: 0.3, output: 1.2, unit: 'tokens' } });
 const bge = model('bge', { kind: 'embedding' });
+const reranker = model('bge-reranker', { kind: 'rerank' });
 const image = model('gpt-image-2', { kind: 'image', gdpr: false, price: { input: null, output: 0.04, unit: 'images' } });
 
 test('models group by kind in a fixed order, so chat models come first', () => {
-	const groups = groupTokenModels([image, bge, qwen]);
-	assert.deepEqual(groups.map((group) => group.kind), ['chat', 'embedding', 'image']);
+	const groups = groupTokenModels([image, reranker, bge, qwen]);
+	assert.deepEqual(groups.map((group) => group.kind), ['chat', 'embedding', 'rerank', 'image']);
 	assert.deepEqual(groups[0].models, [qwen]);
 });
 

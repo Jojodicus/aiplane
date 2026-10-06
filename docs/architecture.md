@@ -192,7 +192,7 @@ invalidating `aiplane-core`.
 ### `crates/aiplane`
 The binary and its routing glue — deliberately thin:
 - `router.rs` — builds the `rama::http::service::web::Router`, mounting handlers from `aiplane-api` and this crate.
-- `proxy.rs` — `/v1/{models,chat/completions,audio/transcriptions,audio/speech,embeddings,images/generations,images/edits}` handlers. The chat path branches between a byte-dumb path and a gateway-owned tool loop with buffered and streaming forms; embeddings, images, and speech are byte-dumb relays to their pool kind.
+- `proxy.rs` — `/v1/{models,chat/completions,audio/transcriptions,audio/speech,embeddings,rerank,images/generations,images/edits}` handlers. The chat path branches between a byte-dumb path and a gateway-owned tool loop with buffered and streaming forms; embeddings, rerank, images, and speech are byte-dumb relays to their pool kind.
 - `api.rs` — session-authed JSON at `/api/v0/*`.
 - `oidc_handlers.rs` — `/auth/{login,callback,logout}`, backed by a `pending_logins` row keyed by the OIDC `state` parameter.
 - `rag_api.rs`, `sandbox_api.rs`, `comfyui_api.rs`, `setup_api.rs` — the remaining JSON surfaces. (`setup_api.rs` lives here rather than in `aiplane-api` so the first-run wizard's API survived the removal of the page stack.)

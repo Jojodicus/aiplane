@@ -22,7 +22,7 @@ export interface TokenModelSummary {
 	maxOutputPerMillion: number | null;
 }
 
-const KIND_ORDER = ['chat', 'transcription', 'speech', 'embedding', 'image', 'system_one'];
+const KIND_ORDER = ['chat', 'transcription', 'speech', 'embedding', 'rerank', 'image', 'system_one'];
 
 export function isCompliant(model: TokenModel): boolean {
 	return model.gdpr && model.nda;

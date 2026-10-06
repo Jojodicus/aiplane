@@ -141,6 +141,7 @@ tokens-models-kind-chat = 对话
 tokens-models-kind-transcription = 语音转文字
 tokens-models-kind-speech = 文字转语音
 tokens-models-kind-embedding = 嵌入
+tokens-models-kind-rerank = 重排序
 tokens-models-kind-image = 图像
 tokens-models-kind-system_one = System One
 tokens-tools-tile-on = 已允许

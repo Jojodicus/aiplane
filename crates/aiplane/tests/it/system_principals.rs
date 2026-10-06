@@ -315,6 +315,14 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
         .mount(&upstream)
         .await;
     Mock::given(method("POST"))
+        .and(path("/rerank"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"index": 0, "relevance_score": 0.5}],
+            "usage": {"total_tokens": 2}
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
         .and(path("/images/generations"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "created": 1,
@@ -355,7 +363,11 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
     );
     // Not probed yet: it serves nothing until a test seeds it.
     pools.insert("late".to_string(), chat_pool(&upstream.uri(), vec![]));
-    for (name, kind) in [("embed", PoolKind::Embedding), ("image", PoolKind::Image)] {
+    for (name, kind) in [
+        ("embed", PoolKind::Embedding),
+        ("image", PoolKind::Image),
+        ("rerank", PoolKind::Rerank),
+    ] {
         pools.insert(
             name.to_string(),
             UpstreamPoolConfig {
@@ -367,6 +379,7 @@ async fn fixture_with_usage(metered: bool) -> Fixture {
     let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
     common::seed_pool_models(&registry, "embed", 0, &["embed-1"]);
     common::seed_pool_models(&registry, "image", 0, &["img-1"]);
+    common::seed_pool_models(&registry, "rerank", 0, &["rerank-1"]);
     common::seed_pool_models(&registry, "pool", 0, &["model-a", "model-b"]);
     common::seed_pool_models(&registry, "vip", 0, &["model-vip", "model-a"]);
     common::seed_pool_models(&registry, "selector", 0, &["picker"]);
@@ -1451,6 +1464,40 @@ async fn embedding_and_image_models_can_be_granted_and_reached() {
         let text = String::from_utf8_lossy(&common::read_body(resp).await).to_string();
         assert_eq!(status, StatusCode::OK, "{uri}: {text}");
     }
+}
+
+/// A rerank model is granted like an embedding model: a principal holding
+/// the grant reaches it over `/v1/rerank`, one without it does not.
+#[tokio::test]
+async fn a_rerank_model_reaches_only_a_principal_granted_it() {
+    let fx = fixture().await;
+    let rerank = |bearer: &str| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/v1/rerank")
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"model": "rerank-1", "query": "q", "documents": ["d"]}).to_string(),
+            ))
+            .unwrap()
+    };
+
+    let granted = fx.create(&fx.manager, "search").await;
+    let (status, body) = fx.grant(&fx.manager, &granted, "model", "rerank-1").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (bearer, _) = fx.token(&fx.manager, &granted).await;
+    let resp = fx.app().serve(rerank(&bearer)).await.unwrap();
+    let status = resp.status();
+    let text = String::from_utf8_lossy(&common::read_body(resp).await).to_string();
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    let other = fx.create(&fx.manager, "pipeline").await;
+    let (status, body) = fx.grant(&fx.manager, &other, "model", "embed-1").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (bearer, _) = fx.token(&fx.manager, &other).await;
+    let resp = fx.app().serve(rerank(&bearer)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 /// Whether principal `id`'s grants reach `model-a` on pool `pool_name`.

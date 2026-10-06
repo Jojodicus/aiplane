@@ -513,10 +513,16 @@ Optional and silently so: with no such pool, search returns the fused ranking
 exactly as before. A reranker that errors or times out logs a warning and the
 fused order stands — degraded ordering beats no answer.
 
-The `/rerank` request shape is the de-facto one served by TEI, Infinity and
-vLLM's scoring endpoint. Both response shapes (`{"results": […]}` and a bare
-array) parse, and an out-of-range index from a misbehaving backend is dropped
+Search sends `{model, query, documents, top_n}` to the backend's `/rerank`,
+the shape Cohere, Jina and vLLM accept; TEI's `/rerank` expects `texts`
+instead. Both response shapes (`{"results": […]}` and a bare array) parse, and an out-of-range index from a misbehaving backend is dropped
 rather than trusted.
+
+Search calls the reranker as the gateway itself: the searching person's pool
+groups do not apply to the rerank pool and the call is not metered. The same
+pool also serves API clients directly through `POST /v1/rerank`, where the
+caller's pool groups apply and every call is metered; see the
+[HTTP API reference](reference/api.md#reranking).
 
 ## Freshness
 

@@ -145,6 +145,7 @@ tokens-models-kind-chat = Чат
 tokens-models-kind-transcription = Речь в текст
 tokens-models-kind-speech = Текст в речь
 tokens-models-kind-embedding = Эмбеддинги
+tokens-models-kind-rerank = Переранжирование
 tokens-models-kind-image = Изображения
 tokens-models-kind-system_one = System One
 tokens-tools-tile-on = Разрешены

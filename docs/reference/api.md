@@ -21,6 +21,7 @@ when forwarding; client credentials are not passed to the model provider.
 | `POST /v1/messages/count_tokens` |
 | `POST /v1/systemone` |
 | `POST /v1/embeddings` |
+| `POST /v1/rerank` |
 | `POST /v1/images/generations` |
 | `POST /v1/images/edits` |
 | `POST /v1/audio/transcriptions` |
@@ -92,6 +93,47 @@ Pool/group permissions and a token's own model restriction are cumulative.
 Automatic-route session affinity accepts `X-Gateway-Session-Id` or
 `X-Gateway-Session`. Reuse an identifier for the same client conversation.
 Headers depend on the code path and decision; clients must tolerate absence.
+
+### Reranking
+
+`POST /v1/rerank` scores documents against a query with a model from a
+`rerank` pool, the same backends knowledge search reranks with. The body is
+relayed to the backend unchanged, so send the request in the backend's own
+dialect. Cohere, Jina and vLLM accept this shape; Text Embeddings Inference,
+for example, names the passages `texts` instead of `documents`:
+
+```bash
+curl https://aiplane.example.com/v1/rerank \
+  -H "Authorization: Bearer $AIPLANE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"your-rerank-model","query":"refund policy","documents":["first passage","second passage"],"top_n":1}'
+```
+
+The gateway reads only `model`: it resolves aliases, rewrites `model` to the
+real ID, forwards the body unchanged to the backend's `/rerank` and relays the
+backend's response, so the response shape (for example `results[]` with
+`index` and `relevance_score`) is the backend's.
+
+Rerank models are ordinary models for access purposes, like embedding
+models: `/v1/models` lists them, a token's model restriction can include
+them, a system principal can be granted them, and the pool's group
+restriction applies to the caller. A token restricted to other models gets
+`403 model_not_allowed`; a system principal without a grant on the model gets
+`404 model_not_found`, as does an unknown model. No healthy backend returns
+`503`. Knowledge search reranks through the same pools as a gateway-internal
+call: it is neither subject to the searching person's pool group restrictions
+nor metered.
+
+Every call is recorded as usage of kind `rerank` and counts against
+request-count limits. Tokens are recorded only when the backend's response
+carries a `usage` object with `prompt_tokens` or `total_tokens`; a bare
+`total_tokens` (as vLLM reports) counts as input tokens, charged at the
+model's input price when it is priced per token. A backend that reports no
+usage (Text Embeddings Inference) or reports something other than tokens
+(Cohere's `meta.billed_units.search_units`) is recorded with no tokens and no
+cost, so its calls do not count against token quotas or spend limits.
+`POST /v1/embeddings` follows the same rule: a bare `total_tokens` counts as
+input tokens.
 
 ## Browser application API
 
@@ -433,6 +475,7 @@ Debug fixture routes exist only in development builds.
 | `POST /v1/messages/count_tokens` |
 | `GET /v1/models` |
 | `GET /v1/models/{*id}` |
+| `POST /v1/rerank` |
 | `GET /v1/sandbox/files/{run}/{filename}` |
 | `POST /v1/systemone` |
 | `GET /{*name}` |
