@@ -8,7 +8,7 @@
 //! ([`AutomaticRouter::select`]); any other name routes as it is.
 
 use aiplane_core::server::automatic_routing::{
-    AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError,
+    AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError, Ungated,
 };
 use aiplane_core::server::upstreams::PoolAccess;
 use serde_json::Value;
@@ -36,7 +36,7 @@ pub async fn route_target(
 ) -> Result<RouteTarget, AutomaticRoutingError> {
     let decision = state
         .automatic_router
-        .select(model, routing_state, access, affinity)
+        .select(model, routing_state, access, affinity, &Ungated)
         .await?;
     Ok(match decision {
         Some(decision) => RouteTarget {

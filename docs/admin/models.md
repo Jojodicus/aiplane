@@ -95,6 +95,8 @@ Use an automatic route when clients should request a stable alias and AIplane sh
 
 The editor proposes confidence `0.7`, timeout `1500 ms`, shadow rollout, disabled session affinity and a one-hour affinity lifetime. Its timeout range is 100–30000 ms; affinity lifetime is 60–604800 seconds. Shadow records the selector's choice while using the fallback target. Active routing can select a candidate; low confidence or selector failure uses the fallback.
 
+On the `/v1` endpoints, usage limits apply to the selector model right before it is asked: a caller over budget on an enforced selector pool gets `429` without a selector call, while a selector on an exempt pool is still asked. A session-affinity hit asks no selector and is not checked on it. The target's limits are checked after selection, so a target refused by its own rule costs the selector call. See [automatic routing](../automatic-routing.md#limits).
+
 The selector receives request content. Treat its provider as another processor of that content. Session affinity can retain a choice across related requests; it has an explicit lifetime. The decision table identifies route version, effective target, confidence, latency and outcomes such as selection, shadow, low confidence, selector error or affinity. Edit existing routes to revise their policy; delete a route only after checking its callers.
 
 ## Troubleshooting

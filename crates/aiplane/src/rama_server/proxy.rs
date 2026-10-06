@@ -28,9 +28,10 @@ use std::time::Instant;
 use jiff::Timestamp;
 
 use crate::rama_server::multipart::{MultipartField, build_multipart, parse_multipart_fields};
+use crate::rama_server::translated::Refusals;
 use aiplane_core::server::auth::UserCtx;
 use aiplane_core::server::automatic_routing::{
-    AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError,
+    AutomaticRouteAffinity, AutomaticRouteDecision, AutomaticRoutingError, SelectorGate,
 };
 use aiplane_core::server::db::usage::{self, UnitUsage, UsageKind, UsageRecord, UsageSource};
 use aiplane_core::server::upstreams::registry::{Acquired, RouteError};
@@ -127,15 +128,8 @@ impl RecordParams {
     }
 }
 
-/// Pre-flight rate-limit / quota gate for a bearer (`/v1`) call. Returns the
-/// `429` to send when the caller is over a limit, else `None`. Resolves the
-/// caller's role ids and consults the shared [`aiplane_core::server::limits::Enforcer`].
-async fn limit_check(state: &RamaState, user: &UserCtx) -> Option<Response> {
-    limit_exceeded(state, user)
-        .await
-        .map(|e| limit_exceeded_response(&e))
-}
-
+/// Rate-limit / quota gate for a bearer (`/v1`) call to one resolved model.
+/// Returns the `429` to send when the caller is over a limit, else `None`.
 async fn limit_check_for_model(
     state: &RamaState,
     user: &UserCtx,
@@ -153,8 +147,22 @@ pub(crate) async fn limit_exceeded_for_model(
     model: &str,
     kind: PoolKind,
 ) -> Option<aiplane_core::server::limits::LimitExceeded> {
-    let role_ids = state.limit_role_ids(&user.principal);
     let enforce_limits = state.upstreams.enforce_limits_for_model(model, kind);
+    limit_exceeded_on(state, user, model, enforce_limits).await
+}
+
+/// The breached limit, if any, for a call to `model` on a pool whose
+/// enforcement flag the caller already resolved.
+async fn limit_exceeded_on(
+    state: &RamaState,
+    user: &UserCtx,
+    model: &str,
+    enforce_limits: bool,
+) -> Option<aiplane_core::server::limits::LimitExceeded> {
+    if !enforce_limits {
+        return None;
+    }
+    let role_ids = state.limit_role_ids(&user.principal);
     if let Err(exceeded) = state
         .enforcer
         .check_for_model(
@@ -167,6 +175,9 @@ pub(crate) async fn limit_exceeded_for_model(
     {
         return Some(exceeded);
     }
+    // The token's own rules are an additional ceiling, not an alternative to
+    // the owner's budget: both must pass, so issuing a token can only narrow
+    // what its owner may spend.
     if let Err(exceeded) = state
         .enforcer
         .check_token_for_model(&user.token_id, model, enforce_limits)
@@ -177,28 +188,63 @@ pub(crate) async fn limit_exceeded_for_model(
     None
 }
 
-/// The breached limit, if any — [`limit_check`] without the OpenAI-shaped
-/// rendering, so a caller that owes its client a different error envelope
-/// (the Anthropic `/v1/messages` path) can enforce the same ceilings.
-pub(crate) async fn limit_exceeded(
+/// A single-round-trip `/v1` call that passed its limit gate: the slot it is
+/// dispatched on, the model that slot serves, and whether that model's pool
+/// enforces limits.
+struct Admitted {
+    acquired: Acquired,
+    real_model: String,
+    enforce_limits: bool,
+}
+
+impl Admitted {
+    fn record(&self, user: &UserCtx, usage: UsageKind) -> RecordParams {
+        RecordParams::v1(user, usage, self.real_model.clone(), self.enforce_limits)
+    }
+}
+
+/// Route `model` to a `kind` pool, gating `caller` on its limits first.
+///
+/// The model is resolved and gated before a slot is taken, so an over-budget
+/// caller gets its 429 even from a saturated pool, and a refused call neither
+/// holds capacity nor counts as a dispatch. `caller` is `None` only for the
+/// chat UI's voice composer, which has never been gated here.
+async fn admit(
     state: &RamaState,
-    user: &UserCtx,
-) -> Option<aiplane_core::server::limits::LimitExceeded> {
-    let role_ids = state.limit_role_ids(&user.principal);
-    if let Err(exceeded) = state
-        .enforcer
-        .check(user.principal.subject_id(), &role_ids)
-        .await
-    {
-        return Some(exceeded);
+    caller: Option<&UserCtx>,
+    model: &str,
+    kind: PoolKind,
+    access: &PoolAccess,
+) -> Result<Admitted, Response> {
+    let gate = async |real_model: &str| -> Result<bool, Response> {
+        let enforce_limits = state.upstreams.enforce_limits_for_model(real_model, kind);
+        if let Some(user) = caller
+            && let Some(exceeded) = limit_exceeded_on(state, user, real_model, enforce_limits).await
+        {
+            return Err(limit_exceeded_response(&exceeded));
+        }
+        Ok(enforce_limits)
+    };
+    let checked = state
+        .upstreams
+        .resolve_route_access(model, kind, access)
+        .map_err(route_error_response)?;
+    let mut enforce_limits = gate(&checked).await?;
+    let acquired = state
+        .upstreams
+        .route_access(model, kind, access)
+        .map_err(route_error_response)?;
+    let real_model = acquired.resolved_model().to_string();
+    // A backend's health can change between resolving and acquiring; what
+    // is dispatched is what must have passed the gate.
+    if real_model != checked {
+        enforce_limits = gate(&real_model).await?;
     }
-    // The token's own rules are an additional ceiling, not an alternative to
-    // the owner's budget: both must pass, so issuing a token can only narrow
-    // what its owner may spend.
-    if let Err(exceeded) = state.enforcer.check_token(&user.token_id).await {
-        return Some(exceeded);
-    }
-    None
+    Ok(Admitted {
+        acquired,
+        real_model,
+        enforce_limits,
+    })
 }
 
 /// A `429 Too Many Requests` with an OpenAI-shaped error envelope and a
@@ -727,6 +773,7 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         &access,
         &parts.headers,
         !allowed_tools.is_empty() || !auto_tools.is_empty(),
+        &OpenAiRefusals,
     )
     .await
     {
@@ -886,6 +933,30 @@ pub async fn enforce_content_guard(
     }
 }
 
+/// The bearer caller's limits, asked of the selector an automatic route is
+/// about to ask on its behalf.
+struct CallerGate<'a> {
+    state: &'a RamaState,
+    user: &'a UserCtx,
+}
+
+impl SelectorGate for CallerGate<'_> {
+    async fn admit(
+        &self,
+        selector_model: &str,
+    ) -> Result<(), aiplane_core::server::limits::LimitExceeded> {
+        match limit_exceeded_for_model(self.state, self.user, selector_model, PoolKind::SystemOne)
+            .await
+        {
+            Some(exceeded) => Err(exceeded),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Resolve `requested_model` through its automatic route, if it names one.
+/// Every refusal renders in the caller's envelope through `refusals`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_automatic_chat_route(
     state: &Arc<RamaState>,
     user: &UserCtx,
@@ -894,6 +965,7 @@ pub(crate) async fn resolve_automatic_chat_route(
     access: &aiplane_core::server::upstreams::PoolAccess,
     headers: &HeaderMap,
     has_gateway_tools: bool,
+    refusals: &(dyn Refusals + Sync),
 ) -> Result<(String, Option<AutomaticRouteDecision>), Response> {
     let session_id = headers
         .get("x-gateway-session-id")
@@ -911,11 +983,12 @@ pub(crate) async fn resolve_automatic_chat_route(
         session,
     });
     let lang = Lang::from_request(headers);
+    let gate = CallerGate { state, user };
     let decision = state
         .automatic_router
-        .select(requested_model, &routing_state, access, affinity)
+        .select(requested_model, &routing_state, access, affinity, &gate)
         .await
-        .map_err(|error| automatic_route_error_response(error, lang))?;
+        .map_err(|error| automatic_route_error_response(error, lang, refusals))?;
     let Some(decision) = decision else {
         return Ok((requested_model.to_string(), None));
     };
@@ -939,15 +1012,20 @@ fn routing_state(request_body: &Value, has_gateway_tools: bool) -> Value {
     state
 }
 
-fn automatic_route_error_response(error: AutomaticRoutingError, lang: Lang) -> Response {
+fn automatic_route_error_response(
+    error: AutomaticRoutingError,
+    lang: Lang,
+    refusals: &(dyn Refusals + Sync),
+) -> Response {
     match error {
         AutomaticRoutingError::AliasNotAllowed(alias) => {
-            route_error_response(RouteError::ModelNotAllowed(alias))
+            refusals.route_error(RouteError::ModelNotAllowed(alias))
         }
+        AutomaticRoutingError::SelectorLimited(exceeded) => refusals.rate_limited(&exceeded),
         AutomaticRoutingError::NoEligibleCandidates { .. }
         | AutomaticRoutingError::IneligibleFallback { .. } => {
             tracing::warn!(error = %error, "automatic route is temporarily unavailable");
-            let mut response = error_response(
+            let mut response = refusals.refused(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "automatic_route_unavailable",
                 &t(lang, "auto-route-error-unavailable"),
@@ -960,12 +1038,29 @@ fn automatic_route_error_response(error: AutomaticRoutingError, lang: Lang) -> R
         }
         AutomaticRoutingError::Load { .. } => {
             tracing::error!(error = %error, "loading automatic route failed");
-            error_response(
+            refusals.refused(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "automatic_route_error",
                 &t(lang, "auto-route-error-internal"),
             )
         }
+    }
+}
+
+/// The OpenAI error envelope, for `/v1/chat/completions` and `/v1/responses`.
+pub(crate) struct OpenAiRefusals;
+
+impl Refusals for OpenAiRefusals {
+    fn route_error(&self, err: RouteError) -> Response {
+        route_error_response(err)
+    }
+
+    fn rate_limited(&self, err: &aiplane_core::server::limits::LimitExceeded) -> Response {
+        limit_exceeded_response(err)
+    }
+
+    fn refused(&self, status: StatusCode, code: &str, message: &str) -> Response {
+        error_response(status, code, message)
     }
 }
 
@@ -1106,7 +1201,7 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
     // and the resolved `enforce_limits` flag into `rec` once routing has run.
     let rec = RecordParams::v1(&user, UsageKind::Transcription, String::new(), true);
     let access = state.pool_access_for_token(&user);
-    handle_transcription(state, parts.headers, body, rec, access).await
+    handle_transcription(&state, Some(&user), parts.headers, body, rec, access).await
 }
 
 /// `POST /api/v0/transcriptions` — session-authed mirror of
@@ -1173,14 +1268,15 @@ pub async fn transcribe_session(State(state): State<Arc<RamaState>>, req: Reques
         Ok(b) => b,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
     };
-    handle_transcription(state, parts.headers, body, rec, access).await
+    handle_transcription(&state, None, parts.headers, body, rec, access).await
 }
 
 /// Shared body of both transcription handlers: parse → VAD-trim → rebuild
 /// multipart → forward. Pulled out because the bearer/session paths
-/// only differ in auth.
+/// only differ in auth, and in `caller`, the bearer caller gated on its limits.
 async fn handle_transcription(
-    state: Arc<RamaState>,
+    state: &RamaState,
+    caller: Option<&UserCtx>,
     mut headers: HeaderMap,
     body: Bytes,
     mut rec: RecordParams,
@@ -1204,19 +1300,16 @@ async fn handle_transcription(
         );
     };
 
-    let mut trimmed_fields = trim_audio_field(fields);
-
     // Resolve aliases + fallback before rebuilding the multipart body, so the
-    // `model` part we forward carries the real id the upstream knows. The slot
-    // is held across the (in-memory) VAD check + rebuild below.
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Transcription, &access)
-    {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
+    // `model` part we forward carries the real id the upstream knows, and gate
+    // the caller before any audio is decoded. The slot is held across the
+    // (in-memory) VAD trim + rebuild below.
+    let admitted = match admit(state, caller, &model, PoolKind::Transcription, &access).await {
+        Ok(admitted) => admitted,
+        Err(refusal) => return refusal,
     };
-    let real_model = acquired.resolved_model().to_string();
+    let mut trimmed_fields = trim_audio_field(fields);
+    let real_model = admitted.real_model.clone();
     if real_model != model
         && let Some(field) = trimmed_fields.iter_mut().find(|f| f.name == "model")
     {
@@ -1278,12 +1371,10 @@ async fn handle_transcription(
             .or_else(|| vad::wav_duration_seconds(b))
             .or_else(|| vad::encoded_audio_duration_seconds(b.clone()))
     });
-    rec.enforce_limits = state
-        .upstreams
-        .enforce_limits_for_model(&real_model, PoolKind::Transcription);
+    rec.enforce_limits = admitted.enforce_limits;
     let resp = forward(
-        &state,
-        acquired,
+        state,
+        admitted.acquired,
         Method::POST,
         "audio/transcriptions",
         headers,
@@ -1355,9 +1446,6 @@ async fn relay_by_model(
         Ok(u) => u,
         Err(refusal) => return refusal.into_response(),
     };
-    if let Some(resp) = limit_check(state, &user).await {
-        return resp;
-    }
     let body = match read_body_to_bytes(body).await {
         Ok(b) => b,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
@@ -1369,27 +1457,16 @@ async fn relay_by_model(
             "request body is missing a string `model` field",
         );
     };
-    // `route` resolves aliases + fallback and maps an unknown model → 404
-    // `model_not_found` / all-down → 503 via `route_error_response`.
     let access = state.pool_access_for_token(&user);
-    let acquired = match state.upstreams.route_access(&model, kind, &access) {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
+    let admitted = match admit(state, Some(&user), &model, kind, &access).await {
+        Ok(admitted) => admitted,
+        Err(refusal) => return refusal,
     };
-    let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(state, &user, &real_model, kind).await {
-        return resp;
-    }
-    let body = rewrite_model_in_bytes(body, &real_model);
-    let rec = RecordParams::v1(
-        &user,
-        usage,
-        real_model.clone(),
-        state.upstreams.enforce_limits_for_model(&real_model, kind),
-    );
+    let rec = admitted.record(&user, usage);
+    let body = rewrite_model_in_bytes(body, &admitted.real_model);
     let resp = forward(
         state,
-        acquired,
+        admitted.acquired,
         Method::POST,
         upstream_path,
         parts.headers,
@@ -1397,64 +1474,21 @@ async fn relay_by_model(
         rec,
     )
     .await;
-    with_resolved_model_header(resp, &model, &real_model)
+    with_resolved_model_header(resp, &model, &admitted.real_model)
 }
 
 /// `POST /v1/systemone` — TypeSafe System One compatible typed decisions.
 /// The body is relayed without interpreting the question schema; only the
 /// model field is read for routing and rewritten when an alias resolves.
 pub async fn system_one(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let (parts, body) = req.into_parts();
-    let user = match require_bearer(&state, &parts.headers).await {
-        Ok(user) => user,
-        Err(refusal) => return refusal.into_response(),
-    };
-    let body = match read_body_to_bytes(body).await {
-        Ok(body) => body,
-        Err(message) => {
-            return error_response(StatusCode::BAD_REQUEST, "invalid_request", &message);
-        }
-    };
-    let Some(model) = parse_model_field(&body) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "request body is missing a string `model` field",
-        );
-    };
-    let access = state.pool_access_for_token(&user);
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::SystemOne, &access)
-    {
-        Ok(acquired) => acquired,
-        Err(error) => return route_error_response(error),
-    };
-    let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::SystemOne).await
-    {
-        return resp;
-    }
-    let body = rewrite_model_in_bytes(body, &real_model);
-    let record = RecordParams::v1(
-        &user,
-        UsageKind::SystemOne,
-        real_model.clone(),
-        state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::SystemOne),
-    );
-    let response = forward(
+    relay_by_model(
         &state,
-        acquired,
-        Method::POST,
+        req,
+        PoolKind::SystemOne,
+        UsageKind::SystemOne,
         "systemone",
-        parts.headers,
-        body,
-        record,
     )
-    .await;
-    with_resolved_model_header(response, &model, &real_model)
+    .await
 }
 
 /// `POST /v1/images/generations` — OpenAI-compatible image generation.
@@ -1466,54 +1500,14 @@ pub async fn system_one(State(state): State<Arc<RamaState>>, req: Request) -> Re
 /// (The chat `generate_image` tool takes a different path — it needs the
 /// bytes in hand to re-host in S3 — via `server::image_gen`.)
 pub async fn images_generations(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let (parts, body) = req.into_parts();
-    let user = match require_bearer(&state, &parts.headers).await {
-        Ok(u) => u,
-        Err(refusal) => return refusal.into_response(),
-    };
-    let body = match read_body_to_bytes(body).await {
-        Ok(b) => b,
-        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
-    };
-    let Some(model) = parse_model_field(&body) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "request body is missing a string `model` field",
-        );
-    };
-    let access = state.pool_access_for_token(&user);
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Image, &access)
-    {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
-    };
-    let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Image).await {
-        return resp;
-    }
-    let body = rewrite_model_in_bytes(body, &real_model);
-    let rec = RecordParams::v1(
-        &user,
-        UsageKind::Image,
-        real_model.clone(),
-        state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Image),
-    );
-    let resp = forward(
+    relay_by_model(
         &state,
-        acquired,
-        Method::POST,
+        req,
+        PoolKind::Image,
+        UsageKind::Image,
         "images/generations",
-        parts.headers,
-        body,
-        rec,
     )
-    .await;
-    with_resolved_model_header(resp, &model, &real_model)
+    .await
 }
 
 /// `POST /v1/images/edits` — OpenAI-compatible image editing (multipart:
@@ -1552,17 +1546,11 @@ pub async fn images_edits(State(state): State<Arc<RamaState>>, req: Request) -> 
         );
     };
     let access = state.pool_access_for_token(&user);
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Image, &access)
-    {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
+    let admitted = match admit(&state, Some(&user), &model, PoolKind::Image, &access).await {
+        Ok(admitted) => admitted,
+        Err(refusal) => return refusal,
     };
-    let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Image).await {
-        return resp;
-    }
+    let real_model = admitted.real_model.clone();
     if real_model != model
         && let Some(field) = fields.iter_mut().find(|f| f.name == "model")
     {
@@ -1576,18 +1564,11 @@ pub async fn images_edits(State(state): State<Arc<RamaState>>, req: Request) -> 
     if let Ok(val) = rama::http::HeaderValue::from_str(&content_type) {
         headers.insert(rama::http::header::CONTENT_TYPE, val);
     }
-    let mut rec = RecordParams::v1(
-        &user,
-        UsageKind::Image,
-        real_model.clone(),
-        state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Image),
-    );
+    let mut rec = admitted.record(&user, UsageKind::Image);
     rec.input_units = image_edit_units(&fields);
     let resp = forward(
         &state,
-        acquired,
+        admitted.acquired,
         Method::POST,
         "images/edits",
         headers,
@@ -1649,54 +1630,14 @@ fn audio_response(bytes: Bytes) -> Response {
 /// other `/v1` endpoint. Voice mode's own sanitised, voice-mapped path is
 /// `POST /api/v0/speech`.
 pub async fn speech(State(state): State<Arc<RamaState>>, req: Request) -> Response {
-    let (parts, body) = req.into_parts();
-    let user = match require_bearer(&state, &parts.headers).await {
-        Ok(u) => u,
-        Err(refusal) => return refusal.into_response(),
-    };
-    let body = match read_body_to_bytes(body).await {
-        Ok(b) => b,
-        Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
-    };
-    let Some(model) = parse_model_field(&body) else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            "request body is missing a string `model` field",
-        );
-    };
-    let access = state.pool_access_for_token(&user);
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Speech, &access)
-    {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
-    };
-    let real_model = acquired.resolved_model().to_string();
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Speech).await {
-        return resp;
-    }
-    let body = rewrite_model_in_bytes(body, &real_model);
-    let rec = RecordParams::v1(
-        &user,
-        UsageKind::Speech,
-        real_model.clone(),
-        state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Speech),
-    );
-    let resp = forward(
+    relay_by_model(
         &state,
-        acquired,
-        Method::POST,
+        req,
+        PoolKind::Speech,
+        UsageKind::Speech,
         "audio/speech",
-        parts.headers,
-        body,
-        rec,
     )
-    .await;
-    with_resolved_model_header(resp, &model, &real_model)
+    .await
 }
 
 /// What `POST /api/v0/speech` reads aloud.

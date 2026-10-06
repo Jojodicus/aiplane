@@ -1710,6 +1710,74 @@ async fn steering_an_idle_conversation_is_refused() {
     assert!(body_string(resp).await.contains("no_turn_running"));
 }
 
+/// Steering is gated like a message, on the running turn's model: a spent
+/// budget refuses it on an enforced pool and lets it through on an exempt one.
+#[tokio::test]
+async fn steering_follows_the_turn_models_limit_exemption() {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+
+    for (enforce_limits, expected) in [
+        (false, StatusCode::ACCEPTED),
+        (true, StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        let upstream = MockServer::start().await;
+        mount_streaming_upstream(&upstream, &["slow"], 5_000).await;
+        let state = Arc::new(
+            common::state_with_pool_enforcing(
+                &upstream.uri(),
+                PoolKind::Chat,
+                "model-a",
+                enforce_limits,
+            )
+            .await,
+        );
+        let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+        let app = router(state.clone());
+        let session = chat::create_session(&state.db, "alice").await.unwrap();
+        let submitted = app
+            .serve(json_req(
+                Method::POST,
+                format!("/api/v0/chat/sessions/{}/messages", session.id),
+                &cookie,
+                Some(r#"{"model":"model-a","message":"one"}"#.into()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(submitted.status(), StatusCode::ACCEPTED);
+        limits::upsert(
+            &state.db,
+            SubjectType::Global,
+            "",
+            None,
+            Dimension::Requests,
+            Window::Hour,
+            0.0,
+        )
+        .await
+        .unwrap();
+
+        let resp = app
+            .serve(json_req(
+                Method::POST,
+                format!("/api/v0/chat/sessions/{}/steer", session.id),
+                &cookie,
+                Some(r#"{"message":"and also"}"#.into()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), expected, "enforce_limits={enforce_limits}");
+
+        let _ = app
+            .serve(json_req(
+                Method::POST,
+                format!("/api/v0/chat/sessions/{}/cancel", session.id),
+                &cookie,
+                None,
+            ))
+            .await;
+    }
+}
+
 /// A finished turn replays from the DB: attach after the fact and the
 /// snapshot alone tells the whole story.
 #[tokio::test]

@@ -596,16 +596,6 @@ pub async fn session_steer(
     if !user_owns(&state, &user.id, &session_id).await {
         return not_found_conversation();
     }
-    // Same gate a message goes through, and the same response. An interjection
-    // is not free: it is a row, and it is one more user message folded into
-    // every remaining round of the prompt, so an unbounded stream of them
-    // inflates the upstream request at nobody's expense but the operator's.
-    {
-        let role_ids = state.role_ids_for(&user.roles);
-        if state.enforcer.check(&user.id, &role_ids).await.is_err() {
-            return submit_refusal(SubmitTurnError::RateLimited);
-        }
-    }
     let (_, body) = req.into_parts();
     let bytes = match session_core::chrome::read_body_to_bytes(body).await {
         Ok(b) => b,
@@ -632,6 +622,31 @@ pub async fn session_steer(
             "nothing is streaming in this conversation — send it as a message instead",
         );
     };
+
+    // Same gate a message goes through, on the running turn's model, and the
+    // same response. An interjection is not free: it is a row, and it is one
+    // more user message folded into every remaining round of the prompt, so an
+    // unbounded stream of them inflates the upstream request at nobody's
+    // expense but the operator's.
+    let model = match chat::get_turn(&state.db, &session_id, &worker.turn_id).await {
+        Ok(turn) => turn.and_then(|turn| turn.model).unwrap_or_default(),
+        Err(err) => return internal(err),
+    };
+    if state
+        .enforcer
+        .check_for_model(
+            &user.id,
+            &state.role_ids_for(&user.roles),
+            &model,
+            state
+                .upstreams
+                .enforce_limits_for_model(&model, aiplane_core::server::upstreams::PoolKind::Chat),
+        )
+        .await
+        .is_err()
+    {
+        return submit_refusal(SubmitTurnError::RateLimited);
+    }
 
     // The insert is conditional on the turn still running, so the answer
     // finishing between the lookup above and this write is a `None` rather

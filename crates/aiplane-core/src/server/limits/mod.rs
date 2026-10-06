@@ -42,7 +42,7 @@ pub struct Enforcer {
 }
 
 /// One in-force limit paired with the caller's current usage — the unit the
-/// user's self-view renders as a progress bar, and what [`Enforcer::check`]
+/// user's self-view renders as a progress bar, and what [`Enforcer::check_for_model`]
 /// scans for a breach.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LimitStatus {
@@ -229,14 +229,10 @@ impl Enforcer {
         out
     }
 
-    /// Gate a call. `Ok(())` to proceed; `Err` with the first breached limit
-    /// (post-hoc debt: a limit already at/over its ceiling blocks the *next*
-    /// call). Unlimited callers and disabled enforcement pass instantly.
-    pub async fn check(&self, user_id: &str, role_ids: &[String]) -> Result<(), LimitExceeded> {
-        first_breach(self.statuses(user_id, role_ids).await)
-    }
-
-    /// Gate a call for one resolved model. Pools exempt from enforcement do
+    /// Gate a call for one resolved model. `Ok(())` to proceed; `Err` with the
+    /// first breached limit (post-hoc debt: a limit already at/over its
+    /// ceiling blocks the *next* call). Unlimited callers and disabled
+    /// enforcement pass instantly. Pools exempt from enforcement do
     /// not consume a budget and must remain available after it is spent.
     /// Model-scoped rules apply only when their scope names this model; an
     /// unscoped rule remains the aggregate budget across all metered models.
@@ -263,12 +259,8 @@ impl Enforcer {
     /// ceiling. A caller under their personal budget can still be refused
     /// here, and a token rule can never grant more than the owner's budget
     /// allows, because both gates must pass. No rules on the token (the
-    /// default for every token ever issued) passes instantly.
-    pub async fn check_token(&self, token_id: &str) -> Result<(), LimitExceeded> {
-        first_breach(self.token_statuses(token_id).await)
-    }
-
-    /// The token-owned counterpart of [`Self::check_for_model`].
+    /// default for every token ever issued) passes instantly. The token-owned
+    /// counterpart of [`Self::check_for_model`].
     pub async fn check_token_for_model(
         &self,
         token_id: &str,
@@ -400,7 +392,7 @@ mod tests {
     async fn no_rules_means_unlimited() {
         let pool = pool().await;
         let enf = Enforcer::new(pool, true);
-        assert!(enf.check("alice", &[]).await.is_ok());
+        assert!(enf.check_for_model("alice", &[], "gpt", true).await.is_ok());
         assert!(enf.statuses("alice", &[]).await.is_empty());
     }
 
@@ -419,7 +411,7 @@ mod tests {
         .await
         .unwrap();
         let enf = Enforcer::new(pool, false);
-        assert!(enf.check("alice", &[]).await.is_ok());
+        assert!(enf.check_for_model("alice", &[], "gpt", true).await.is_ok());
     }
 
     /// An event attributed to one API token.
@@ -438,8 +430,11 @@ mod tests {
     async fn a_token_without_rules_is_never_blocked() {
         let pool = pool().await;
         let enf = Enforcer::new(pool, true);
-        assert!(enf.check_token("tok-a").await.is_ok());
-        assert!(enf.check_token("").await.is_ok(), "no token id at all");
+        assert!(enf.check_token_for_model("tok-a", "m", true).await.is_ok());
+        assert!(
+            enf.check_token_for_model("", "m", true).await.is_ok(),
+            "no token id at all"
+        );
         assert!(enf.token_statuses("tok-a").await.is_empty());
     }
 
@@ -474,7 +469,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(enf.check_token("tok-a").await.is_ok());
+        assert!(enf.check_token_for_model("tok-a", "m", true).await.is_ok());
 
         // Its own two requests do.
         usage::insert_batch(
@@ -486,7 +481,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = enf.check_token("tok-a").await.unwrap_err();
+        let err = enf
+            .check_token_for_model("tok-a", "m", true)
+            .await
+            .unwrap_err();
         assert_eq!(err.limit, 2.0);
         assert_eq!(
             err.subject,
@@ -494,7 +492,7 @@ mod tests {
             "the 429 has to say which ceiling tripped"
         );
         // …and tok-b, which has no rule, still passes.
-        assert!(enf.check_token("tok-b").await.is_ok());
+        assert!(enf.check_token_for_model("tok-b", "m", true).await.is_ok());
     }
 
     /// A token rule is an *additional* ceiling, never a replacement. The
@@ -534,9 +532,12 @@ mod tests {
             .unwrap();
 
         // The token's own gate is happy (1 of 100)…
-        assert!(enf.check_token("tok-a").await.is_ok());
+        assert!(enf.check_token_for_model("tok-a", "m", true).await.is_ok());
         // …but the owner's budget is spent, and that gate is checked too.
-        let err = enf.check("alice", &[]).await.unwrap_err();
+        let err = enf
+            .check_for_model("alice", &[], "gpt", true)
+            .await
+            .unwrap_err();
         assert_eq!(err.limit, 1.0);
         assert_eq!(err.subject, SubjectType::User);
     }
@@ -583,7 +584,7 @@ mod tests {
         let now = Timestamp::now();
 
         // No usage yet → allowed.
-        assert!(enf.check("alice", &[]).await.is_ok());
+        assert!(enf.check_for_model("alice", &[], "gpt", true).await.is_ok());
 
         // Two metered requests recorded → at the ceiling → next is refused.
         usage::insert_batch(
@@ -595,7 +596,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = enf.check("alice", &[]).await.unwrap_err();
+        let err = enf
+            .check_for_model("alice", &[], "gpt", true)
+            .await
+            .unwrap_err();
         assert_eq!(err.dimension, Dimension::Requests);
         assert_eq!(err.limit, 2.0);
         assert!(err.used >= 2.0);
@@ -637,7 +641,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            enf.check("alice", &[]).await.is_ok(),
+            enf.check_for_model("alice", &[], "gpt", true).await.is_ok(),
             "usage older than the window must not count (the window resets)"
         );
         let status = enf.statuses("alice", &[]).await;
@@ -657,7 +661,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(enf.check("alice", &[]).await.is_err());
+        assert!(
+            enf.check_for_model("alice", &[], "gpt", true)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -680,7 +688,7 @@ mod tests {
         usage::insert_batch(&pool, &[event("alice", "local", 500, false, now)])
             .await
             .unwrap();
-        assert!(enf.check("alice", &[]).await.is_ok());
+        assert!(enf.check_for_model("alice", &[], "gpt", true).await.is_ok());
         let st = enf.statuses("alice", &[]).await;
         assert_eq!(st.len(), 1);
         assert_eq!(st[0].used, 0.0);

@@ -141,6 +141,17 @@ pub async fn state_with_chat_pool(upstream_url: &str) -> RamaState {
 /// backend has its advertised-model set seeded directly via
 /// `Backend::set_models` so `acquire_for(model_name, kind)` succeeds.
 pub async fn state_with_pool(upstream_url: &str, kind: PoolKind, model_name: &str) -> RamaState {
+    state_with_pool_enforcing(upstream_url, kind, model_name, true).await
+}
+
+/// [`state_with_pool`] with the pool's `enforce_limits` flag chosen; `false`
+/// makes it a pool exempt from limit enforcement.
+pub async fn state_with_pool_enforcing(
+    upstream_url: &str,
+    kind: PoolKind,
+    model_name: &str,
+    enforce_limits: bool,
+) -> RamaState {
     let db_pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
     pools.insert(
@@ -151,7 +162,7 @@ pub async fn state_with_pool(upstream_url: &str, kind: PoolKind, model_name: &st
             allowed_groups: Vec::new(),
             fallback_offline: None,
             compliance: Default::default(),
-            enforce_limits: true,
+            enforce_limits,
             kind,
             strategy: PickerStrategy::RoundRobin,
             models: Vec::new(),
@@ -164,6 +175,16 @@ pub async fn state_with_pool(upstream_url: &str, kind: PoolKind, model_name: &st
 }
 
 pub async fn state_with_automatic_route_pools(upstream_url: &str) -> RamaState {
+    state_with_automatic_route_pools_enforcing(upstream_url, true, true).await
+}
+
+/// [`state_with_automatic_route_pools`] with each pool's `enforce_limits`
+/// flag chosen.
+pub async fn state_with_automatic_route_pools_enforcing(
+    upstream_url: &str,
+    chat_enforces: bool,
+    selector_enforces: bool,
+) -> RamaState {
     let db_pool = db::open(std::path::Path::new(":memory:")).await.unwrap();
     let mut pools = HashMap::new();
     for (name, kind) in [("chat", PoolKind::Chat), ("selector", PoolKind::SystemOne)] {
@@ -175,7 +196,11 @@ pub async fn state_with_automatic_route_pools(upstream_url: &str) -> RamaState {
                 allowed_groups: Vec::new(),
                 fallback_offline: None,
                 compliance: Default::default(),
-                enforce_limits: true,
+                enforce_limits: if kind == PoolKind::Chat {
+                    chat_enforces
+                } else {
+                    selector_enforces
+                },
                 kind,
                 strategy: PickerStrategy::RoundRobin,
                 models: if kind == PoolKind::SystemOne {
