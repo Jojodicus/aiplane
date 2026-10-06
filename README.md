@@ -7,8 +7,9 @@ combines the employee workspace, multi-provider model gateway and business
 agents—and adds browser control through its dedicated extension. Administrators
 connect company systems and define who can access models, tools and workflows.
 
-[Get started](docs/getting-started.md) · [Explore the user guide](docs/README.md#use-aiplane) ·
-[Connect an application](docs/reference/api.md) · [Deploy AIplane](docs/operations/deployment.md)
+[Read the manual](https://croit.github.io/aiplane/) · [Get started](docs/getting-started.md) ·
+[Explore the user guide](docs/README.md#use-aiplane) · [Connect an application](docs/reference/api.md) ·
+[Deploy AIplane](docs/operations/deployment.md)
 
 [![Latest release](https://img.shields.io/github/v/release/croit/aiplane?label=Latest%20release)](https://github.com/croit/aiplane/releases/latest) [![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
 
@@ -195,8 +196,8 @@ them. User and token restrictions still apply. See the
 The complete manual is available inside each packaged installation at **`/docs/`**,
 including before first login. It includes local search, screenshots, and the
 version and commit of the running build. The same Markdown pages are published
-as the [documentation website](docs/README.md) and as formats suitable for
-language models:
+as the [documentation website](https://croit.github.io/aiplane/) and as formats
+suitable for language models:
 
 - `/docs/llms.txt` — an index of the manual.
 - `/docs/llms-full.txt` — the complete manual in Markdown.
