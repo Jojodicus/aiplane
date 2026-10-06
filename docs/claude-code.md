@@ -236,8 +236,13 @@ Identical to `/v1/chat/completions`, because it is the same pipeline:
 
 - every round is one usage row (`/usage`, and `/admin/tokens` for the
   deployment-wide view), attributed to the token and its owner;
-- rate limits and quotas are enforced before routing, and a breach is a `429`
-  with `Retry-After` in the Anthropic error shape;
+- rate limits and quotas are enforced for the resolved model before anything
+  is forwarded, and a breach is a `429` with `Retry-After` in the Anthropic
+  error shape; a pool exempt from enforcement is never refused; an automatic
+  route's selector is checked the same way right before it is asked, on
+  `/v1/messages/count_tokens` too, so a session-affinity hit is not checked
+  on it; an automatic-route failure is reported in the Anthropic error shape
+  ([automatic routing](automatic-routing.md#limits));
 - a token's model allowlist applies to the alias *and* its target;
 - pool group restrictions apply, so a token can't reach a pool its owner's
   groups don't permit.

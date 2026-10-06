@@ -39,14 +39,12 @@ use rama::http::{Request, Response, StatusCode};
 use serde_json::{Value, json};
 
 use aiplane_core::server::db::Pool;
-use aiplane_core::server::limits::LimitExceeded;
-use aiplane_core::server::upstreams::registry::RouteError;
 use aiplane_runtime::rama_server::auth::require_bearer;
 use aiplane_runtime::rama_server::state::RamaState;
 use aiplane_runtime::server::tools::runner::{LoopError, LoopOutput, ToolCallAcc};
 
 use crate::rama_server::proxy::{self, ChunkMeta, Outbound, StreamFailure, StreamSink, TokenUsage};
-use crate::rama_server::translated::{self, Ran, Refusals, TranslatedTurn, Turn};
+use crate::rama_server::translated::{self, Ran, TranslatedTurn, Turn};
 
 use output::Shell;
 use request::{ResponsesRequest, TranslateError};
@@ -123,7 +121,7 @@ pub async fn create(State(state): State<Arc<RamaState>>, req: Request) -> Respon
         parts.headers,
         client_ip,
         turn,
-        &OpenAiRefusals,
+        &proxy::OpenAiRefusals,
         move || Box::new(ResponsesSink::new(sink_shell, sink_custom, sink_saving)),
     )
     .await
@@ -331,19 +329,6 @@ impl StreamSink for ResponsesSink {
     fn outbound(&self) -> Option<Outbound> {
         let mut numbers = SequenceNumbers::default();
         Some(Box::new(move |frame| numbers.number(frame)))
-    }
-}
-
-/// Pre-turn refusals in OpenAI's shape, identical to `/v1/chat/completions`.
-struct OpenAiRefusals;
-
-impl Refusals for OpenAiRefusals {
-    fn route_error(&self, err: RouteError) -> Response {
-        proxy::route_error_response(err)
-    }
-
-    fn rate_limited(&self, err: &LimitExceeded) -> Response {
-        proxy::limit_exceeded_response(err)
     }
 }
 

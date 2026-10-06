@@ -30,7 +30,7 @@ pub enum SubjectType {
     /// a token rule is not part of the global → role → user hierarchy: it is
     /// an *additional* ceiling checked alongside the owner's budget, so a
     /// token can only ever narrow what its owner may spend. See
-    /// `limits::Enforcer::check_token`.
+    /// `limits::Enforcer::check_token_for_model`.
     Token,
     /// One agent (`subject_id` = `system_principals.id`): an operator's cap
     /// on what the agent's conversations may spend, sub-agents and router

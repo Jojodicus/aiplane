@@ -12,6 +12,8 @@ use thiserror::Error;
 use crate::server::db::Pool;
 use crate::server::db::automatic_routes::{self, AutomaticRoute, AutomaticRouteCandidate};
 use crate::server::db::model_defaults::PricingUnit;
+use crate::server::limits::LimitExceeded;
+use crate::server::upstreams::registry::Acquired;
 use crate::server::upstreams::{PoolAccess, PoolKind, UpstreamRegistry};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +51,27 @@ pub enum AutomaticRoutingError {
     NoEligibleCandidates { alias: String },
     #[error("automatic route `{alias}` fallback `{fallback}` is not currently eligible")]
     IneligibleFallback { alias: String, fallback: String },
+    #[error("the caller may not spend on the automatic route's selector: {0}")]
+    SelectorLimited(LimitExceeded),
+}
+
+/// Asked before a selector is: whether the caller may spend on the selector
+/// model it is about to be routed to. The router knows no caller, so whoever
+/// selects on a caller's behalf supplies their limits.
+pub trait SelectorGate: Sync {
+    fn admit(&self, selector_model: &str)
+    -> impl Future<Output = Result<(), LimitExceeded>> + Send;
+}
+
+/// The gate of a caller that does not check the selector's limits: the chat
+/// driver and side calls, whose limits are checked on a chat model rather than
+/// on the selector.
+pub struct Ungated;
+
+impl SelectorGate for Ungated {
+    async fn admit(&self, _selector_model: &str) -> Result<(), LimitExceeded> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -170,12 +193,17 @@ impl AutomaticRouter {
         Ok(route)
     }
 
+    /// Choose the target for a request naming `alias`, if it is an automatic
+    /// route. `gate` is asked before the selector is, on the selector model
+    /// the request is routed to; a session-affinity hit asks no selector and
+    /// so is not gated.
     pub async fn select(
         &self,
         alias: &str,
         state: &Value,
         access: &PoolAccess,
         affinity: Option<AutomaticRouteAffinity<'_>>,
+        gate: &impl SelectorGate,
     ) -> Result<Option<AutomaticRouteDecision>, AutomaticRoutingError> {
         let Some(route) = self.load_route(alias).await? else {
             return Ok(None);
@@ -273,15 +301,19 @@ impl AutomaticRouter {
         }
 
         let started = Instant::now();
-        let selection = self
-            .ask_selector(
-                &route,
-                &selector_state(state),
-                &eligible,
-                &candidate_facts,
-                &target_access,
-            )
-            .await;
+        let selection = match self.admit_selector(&route, &target_access, gate).await? {
+            Ok(acquired) => {
+                self.ask_selector(
+                    acquired,
+                    &route,
+                    &selector_state(state),
+                    &eligible,
+                    &candidate_facts,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
         let elapsed = started.elapsed().as_millis() as i64;
         let (selected, confidence, probabilities, selector_model, selector_backend, selector_usage) =
             match selection {
@@ -445,18 +477,53 @@ impl AutomaticRouter {
         }
     }
 
+    /// A slot on the selector `gate` admitted. The inner `Err` is a routing
+    /// failure, which falls back like any selector failure; the outer one is
+    /// the gate's refusal, which ends the request.
+    async fn admit_selector(
+        &self,
+        route: &AutomaticRoute,
+        access: &PoolAccess,
+        gate: &impl SelectorGate,
+    ) -> Result<Result<Acquired, String>, AutomaticRoutingError> {
+        let routing_failed = |error| format!("routing selector model: {error}");
+        let checked = match self.upstreams.resolve_route_access(
+            &route.selector_model,
+            PoolKind::SystemOne,
+            access,
+        ) {
+            Ok(model) => model,
+            Err(error) => return Ok(Err(routing_failed(error))),
+        };
+        gate.admit(&checked)
+            .await
+            .map_err(AutomaticRoutingError::SelectorLimited)?;
+        let acquired =
+            match self
+                .upstreams
+                .route_access(&route.selector_model, PoolKind::SystemOne, access)
+            {
+                Ok(acquired) => acquired,
+                Err(error) => return Ok(Err(routing_failed(error))),
+            };
+        // A backend's health can change between resolving and acquiring; what
+        // is asked is what must have passed the gate.
+        if acquired.resolved_model() != checked {
+            gate.admit(acquired.resolved_model())
+                .await
+                .map_err(AutomaticRoutingError::SelectorLimited)?;
+        }
+        Ok(Ok(acquired))
+    }
+
     async fn ask_selector(
         &self,
+        acquired: Acquired,
         route: &AutomaticRoute,
         state: &Value,
         eligible: &[&AutomaticRouteCandidate],
         candidate_facts: &HashMap<String, String>,
-        access: &PoolAccess,
     ) -> Result<SelectorAnswer, String> {
-        let acquired = self
-            .upstreams
-            .route_access(&route.selector_model, PoolKind::SystemOne, access)
-            .map_err(|error| format!("routing selector model: {error}"))?;
         let selector_model = acquired.resolved_model().to_string();
         let selector_backend = acquired.backend().name.clone();
         let url = format!(

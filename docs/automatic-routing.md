@@ -84,9 +84,32 @@ Responses expose the decision through:
 The feature applies consistently to `/v1/chat/completions`, `/v1/responses`,
 `/v1/messages`, `/v1/messages/count_tokens`, and the built-in persisted chat
 driver.
-Token counting stays a cheap, quota-independent operation for static models.
-When an automatic alias requires selector inference, the normal request and
-quota gate runs before that inference.
+
+## Limits
+
+On the `/v1` endpoints, the caller's limits are checked on the selector model
+right before the selector is asked, on the model the request is actually routed
+to: when the selector's own pool is down and an offline or unknown-model
+fallback serves it, the fallback's pool decides. A caller over budget there gets
+`429` before the selector is called or billed. A selector on a pool exempt from
+enforcement is asked even after a budget is spent.
+
+A request that asks no selector is not checked on it: a session-affinity hit
+answers from the cached target, and a route without eligible candidates
+reports its `503 automatic_route_unavailable`. A selector that cannot be routed
+at all falls back to the route's fallback target without being checked or
+asked.
+
+The selector call is recorded as System One usage. The target's limits are
+checked afterwards, as for any model. A caller whose selector passes but whose
+target is refused, for example by a rule scoped to the target model, gets
+`429` after the selector has run and, on an enforced selector pool, been billed.
+
+Token counting checks only the selector: the count itself is not metered, so
+for a static model it is independent of limits.
+
+The built-in persisted chat driver and side calls (titles, compaction, agent
+classifiers) check limits on the chat model, not on the selector.
 
 ## Data boundary
 

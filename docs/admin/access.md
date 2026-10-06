@@ -52,7 +52,7 @@ Open `/admin/limits`. Ensure `limits.enabled` is on in [system settings](setting
 5. Enter the limit and save.
 6. Check the rule table and the user's limit display on **Usage**. Use Edit to change a rule or Delete with confirmation to remove it.
 
-Costs use the configured currency and model pricing. Missing prices make a cost-based policy incomplete; verify the unpriced-model warning before using monetary totals to judge consumption. A pool's `enforce_limits` declaration also affects enforcement and belongs in the routing review.
+Costs use the configured currency and model pricing. Missing prices make a cost-based policy incomplete; verify the unpriced-model warning before using monetary totals to judge consumption. A pool's `enforce_limits` declaration also affects enforcement and belongs in the routing review: a pool with it off is exempt, so its calls consume no budget and are not refused once a budget is spent, by user, group, global and token rules alike. Every model-routed `/v1` endpoint checks limits against the model it resolved, `/v1/responses`, transcription and image editing included; an automatic route also checks its selector model right before asking it ([automatic routing](../automatic-routing.md#limits)). Steering a running chat answer is checked on that turn's model, so it honours an exempt pool like sending a message does. The chat's voice input and read-aloud (`/api/v0/transcriptions`, `/api/v0/speech`) are recorded as usage but not refused by limits.
 
 ## Read usage correctly
 

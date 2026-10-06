@@ -1500,3 +1500,223 @@ async fn v1_embeddings_prices_a_bare_total_as_input_tokens() {
         agg.summary.total_cost
     );
 }
+
+// --- limits on the single-round-trip /v1 relays ------------------------------
+
+/// A `/v1` relay that reads a `model`, routes it and forwards one request.
+struct ModelRelay {
+    kind: PoolKind,
+    uri: &'static str,
+    model: &'static str,
+    multipart: bool,
+}
+
+const MODEL_RELAYS: [ModelRelay; 7] = [
+    ModelRelay {
+        kind: PoolKind::Embedding,
+        uri: "/v1/embeddings",
+        model: "embed-model",
+        multipart: false,
+    },
+    ModelRelay {
+        kind: PoolKind::Rerank,
+        uri: "/v1/rerank",
+        model: "rerank-model",
+        multipart: false,
+    },
+    ModelRelay {
+        kind: PoolKind::SystemOne,
+        uri: "/v1/systemone",
+        model: "decide-model",
+        multipart: false,
+    },
+    ModelRelay {
+        kind: PoolKind::Image,
+        uri: "/v1/images/generations",
+        model: "glm-image",
+        multipart: false,
+    },
+    ModelRelay {
+        kind: PoolKind::Speech,
+        uri: "/v1/audio/speech",
+        model: "tts-model",
+        multipart: false,
+    },
+    ModelRelay {
+        kind: PoolKind::Image,
+        uri: "/v1/images/edits",
+        model: "edit-model",
+        multipart: true,
+    },
+    ModelRelay {
+        kind: PoolKind::Transcription,
+        uri: "/v1/audio/transcriptions",
+        model: "whisper-model",
+        multipart: true,
+    },
+];
+
+fn relay_request(bearer: &str, relay: &ModelRelay) -> Request<Body> {
+    let model = relay.model;
+    let (content_type, body) = if relay.multipart {
+        let boundary = "relay-boundary";
+        (
+            format!("multipart/form-data; boundary={boundary}"),
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n\
+                 --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\nAUDIO\r\n\
+                 --{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\nA\r\n\
+                 --{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nedit\r\n\
+                 --{boundary}--\r\n"
+            ),
+        )
+    } else {
+        (
+            "application/json".to_string(),
+            json!({"model": model, "input": "hi"}).to_string(),
+        )
+    };
+    Request::builder()
+        .method(Method::POST)
+        .uri(relay.uri)
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", content_type)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// A lone pool for `relay` behind an upstream that answers every POST, with a
+/// zero-request rule on `subject` that has already spent the budget. Returns
+/// the state, the caller's bearer and the upstream.
+async fn spent_budget(
+    relay: &ModelRelay,
+    enforce_limits: bool,
+    subject: aiplane_core::server::db::limits::SubjectType,
+) -> (aiplane::rama_server::RamaState, String, MockServer) {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&upstream)
+        .await;
+    let state =
+        common::state_with_pool_enforcing(&upstream.uri(), relay.kind, relay.model, enforce_limits)
+            .await;
+    let (bearer, token_id) = common::seed_user_with_token_id(&state, "alice").await;
+    let subject_id = match subject {
+        SubjectType::Token => token_id.as_str(),
+        _ => "",
+    };
+    limits::upsert(
+        &state.db,
+        subject,
+        subject_id,
+        None,
+        Dimension::Requests,
+        Window::Hour,
+        0.0,
+    )
+    .await
+    .unwrap();
+    (state, bearer, upstream)
+}
+
+/// Sends one request through `relay` with a spent budget and returns the
+/// status together with how many requests reached the upstream.
+async fn status_with_spent_budget(
+    relay: &ModelRelay,
+    enforce_limits: bool,
+    subject: aiplane_core::server::db::limits::SubjectType,
+) -> (StatusCode, usize) {
+    let (state, bearer, upstream) = spent_budget(relay, enforce_limits, subject).await;
+    let resp = common::app(state)
+        .serve(relay_request(&bearer, relay))
+        .await
+        .unwrap();
+    let reached = upstream.received_requests().await.unwrap().len();
+    (resp.status(), reached)
+}
+
+/// A pool exempt from enforcement does not consume a budget, so it stays
+/// reachable after the caller's budget is spent.
+#[tokio::test]
+async fn exempt_pools_stay_available_after_the_budget_is_spent() {
+    use aiplane_core::server::db::limits::SubjectType;
+
+    for relay in &MODEL_RELAYS {
+        let (status, reached) = status_with_spent_budget(relay, false, SubjectType::Global).await;
+        assert_eq!(status, StatusCode::OK, "{} on an exempt pool", relay.uri);
+        assert_eq!(reached, 1, "{} must reach the exempt pool", relay.uri);
+    }
+}
+
+#[tokio::test]
+async fn enforced_pools_refuse_a_spent_budget_with_429() {
+    use aiplane_core::server::db::limits::SubjectType;
+
+    for relay in &MODEL_RELAYS {
+        let (status, reached) = status_with_spent_budget(relay, true, SubjectType::Global).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{}", relay.uri);
+        assert_eq!(reached, 0, "{} must refuse before forwarding", relay.uri);
+    }
+}
+
+/// The token's own rules are an additional ceiling on enforced pools.
+#[tokio::test]
+async fn enforced_pools_apply_the_tokens_own_rules() {
+    use aiplane_core::server::db::limits::SubjectType;
+
+    for relay in &MODEL_RELAYS {
+        let (status, reached) = status_with_spent_budget(relay, true, SubjectType::Token).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{}", relay.uri);
+        assert_eq!(reached, 0, "{} must refuse before forwarding", relay.uri);
+    }
+}
+
+/// An exempt pool ignores the token's own rules as it ignores every other.
+#[tokio::test]
+async fn exempt_pools_ignore_the_tokens_own_rules() {
+    use aiplane_core::server::db::limits::SubjectType;
+
+    for relay in &MODEL_RELAYS {
+        let (status, reached) = status_with_spent_budget(relay, false, SubjectType::Token).await;
+        assert_eq!(status, StatusCode::OK, "{} on an exempt pool", relay.uri);
+        assert_eq!(reached, 1, "{} must reach the exempt pool", relay.uri);
+    }
+}
+
+/// The limit gate runs before a slot is taken: an over-budget caller on a
+/// saturated pool is told it is over budget, and its refused call neither
+/// holds capacity nor counts as a dispatch.
+#[tokio::test]
+async fn a_spent_budget_is_refused_before_a_slot_is_taken() {
+    use aiplane_core::server::db::limits::SubjectType;
+
+    for relay in &MODEL_RELAYS {
+        let (state, bearer, upstream) = spent_budget(relay, true, SubjectType::Global).await;
+        let registry = state.upstreams.clone();
+        let pool = registry.pools().into_iter().next().unwrap();
+        let backend = &pool.backends[0];
+        let held: Vec<_> = (0..16)
+            .map(|_| registry.route(relay.model, relay.kind).unwrap())
+            .collect();
+        let dispatched = backend.dispatched();
+
+        let resp = common::app(state)
+            .serve(relay_request(&bearer, relay))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "{}",
+            relay.uri
+        );
+        assert_eq!(backend.dispatched(), dispatched, "{}", relay.uri);
+        assert_eq!(backend.inflight(), 16, "{}", relay.uri);
+        assert!(upstream.received_requests().await.unwrap().is_empty());
+        drop(held);
+    }
+}

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rama::http::{HeaderMap, Response};
+use rama::http::{HeaderMap, Response, StatusCode};
 use serde_json::Value;
 
 use aiplane_core::server::auth::UserCtx;
@@ -41,6 +41,9 @@ pub(crate) struct TranslatedTurn {
 pub(crate) trait Refusals {
     fn route_error(&self, err: RouteError) -> Response;
     fn rate_limited(&self, err: &LimitExceeded) -> Response;
+    /// Any other refusal. `code` is the OpenAI error code; a dialect without
+    /// one words the refusal by `status` alone.
+    fn refused(&self, status: StatusCode, code: &str, message: &str) -> Response;
 }
 
 /// What the loop produced.
@@ -99,6 +102,7 @@ pub(crate) async fn run(
         &access,
         &headers,
         !allowed_tools.is_empty() || !auto_tools.is_empty(),
+        refusals,
     )
     .await?;
     let access = match &automatic_decision {

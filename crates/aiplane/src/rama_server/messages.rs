@@ -164,13 +164,6 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    if matches!(
-        state.automatic_router.is_route(&translated.model).await,
-        Ok(true)
-    ) && let Some(exceeded) = proxy::limit_exceeded(&state, &user).await
-    {
-        return rate_limited(&exceeded);
-    }
     let requested_model = translated.model.clone();
 
     let access = state
@@ -184,6 +177,7 @@ pub async fn count_tokens(State(state): State<Arc<RamaState>>, req: Request) -> 
         &access,
         &parts.headers,
         false,
+        &AnthropicRefusals,
     )
     .await
     {
@@ -371,6 +365,10 @@ impl Refusals for AnthropicRefusals {
 
     fn rate_limited(&self, err: &aiplane_core::server::limits::LimitExceeded) -> Response {
         rate_limited(err)
+    }
+
+    fn refused(&self, status: StatusCode, _code: &str, message: &str) -> Response {
+        error_response(status, message)
     }
 }
 

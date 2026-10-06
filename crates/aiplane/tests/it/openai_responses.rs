@@ -655,6 +655,61 @@ async fn a_quota_breach_is_429_with_retry_after() {
     );
 }
 
+/// Limits gate the resolved model's pool: an exempt pool answers after the
+/// budget is spent, whoever's rule spent it, and an enforced pool refuses on
+/// the owner's and on the token's own rules alike.
+#[tokio::test]
+async fn limits_follow_the_pools_enforcement() {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+    use aiplane_core::server::upstreams::PoolKind;
+
+    for (enforce_limits, subject, expected) in [
+        (false, SubjectType::Global, StatusCode::OK),
+        (false, SubjectType::Token, StatusCode::OK),
+        (true, SubjectType::Global, StatusCode::TOO_MANY_REQUESTS),
+        (true, SubjectType::Token, StatusCode::TOO_MANY_REQUESTS),
+    ] {
+        let upstream = MockServer::start().await;
+        mount_chat(&upstream, completion("hi")).await;
+        let state = common::state_with_pool_enforcing(
+            &upstream.uri(),
+            PoolKind::Chat,
+            "model-a",
+            enforce_limits,
+        )
+        .await;
+        let (bearer, token_id) = common::seed_user_with_token_id(&state, "alice").await;
+        let subject_id = match subject {
+            SubjectType::Token => token_id.clone(),
+            _ => String::new(),
+        };
+        limits::upsert(
+            &state.db,
+            subject,
+            &subject_id,
+            None,
+            Dimension::Requests,
+            Window::Hour,
+            0.0,
+        )
+        .await
+        .unwrap();
+
+        let resp = common::app(state)
+            .serve(create_req(
+                &bearer,
+                &json!({"model": "model-a", "input": "hi"}),
+            ))
+            .await
+            .unwrap();
+
+        let case = format!("enforce_limits={enforce_limits}, rule on {subject:?}");
+        assert_eq!(resp.status(), expected, "{case}");
+        let reached = upstream.received_requests().await.unwrap().len();
+        assert_eq!(reached, usize::from(expected == StatusCode::OK), "{case}");
+    }
+}
+
 #[tokio::test]
 async fn an_alias_is_reported_as_asked_and_resolved_in_the_header() {
     let upstream = MockServer::start().await;

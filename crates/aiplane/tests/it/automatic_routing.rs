@@ -749,3 +749,348 @@ async fn agent_resources_offer_only_the_automatic_routes_a_manager_may_use_whole
         "the chat picker lists a route whose fallback the person reaches: {body}"
     );
 }
+
+// --- limits on the selector ---------------------------------------------------
+
+/// The `/v1` endpoints that resolve a model through an automatic route.
+const ROUTED_ENDPOINTS: [&str; 4] = [
+    "/v1/chat/completions",
+    "/v1/responses",
+    "/v1/messages",
+    "/v1/messages/count_tokens",
+];
+
+/// An `active` route over pools whose selector pool enforces limits as
+/// `selector_enforces` says, a global zero-request rule that has already
+/// spent every budget, and a bearer for it.
+async fn spent_budget_with_route(
+    upstream: &MockServer,
+    selector_enforces: bool,
+) -> (aiplane::rama_server::RamaState, String) {
+    let state = common::state_with_automatic_route_pools_enforcing(
+        &upstream.uri(),
+        true,
+        selector_enforces,
+    )
+    .await;
+    automatic_routes::upsert(&state.db, &route("active", 0.7))
+        .await
+        .unwrap();
+    spend_every_budget(&state.db).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    (state, bearer)
+}
+
+/// A global zero-request rule: every caller's budget is spent.
+async fn spend_every_budget(db: &aiplane_core::server::db::Pool) {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+
+    limits::upsert(
+        db,
+        SubjectType::Global,
+        "",
+        None,
+        Dimension::Requests,
+        Window::Hour,
+        0.0,
+    )
+    .await
+    .unwrap();
+}
+
+fn routed_request(uri: &str, bearer: &str) -> Request<Body> {
+    let body = if uri == "/v1/responses" {
+        json!({"model": "default", "input": "Fix this Rust lifetime"})
+    } else {
+        json!({
+            "model": "default",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Fix this Rust lifetime"}]
+        })
+    };
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn selector_calls(upstream: &MockServer) -> usize {
+    upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/systemone")
+        .count()
+}
+
+/// A caller over budget on an enforced selector is refused before the
+/// selector is asked, so it is neither called nor billed.
+#[tokio::test]
+async fn a_spent_budget_refuses_an_enforced_selector_before_it_is_asked() {
+    for uri in ROUTED_ENDPOINTS {
+        let upstream = MockServer::start().await;
+        mount_selector(&upstream, 0.95).await;
+        let (state, bearer) = spent_budget_with_route(&upstream, true).await;
+
+        let response = common::app(state)
+            .serve(routed_request(uri, &bearer))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+        assert!(
+            upstream.received_requests().await.unwrap().is_empty(),
+            "{uri} must not reach any upstream"
+        );
+    }
+}
+
+/// The Anthropic endpoints report a refused selector in their own envelope.
+#[tokio::test]
+async fn a_refused_selector_is_reported_in_the_anthropic_envelope() {
+    for uri in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let upstream = MockServer::start().await;
+        let (state, bearer) = spent_budget_with_route(&upstream, true).await;
+
+        let response = common::app(state)
+            .serve(routed_request(uri, &bearer))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+        let body: Value = serde_json::from_slice(&common::read_body(response).await).unwrap();
+        assert_eq!(body["error"]["type"], "rate_limit_error", "{uri}");
+    }
+}
+
+/// An exempt selector is asked after the budget is spent. The target's own
+/// limits still apply, so an enforced target is refused afterwards: the
+/// selector call happened.
+#[tokio::test]
+async fn an_exempt_selector_is_asked_after_the_budget_is_spent() {
+    for uri in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        let upstream = MockServer::start().await;
+        mount_selector(&upstream, 0.95).await;
+        let (state, bearer) = spent_budget_with_route(&upstream, false).await;
+
+        let response = common::app(state)
+            .serve(routed_request(uri, &bearer))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+        assert_eq!(selector_calls(&upstream).await, 1, "{uri}");
+    }
+}
+
+/// Counting tokens is not metered, so with an exempt selector it answers
+/// after the budget is spent.
+#[tokio::test]
+async fn an_exempt_selector_counts_tokens_after_the_budget_is_spent() {
+    let upstream = MockServer::start().await;
+    mount_selector(&upstream, 0.95).await;
+    Mock::given(method("POST"))
+        .and(path("/tokenize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"count": 42})))
+        .mount(&upstream)
+        .await;
+    let (state, bearer) = spent_budget_with_route(&upstream, false).await;
+
+    let response = common::app(state)
+        .serve(routed_request("/v1/messages/count_tokens", &bearer))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(selector_calls(&upstream).await, 1);
+}
+
+fn session_request(bearer: &str, session: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .header("x-gateway-session-id", session)
+        .body(Body::from(
+            json!({
+                "model": "default",
+                "messages": [{"role": "user", "content": "Fix this Rust lifetime"}]
+            })
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+/// The selector is checked only when it is asked. A session-affinity hit asks
+/// no selector, so a spent budget on an enforced selector does not refuse it,
+/// and an exempt target answers.
+#[tokio::test]
+async fn a_session_affinity_hit_is_not_refused_by_the_selectors_limits() {
+    let upstream = MockServer::start().await;
+    mount_selector(&upstream, 0.95).await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "expert-model",
+            "choices": [{"message": {"role": "assistant", "content": "done"}}]
+        })))
+        .mount(&upstream)
+        .await;
+    let state =
+        common::state_with_automatic_route_pools_enforcing(&upstream.uri(), false, true).await;
+    let mut sticky = route("active", 0.7);
+    sticky.session_affinity = true;
+    automatic_routes::upsert(&state.db, &sticky).await.unwrap();
+    let db = state.db.clone();
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+
+    let first = app.serve(session_request(&bearer, "s1")).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    spend_every_budget(&db).await;
+    let second = app.serve(session_request(&bearer, "s1")).await.unwrap();
+
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get("x-gateway-route-reason")
+            .and_then(|value| value.to_str().ok()),
+        Some("session_affinity")
+    );
+    assert_eq!(selector_calls(&upstream).await, 1);
+}
+
+/// A route with no eligible candidate never asks its selector, so it reports
+/// itself unavailable rather than the selector's spent budget.
+#[tokio::test]
+async fn a_route_without_eligible_candidates_is_unavailable_not_rate_limited() {
+    let upstream = MockServer::start().await;
+    let state = common::state_with_automatic_route_pools(&upstream.uri()).await;
+    let mut stranded = route("active", 0.7);
+    for candidate in &mut stranded.candidates {
+        candidate.target = format!("gone-{}", candidate.key);
+    }
+    stranded.fallback_target = "gone-fast".into();
+    automatic_routes::upsert(&state.db, &stranded)
+        .await
+        .unwrap();
+    spend_every_budget(&state.db).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+
+    let response = common::app(state)
+        .serve(routed_request("/v1/chat/completions", &bearer))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = serde_json::from_slice(&common::read_body(response).await).unwrap();
+    assert_eq!(body["error"]["code"], "automatic_route_unavailable");
+}
+
+/// The Anthropic endpoints report an automatic-route failure in their own
+/// envelope, not the OpenAI one.
+#[tokio::test]
+async fn an_automatic_route_failure_is_reported_in_the_anthropic_envelope() {
+    for uri in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let upstream = MockServer::start().await;
+        let state = common::state_with_automatic_route_pools(&upstream.uri()).await;
+        let mut stranded = route("active", 0.7);
+        for candidate in &mut stranded.candidates {
+            candidate.target = format!("gone-{}", candidate.key);
+        }
+        stranded.fallback_target = "gone-fast".into();
+        automatic_routes::upsert(&state.db, &stranded)
+            .await
+            .unwrap();
+        let bearer = common::seed_user_with_token(&state, "alice").await;
+
+        let response = common::app(state)
+            .serve(routed_request(uri, &bearer))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+        assert!(response.headers().contains_key("retry-after"), "{uri}");
+        let body: Value = serde_json::from_slice(&common::read_body(response).await).unwrap();
+        assert_eq!(body["type"], "error", "{uri}: {body}");
+        assert!(body["error"]["type"].is_string(), "{uri}: {body}");
+    }
+}
+
+/// The selector is checked on the model it is actually routed to: when its own
+/// exempt pool is down and the request falls back to an enforced pool, the
+/// spent budget refuses it before that pool is asked.
+#[tokio::test]
+async fn a_selector_falling_back_to_an_enforced_pool_is_refused() {
+    use aiplane_core::server::upstreams::{
+        self, PoolKind,
+        config::{PickerStrategy, UpstreamPoolConfig},
+    };
+    use std::collections::HashMap;
+
+    let upstream = MockServer::start().await;
+    mount_selector(&upstream, 0.95).await;
+    let pool = |kind, enforce_limits, models: &[&str], fallback_offline: Option<&str>| {
+        UpstreamPoolConfig {
+            voices: Default::default(),
+            offer_voices: Vec::new(),
+            allowed_groups: Vec::new(),
+            fallback_offline: fallback_offline.map(str::to_string),
+            compliance: Default::default(),
+            enforce_limits,
+            kind,
+            strategy: PickerStrategy::RoundRobin,
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+            backend: vec![common::mock_backend("openrouter", &upstream.uri())],
+        }
+    };
+    let pools = HashMap::from([
+        ("chat".to_string(), pool(PoolKind::Chat, false, &[], None)),
+        (
+            "selector".to_string(),
+            pool(
+                PoolKind::SystemOne,
+                false,
+                &["jev-model"],
+                Some("backup-jev"),
+            ),
+        ),
+        (
+            "backup".to_string(),
+            pool(PoolKind::SystemOne, true, &["backup-jev"], None),
+        ),
+    ]);
+    let registry = upstreams::UpstreamRegistry::new(&pools).unwrap();
+    common::seed_pool_models(&registry, "chat", 0, &["fast-model", "expert-model"]);
+    for pool in registry.pools() {
+        if pool.name == "selector" {
+            pool.backends[0].set_healthy(false);
+        }
+    }
+    let state = common::state_from_registry(
+        aiplane_core::server::db::open(std::path::Path::new(":memory:"))
+            .await
+            .unwrap(),
+        registry,
+    );
+    automatic_routes::upsert(&state.db, &route("active", 0.7))
+        .await
+        .unwrap();
+    spend_every_budget(&state.db).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+
+    let response = common::app(state)
+        .serve(routed_request("/v1/chat/completions", &bearer))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(selector_calls(&upstream).await, 0);
+}
