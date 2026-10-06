@@ -148,6 +148,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `build-web` stamps the bundled manual with the derived version, and
+          # derive-version.sh refuses a shallow clone without release tags.
+          fetch-depth: 0
       # ubuntu-latest ships ~25 GB of preinstalled SDKs we don't use; the big
       # multi-profile Rust compile otherwise runs the runner out of disk
       # ("No space left on device"). Reclaim it up front.
