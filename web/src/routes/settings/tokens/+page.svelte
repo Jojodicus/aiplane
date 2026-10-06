@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { api } from '$lib/api';
-	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
-	import EditModal from '$lib/components/EditModal.svelte';
-	import ManagedTokenCard from '$lib/components/tokens/ManagedTokenCard.svelte';
-	import TokenSetupGuides from '$lib/components/tokens/TokenSetupGuides.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { selectedTokenTab } from '$lib/tokens-tabs';
-	import type { ManagedToken, NewQuota, TokenManagementDetails } from '$lib/tokens';
+	import { api } from '#lib/api.js';
+	import { adminDelete, adminJson, adminPost, adminPut } from '#lib/admin-client.js';
+	import EditModal from '#lib/components/EditModal.svelte';
+	import ManagedTokenCard from '#lib/components/tokens/ManagedTokenCard.svelte';
+	import TokenSetupGuides from '#lib/components/tokens/TokenSetupGuides.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { selectedTokenTab } from '#lib/tokens-tabs.js';
+	import type { ManagedToken, NewQuota, TokenManagementDetails } from '#lib/tokens.js';
 
 	let details = $state<TokenManagementDetails | null>(null);
 	let error = $state<string | null>(null);

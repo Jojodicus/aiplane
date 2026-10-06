@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { dt, t } from '$lib/i18n.svelte';
-	import { limitPercent, usageCost, usageInteger } from '$lib/usage';
-	import type { UsageLimit } from '$lib/usage-types';
+	import { dt, t } from '#lib/i18n.svelte.js';
+	import { limitPercent, usageCost, usageInteger } from '#lib/usage.js';
+	import type { UsageLimit } from '#lib/usage-types.js';
 
 	let { limits, currency, timezone, action = null }: {
 		limits: UsageLimit[];

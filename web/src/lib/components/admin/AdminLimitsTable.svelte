@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { AdminLimitsData, AdminLimitRule, LimitSubjectNames } from '$lib/admin-limits';
-	import { limitSubjectLabel, limitValue } from '$lib/admin-limits';
-	import { n, t } from '$lib/i18n.svelte';
+	import type { AdminLimitsData, AdminLimitRule, LimitSubjectNames } from '#lib/admin-limits.js';
+	import { limitSubjectLabel, limitValue } from '#lib/admin-limits.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	let { data, onedit, onremove }: { data: AdminLimitsData; onedit: (rule: AdminLimitRule) => void; onremove: (rule: AdminLimitRule) => Promise<void> } = $props();
 	const subjectNames: LimitSubjectNames = { global: t('limits-subject-global'), role: t('limits-subject-role'), user: t('limits-subject-user'), token: t('limits-subject-token'), system: t('limits-subject-system') };

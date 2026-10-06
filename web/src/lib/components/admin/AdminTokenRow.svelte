@@ -1,13 +1,13 @@
 <script lang="ts">
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import EditModal from '$lib/components/EditModal.svelte';
-	import { tokenState, visibleTokenModels } from '$lib/admin-tokens';
-	import type { AdminToken, AdminTokenLimit } from '$lib/admin-tokens';
-	import TokenModelPicker from '$lib/components/tokens/TokenModelPicker.svelte';
-	import type { TokenModel } from '$lib/token-models';
-	import { t } from '$lib/i18n.svelte';
-	import { tokenDate } from '$lib/tokens';
-	import { usageCost, usageInteger } from '$lib/usage';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import EditModal from '#lib/components/EditModal.svelte';
+	import { tokenState, visibleTokenModels } from '#lib/admin-tokens.js';
+	import type { AdminToken, AdminTokenLimit } from '#lib/admin-tokens.js';
+	import TokenModelPicker from '#lib/components/tokens/TokenModelPicker.svelte';
+	import type { TokenModel } from '#lib/token-models.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { tokenDate } from '#lib/tokens.js';
+	import { usageCost, usageInteger } from '#lib/usage.js';
 
 	let { token, models, usageEnabled, currency, timezone, onsave }: {
 		token: AdminToken;

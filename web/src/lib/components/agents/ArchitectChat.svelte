@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { api } from '$lib/api';
-	import { agentsApi, type AgentError } from '$lib/agents';
-	import { conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '$lib/architect';
-	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
-	import type { ToolCall } from '$lib/chat-protocol';
-	import { t } from '$lib/i18n.svelte';
-	import DictationButton from '$lib/components/chat/DictationButton.svelte';
-	import StreamedChat from '$lib/components/chat/StreamedChat.svelte';
+	import { api } from '#lib/api.js';
+	import { agentsApi, type AgentError } from '#lib/agents.js';
+	import { conversationTitle, setupPath, toolLabel, undoTarget, type Phase } from '#lib/architect.js';
+	import { createConversationController, type ConversationController } from '#lib/chat.svelte.js';
+	import type { ToolCall } from '#lib/chat-protocol.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import DictationButton from '#lib/components/chat/DictationButton.svelte';
+	import StreamedChat from '#lib/components/chat/StreamedChat.svelte';
 
 	/**
 	 * The architect's conversation, mounted while its window is open: it opens

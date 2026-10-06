@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { agentsApi, readFailure, settleAnswered, testTurnLabel, turnsToRead, type AgentError, type Spec, type TestDebug, type TestTurnView } from '$lib/agents';
-	import { createConversationController, type ConversationController } from '$lib/chat.svelte';
-	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '$lib/suspension';
-	import { t } from '$lib/i18n.svelte';
-	import StreamedChat from '$lib/components/chat/StreamedChat.svelte';
-	import SuspensionCard from '$lib/components/SuspensionCard.svelte';
+	import { agentsApi, readFailure, settleAnswered, testTurnLabel, turnsToRead, type AgentError, type Spec, type TestDebug, type TestTurnView } from '#lib/agents.js';
+	import { createConversationController, type ConversationController } from '#lib/chat.svelte.js';
+	import { waitingFrom, waitingLead, type Answer, type SuspensionView } from '#lib/suspension.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import StreamedChat from '#lib/components/chat/StreamedChat.svelte';
+	import SuspensionCard from '#lib/components/SuspensionCard.svelte';
 	import DebugPanel from './DebugPanel.svelte';
 
 	/**

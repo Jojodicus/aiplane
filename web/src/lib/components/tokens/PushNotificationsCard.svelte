@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { disablePush, enablePush, push, refreshPushState } from '$lib/push.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { disablePush, enablePush, push, refreshPushState } from '#lib/push.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	onMount(refreshPushState);
 	let phase = $derived(push.ui.phase);

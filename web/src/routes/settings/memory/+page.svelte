@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminDelete, adminJson, adminPost, adminPut } from '$lib/admin-client';
-	import EditModal from '$lib/components/EditModal.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { groupMemories, MEMORY_KINDS, type Memory, type MemoryKind, type PreferenceContext } from '$lib/memory';
+	import { adminDelete, adminJson, adminPost, adminPut } from '#lib/admin-client.js';
+	import EditModal from '#lib/components/EditModal.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { groupMemories, MEMORY_KINDS, type Memory, type MemoryKind, type PreferenceContext } from '#lib/memory.js';
 
 	let memories = $state<Memory[]>([]);
 	let preferences = $state<PreferenceContext | null>(null);

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { GRANT_KINDS, agentsApi, grantOptions, type AgentResources, type AgentError, type Grant, type GrantKind } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { GRANT_KINDS, agentsApi, grantOptions, type AgentResources, type AgentError, type Grant, type GrantKind } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * What the agent's principal may use. A new agent holds nothing, and a

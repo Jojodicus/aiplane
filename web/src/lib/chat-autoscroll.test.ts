@@ -86,7 +86,7 @@ test('a stale report of our own scroll never cancels the following', () => {
 // following again, which is the bug this module was written for.
 test('the transcript is wired to follow its own content', () => {
 	const view = read('src/lib/Conversation.svelte');
-	assert.ok(view.includes("from '$lib/chat-autoscroll'"), 'the rules are not imported');
+	assert.match(view, /from '#lib\/chat-autoscroll(\.[jt]s)?'/, 'the rules are not imported');
 	const tag = view.slice(view.indexOf('<main'), view.indexOf('>', view.indexOf('<main')) + 1);
 	assert.ok(tag.includes('data-chat-transcript'), `not the transcript element: ${tag}`);
 	assert.ok(tag.includes('onscroll='), 'the transcript does not report its scrolling');

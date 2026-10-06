@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import { usageCost, usageInteger } from '$lib/usage';
-	import type { UsageGroup } from '$lib/usage-types';
+	import { t } from '#lib/i18n.svelte.js';
+	import { usageCost, usageInteger } from '#lib/usage.js';
+	import type { UsageGroup } from '#lib/usage-types.js';
 
 	let { titleKey, keyKey, rows, showCost, currency, emptyLabel = '—' }: {
 		titleKey: string;

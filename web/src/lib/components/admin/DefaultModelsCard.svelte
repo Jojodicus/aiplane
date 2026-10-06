@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { FeatureDefault } from '$lib/admin-models';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import type { FeatureDefault } from '#lib/admin-models.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 
 	let { defaults, onsave }: {
 		defaults: FeatureDefault[];

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import Modal from '$lib/components/ui/Modal.svelte';
+	import Modal from '#lib/components/ui/Modal.svelte';
 
 	/**
 	 * The one editor dialog the admin rows share: `ui/Modal` with a footer.

@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { adminPost, adminPut } from '$lib/admin-client';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import LinkedChatPicker from '$lib/components/LinkedChatPicker.svelte';
-	import { initialLinkedSession, linkedSessionField } from '$lib/linked-chat';
-	import { modelSelectOptions, type ChatModelOption } from '$lib/model-option';
-	import type { Webhook } from '$lib/webhooks';
+	import { adminPost, adminPut } from '#lib/admin-client.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import LinkedChatPicker from '#lib/components/LinkedChatPicker.svelte';
+	import { initialLinkedSession, linkedSessionField } from '#lib/linked-chat.js';
+	import { modelSelectOptions, type ChatModelOption } from '#lib/model-option.js';
+	import type { Webhook } from '#lib/webhooks.js';
 
 	let { webhook = null, models, onsaved, oncancel, onsecret } = $props<{
 		webhook?: Webhook | null;

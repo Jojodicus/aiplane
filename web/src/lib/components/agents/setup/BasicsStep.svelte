@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
-	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
-	import type { Spec } from '$lib/agents';
+	import ChipToggle from '#lib/components/ui/ChipToggle.svelte';
+	import SegmentedControl from '#lib/components/ui/SegmentedControl.svelte';
+	import type { Spec } from '#lib/agents.js';
 	import {
 		ANSWER_LANGUAGES,
 		TONES,
@@ -14,10 +14,10 @@
 		suggestedTone,
 		writeBasics,
 		type AnswerLanguage
-	} from '$lib/agent-setup';
+	} from '#lib/agent-setup.js';
 	import ModelPicker from '../ModelPicker.svelte';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { LOCALE_NAMES, t } from '$lib/i18n.svelte';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { LOCALE_NAMES, t } from '#lib/i18n.svelte.js';
 	import ImproveText from './ImproveText.svelte';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';

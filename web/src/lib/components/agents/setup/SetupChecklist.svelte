@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Spec } from '$lib/agents';
-	import { publishState, readScope, type StepKey, type Todo } from '$lib/agent-setup';
-	import { t } from '$lib/i18n.svelte';
+	import type { Spec } from '#lib/agents.js';
+	import { publishState, readScope, type StepKey, type Todo } from '#lib/agent-setup.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * "Before you publish": every open item with a link to the step that fixes

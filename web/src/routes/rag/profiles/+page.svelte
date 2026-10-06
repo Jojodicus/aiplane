@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
-	import ProfileForm from '$lib/components/rag/ProfileForm.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { RagProfile } from '$lib/rag';
+	import { adminJson } from '#lib/admin-client.js';
+	import ProfileForm from '#lib/components/rag/ProfileForm.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { RagProfile } from '#lib/rag.js';
 
 	let profiles = $state<RagProfile[]>([]);
 	let editing = $state<string | null>(null);

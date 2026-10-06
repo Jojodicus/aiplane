@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import { stepClass, stepState } from '$lib/ui-variants';
+	import { t } from '#lib/i18n.svelte.js';
+	import { stepClass, stepState } from '#lib/ui-variants.js';
 
 	/**
 	 * Where the user is in a multi-step flow. Steps are pills: the current one

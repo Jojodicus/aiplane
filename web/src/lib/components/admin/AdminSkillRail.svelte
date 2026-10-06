@@ -1,7 +1,7 @@
 <script lang="ts">
-	import NavIcon from '$lib/components/NavIcon.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { skillFileTree, type AdminSkill } from '$lib/admin-skills';
+	import NavIcon from '#lib/components/NavIcon.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { skillFileTree, type AdminSkill } from '#lib/admin-skills.js';
 
 	let { skills, selected, source, configured, onupload } = $props<{
 		skills: AdminSkill[];

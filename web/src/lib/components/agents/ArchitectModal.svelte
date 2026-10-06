@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Modal from '$lib/components/ui/Modal.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import Modal from '#lib/components/ui/Modal.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 	import ArchitectChat from './ArchitectChat.svelte';
 
 	/**

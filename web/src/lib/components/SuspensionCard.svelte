@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 	import {
 		answerField,
 		decisionButtons,
@@ -11,7 +11,7 @@
 		type Answer,
 		type DecisionKind,
 		type Waiting
-	} from '$lib/suspension';
+	} from '#lib/suspension.js';
 
 	/**
 	 * What a paused turn waits for, and the answer to it: one card for the

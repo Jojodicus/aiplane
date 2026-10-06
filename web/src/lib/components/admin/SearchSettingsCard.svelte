@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { search, onsave }: {
 		search: { provider: string; searxng_url: string | null; brave_key_set: boolean; tavily_key_set: boolean; tavily_enabled: boolean; tavily_active: boolean };

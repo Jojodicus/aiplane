@@ -2,14 +2,14 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
-	import { selectedGroupAdminTab, skillMatrixRows, toolMatrixRows } from '$lib/admin-groups';
-	import AdminGroupForm from '$lib/components/admin/AdminGroupForm.svelte';
-	import AdminGrantMatrix from '$lib/components/admin/AdminGrantMatrix.svelte';
-	import AdminIdentityMapping from '$lib/components/admin/AdminIdentityMapping.svelte';
-	import type { GrantableTool } from '$lib/admin-groups';
-	import type { AdminGroup, McpTool, ToolFamily } from '$lib/components/admin/AdminGroupForm.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPut } from '#lib/admin-client.js';
+	import { selectedGroupAdminTab, skillMatrixRows, toolMatrixRows } from '#lib/admin-groups.js';
+	import AdminGroupForm from '#lib/components/admin/AdminGroupForm.svelte';
+	import AdminGrantMatrix from '#lib/components/admin/AdminGrantMatrix.svelte';
+	import AdminIdentityMapping from '#lib/components/admin/AdminIdentityMapping.svelte';
+	import type { GrantableTool } from '#lib/admin-groups.js';
+	import type { AdminGroup, McpTool, ToolFamily } from '#lib/components/admin/AdminGroupForm.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	interface GroupsData {
 		groups: AdminGroup[];

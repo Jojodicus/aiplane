@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson, adminPost } from '$lib/admin-client';
-	import LocationSharingCard from '$lib/components/tools/LocationSharingCard.svelte';
-	import ToolToggleSections from '$lib/components/tools/ToolToggleSections.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { currentBrowserLocation, toolCategoryLabel, type LocationSharingState, type ToolEntry, type ToolsResponse } from '$lib/tools';
+	import { adminJson, adminPost } from '#lib/admin-client.js';
+	import LocationSharingCard from '#lib/components/tools/LocationSharingCard.svelte';
+	import ToolToggleSections from '#lib/components/tools/ToolToggleSections.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { currentBrowserLocation, toolCategoryLabel, type LocationSharingState, type ToolEntry, type ToolsResponse } from '#lib/tools.js';
 
 	let tools = $state<ToolEntry[]>([]);
 	let error = $state<string | null>(null);

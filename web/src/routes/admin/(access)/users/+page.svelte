@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson, adminPost } from '$lib/admin-client';
-	import NavIcon from '$lib/components/NavIcon.svelte';
-	import UserIdentity from '$lib/components/admin/UserIdentity.svelte';
-	import { dt, t } from '$lib/i18n.svelte';
+	import { adminJson, adminPost } from '#lib/admin-client.js';
+	import NavIcon from '#lib/components/NavIcon.svelte';
+	import UserIdentity from '#lib/components/admin/UserIdentity.svelte';
+	import { dt, t } from '#lib/i18n.svelte.js';
 
 	interface AdminUser {
 		id: string;

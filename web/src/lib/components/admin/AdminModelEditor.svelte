@@ -1,9 +1,9 @@
 <script lang="ts">
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 	import { untrack } from 'svelte';
-	import { contextWindowHint, pricingUnitFor } from '$lib/admin-models';
-	import type { AdminModel } from '$lib/admin-models';
-	import { n, t } from '$lib/i18n.svelte';
+	import { contextWindowHint, pricingUnitFor } from '#lib/admin-models.js';
+	import type { AdminModel } from '#lib/admin-models.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * The per-model override form.

@@ -27,8 +27,8 @@
 		stopVoice,
 		submit,
 		toggleVoice
-	} from '$lib/feedback.svelte';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/feedback.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import ScreenshotAnnotator from './ScreenshotAnnotator.svelte';
 
 	let dialog = $state<HTMLDialogElement | null>(null);

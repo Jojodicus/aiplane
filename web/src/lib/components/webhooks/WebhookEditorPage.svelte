@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { adminJson } from '$lib/admin-client';
+	import { adminJson } from '#lib/admin-client.js';
 	import WebhookForm from './WebhookForm.svelte';
 	import WebhookSecretReveal from './WebhookSecretReveal.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { Webhook, WebhooksData } from '$lib/webhooks';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { Webhook, WebhooksData } from '#lib/webhooks.js';
 
 	/**
 	 * The webhook editor, on its own route.

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { modelPickerOptions } from '$lib/agent-setup';
-	import type { AgentResources, ModelKind } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { modelPickerOptions } from '#lib/agent-setup.js';
+	import type { AgentResources, ModelKind } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * One model key of an agent's spec, picked like the chat picks its model:

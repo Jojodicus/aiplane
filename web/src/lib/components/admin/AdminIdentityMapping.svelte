@@ -7,8 +7,8 @@
 	 * no login has ever matched is usually a value mistyped when the group was
 	 * created. Neither shows up anywhere else.
 	 */
-	import { identityRows } from '$lib/admin-groups';
-	import { t } from '$lib/i18n.svelte';
+	import { identityRows } from '#lib/admin-groups.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import type { AdminGroup } from './AdminGroupForm.svelte';
 
 	let {

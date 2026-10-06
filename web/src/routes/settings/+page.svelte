@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
-	import TokenAccountCard from '$lib/components/tokens/TokenAccountCard.svelte';
-	import type { TokenManagementDetails } from '$lib/tokens';
+	import { adminJson } from '#lib/admin-client.js';
+	import TokenAccountCard from '#lib/components/tokens/TokenAccountCard.svelte';
+	import type { TokenManagementDetails } from '#lib/tokens.js';
 
 	let details = $state<TokenManagementDetails | null>(null);
 	let error = $state<string | null>(null);

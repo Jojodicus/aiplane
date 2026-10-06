@@ -1,5 +1,5 @@
 <script lang="ts" generics="V extends string">
-	import { segmentClass } from '$lib/ui-variants';
+	import { segmentClass } from '#lib/ui-variants.js';
 
 	/** A small closed choice (a handful of options) shown all at once, as a daisyUI `join`. */
 	let {

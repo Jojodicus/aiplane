@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { adminDelete, adminJson, adminPatch, adminPost } from '$lib/admin-client';
-	import { dt, t } from '$lib/i18n.svelte';
-	import { parseSources, sourceLabel, type RagCollection, type RagLogEntry, type RagRef } from '$lib/rag';
-	import EditModal from '$lib/components/EditModal.svelte';
+	import { adminDelete, adminJson, adminPatch, adminPost } from '#lib/admin-client.js';
+	import { dt, t } from '#lib/i18n.svelte.js';
+	import { parseSources, sourceLabel, type RagCollection, type RagLogEntry, type RagRef } from '#lib/rag.js';
+	import EditModal from '#lib/components/EditModal.svelte';
 
 	let { collection, onchanged, onnotice } = $props<{
 		collection: RagCollection;

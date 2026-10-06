@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { decodeSetupClaim, encodeSetupClaim, setupClaimChoices } from '$lib/setup';
-	import { t } from '$lib/i18n.svelte';
+	import { decodeSetupClaim, encodeSetupClaim, setupClaimChoices } from '#lib/setup.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	interface Draft {
 		public_url: string;

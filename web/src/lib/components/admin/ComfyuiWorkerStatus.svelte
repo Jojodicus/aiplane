@@ -5,8 +5,8 @@
 		formatVram,
 		type ComfyuiCatalog,
 		type ComfyuiHealth
-	} from '$lib/admin-comfyui';
-	import { n, t } from '$lib/i18n.svelte';
+	} from '#lib/admin-comfyui.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	// The strip that answers the operator's first question ("is it up?")
 	// before the catalog answers their second ("what can it do?"). `health`

@@ -31,5 +31,8 @@
 		"@zumer/snapdom": "^3.3.0",
 		"dompurify": "^3.4.16",
 		"marked": "^18.1.0"
+	},
+	"imports": {
+		"#lib/*": "./src/lib/*"
 	}
 }

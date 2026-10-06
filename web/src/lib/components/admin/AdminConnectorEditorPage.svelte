@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { adminJson, adminPut } from '$lib/admin-client';
+	import { adminJson, adminPut } from '#lib/admin-client.js';
 	import {
 		splitConnectorValues,
 		type AdminConnector,
 		type AdminConnectorsData,
 		type ConnectorFormValue
-	} from '$lib/admin-connectors';
+	} from '#lib/admin-connectors.js';
 	import AdminConnectorForm from './AdminConnectorForm.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * The connector editor, on its own route.

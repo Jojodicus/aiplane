@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { adminDelete, adminPost, adminPut } from '$lib/admin-client';
-	import { t } from '$lib/i18n.svelte';
-	import { profileFieldsJson, type RagProfile, type RagProfileField } from '$lib/rag';
+	import { adminDelete, adminPost, adminPut } from '#lib/admin-client.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import { profileFieldsJson, type RagProfile, type RagProfileField } from '#lib/rag.js';
 
 	function exampleFields(): RagProfileField[] {
 		return [

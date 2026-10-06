@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { connectorForm, connectorUsesOAuth, type AdminConnector, type ConnectorFormValue } from '$lib/admin-connectors';
+	import { connectorForm, connectorUsesOAuth, type AdminConnector, type ConnectorFormValue } from '#lib/admin-connectors.js';
 	import ConnectorOAuthHelp from './ConnectorOAuthHelp.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import GroupSelect from '$lib/components/GroupSelect.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import GroupSelect from '#lib/components/GroupSelect.svelte';
 
 	let { connector, redirectUri, groups, onsave } = $props<{
 		connector?: AdminConnector;

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { adminPatch, adminPost } from '$lib/admin-client';
-	import { ApiError, request } from '$lib/api';
+	import { adminPatch, adminPost } from '#lib/admin-client.js';
+	import { ApiError, request } from '#lib/api.js';
 	import { untrack } from 'svelte';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { parseList, type RagCollection, type RagProfile, type RagProvider } from '$lib/rag';
-	import GroupSelect from '$lib/components/GroupSelect.svelte';
-	import { normalizeSelection } from '$lib/multi-select';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { parseList, type RagCollection, type RagProfile, type RagProvider } from '#lib/rag.js';
+	import GroupSelect from '#lib/components/GroupSelect.svelte';
+	import { normalizeSelection } from '#lib/multi-select.js';
 
 	let {
 		collection = null,

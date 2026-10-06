@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { splitList, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { splitList, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import FieldIssues from './FieldIssues.svelte';
 	import ModelPicker from './ModelPicker.svelte';
 

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { CHANNEL_KINDS, agentsApi, type NotifyChannel, type Spec } from '$lib/agents';
+	import { CHANNEL_KINDS, agentsApi, type NotifyChannel, type Spec } from '#lib/agents.js';
 	import ChannelsPanel from '../ChannelsPanel.svelte';
-	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyEverywhere, notifyOn, readHandoffs, readSlots, setNotify, sharedNotify, writeHandoffs, type Rule } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { applySuggestedRules, deriveBind, identityLabels, identityWriter, notifyEverywhere, notifyOn, readHandoffs, readSlots, setNotify, sharedNotify, writeHandoffs, type Rule } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 

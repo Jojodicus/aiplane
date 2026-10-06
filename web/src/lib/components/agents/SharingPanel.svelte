@@ -1,7 +1,7 @@
 <script lang="ts">
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { agentsApi, SHARE_ACCESS, shareSubjectLabel, shareSubjectOptions, type AgentError, type Share, type ShareAccess, type ShareSubjectMatches } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { agentsApi, SHARE_ACCESS, shareSubjectLabel, shareSubjectOptions, type AgentError, type Share, type ShareAccess, type ShareSubjectMatches } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * Who else may work on this agent, and who answers its inbox. `read` and

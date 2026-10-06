@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import WebhookSubpageHeader from '$lib/components/webhooks/WebhookSubpageHeader.svelte';
-	import { locale, t } from '$lib/i18n.svelte';
-	import { formatWebhookRun, type Webhook, type WebhookRun, type WebhooksData } from '$lib/webhooks';
+	import { adminJson } from '#lib/admin-client.js';
+	import WebhookSubpageHeader from '#lib/components/webhooks/WebhookSubpageHeader.svelte';
+	import { locale, t } from '#lib/i18n.svelte.js';
+	import { formatWebhookRun, type Webhook, type WebhookRun, type WebhooksData } from '#lib/webhooks.js';
 	let webhook = $state<Webhook | null>(null);
 	let runs = $state<WebhookRun[]>([]);
 	let error = $state<string | null>(null);

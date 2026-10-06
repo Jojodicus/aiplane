@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson, adminPost, adminPut } from '$lib/admin-client';
-	import { t, n } from '$lib/i18n.svelte';
-	import { backendAssignments, type LiveBackend, type PendingChange, type Topology } from '$lib/upstreams';
-	import BackendCard from '$lib/components/upstreams/BackendCard.svelte';
-	import BackendEditor from '$lib/components/upstreams/BackendEditor.svelte';
-	import PoolCard from '$lib/components/upstreams/PoolCard.svelte';
-	import EditModal from '$lib/components/EditModal.svelte';
-	import PoolEditor from '$lib/components/upstreams/PoolEditor.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
+	import { adminJson, adminPost, adminPut } from '#lib/admin-client.js';
+	import { t, n } from '#lib/i18n.svelte.js';
+	import { backendAssignments, type LiveBackend, type PendingChange, type Topology } from '#lib/upstreams.js';
+	import BackendCard from '#lib/components/upstreams/BackendCard.svelte';
+	import BackendEditor from '#lib/components/upstreams/BackendEditor.svelte';
+	import PoolCard from '#lib/components/upstreams/PoolCard.svelte';
+	import EditModal from '#lib/components/EditModal.svelte';
+	import PoolEditor from '#lib/components/upstreams/PoolEditor.svelte';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
 
 	interface StatusEvent extends LiveBackend { name: string; dirty: number; usage: number[]; }
 

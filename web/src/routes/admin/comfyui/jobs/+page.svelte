@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { adminJson } from '$lib/admin-client';
+	import { adminJson } from '#lib/admin-client.js';
 	import {
 		filterJobs,
 		formatDuration,
@@ -10,10 +10,10 @@
 		JOB_FILTERS,
 		type ComfyuiCatalog,
 		type ComfyuiJobFilter
-	} from '$lib/admin-comfyui';
-	import ComfyuiJobsTable from '$lib/components/admin/ComfyuiJobsTable.svelte';
-	import ComfyuiTabs from '$lib/components/admin/ComfyuiTabs.svelte';
-	import { n, t } from '$lib/i18n.svelte';
+	} from '#lib/admin-comfyui.js';
+	import ComfyuiJobsTable from '#lib/components/admin/ComfyuiJobsTable.svelte';
+	import ComfyuiTabs from '#lib/components/admin/ComfyuiTabs.svelte';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	let data = $state<ComfyuiCatalog | null>(null);
 	let error = $state<string | null>(null);

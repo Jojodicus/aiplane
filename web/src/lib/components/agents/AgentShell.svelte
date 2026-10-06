@@ -1,13 +1,13 @@
 <script lang="ts">
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
 	import { onMount, type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { boundedViewport } from '$lib/viewport';
-	import { agentsApi } from '$lib/agents';
-	import { checklist, publishState } from '$lib/agent-setup';
-	import { AgentWorkspace, provideWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { boundedViewport } from '#lib/viewport.js';
+	import { agentsApi } from '#lib/agents.js';
+	import { checklist, publishState } from '#lib/agent-setup.js';
+	import { AgentWorkspace, provideWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	/**
 	 * What every page of one agent shares: the workspace (the spec buffer and

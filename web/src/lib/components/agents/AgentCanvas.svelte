@@ -9,9 +9,9 @@
 		summarizeMain,
 		testPath,
 		type CanvasNode
-	} from '$lib/agent-canvas';
-	import { addRoute, removeRoute, type AgentSummary, type Granted, type Spec, type SpecIssue, type TestDebug } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/agent-canvas.js';
+	import { addRoute, removeRoute, type AgentSummary, type Granted, type Spec, type SpecIssue, type TestDebug } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import MainAgentForm from './MainAgentForm.svelte';
 	import RouteEditor from './RouteEditor.svelte';
 	import RouterFields from './RouterFields.svelte';

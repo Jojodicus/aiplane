@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import ScheduledActionRow from '$lib/components/scheduled/ScheduledActionRow.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { ScheduledData } from '$lib/scheduled';
+	import { adminJson } from '#lib/admin-client.js';
+	import ScheduledActionRow from '#lib/components/scheduled/ScheduledActionRow.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { ScheduledData } from '#lib/scheduled.js';
 
 	let data = $state<ScheduledData | null>(null);
 	let loading = $state(true);

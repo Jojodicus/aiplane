@@ -1,7 +1,7 @@
 <script lang="ts">
-	import NavIcon from '$lib/components/NavIcon.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import type { PersonalSkill } from '$lib/skills';
+	import NavIcon from '#lib/components/NavIcon.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { PersonalSkill } from '#lib/skills.js';
 
 	let { skills, selected, mode, enabled, onupload } = $props<{
 		skills: PersonalSkill[];

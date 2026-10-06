@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { AdminSettingsSection, SettingsCategory } from '$lib/admin-settings';
-	import { categorySummary, SETTINGS_CATEGORIES } from '$lib/admin-settings';
-	import { t } from '$lib/i18n.svelte';
+	import type { AdminSettingsSection, SettingsCategory } from '#lib/admin-settings.js';
+	import { categorySummary, SETTINGS_CATEGORIES } from '#lib/admin-settings.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { sections, selected }: { sections: AdminSettingsSection[]; selected: SettingsCategory } = $props();
 </script>

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import type { IntegrationMode } from '$lib/integrations';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { IntegrationMode } from '#lib/integrations.js';
 
 	let { current, onchange, disabled = false } = $props<{
 		current?: IntegrationMode;

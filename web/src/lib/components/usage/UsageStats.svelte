@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
-	import { usageCost, usageInteger } from '$lib/usage';
-	import type { UsageSummary } from '$lib/usage-types';
+	import { t } from '#lib/i18n.svelte.js';
+	import { usageCost, usageInteger } from '#lib/usage.js';
+	import type { UsageSummary } from '#lib/usage-types.js';
 
 	let { summary, allUsers, currency }: { summary: UsageSummary; allUsers: boolean; currency: string } = $props();
 	let showCost = $derived(summary.total_cost > 0);

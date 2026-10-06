@@ -1,12 +1,12 @@
 <script lang="ts">
-	import Modal from '$lib/components/ui/Modal.svelte';
-	import ArchitectModal from '$lib/components/agents/ArchitectModal.svelte';
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import { ensureShape, type Spec } from '$lib/agents';
-	import { SECTIONS, checklist, sectionStatus, summary, type SectionStatus, type StepKey } from '$lib/agent-setup';
-	import { emptyPlan, type GrantPlan } from '$lib/agent-grant-plan';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import Modal from '#lib/components/ui/Modal.svelte';
+	import ArchitectModal from '#lib/components/agents/ArchitectModal.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import { ensureShape, type Spec } from '#lib/agents.js';
+	import { SECTIONS, checklist, sectionStatus, summary, type SectionStatus, type StepKey } from '#lib/agent-setup.js';
+	import { emptyPlan, type GrantPlan } from '#lib/agent-grant-plan.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SetupChecklist from './SetupChecklist.svelte';
 	import SetupStep from './SetupStep.svelte';
 	import WidgetPreview from './WidgetPreview.svelte';

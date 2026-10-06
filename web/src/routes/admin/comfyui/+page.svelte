@@ -1,19 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson, adminPost } from '$lib/admin-client';
+	import { adminJson, adminPost } from '#lib/admin-client.js';
 	import {
 		filterWorkflows,
 		jobTone,
 		selectedWorkflow,
 		type ComfyuiCatalog,
 		type ComfyuiHealth
-	} from '$lib/admin-comfyui';
-	import ComfyuiCatalogRail from '$lib/components/admin/ComfyuiCatalogRail.svelte';
-	import ComfyuiTabs from '$lib/components/admin/ComfyuiTabs.svelte';
-	import ComfyuiWorkerStatus from '$lib/components/admin/ComfyuiWorkerStatus.svelte';
-	import ComfyuiWorkflowDetail from '$lib/components/admin/ComfyuiWorkflowDetail.svelte';
-	import { t } from '$lib/i18n.svelte';
+	} from '#lib/admin-comfyui.js';
+	import ComfyuiCatalogRail from '#lib/components/admin/ComfyuiCatalogRail.svelte';
+	import ComfyuiTabs from '#lib/components/admin/ComfyuiTabs.svelte';
+	import ComfyuiWorkerStatus from '#lib/components/admin/ComfyuiWorkerStatus.svelte';
+	import ComfyuiWorkflowDetail from '#lib/components/admin/ComfyuiWorkflowDetail.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<ComfyuiCatalog | null>(null);
 	let health = $state<ComfyuiHealth | null>(null);

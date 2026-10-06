@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { issuesAt, type SpecIssue } from '$lib/agents';
+	import { issuesAt, type SpecIssue } from '#lib/agents.js';
 
 	/** The validator's messages for exactly this field, shown under it. */
 	let { issues, path }: { issues: SpecIssue[]; path: string } = $props();

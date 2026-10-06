@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { slotInfos, type Granted, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { slotInfos, type Granted, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import BindsEditor from './BindsEditor.svelte';
 	import FieldIssues from './FieldIssues.svelte';
 	import ModelPicker from './ModelPicker.svelte';

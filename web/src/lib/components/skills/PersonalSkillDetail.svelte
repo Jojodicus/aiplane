@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/markdown';
-	import { t } from '$lib/i18n.svelte';
-	import type { PersonalSkill } from '$lib/skills';
+	import { renderMarkdown } from '#lib/markdown.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import type { PersonalSkill } from '#lib/skills.js';
 
 	let { skill, body, ondelete } = $props<{ skill: PersonalSkill; body: string; ondelete: () => void | Promise<void> }>();
 </script>

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { targetKindOf } from '$lib/agent-canvas';
-	import { renameRoute, slotInfos, type AgentSummary, type Spec, type SpecIssue } from '$lib/agents';
-	import { t } from '$lib/i18n.svelte';
+	import { targetKindOf } from '#lib/agent-canvas.js';
+	import { renameRoute, slotInfos, type AgentSummary, type Spec, type SpecIssue } from '#lib/agents.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import BindsEditor from './BindsEditor.svelte';
 	import CondEditor from './CondEditor.svelte';
 	import FieldIssues from './FieldIssues.svelte';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { choiceCardClass } from '$lib/ui-variants';
+	import { choiceCardClass } from '#lib/ui-variants.js';
 
 	/**
 	 * One option of a single-pick set where each option needs a sentence of

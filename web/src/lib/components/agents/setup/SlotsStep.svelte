@@ -1,10 +1,10 @@
 <script lang="ts">
-	import ChipToggle from '$lib/components/ui/ChipToggle.svelte';
-	import StatusPill from '$lib/components/ui/StatusPill.svelte';
-	import type { Spec } from '$lib/agents';
-	import { SLOT_KINDS, readSlots, slotsForIdentity, suggestedSlotRows, writeSlots, type SlotKind, type SlotRow } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import ChipToggle from '#lib/components/ui/ChipToggle.svelte';
+	import StatusPill from '#lib/components/ui/StatusPill.svelte';
+	import type { Spec } from '#lib/agents.js';
+	import { SLOT_KINDS, readSlots, slotsForIdentity, suggestedSlotRows, writeSlots, type SlotKind, type SlotRow } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SuggestionBox from './SuggestionBox.svelte';
 	import { writeOnChange } from './write-on-change.svelte';
 

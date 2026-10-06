@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { t } from '$lib/i18n.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 	let { title, intro = null } = $props<{ title: string; intro?: string | null }>();
 </script>
 

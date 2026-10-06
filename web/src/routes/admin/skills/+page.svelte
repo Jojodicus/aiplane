@@ -2,12 +2,12 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { adminDelete, adminJson, adminPut } from '$lib/admin-client';
-	import { selectedAdminSkill, type AdminSkillsData } from '$lib/admin-skills';
-	import AdminSkillDetail from '$lib/components/admin/AdminSkillDetail.svelte';
-	import AdminSkillRail from '$lib/components/admin/AdminSkillRail.svelte';
-	import NavIcon from '$lib/components/NavIcon.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminDelete, adminJson, adminPut } from '#lib/admin-client.js';
+	import { selectedAdminSkill, type AdminSkillsData } from '#lib/admin-skills.js';
+	import AdminSkillDetail from '#lib/components/admin/AdminSkillDetail.svelte';
+	import AdminSkillRail from '#lib/components/admin/AdminSkillRail.svelte';
+	import NavIcon from '#lib/components/NavIcon.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<AdminSkillsData | null>(null);
 	let error = $state<string | null>(null);

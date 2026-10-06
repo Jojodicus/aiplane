@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { safeReturnTo } from '$lib/auth';
-	import { t } from '$lib/i18n.svelte';
-	import SourceLink from '$lib/components/SourceLink.svelte';
+	import { safeReturnTo } from '#lib/auth.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import SourceLink from '#lib/components/SourceLink.svelte';
 
 	const returnTo = $derived(safeReturnTo(page.url.searchParams.get('return_to')));
 </script>

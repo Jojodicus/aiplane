@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount, type Snippet } from 'svelte';
-	import type { LiveTurn } from '$lib/chat-protocol';
-	import { endScrollTop, nextFollow } from '$lib/chat-autoscroll';
-	import { t } from '$lib/i18n.svelte';
+	import type { LiveTurn } from '#lib/chat-protocol.js';
+	import { endScrollTop, nextFollow } from '#lib/chat-autoscroll.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import Markdown from './Markdown.svelte';
 	import ToolCalls from './ToolCalls.svelte';
 

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { configuredFacets, pricingUnitFor } from '$lib/admin-models';
-	import type { AdminModel } from '$lib/admin-models';
-	import { t } from '$lib/i18n.svelte';
+	import { configuredFacets, pricingUnitFor } from '#lib/admin-models.js';
+	import type { AdminModel } from '#lib/admin-models.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let { model, currency }: {
 		model: AdminModel;

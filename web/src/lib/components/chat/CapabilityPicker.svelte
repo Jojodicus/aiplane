@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { ChatCapability } from '$lib/api';
-	import { capabilityCounts, type CapabilityStateFilter } from '$lib/capability-picker';
-	import { t } from '$lib/i18n.svelte';
-	import CapabilityBrowser from '$lib/components/capabilities/CapabilityBrowser.svelte';
+	import type { ChatCapability } from '#lib/api.js';
+	import { capabilityCounts, type CapabilityStateFilter } from '#lib/capability-picker.js';
+	import { t } from '#lib/i18n.svelte.js';
+	import CapabilityBrowser from '#lib/components/capabilities/CapabilityBrowser.svelte';
 
 	/** `showTrigger: false` is for a caller that opens the picker itself
 	 *  through `show()` — from inside another dialog, whose box would

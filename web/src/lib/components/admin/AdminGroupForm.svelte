@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { t } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { isWildcardSelected, multiSelectOptions, normalizeSelection } from '$lib/multi-select';
-	import { splitList } from '$lib/upstreams';
+	import { t } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { isWildcardSelected, multiSelectOptions, normalizeSelection } from '#lib/multi-select.js';
+	import { splitList } from '#lib/upstreams.js';
 
 	export interface AdminGroup {
 		name: string;

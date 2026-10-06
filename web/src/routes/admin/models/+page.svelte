@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson, adminPut } from '$lib/admin-client';
-	import { matchesModelFilter, selectedModelAdminTab } from '$lib/admin-models';
-	import type { AdminModelsData, ModelFilter } from '$lib/admin-models';
-	import AdminModelRow from '$lib/components/admin/AdminModelRow.svelte';
-	import DefaultModelsCard from '$lib/components/admin/DefaultModelsCard.svelte';
-	import AutomaticRoutesCard from '$lib/components/admin/AutomaticRoutesCard.svelte';
-	import UpstreamsPanel from '$lib/components/admin/UpstreamsPanel.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { adminJson, adminPut } from '#lib/admin-client.js';
+	import { matchesModelFilter, selectedModelAdminTab } from '#lib/admin-models.js';
+	import type { AdminModelsData, ModelFilter } from '#lib/admin-models.js';
+	import AdminModelRow from '#lib/components/admin/AdminModelRow.svelte';
+	import DefaultModelsCard from '#lib/components/admin/DefaultModelsCard.svelte';
+	import AutomaticRoutesCard from '#lib/components/admin/AutomaticRoutesCard.svelte';
+	import UpstreamsPanel from '#lib/components/admin/UpstreamsPanel.svelte';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let data = $state<AdminModelsData | null>(null);
 	let error = $state<string | null>(null);

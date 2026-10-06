@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { inlineCodeSpans, requiredParams, type ComfyuiWorkflow } from '$lib/admin-comfyui';
-	import { n, t } from '$lib/i18n.svelte';
+	import { inlineCodeSpans, requiredParams, type ComfyuiWorkflow } from '#lib/admin-comfyui.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	// The right half: one workflow's full contract. The parameter prose is
 	// written for the model, not the operator, so it goes in a table where a

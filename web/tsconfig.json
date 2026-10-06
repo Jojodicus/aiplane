@@ -3,7 +3,13 @@
 	"compilerOptions": {
 		"rewriteRelativeImportExtensions": true,
 		"sourceMap": true,
-		"strict": true
+		"strict": true,
+		// Mirrors package.json's `#lib/*` import for svelte-check: in TS 7
+		// (`--tsgo`) mode it cannot resolve a `.svelte` file behind a package
+		// `imports` entry and types every component imported that way as `any`.
+		"paths": {
+			"#lib/*": ["./src/lib/*"]
+		}
 	},
 	"include": [
 		"src",

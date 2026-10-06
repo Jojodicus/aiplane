@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { adminJson } from '$lib/admin-client';
-	import CollectionCard from '$lib/components/rag/CollectionCard.svelte';
-	import { t } from '$lib/i18n.svelte';
-	import { listNotice, type RagCollection } from '$lib/rag';
+	import { adminJson } from '#lib/admin-client.js';
+	import CollectionCard from '#lib/components/rag/CollectionCard.svelte';
+	import { t } from '#lib/i18n.svelte.js';
+	import { listNotice, type RagCollection } from '#lib/rag.js';
 
 	let collections = $state<RagCollection[]>([]);
 	let loading = $state(true);

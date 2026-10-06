@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { agentsApi, type AgentError, type AgentVersion } from '$lib/agents';
+	import { agentsApi, type AgentError, type AgentVersion } from '#lib/agents.js';
 	import {
 		RANGE_DAYS,
 		METRICS,
@@ -9,10 +9,10 @@
 		countRows,
 		type AgentAnalytics,
 		type Metric
-	} from '$lib/agent-analytics';
-	import { dt, n, t } from '$lib/i18n.svelte';
-	import { usageCost, usageInteger } from '$lib/usage';
-	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
+	} from '#lib/agent-analytics.js';
+	import { dt, n, t } from '#lib/i18n.svelte.js';
+	import { usageCost, usageInteger } from '#lib/usage.js';
+	import SegmentedControl from '#lib/components/ui/SegmentedControl.svelte';
 
 	/**
 	 * What the agent did over a period, from `GET …/analytics`: counts only,

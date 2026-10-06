@@ -1,9 +1,9 @@
 <script lang="ts">
-	import AiSuggestion from '$lib/components/ui/AiSuggestion.svelte';
-	import { agentsApi, type AgentError, type Spec } from '$lib/agents';
-	import { SECTIONS, checklist, setupErrorMessage, summary, type StepKey } from '$lib/agent-setup';
-	import { useWorkspace } from '$lib/agent-workspace.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import AiSuggestion from '#lib/components/ui/AiSuggestion.svelte';
+	import { agentsApi, type AgentError, type Spec } from '#lib/agents.js';
+	import { SECTIONS, checklist, setupErrorMessage, summary, type StepKey } from '#lib/agent-setup.js';
+	import { useWorkspace } from '#lib/agent-workspace.svelte.js';
+	import { t } from '#lib/i18n.svelte.js';
 	import SetupChecklist from './SetupChecklist.svelte';
 
 	/** The last step: the whole setup in plain sentences, what is still open, and the way to the test chat. */

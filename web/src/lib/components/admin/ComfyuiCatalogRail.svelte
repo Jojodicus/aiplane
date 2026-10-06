@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { groupWorkflowsByKind, type ComfyuiWorkflow } from '$lib/admin-comfyui';
-	import { n, t } from '$lib/i18n.svelte';
+	import { groupWorkflowsByKind, type ComfyuiWorkflow } from '#lib/admin-comfyui.js';
+	import { n, t } from '#lib/i18n.svelte.js';
 
 	// The left half of the master–detail view: one searchable list, grouped
 	// by output kind. The rail scrolls on its own so the page never becomes

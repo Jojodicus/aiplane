@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
-	import { adminDelete, adminPost, adminPut } from '$lib/admin-client';
-	import { ApiError, request } from '$lib/api';
-	import { t, n } from '$lib/i18n.svelte';
-	import SearchableSelect from '$lib/components/SearchableSelect.svelte';
-	import { backendTestFailure, completeAliasLine, parallelismMismatch, parseAliases, splitList, type Backend, type BackendTestResult, type Pool } from '$lib/upstreams';
+	import { adminDelete, adminPost, adminPut } from '#lib/admin-client.js';
+	import { ApiError, request } from '#lib/api.js';
+	import { t, n } from '#lib/i18n.svelte.js';
+	import SearchableSelect from '#lib/components/SearchableSelect.svelte';
+	import { backendTestFailure, completeAliasLine, parallelismMismatch, parseAliases, splitList, type Backend, type BackendTestResult, type Pool } from '#lib/upstreams.js';
 
 	interface Props {
 		backend?: Backend | null;

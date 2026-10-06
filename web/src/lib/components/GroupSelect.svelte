@@ -9,8 +9,8 @@
 	 * import-free so it runs under `node --test`.
 	 */
 	import SearchableSelect from './SearchableSelect.svelte';
-	import { multiSelectOptions } from '$lib/multi-select';
-	import { t } from '$lib/i18n.svelte';
+	import { multiSelectOptions } from '#lib/multi-select.js';
+	import { t } from '#lib/i18n.svelte.js';
 
 	let {
 		groups,
