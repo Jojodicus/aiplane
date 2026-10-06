@@ -37,6 +37,8 @@ Open `/admin/tokens` to inspect all tokens, their owner, state, dates, request/t
 3. Enable restriction and select the allowed model names, or disable restriction to remove that token-specific list.
 4. Save and inspect the updated scope.
 
+The model picker groups models by kind, including a **Reranking** group for the models `POST /v1/rerank` serves. A system principal can also be granted a rerank model through `POST /api/v0/system-principals/{id}/grants` with kind `model`; the agent setup pickers offer chat, transcription and speech models only.
+
 A token restriction narrows model access. Removing it does not grant rights beyond the owner's existing access. Usage columns depend on usage accounting. The list does not recover plaintext bearer secrets.
 
 ## Set request, token or cost limits

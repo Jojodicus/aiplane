@@ -4,6 +4,8 @@ Knowledge collections make indexed source material available to retrieval tools 
 
 Before creating a collection, enable RAG with a persistent data directory in [system settings](settings.md), and configure an embeddings pool in [Models and routing](models.md). Source credentials must be able to read the material being indexed.
 
+Optionally, configure a [rerank pool](models.md#pool-fields). Search then reorders the candidates it found with the reranker; without one, search returns its own ordering. If the reranker fails, search keeps its own ordering.
+
 ## Create a collection
 
 ![A knowledge collection card shows source, indexed ref, status and sync or re-index controls.](../img/guide/knowledge-collection.png)

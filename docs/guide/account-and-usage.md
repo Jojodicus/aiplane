@@ -40,7 +40,7 @@ The plaintext is revealed at creation or rotation; it cannot be retrieved from a
 
 Each token card provides three configuration areas:
 
-- **Models:** restrict the token to selected models within its effective permissions. Administrator restrictions are displayed and remain applicable.
+- **Models:** restrict the token to selected models within its effective permissions. The picker groups models by kind, such as chat, embedding and reranking. Administrator restrictions are displayed and remain applicable.
 - **Tools:** enable gateway-owned tools and set their capability states. A separate MCP policy switch controls MCP access for the token.
 - **Budget:** add request, token or cost quotas with hourly, daily, weekly or monthly windows. Owner limits still apply and are displayed separately; user configuration cannot remove administrator-owned quotas.
 

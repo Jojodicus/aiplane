@@ -1,6 +1,6 @@
 # Connect models and control routing
 
-An **upstream backend** is a model server or provider endpoint. A **pool** groups backends for a purpose such as chat, embeddings, transcription or OCR. The **model catalog** is the set of models and aliases exposed by that topology. Configure these before selecting models for chat, agents or optional features.
+An **upstream backend** is a model server or provider endpoint. A **pool** groups backends for a purpose such as chat, embeddings, reranking, transcription or OCR. The **model catalog** is the set of models and aliases exposed by that topology. Configure these before selecting models for chat, agents or optional features.
 
 You need a signed-in account with the `admin` role. Open **Administration → Models and routing** (`/admin/models`). Its tabs are **Upstreams**, **Catalog**, **Defaults** and **Automatic routing**. `/admin/upstreams` also opens the upstream manager.
 
@@ -44,6 +44,8 @@ Choose the pool's purpose from the kinds offered by the server. The editor also 
 
 The **System One** pool kind serves models for TypeSafe System One requests, including content checks and automatic-route selection. It is separate from the chat pool that receives the user's request; review both destinations' GDPR and NDA declarations when configuring those features.
 
+The **rerank** pool kind serves cross-encoder models that score passages against a query. Knowledge search uses it, when one is configured, to reorder the candidates it found ([knowledge collections](knowledge.md)). API clients call the same models through `POST /v1/rerank`, and `/v1/models` lists them. A rerank pool's allowed groups restrict which people's tokens may call or list its models; a pool without allowed groups is open to every token with default pool access. Knowledge search ignores those groups, because it calls the reranker as the gateway itself. `POST /v1/rerank` relays the request in the backend's own format; see the [HTTP API reference](../reference/api.md#reranking).
+
 Prefix affinity is useful for self-hosted replicas with separate prompt-prefix caches. It is separate from an automatic route's session affinity: one chooses a backend replica, the other retains a selected model target.
 
 The **GDPR** and **NDA** flags describe separate properties of the provider arrangement. Set each one only when the applicable provider and service are covered for the data sent to that pool. These are operator declarations: AIplane does not inspect contracts, verify data residency, or certify compliance. The declarations are used by the [content guard](settings.md#access-and-content-guard) to decide which checks are needed before a request reaches a chat model. They do not grant access; allowed groups govern pool access, together with [group permissions](access.md). Review an offline fallback's availability, coverage and user access before relying on it.
@@ -68,7 +70,7 @@ For a known model, AIplane skips unhealthy or drained backends and routes to a h
 
 1. Open **Catalog**. Search by model name or use the chat, other, aliases or configured filter.
 2. Open the model editor (`/admin/models/edit`).
-3. Set input/output prices in the unit shown for that model kind. Configure prices before treating monetary usage totals as complete.
+3. Set input/output prices in the unit shown for that model kind. Configure prices before treating monetary usage totals as complete. With a per-token price, embedding and rerank calls are charged at the input price; when a backend reports only a total token count, those tokens count as input. A rerank backend that reports no token usage (Text Embeddings Inference) or reports search units instead (Cohere) records its calls with no tokens and no cost; see [reranking](../reference/api.md#reranking).
 4. For a chat model, verify its context window, reasoning format and capabilities against the upstream's actual configuration.
 5. Save. Return to the catalog and inspect the configured values.
 
