@@ -3268,3 +3268,48 @@ async fn attachment_download_statuses_follow_what_the_object_store_answered() {
         serde_json::from_slice(&common::read_body(resp).await).unwrap();
     assert_eq!(refused["error"]["code"], "attachments_not_configured");
 }
+
+/// A message over budget is refused with how long until the breached window
+/// moves on, as a `/v1` call is.
+#[tokio::test]
+async fn an_over_budget_message_says_when_to_retry() {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+
+    let state = Arc::new(
+        common::state_with_pool_enforcing("http://unused.invalid", PoolKind::Chat, "model-a", true)
+            .await,
+    );
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    limits::upsert(
+        &state.db,
+        SubjectType::Global,
+        "",
+        None,
+        Dimension::Requests,
+        Window::Hour,
+        0.0,
+    )
+    .await
+    .unwrap();
+    let session = chat::create_session(&state.db, "alice").await.unwrap();
+
+    let resp = router(state.clone())
+        .serve(json_req(
+            Method::POST,
+            format!("/api/v0/chat/sessions/{}/messages", session.id),
+            &cookie,
+            Some(r#"{"model":"model-a","message":"one"}"#.into()),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after: u64 = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .expect("a limit refusal says when to retry");
+    assert!(retry_after > 0);
+    assert!(body_string(resp).await.contains("rate_limited"));
+}

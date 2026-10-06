@@ -15,6 +15,7 @@ voice-phase-listening = À l'écoute — appuyez pour envoyer
 voice-phase-speaking = Je parle — appuyez pour interrompre
 voice-recording-stop-failed = Impossible d'arrêter l'enregistrement : { $error }
 voice-network-error = Erreur réseau : { $error }
+voice-limit-reached = Vous avez atteint une limite d’utilisation : la voix est en pause. Vos limites et leur prochain renouvellement figurent sur la page Utilisation.
 
 # Why the microphone would not start. Shown at the moment someone is
 # trying to talk to the gateway, so they need it in their own language.

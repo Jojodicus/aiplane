@@ -15,6 +15,7 @@ voice-phase-listening = Слушаю — нажмите, чтобы отправ
 voice-phase-speaking = Говорю — нажмите, чтобы прервать
 voice-recording-stop-failed = Не удалось остановить запись: { $error }
 voice-network-error = Сетевая ошибка: { $error }
+voice-limit-reached = Вы достигли лимита использования, поэтому голос приостановлен. Ваши лимиты и время их обновления указаны на странице «Использование».
 
 # Why the microphone would not start. Shown at the moment someone is
 # trying to talk to the gateway, so they need it in their own language.

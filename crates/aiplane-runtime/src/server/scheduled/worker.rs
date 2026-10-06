@@ -165,12 +165,11 @@ async fn execute_run(
     // A scheduled fire draws from the owner's budget like any other call. If
     // they're over a limit, skip this fire and record it as an error (visible
     // in the schedule's run history) rather than running it for free.
-    let role_ids = state.role_ids_for(&user.roles);
     if state
-        .enforcer
-        .check_for_model(
+        .limit_exceeded(
             &action.user_id,
-            &role_ids,
+            &state.role_ids_for(&user.roles),
+            None,
             &action.model,
             state.upstreams.enforce_limits_for_model(
                 &action.model,
@@ -178,7 +177,7 @@ async fn execute_run(
             ),
         )
         .await
-        .is_err()
+        .is_some()
     {
         return fail("usage limit reached — run skipped");
     }

@@ -1720,3 +1720,364 @@ async fn a_spent_budget_is_refused_before_a_slot_is_taken() {
         drop(held);
     }
 }
+
+// --- limits on the chat UI's voice -------------------------------------------
+
+/// A zero-request global rule: every caller is over budget at once.
+async fn spend_every_budget(state: &aiplane::rama_server::RamaState) {
+    use aiplane_core::server::db::limits::{self, Dimension, SubjectType, Window};
+    limits::upsert(
+        &state.db,
+        SubjectType::Global,
+        "",
+        None,
+        Dimension::Requests,
+        Window::Hour,
+        0.0,
+    )
+    .await
+    .unwrap();
+}
+
+/// An upstream that answers every POST with `200 {}`; what the tests read is
+/// how many requests arrive.
+async fn answering_upstream() -> MockServer {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&upstream)
+        .await;
+    upstream
+}
+
+fn session_transcription(cookie: &str) -> Request<Body> {
+    let boundary = "voice-boundary";
+    Request::builder()
+        .method(Method::POST)
+        .uri("/api/v0/transcriptions")
+        .header("cookie", format!("id={cookie}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-model\r\n\
+             --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\nAUDIO\r\n\
+             --{boundary}--\r\n"
+        )))
+        .unwrap()
+}
+
+/// `text` keys the process-wide TTS cache, so every test speaks its own.
+fn session_speech(cookie: &str, text: &str) -> Request<Body> {
+    common::post_json(
+        "/api/v0/speech",
+        cookie,
+        &json!({"text": text, "language": "en"}).to_string(),
+    )
+}
+
+/// One voice call by a signed-in user: its status, the error code, the
+/// `Retry-After` seconds and how many requests reached the upstream.
+async fn voice_call(
+    enforce_limits: bool,
+    over_budget: bool,
+    kind: PoolKind,
+    model: &str,
+    request: impl FnOnce(&str) -> Request<Body>,
+) -> (StatusCode, Option<String>, Option<u64>, usize) {
+    let upstream = answering_upstream().await;
+    let state =
+        common::state_with_pool_enforcing(&upstream.uri(), kind, model, enforce_limits).await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    if over_budget {
+        spend_every_budget(&state).await;
+    }
+    let resp = common::app(state).serve(request(&cookie)).await.unwrap();
+    let status = resp.status();
+    let retry_after = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let body: serde_json::Value =
+        serde_json::from_slice(&common::read_body(resp).await).unwrap_or_default();
+    let code = body["error"]["code"].as_str().map(str::to_string);
+    (
+        status,
+        code,
+        retry_after,
+        upstream.received_requests().await.unwrap().len(),
+    )
+}
+
+/// The refusal a signed-in user over budget gets on a voice call: the chat
+/// submit's code, and how long until the breached window moves on.
+fn assert_session_limit_refusal(status: StatusCode, code: Option<&str>, retry_after: Option<u64>) {
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(code, Some("rate_limited"));
+    assert!(
+        retry_after.is_some_and(|secs| secs > 0),
+        "a limit refusal says when to retry, got {retry_after:?}"
+    );
+}
+
+#[tokio::test]
+async fn voice_transcription_is_refused_over_budget_on_an_enforced_pool() {
+    let (status, code, retry_after, reached) = voice_call(
+        true,
+        true,
+        PoolKind::Transcription,
+        "whisper-model",
+        session_transcription,
+    )
+    .await;
+    assert_session_limit_refusal(status, code.as_deref(), retry_after);
+    assert_eq!(
+        reached, 0,
+        "a refused transcription must not reach the upstream"
+    );
+}
+
+#[tokio::test]
+async fn voice_transcription_on_an_exempt_pool_ignores_a_spent_budget() {
+    let (status, _, _, reached) = voice_call(
+        false,
+        true,
+        PoolKind::Transcription,
+        "whisper-model",
+        session_transcription,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reached, 1);
+}
+
+#[tokio::test]
+async fn voice_transcription_under_budget_is_relayed() {
+    let (status, _, _, reached) = voice_call(
+        true,
+        false,
+        PoolKind::Transcription,
+        "whisper-model",
+        session_transcription,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reached, 1);
+}
+
+#[tokio::test]
+async fn voice_speech_is_refused_over_budget_on_an_enforced_pool() {
+    let (status, code, retry_after, reached) =
+        voice_call(true, true, PoolKind::Speech, "tts-model", |cookie| {
+            session_speech(cookie, "Refused for being over budget.")
+        })
+        .await;
+    assert_session_limit_refusal(status, code.as_deref(), retry_after);
+    assert_eq!(
+        reached, 0,
+        "a refused synthesis must not reach the upstream"
+    );
+}
+
+#[tokio::test]
+async fn voice_speech_on_an_exempt_pool_ignores_a_spent_budget() {
+    let (status, _, _, reached) =
+        voice_call(false, true, PoolKind::Speech, "tts-model", |cookie| {
+            session_speech(cookie, "Spoken by an exempt pool.")
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reached, 1);
+}
+
+#[tokio::test]
+async fn voice_speech_under_budget_is_synthesised() {
+    let (status, _, _, reached) =
+        voice_call(true, false, PoolKind::Speech, "tts-model", |cookie| {
+            session_speech(cookie, "Spoken within the budget.")
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reached, 1);
+}
+
+/// The user row carries the groups that decide which pools and which limits
+/// apply. When it cannot be read, a voice call is refused rather than run as
+/// a user without groups, whose limits and access may be looser.
+#[tokio::test]
+async fn a_voice_call_fails_closed_when_the_user_cannot_be_read() {
+    for (kind, model, request) in [
+        (
+            PoolKind::Transcription,
+            "whisper-model",
+            session_transcription as fn(&str) -> Request<Body>,
+        ),
+        (PoolKind::Speech, "tts-model", |cookie: &str| {
+            session_speech(cookie, "Never spoken without its user.")
+        }),
+    ] {
+        let upstream = answering_upstream().await;
+        let state = common::state_with_pool_enforcing(&upstream.uri(), kind, model, true).await;
+        let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+        sqlx::query("ALTER TABLE users RENAME TO users_unreadable")
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        let resp = common::app(state).serve(request(&cookie)).await.unwrap();
+        let status = resp.status();
+        let body: serde_json::Value =
+            serde_json::from_slice(&common::read_body(resp).await).unwrap_or_default();
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{model}: {body}");
+        assert_eq!(body["error"]["code"], "internal_error", "{model}");
+        assert!(upstream.received_requests().await.unwrap().is_empty());
+    }
+}
+
+/// A cached sentence costs no upstream call and records no usage, so a spent
+/// budget does not take it away; a sentence that needs the upstream is refused.
+#[tokio::test]
+async fn voice_speech_serves_a_cached_sentence_after_the_budget_is_spent() {
+    let upstream = answering_upstream().await;
+    let state =
+        common::state_with_pool_enforcing(&upstream.uri(), PoolKind::Speech, "tts-model", true)
+            .await;
+    let cookie = common::seed_session(&state, "alice", "alice@example.com").await;
+    let app = common::app(state.clone());
+    let cached = "Cached before the budget ran out.";
+    let first = app.serve(session_speech(&cookie, cached)).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    spend_every_budget(&state).await;
+    let again = app.serve(session_speech(&cookie, cached)).await.unwrap();
+    assert_eq!(again.status(), StatusCode::OK, "a cache hit is free");
+    let fresh = app
+        .serve(session_speech(
+            &cookie,
+            "Never spoken before the budget ran out.",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(fresh.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
+}
+
+// --- the target's limits come before the content guard -----------------------
+
+/// A content-guard deployment whose guard allows everything and whose chat
+/// model answers, so the only thing that can stop a request is a limit.
+async fn guarded_upstream() -> MockServer {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "answers": {
+                "gdpr": {"type": "noul", "noul": 0.1},
+                "nda": {"type": "noul", "noul": 0.1}
+            }
+        })))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "c1",
+            "object": "chat.completion",
+            "model": "model-a",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        })))
+        .mount(&upstream)
+        .await;
+    upstream
+}
+
+/// One request per chat dialect that runs through the content guard.
+fn guarded_requests(bearer: &str) -> Vec<(&'static str, Request<Body>)> {
+    let post = |uri: &str, body: serde_json::Value| {
+        Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .header("anthropic-version", "2023-06-01")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    vec![
+        (
+            "/v1/chat/completions",
+            post(
+                "/v1/chat/completions",
+                json!({"model": "model-a", "messages": [{"role": "user", "content": "secret"}]}),
+            ),
+        ),
+        (
+            "/v1/messages",
+            post(
+                "/v1/messages",
+                json!({
+                    "model": "model-a",
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "secret"}]
+                }),
+            ),
+        ),
+        (
+            "/v1/responses",
+            post(
+                "/v1/responses",
+                json!({"model": "model-a", "input": "secret"}),
+            ),
+        ),
+    ]
+}
+
+async fn guard_calls(upstream: &MockServer) -> usize {
+    upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/systemone")
+        .count()
+}
+
+#[tokio::test]
+async fn an_over_budget_caller_is_refused_before_the_content_guard_is_asked() {
+    let upstream = guarded_upstream().await;
+    let state = common::state_with_content_guard_pools(&upstream.uri()).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    spend_every_budget(&state).await;
+    let app = common::app(state);
+    for (uri, request) in guarded_requests(&bearer) {
+        let resp = app.serve(request).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+    }
+    assert_eq!(
+        guard_calls(&upstream).await,
+        0,
+        "a request refused by its limits must not cost a guard inference"
+    );
+}
+
+#[tokio::test]
+async fn a_caller_within_budget_is_still_checked_by_the_content_guard() {
+    let upstream = guarded_upstream().await;
+    let state = common::state_with_content_guard_pools(&upstream.uri()).await;
+    let bearer = common::seed_user_with_token(&state, "alice").await;
+    let app = common::app(state);
+    for (asked_before, (uri, request)) in guarded_requests(&bearer).into_iter().enumerate() {
+        let resp = app.serve(request).await.unwrap();
+        let status = resp.status();
+        let body = String::from_utf8_lossy(&common::read_body(resp).await).into_owned();
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert_eq!(guard_calls(&upstream).await, asked_before + 1, "{uri}");
+    }
+}

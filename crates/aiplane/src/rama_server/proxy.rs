@@ -148,44 +148,9 @@ pub(crate) async fn limit_exceeded_for_model(
     kind: PoolKind,
 ) -> Option<aiplane_core::server::limits::LimitExceeded> {
     let enforce_limits = state.upstreams.enforce_limits_for_model(model, kind);
-    limit_exceeded_on(state, user, model, enforce_limits).await
-}
-
-/// The breached limit, if any, for a call to `model` on a pool whose
-/// enforcement flag the caller already resolved.
-async fn limit_exceeded_on(
-    state: &RamaState,
-    user: &UserCtx,
-    model: &str,
-    enforce_limits: bool,
-) -> Option<aiplane_core::server::limits::LimitExceeded> {
-    if !enforce_limits {
-        return None;
-    }
-    let role_ids = state.limit_role_ids(&user.principal);
-    if let Err(exceeded) = state
-        .enforcer
-        .check_for_model(
-            user.principal.subject_id(),
-            &role_ids,
-            model,
-            enforce_limits,
-        )
+    Caller::Bearer(user)
+        .limit_exceeded(state, model, enforce_limits)
         .await
-    {
-        return Some(exceeded);
-    }
-    // The token's own rules are an additional ceiling, not an alternative to
-    // the owner's budget: both must pass, so issuing a token can only narrow
-    // what its owner may spend.
-    if let Err(exceeded) = state
-        .enforcer
-        .check_token_for_model(&user.token_id, model, enforce_limits)
-        .await
-    {
-        return Some(exceeded);
-    }
-    None
 }
 
 /// A single-round-trip `/v1` call that passed its limit gate: the slot it is
@@ -203,27 +168,80 @@ impl Admitted {
     }
 }
 
+/// Whose limits a call is checked against.
+#[derive(Clone, Copy)]
+enum Caller<'a> {
+    /// A `/v1` bearer: its owner's rules and the token's own.
+    Bearer(&'a UserCtx),
+    /// A signed-in user of the chat UI, which has no token: their own rules,
+    /// refused exactly as a chat message is. `role_ids` are the user's
+    /// resolved groups, the ones their pool access was built from.
+    Session {
+        user_id: &'a str,
+        role_ids: &'a [String],
+    },
+}
+
+impl Caller<'_> {
+    async fn limit_exceeded(
+        self,
+        state: &RamaState,
+        model: &str,
+        enforce_limits: bool,
+    ) -> Option<aiplane_core::server::limits::LimitExceeded> {
+        match self {
+            Caller::Bearer(user) => {
+                state
+                    .limit_exceeded(
+                        user.principal.subject_id(),
+                        &state.limit_role_ids(&user.principal),
+                        Some(&user.token_id),
+                        model,
+                        enforce_limits,
+                    )
+                    .await
+            }
+            Caller::Session { user_id, role_ids } => {
+                state
+                    .limit_exceeded(user_id, role_ids, None, model, enforce_limits)
+                    .await
+            }
+        }
+    }
+
+    /// The refusal for an over-budget call, in this caller's envelope.
+    async fn refusal(
+        self,
+        state: &RamaState,
+        model: &str,
+        enforce_limits: bool,
+    ) -> Option<Response> {
+        let exceeded = self.limit_exceeded(state, model, enforce_limits).await?;
+        Some(match self {
+            Caller::Bearer(_) => limit_exceeded_response(&exceeded),
+            Caller::Session { .. } => aiplane_api::pages::chat::json_api::over_budget(&exceeded),
+        })
+    }
+}
+
 /// Route `model` to a `kind` pool, gating `caller` on its limits first.
 ///
 /// The model is resolved and gated before a slot is taken, so an over-budget
 /// caller gets its 429 even from a saturated pool, and a refused call neither
-/// holds capacity nor counts as a dispatch. `caller` is `None` only for the
-/// chat UI's voice composer, which has never been gated here.
+/// holds capacity nor counts as a dispatch.
 async fn admit(
     state: &RamaState,
-    caller: Option<&UserCtx>,
+    caller: Caller<'_>,
     model: &str,
     kind: PoolKind,
     access: &PoolAccess,
 ) -> Result<Admitted, Response> {
     let gate = async |real_model: &str| -> Result<bool, Response> {
         let enforce_limits = state.upstreams.enforce_limits_for_model(real_model, kind);
-        if let Some(user) = caller
-            && let Some(exceeded) = limit_exceeded_on(state, user, real_model, enforce_limits).await
-        {
-            return Err(limit_exceeded_response(&exceeded));
+        match caller.refusal(state, real_model, enforce_limits).await {
+            Some(refusal) => Err(refusal),
+            None => Ok(enforce_limits),
         }
-        Ok(enforce_limits)
     };
     let checked = state
         .upstreams
@@ -621,23 +639,20 @@ async fn forward_one_round_once(
 }
 
 /// Byte-faithful `/v1/chat/completions` passthrough for a caller with no
-/// gateway tool grants: resolve the model, apply admin defaults, rewrite the
-/// outgoing `model` to the real id, and stream the upstream response through
-/// 1:1 (any client-driven tool loop is left untouched). Factored out of
-/// [`chat_completions`] so its prologue reads as prologue + a three-way
-/// dispatch.
+/// gateway tool grants: apply admin defaults to the already resolved and
+/// limit-checked `real_model`, rewrite the outgoing `model` to it, and stream
+/// the upstream response through 1:1 (any client-driven tool loop is left
+/// untouched). Factored out of [`chat_completions`] so its prologue reads as
+/// prologue + a three-way dispatch.
 async fn chat_bytedumb(
     state: &Arc<RamaState>,
     user: &UserCtx,
     model: &str,
+    real_model: &str,
     access: &aiplane_core::server::upstreams::PoolAccess,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // `route` resolves aliases + the two fallbacks and returns a structured
-    // `RouteError`, so `route_error_response` maps an unknown model straight
-    // to 404 `model_not_found` (and known-but-down to 503). Acquires the slot
-    // up front so the resolved real id is known before we touch the body.
     // Prefix-affinity key, parsed from the client's body as-is. Best-effort:
     // an unparseable body simply routes by load (and would fail upstream
     // anyway). See `upstreams::affinity` for why this matters more than
@@ -646,30 +661,21 @@ async fn chat_bytedumb(
         .ok()
         .map(|v| aiplane_core::server::upstreams::affinity::hint_for_request(&headers, &v))
         .unwrap_or_default();
-    // Resolve first, without a slot: the dispatch below acquires its own (and
-    // may acquire more than one, if a replica fails before answering).
-    let real_model = match resolve_or_wait(state, model, access).await {
-        Ok(id) => id,
-        Err(e) => return route_error_response(e),
-    };
-    if let Some(resp) = limit_check_for_model(state, user, &real_model, PoolKind::Chat).await {
-        return resp;
-    }
     // Admin sampling/reasoning defaults key on the *real* model id (so an
     // alias inherits the target's defaults). Client keys still win —
     // `apply_defaults` only fills missing top-level fields. Then rewrite the
     // outgoing `model` to the real id (upstreams don't know the alias).
     let body =
-        aiplane_core::server::model_defaults::apply_defaults_to_bytes(&state.db, &real_model, body)
+        aiplane_core::server::model_defaults::apply_defaults_to_bytes(&state.db, real_model, body)
             .await;
-    let body = rewrite_model_in_bytes(body, &real_model);
+    let body = rewrite_model_in_bytes(body, real_model);
     let rec = RecordParams::v1(
         user,
         UsageKind::Chat,
-        real_model.clone(),
+        real_model.to_string(),
         state
             .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Chat),
+            .enforce_limits_for_model(real_model, PoolKind::Chat),
     );
     // Dispatch, retrying on another replica while the client has seen nothing.
     // A replica that fails to answer must not cost the request: that is the
@@ -679,7 +685,7 @@ async fn chat_bytedumb(
     for attempt in 0..=DISPATCH_RETRIES {
         let acquired = match aiplane_core::server::upstreams::route_or_wait(
             &state.upstreams,
-            &real_model,
+            real_model,
             PoolKind::Chat,
             access,
             state.upstream_wait(),
@@ -701,7 +707,7 @@ async fn chat_bytedumb(
         )
         .await
         {
-            Ok(resp) => return with_resolved_model_header(resp, model, &real_model),
+            Ok(resp) => return with_resolved_model_header(resp, model, real_model),
             Err(msg) => {
                 tracing::warn!(
                     model = %real_model, attempt, error = %msg,
@@ -786,6 +792,31 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
         }
         None => access.clone(),
     };
+
+    // Resolve aliases + fallback once, up front: the tool loops acquire per
+    // round (flattening errors into `LoopError::Upstream` → 503, so they can't
+    // distinguish an unknown model), and every round must dispatch the *same*
+    // resolved real id. This maps the OpenAI 404/503 before streaming starts
+    // and yields the real id to forward. Resolved **without** taking a slot:
+    // every dispatch below acquires its own, so a guard acquired here would be
+    // dropped unused — holding capacity the request never spends and counting
+    // as a dispatch it never made (which, on a dispatch-balanced picker, locks
+    // the two acquisitions into strict alternation and pins every real
+    // dispatch to one replica). The outage wait still applies.
+    let real_model = match resolve_or_wait(&state, &routing_model, &route_access).await {
+        Ok(id) => id,
+        Err(e) => {
+            return with_automatic_route_headers(
+                route_error_response(e),
+                automatic_decision.as_ref(),
+            );
+        }
+    };
+    // The limits come before the content guard, so a caller over budget does
+    // not cost a guard inference on the way to its 429.
+    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Chat).await {
+        return with_automatic_route_headers(resp, automatic_decision.as_ref());
+    }
     if let Some(response) =
         enforce_content_guard(&state, &request_value, &routing_model, &route_access).await
     {
@@ -796,31 +827,13 @@ pub async fn chat_completions(State(state): State<Arc<RamaState>>, req: Request)
             &state,
             &user,
             &routing_model,
+            &real_model,
             &route_access,
             parts.headers,
             body,
         )
         .await;
         return with_automatic_route_headers(response, automatic_decision.as_ref());
-    }
-
-    // Gateway-tool path. Resolve aliases + fallback once, up front: the tool
-    // loops acquire per round (flattening errors into `LoopError::Upstream` →
-    // 503, so they can't distinguish an unknown model), and every round must
-    // dispatch the *same* resolved real id. `route` here both maps the OpenAI
-    // 404/503 before streaming starts and yields the real id to forward.
-    // Resolved **without** taking a slot: the loops below route per round, so a
-    // guard acquired here would be dropped unused — holding capacity the
-    // request never spends and counting as a dispatch it never made (which, on
-    // a dispatch-balanced picker, locks the two acquisitions into strict
-    // alternation and pins every real dispatch to one replica). The outage wait
-    // still applies.
-    let real_model = match resolve_or_wait(&state, &routing_model, &route_access).await {
-        Ok(id) => id,
-        Err(e) => return route_error_response(e),
-    };
-    if let Some(resp) = limit_check_for_model(&state, &user, &real_model, PoolKind::Chat).await {
-        return resp;
     }
 
     // Defaults key on the resolved real id, same as the byte-dumb path.
@@ -1201,7 +1214,15 @@ pub async fn transcribe(State(state): State<Arc<RamaState>>, req: Request) -> Re
     // and the resolved `enforce_limits` flag into `rec` once routing has run.
     let rec = RecordParams::v1(&user, UsageKind::Transcription, String::new(), true);
     let access = state.pool_access_for_token(&user);
-    handle_transcription(&state, Some(&user), parts.headers, body, rec, access).await
+    handle_transcription(
+        &state,
+        Caller::Bearer(&user),
+        parts.headers,
+        body,
+        rec,
+        &access,
+    )
+    .await
 }
 
 /// `POST /api/v0/transcriptions` — session-authed mirror of
@@ -1234,12 +1255,11 @@ pub async fn transcribe_session(State(state): State<Arc<RamaState>>, req: Reques
     // per-user breakdown reads nicely; user_id is always present. Skipped
     // when metrics are disabled (no extra DB read on the kill-switched path).
     // Load the user once: for the usage-row email AND to resolve their gateway
-    // groups so the transcription model is gated to pools they may access, same
-    // as the API path.
-    let user_row = aiplane_core::server::db::users::find_by_id(&state.db, &session.user_id)
-        .await
-        .ok()
-        .flatten();
+    // groups, which gate both the pools they may reach and their limits.
+    let user_row = match session_user(&state, &session.user_id).await {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
     let user_email = if state.usage.is_enabled() {
         user_row
             .as_ref()
@@ -1268,19 +1288,42 @@ pub async fn transcribe_session(State(state): State<Arc<RamaState>>, req: Reques
         Ok(b) => b,
         Err(msg) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &msg),
     };
-    handle_transcription(&state, None, parts.headers, body, rec, access).await
+    let caller = Caller::Session {
+        user_id: &session.user_id,
+        role_ids: &access.role_ids,
+    };
+    handle_transcription(&state, caller, parts.headers, body, rec, &access).await
+}
+
+/// The signed-in user's row, whose groups decide the pools a voice call may
+/// reach and the limits it is held to. A failed read refuses the call rather
+/// than running it as a user without groups.
+async fn session_user(
+    state: &RamaState,
+    user_id: &str,
+) -> Result<Option<aiplane_core::server::db::users::User>, Response> {
+    aiplane_core::server::db::users::find_by_id(&state.db, user_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, user_id, "reading the user for a voice call");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "could not read your account to check its access and limits; try again",
+            )
+        })
 }
 
 /// Shared body of both transcription handlers: parse → VAD-trim → rebuild
 /// multipart → forward. Pulled out because the bearer/session paths
-/// only differ in auth, and in `caller`, the bearer caller gated on its limits.
+/// only differ in auth, and in whose limits `caller` names.
 async fn handle_transcription(
     state: &RamaState,
-    caller: Option<&UserCtx>,
+    caller: Caller<'_>,
     mut headers: HeaderMap,
     body: Bytes,
     mut rec: RecordParams,
-    access: aiplane_core::server::upstreams::PoolAccess,
+    access: &PoolAccess,
 ) -> Response {
     let fields = match parse_multipart_fields(&headers, body).await {
         Ok(f) => f,
@@ -1304,7 +1347,7 @@ async fn handle_transcription(
     // `model` part we forward carries the real id the upstream knows, and gate
     // the caller before any audio is decoded. The slot is held across the
     // (in-memory) VAD trim + rebuild below.
-    let admitted = match admit(state, caller, &model, PoolKind::Transcription, &access).await {
+    let admitted = match admit(state, caller, &model, PoolKind::Transcription, access).await {
         Ok(admitted) => admitted,
         Err(refusal) => return refusal,
     };
@@ -1458,7 +1501,7 @@ async fn relay_by_model(
         );
     };
     let access = state.pool_access_for_token(&user);
-    let admitted = match admit(state, Some(&user), &model, kind, &access).await {
+    let admitted = match admit(state, Caller::Bearer(&user), &model, kind, &access).await {
         Ok(admitted) => admitted,
         Err(refusal) => return refusal,
     };
@@ -1546,7 +1589,15 @@ pub async fn images_edits(State(state): State<Arc<RamaState>>, req: Request) -> 
         );
     };
     let access = state.pool_access_for_token(&user);
-    let admitted = match admit(&state, Some(&user), &model, PoolKind::Image, &access).await {
+    let admitted = match admit(
+        &state,
+        Caller::Bearer(&user),
+        &model,
+        PoolKind::Image,
+        &access,
+    )
+    .await
+    {
         Ok(admitted) => admitted,
         Err(refusal) => return refusal,
     };
@@ -1745,17 +1796,27 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
             "no speech (TTS) pool is configured",
         );
     };
-    // One user row, read up front, serves three purposes below: pool access
-    // (RBAC), the picked voice, and the usage record's email. The voice has to
-    // be resolved before the cache key is built, which is why this read now
-    // precedes the cache lookup — a single indexed SELECT, whereas the thing
-    // the cache is actually there to avoid is the upstream round-trip.
-    let me = aiplane_core::server::db::users::find_by_id(&state.db, &session.user_id)
-        .await
-        .ok()
-        .flatten();
+    // One user row, read up front, serves four purposes below: pool access
+    // (RBAC), the picked voice, the groups the limits apply to, and the usage
+    // record's email. The voice and the access have to be resolved before the
+    // cache is consulted, which is why this read precedes the lookup — a
+    // single indexed SELECT, whereas the thing the cache is actually there to
+    // avoid is the upstream round-trip.
+    let me = match session_user(&state, &session.user_id).await {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
     // Gate the TTS pool to the session user's groups, same as every other route.
-    let access = state.pool_access_for(&me.as_ref().map(|u| u.roles.clone()).unwrap_or_default());
+    let access = state.pool_access_for(me.as_ref().map(|u| u.roles.as_slice()).unwrap_or(&[]));
+    // The cache is shared across users, so it is consulted only once this
+    // user may reach the speech model at all: a hit answers the way an
+    // uncached call would have been refused otherwise. No slot is taken.
+    if let Err(err) = state
+        .upstreams
+        .resolve_route_access(&model, PoolKind::Speech, &access)
+    {
+        return route_error_response(err);
+    }
     // The user's pick wins over the pool's language→voice default, but only
     // while the operator still offers it: a voice dropped from the pool config
     // must not keep reaching the upstream as an unknown id.
@@ -1764,21 +1825,23 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
         .and_then(|u| u.speech_voice.clone())
         .filter(|v| state.upstreams.speech_voices_for(&access).contains(v))
         .or(default_voice);
-    // Cache lookup BEFORE routing, so a hit costs no inflight slot and no TTS
-    // spend. Key on the pre-resolution model + voice + spoken text.
+    // Cache lookup BEFORE the limit gate and routing: a hit costs no inflight
+    // slot, no TTS spend and records no usage, so a spent budget has nothing
+    // to refuse. Key on the pre-resolution model + voice + spoken text.
     let cache_key = format!("{model}|{}|{spoken}", voice.as_deref().unwrap_or(""));
     if let Some(bytes) = tts_cache_get(&cache_key) {
         return audio_response(bytes);
     }
     let spoken_len = spoken.chars().count();
-    let acquired = match state
-        .upstreams
-        .route_access(&model, PoolKind::Speech, &access)
-    {
-        Ok(a) => a,
-        Err(e) => return route_error_response(e),
+    let caller = Caller::Session {
+        user_id: &session.user_id,
+        role_ids: &access.role_ids,
     };
-    let real_model = acquired.resolved_model().to_string();
+    let admitted = match admit(&state, caller, &model, PoolKind::Speech, &access).await {
+        Ok(admitted) => admitted,
+        Err(refusal) => return refusal,
+    };
+    let real_model = admitted.real_model.clone();
     let mut req_body = json!({
         "model": real_model,
         "input": spoken,
@@ -1802,9 +1865,7 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
         source: UsageSource::Chat,
         kind: UsageKind::Speech,
         model: real_model.clone(),
-        enforce_limits: state
-            .upstreams
-            .enforce_limits_for_model(&real_model, PoolKind::Speech),
+        enforce_limits: admitted.enforce_limits,
         input_units: None,
         output_units: None,
     };
@@ -1828,7 +1889,7 @@ pub async fn speech_session(State(state): State<Arc<RamaState>>, req: Request) -
     );
     let resp = forward(
         &state,
-        acquired,
+        admitted.acquired,
         Method::POST,
         "audio/speech",
         headers,

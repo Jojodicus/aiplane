@@ -7,6 +7,8 @@
 		startRecording,
 		type VoiceRecorder
 	} from '$lib/voice-recorder';
+	import { responseError } from '$lib/api';
+	import { voiceRefusalMessage } from '$lib/voice-refusal';
 
 	let { model, ontranscript, onerror }: {
 		model: string;
@@ -29,14 +31,8 @@
 		try {
 			const response = await fetch('/api/v0/transcriptions', { method: 'POST', body: form });
 			if (!response.ok) {
-				const raw = await response.text();
-				let message = raw;
-				try {
-					message = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
-				} catch {
-					/* The response is already useful plain text. */
-				}
-				throw new Error(message.slice(0, 200));
+				onerror(voiceRefusalMessage(await responseError(response), t));
+				return;
 			}
 			const text = ((await response.json()) as { text?: string }).text?.trim() ?? '';
 			if (text) ontranscript(text);

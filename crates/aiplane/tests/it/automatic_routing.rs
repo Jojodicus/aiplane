@@ -1094,3 +1094,31 @@ async fn a_selector_falling_back_to_an_enforced_pool_is_refused() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(selector_calls(&upstream).await, 0);
 }
+
+/// A target refused for its limits after the route chose it says which route
+/// chose it, on every chat dialect, like the route's other refusals.
+#[tokio::test]
+async fn a_target_refused_for_its_limits_names_the_route_that_chose_it() {
+    for uri in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        let upstream = MockServer::start().await;
+        mount_selector(&upstream, 0.95).await;
+        let (state, bearer) = spent_budget_with_route(&upstream, false).await;
+
+        let response = common::app(state)
+            .serve(routed_request(uri, &bearer))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+        assert_eq!(
+            response.headers()["x-gateway-route-alias"],
+            "default",
+            "{uri}"
+        );
+        assert_eq!(
+            response.headers()["x-gateway-route-target"],
+            "expert-model",
+            "{uri}"
+        );
+    }
+}

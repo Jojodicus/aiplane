@@ -10,7 +10,7 @@
 //! - resolves the model the way a chat turn does ([`route_target`]), under
 //!   the access the caller gives;
 //! - checks the payer's spend limits **before** the model is called — a
-//!   person's ceilings ([`Enforcer::check_for_model`]), an agent's owner
+//!   person's ceilings ([`RamaState::limit_exceeded`]), an agent's owner
 //!   budget and operator rules ([`Enforcer::check_agent`]);
 //! - switches reasoning off (`chat_template_kwargs.enable_thinking: false`,
 //!   and Qwen3's `/no_think` directive where the caller asks for it), because
@@ -24,7 +24,7 @@
 //! which an agent's activity log writes as an `llm_exchange`
 //! ([`crate::agents::audit::RunLog::record`]) — and the answer.
 //!
-//! [`Enforcer::check_for_model`]: aiplane_core::server::limits::Enforcer::check_for_model
+//! [`RamaState::limit_exceeded`]: crate::rama_server::state::RamaState::limit_exceeded
 //! [`Enforcer::check_agent`]: aiplane_core::server::limits::Enforcer::check_agent
 
 use std::sync::Arc;
@@ -101,11 +101,11 @@ impl Payer {
             return None;
         }
         match &self.principal {
-            Principal::User { id, roles } => state
-                .enforcer
-                .check_for_model(id, &state.role_ids_for(roles), model, enforce)
-                .await
-                .err(),
+            Principal::User { id, roles } => {
+                state
+                    .limit_exceeded(id, &state.role_ids_for(roles), None, model, enforce)
+                    .await
+            }
             Principal::System(principal) => {
                 let agent_id = self.run.as_deref().map_or(principal.id.as_str(), |run| {
                     run.agent().principal_id.as_str()

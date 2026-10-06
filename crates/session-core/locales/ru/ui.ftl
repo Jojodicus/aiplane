@@ -5,3 +5,4 @@ ui-ai-suggestion = Предложение ИИ
 ui-chip-remove = Удалить { $label }
 ui-steps-label = Прогресс
 ui-step-done = { $label } (готово)
+error-request-failed = Запрос не выполнен (HTTP { $status }). Попробуйте ещё раз.
